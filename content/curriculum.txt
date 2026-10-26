@@ -1,0 +1,355 @@
+# Curriculum manifest source. `npm run manifest` converts this to src/generated/curriculum.json.
+# Module line:  ## <moduleId> | <title> | <track: foundations|lld|hld|ops|career> | <one-line description>
+# Lesson line:  <lessonId> | <title> | <level: beginner|intermediate|advanced> | <topic; topic; ...>
+# A lesson's content lives at content/lessons/<moduleId>/<lessonId>.md. No file = "planned".
+
+## m01 | Programming and Software Engineering Foundations | foundations | The C# and engineering basics every later lesson builds on.
+m01-software-engineering | What is software engineering? | beginner | engineering vs coding; requirements; maintenance cost; teams
+m01-software-system | What is a software system? | beginner | components; inputs and outputs; boundaries; users
+m01-how-programs-run | How a computer executes a program | beginner | CPU; memory; compilation; IL and JIT; processes and threads
+m01-csharp-basics | Variables, types, conditions, loops and functions in C# | beginner | variables; types; if/switch; loops; methods
+m01-classes-objects | Classes, objects, fields, properties and methods | beginner | class vs object; fields; properties; methods; static
+m01-constructors | Constructors and object initialization | beginner | constructors; overloading; object initializers; required members; records
+m01-oop-pillars | Encapsulation, abstraction, inheritance and polymorphism | beginner | four pillars; virtual/override; access modifiers
+m01-interfaces-abstract | Interfaces and abstract classes | beginner | contracts; abstract classes; default interface methods; when to use which
+m01-value-reference-memory | Value types, reference types and memory basics | beginner | stack vs heap; boxing; struct vs class; GC basics
+m01-exceptions | Exceptions and error handling | beginner | try/catch/finally; custom exceptions; when not to throw
+m01-collections-generics | Collections, generics and common data structures | beginner | List; Dictionary; HashSet; Queue; Stack; generics; LINQ
+m01-big-o | Big O notation, time and space complexity | beginner | O(1); O(log n); O(n); O(n log n); space
+m01-algorithms | Basic algorithms relevant to software design | beginner | searching; sorting; hashing; recursion; two pointers
+m01-testing-debugging | Unit testing and debugging fundamentals | beginner | xUnit; arrange-act-assert; breakpoints; test doubles
+m01-git | Git, branches, commits and code reviews | beginner | commits; branches; merge vs rebase; pull requests
+
+## m02 | Understanding Applications and Architecture | foundations | What architecture is, the main styles, and how to choose between them.
+m02-what-is-architecture | What is software architecture? | beginner | decisions that are hard to change; quality attributes
+m02-what-is-system-design | What is system design? | beginner | components; data flow; scale; trade-offs
+m02-hld-vs-lld | HLD versus LLD | beginner | high-level design; low-level design; how they connect
+m02-requirements | Functional and non-functional requirements | beginner | FRs; NFRs; quality attributes; measurable targets
+m02-constraints | Business requirements and technical constraints | beginner | budget; team; compliance; legacy; deadlines
+m02-monolith | Monolithic architecture | beginner | single deployable; strengths; failure modes
+m02-layered | Layered architecture | beginner | presentation; business; data; dependency direction
+m02-client-server | Client-server architecture | beginner | request/response; thin vs thick clients
+m02-n-tier | Three-tier and n-tier architecture | beginner | physical tiers vs logical layers
+m02-modular-monolith | Modular monolith architecture | intermediate | modules; boundaries; internal APIs
+m02-soa | Service-oriented architecture | intermediate | services; ESB; contracts
+m02-microservices | Microservices architecture | intermediate | independent deploy; data ownership; costs
+m02-event-driven | Event-driven architecture | intermediate | events; producers; consumers; eventual consistency
+m02-hexagonal | Hexagonal architecture | intermediate | ports; adapters; testing
+m02-clean-onion | Clean Architecture and Onion Architecture | intermediate | dependency rule; use cases; entities
+m02-vertical-slice | Vertical Slice Architecture | intermediate | feature folders; handlers; coupling by feature
+m02-adr | Architecture Decision Records (ADRs) | intermediate | context; decision; consequences
+m02-coupling-cohesion | Coupling, cohesion, modularity and separation of concerns | beginner | afferent/efferent coupling; cohesion types
+
+## m03 | C# and ASP.NET Core Application Architecture | foundations | How a real ASP.NET Core app is put together, end to end.
+m03-startup | How an ASP.NET Core application starts | beginner | Program.cs; WebApplication builder; host
+m03-request-lifecycle | HTTP request and response lifecycle | beginner | client to database and back
+m03-kestrel-middleware-routing | Kestrel, middleware, routing, controllers and minimal APIs | beginner | pipeline order; endpoints
+m03-dependency-injection | Dependency injection | beginner | IServiceCollection; constructor injection
+m03-service-lifetimes | Singleton, scoped and transient services | intermediate | captive dependencies; scope validation
+m03-layers | Controllers, services, repositories and domain models | beginner | responsibilities per layer
+m03-dtos-mapping-validation | DTOs, entities, mapping and validation | beginner | over-posting; FluentValidation
+m03-configuration | Configuration, environment variables and secrets | beginner | appsettings; options pattern; user secrets
+m03-authn-authz | Authentication and authorization | intermediate | cookies; JWT; policies
+m03-filters-exceptions | Filters, middleware and exception handling | intermediate | ProblemDetails; IExceptionHandler
+m03-logging | Logging and observability | intermediate | ILogger; structured logs; scopes
+m03-async-await | Asynchronous programming with async/await | intermediate | Task; thread pool; deadlocks
+m03-cancellation | Cancellation tokens and request cancellation | intermediate | CancellationToken; timeouts
+m03-background-services | Background services and hosted workers | intermediate | BackgroundService; channels
+m03-api-shape | API versioning, pagination, filtering and sorting | intermediate | query design
+m03-rest-status-codes | REST API design and HTTP status codes | beginner | resources; verbs; codes
+m03-openapi | API documentation with OpenAPI | beginner | OpenAPI; Swagger UI
+m03-caching | Caching in ASP.NET Core | intermediate | IMemoryCache; HybridCache; output caching
+m03-health-shutdown | Health checks and graceful shutdown | intermediate | liveness; readiness; draining
+
+## m04 | SOLID Principles and Clean Code | lld | Principles that keep code easy to change, and when they go too far.
+m04-srp | Single Responsibility Principle | beginner | reasons to change; actors
+m04-ocp | Open/Closed Principle | intermediate | extension points; strategy
+m04-lsp | Liskov Substitution Principle | intermediate | contracts; preconditions; rectangle-square
+m04-isp | Interface Segregation Principle | intermediate | role interfaces; fat interfaces
+m04-dip | Dependency Inversion Principle | intermediate | abstractions; ownership of interfaces
+m04-dry-kiss-yagni | DRY, KISS and YAGNI | beginner | duplication of knowledge; simplicity
+m04-code-smells | Code smells and technical debt | intermediate | long method; feature envy; shotgun surgery
+m04-composition-inheritance | Composition versus inheritance | intermediate | fragile base class; delegation
+m04-di-vs-service-locator | Dependency injection versus service locator | intermediate | hidden dependencies
+m04-refactoring-legacy | Refactoring legacy code | advanced | characterization tests; seams; strangler
+m04-testability | Designing for testability | intermediate | pure functions; seams; clocks
+m04-over-under-engineering | Identifying overengineering and underengineering | advanced | speculative generality; cost of change
+
+## m05 | UML and Visual Design | lld | Read and draw the diagrams engineers actually use.
+m05-uml-fundamentals | UML fundamentals | beginner | notation; when diagrams help
+m05-class-diagrams | Class diagrams | beginner | attributes; operations; relationships; multiplicity
+m05-object-diagrams | Object diagrams | beginner | runtime snapshots
+m05-sequence-diagrams | Sequence diagrams | beginner | lifelines; messages; alt/loop
+m05-activity-diagrams | Activity diagrams | beginner | flows; forks; swimlanes
+m05-state-diagrams | State machine diagrams | intermediate | states; transitions; guards
+m05-component-diagrams | Component diagrams | intermediate | provided/required interfaces
+m05-deployment-diagrams | Deployment diagrams | intermediate | nodes; artifacts
+m05-er-diagrams | Entity-relationship diagrams | beginner | entities; cardinality
+m05-c4-model | C4 architecture model | intermediate | context; container; component; code
+m05-c4-views | Context, container, component and code-level views | intermediate | worked C4 example
+m05-reading-diagrams | Reading and creating architecture diagrams | intermediate | legends; levels of detail
+m05-diagrams-to-code | Mapping diagrams to code and database structures | intermediate | class to C#; ER to SQL
+
+## m06 | Design Patterns — The Complete Catalogue | lld | Every GoF pattern plus the enterprise patterns used in modern .NET.
+m06-intro-patterns | What design patterns are and how to learn them | beginner | GoF; categories; pattern language
+m06-singleton | Singleton | beginner | creational; lazy; thread safety; DI singleton
+m06-factory-method | Factory Method | beginner | creational
+m06-abstract-factory | Abstract Factory | intermediate | creational; families
+m06-builder | Builder | beginner | creational; fluent
+m06-prototype | Prototype | intermediate | creational; cloning
+m06-object-pool | Object Pool | intermediate | creational; ArrayPool; ObjectPool
+m06-adapter | Adapter | beginner | structural
+m06-decorator | Decorator | intermediate | structural
+m06-facade | Facade | beginner | structural
+m06-proxy | Proxy | intermediate | structural; lazy; caching; protection
+m06-composite | Composite | intermediate | structural; trees
+m06-bridge | Bridge | advanced | structural
+m06-flyweight | Flyweight | advanced | structural; interning
+m06-strategy | Strategy | beginner | behavioral
+m06-observer | Observer | intermediate | behavioral; events; IObservable
+m06-command | Command | intermediate | behavioral; undo; queues
+m06-state | State | intermediate | behavioral; state machines
+m06-template-method | Template Method | beginner | behavioral
+m06-chain-of-responsibility | Chain of Responsibility | intermediate | behavioral; middleware
+m06-mediator | Mediator | intermediate | behavioral; MediatR-style
+m06-iterator | Iterator | beginner | behavioral; IEnumerable; yield
+m06-memento | Memento | intermediate | behavioral; snapshots; undo
+m06-visitor | Visitor | advanced | behavioral; double dispatch
+m06-interpreter | Interpreter | advanced | behavioral; grammars; expression trees
+m06-specification | Specification | intermediate | business rules; expressions
+m06-repository-uow | Repository and Unit of Work, including their limitations | intermediate | EF Core; DbContext
+m06-null-object | Null Object | beginner | behavioral; defaults
+m06-dependency-injection-pattern | Dependency Injection as a pattern | intermediate | composition root; lifetimes
+m06-options-result | Options pattern and Result pattern | intermediate | IOptions; Result<T>; errors as values
+m06-pipeline | Pipeline and middleware pattern | intermediate | pipes and filters; delegates
+m06-pattern-comparison | Choosing between similar patterns | advanced | decorator vs proxy; strategy vs state; adapter vs facade
+m06-anti-patterns | Anti-patterns | intermediate | god object; anemic model; golden hammer; spaghetti; lava flow
+
+## m07 | Object-Oriented LLD Fundamentals | lld | How to turn requirements into classes that are easy to change and test.
+m07-classes-responsibilities | Identifying classes and responsibilities | beginner | nouns and verbs; CRC cards
+m07-entities-values-services | Identifying entities, value objects and services | beginner | identity; equality
+m07-relationships | Modeling object relationships | beginner | dependencies; navigability
+m07-association-aggregation-composition | Association, aggregation and composition | beginner | lifetimes; ownership
+m07-interfaces-abstractions | Designing interfaces and abstractions | intermediate | leaky abstractions
+m07-encapsulation-invariants | Encapsulation and invariant protection | intermediate | guard clauses; private setters
+m07-lifecycle-state | Object lifecycle and state management | intermediate | creation; transitions; disposal
+m07-domain-modeling | Domain modeling | intermediate | language; rules; models
+m07-validation-rules | Validation and business rules | intermediate | input vs domain validation
+m07-domain-exceptions | Error handling and domain exceptions | intermediate | exceptions vs results
+m07-immutability | Immutable objects | intermediate | records; init; with-expressions
+m07-equality-identity | Equality and identity | intermediate | Equals; GetHashCode; records
+m07-testable-design | Testable object design | intermediate | seams; fakes; clocks
+m07-dependency-graphs | Dependency graphs and circular dependencies | advanced | cycles; layering
+m07-refactoring-large-classes | Refactoring large classes | advanced | extract class; move method
+m07-extensible-workflows | Designing extensible business workflows | advanced | pipelines; rules; state machines
+
+## m08 | Advanced LLD and Domain-Driven Design | lld | Tactical and strategic DDD for real business systems.
+m08-entities-value-objects | Entities and value objects in DDD | intermediate | identity; immutability
+m08-aggregates | Aggregates and aggregate roots | advanced | invariants; consistency boundary
+m08-repositories-domain-services | Repositories and domain services | intermediate | persistence ignorance
+m08-domain-events | Domain events | advanced | raising; dispatching
+m08-application-services | Application services | intermediate | orchestration; transactions
+m08-bounded-contexts | Bounded contexts and ubiquitous language | advanced | context maps
+m08-strategic-tactical | Strategic and tactical DDD | advanced | subdomains; core/supporting/generic
+m08-transaction-boundaries | Transaction boundaries and aggregate consistency | advanced | one aggregate per transaction
+m08-cqrs-fundamentals | CQRS fundamentals | advanced | commands; queries; read models
+m08-domain-vs-infra | Domain versus infrastructure dependencies | intermediate | dependency rule
+m08-ddd-modular-monolith | Domain-driven modular monoliths | advanced | modules per context
+m08-clean-architecture-aspnet | Clean Architecture in ASP.NET Core | advanced | projects; references
+m08-vertical-slice | Vertical Slice Architecture in practice | advanced | features; handlers
+m08-event-sourcing | Event sourcing fundamentals and trade-offs | advanced | event store; projections
+m08-order-management-project | Project: Order management domain | advanced | products; orders; payments; inventory
+
+## m09 | Database Design and Data Modeling | hld | Model, index, and scale relational data in PostgreSQL.
+m09-relational-fundamentals | Relational database fundamentals | beginner | tables; rows; constraints; keys
+m09-relationships | One-to-one, one-to-many and many-to-many | beginner | junction tables
+m09-normalization | Normalization and denormalization | intermediate | 1NF–3NF; BCNF; when to denormalize
+m09-indexes | Indexes, composite indexes, B-tree and hash | intermediate | column order; covering; partial
+m09-query-planning | Query planning and EXPLAIN ANALYZE | intermediate | scans; joins; costs
+m09-transactions-acid | Transactions and ACID | intermediate | atomicity; durability
+m09-isolation-levels | Isolation levels and anomalies | advanced | dirty reads; phantom; serializable
+m09-locking | Deadlocks, optimistic and pessimistic locking | advanced | row locks; xmin; retries
+m09-connection-pooling | Database connection pooling | intermediate | Npgsql pool; PgBouncer
+m09-migrations-evolution | Migrations and schema evolution | intermediate | expand/contract
+m09-n-plus-one | N+1 query problems and EF Core performance | intermediate | Include; projections; split queries
+m09-pagination | Offset versus keyset pagination | intermediate | cursors; stability
+m09-jsonb | PostgreSQL JSONB | intermediate | GIN indexes; when to use
+m09-replicas | Read replicas and replication lag | advanced | async replication; read-your-writes
+m09-partitioning-sharding | Partitioning and sharding | advanced | range/hash/list; shard keys
+m09-relational-vs-document | Relational versus document and other databases | intermediate | key-value; wide-column; graph; time-series
+
+## m10 | APIs and Communication | hld | How services talk, and how to keep those conversations safe under failure.
+m10-http-fundamentals | HTTP fundamentals | beginner | methods; headers; caching; HTTP/2 and 3
+m10-rest-design | REST API design | beginner | resources; contracts; errors
+m10-graphql | GraphQL | intermediate | schema; resolvers; N+1
+m10-grpc | gRPC | intermediate | protobuf; streaming
+m10-realtime | WebSockets, Server-Sent Events and long polling | intermediate | push vs pull
+m10-webhooks | Webhooks | intermediate | signatures; retries
+m10-sync-async | Synchronous versus asynchronous communication | intermediate | temporal coupling
+m10-gateways-proxies-lb | API gateways, reverse proxies and load balancers | intermediate | L4 vs L7
+m10-service-discovery | Service discovery | advanced | client vs server side
+m10-idempotency | Idempotency keys | intermediate | safe retries
+m10-rate-limiting | Rate limiting algorithms | intermediate | token bucket; leaky bucket; sliding window
+m10-versioning-contracts | API contracts and versioning | intermediate | breaking changes
+m10-timeouts-retries | Timeouts, retries and backoff with jitter | intermediate | retry budgets
+m10-circuit-breaker | Circuit breaker | intermediate | closed; open; half-open
+m10-bulkhead | Bulkheads, fallbacks and resilience pipelines | advanced | isolation; Polly
+m10-correlation | Distributed request correlation | intermediate | trace context; correlation ids
+
+## m11 | High-Level Design Foundations | hld | A repeatable method for designing large systems.
+m11-hld-framework | How to approach an HLD problem: the 12-step framework | beginner | clarify; estimate; design; refine
+m11-clarifying-requirements | Clarifying requirements, users and system boundaries | beginner | scope; actors
+m11-nfrs | Non-functional requirements, assumptions and constraints | beginner | latency; availability; durability
+m11-capacity-estimation | Capacity estimation: RPS, peak, bandwidth and storage | beginner | back-of-envelope math
+m11-latency-numbers | Latency numbers and latency budgets | intermediate | memory vs disk vs network
+m11-availability | Availability, reliability and the nines | intermediate | serial vs parallel availability
+m11-scaling | Vertical versus horizontal scaling and elasticity | beginner | scale up; scale out
+m11-stateless | Stateless versus stateful services | intermediate | sessions; sticky sessions
+m11-load-balancing | Load balancing algorithms | intermediate | round robin; least connections; consistent hash
+m11-caching-layers | Caching layers in a system | intermediate | client; CDN; app; DB
+m11-cdn | CDN architecture | intermediate | edge; origin; invalidation
+m11-dns-routing | DNS and traffic routing | intermediate | TTL; geo routing; anycast
+m11-database-architecture | Choosing and scaling the database tier | intermediate | primary; replicas; shards
+m11-object-storage | Object storage | intermediate | blobs; presigned URLs
+m11-background-processing | Background processing and job queues | intermediate | workers; schedules
+m11-cost-estimation | Cost estimation | intermediate | compute; storage; egress
+m11-trade-offs | Explaining trade-offs and failure scenarios | advanced | how to argue a design
+
+## m12 | Caching, Messaging and Asynchronous Processing | hld | Make systems fast and decoupled without losing data.
+m12-why-caching | Why caching works | beginner | locality; hit ratio
+m12-cache-patterns | Cache-aside, read-through, write-through and write-behind | intermediate | patterns compared
+m12-invalidation-ttl | Cache invalidation, TTL and eviction policies | intermediate | LRU; LFU; versioned keys
+m12-redis | Redis data structures and use cases | intermediate | strings; hashes; sorted sets; streams
+m12-cache-failures | Cache stampede, penetration and hot keys | advanced | locking; bloom filters; jitter
+m12-message-queues | Message queues | beginner | producers; consumers; acks
+m12-rabbitmq | RabbitMQ exchanges and routing | intermediate | direct; topic; fanout
+m12-kafka | Kafka topics, partitions and consumer groups | advanced | offsets; ordering
+m12-delivery-guarantees | Delivery guarantees | advanced | at-most; at-least; effectively-once
+m12-idempotent-consumers | Idempotent consumers and inbox deduplication | advanced | dedupe tables
+m12-retries-dlq | Retries and dead-letter queues | intermediate | poison messages
+m12-outbox | Transactional outbox | advanced | dual writes; relay
+m12-messaging-patterns | Messaging patterns catalogue | intermediate | pub/sub; competing consumers; claim check; priority queue; request-reply
+m12-eventual-consistency | Eventual consistency | intermediate | convergence; user experience
+m12-sagas | Sagas and compensating transactions | advanced | orchestration; choreography
+
+## m13 | Distributed Systems | hld | Why distributed systems fail, and the tools for living with it.
+m13-why-hard | Why distributed systems are difficult | intermediate | fallacies; partial failure
+m13-time-ordering | Clock skew, ordering and logical clocks | advanced | Lamport; vector clocks
+m13-cap-pacelc | CAP theorem and PACELC, properly interpreted | intermediate | partitions; latency trade-off
+m13-consistency-models | Consistency models | advanced | linearizable; causal; read-your-writes
+m13-replication | Replication and leader-follower | intermediate | sync; async; failover
+m13-quorums | Quorums | advanced | R + W > N
+m13-consensus | Consensus fundamentals (Raft) | advanced | leaders; terms; logs
+m13-distributed-locks | Distributed locks and fencing tokens | advanced | leases; Redlock debate
+m13-split-brain | Split-brain and failure detection | advanced | heartbeats; STONITH
+m13-sharding | Sharding, hot partitions and consistent hashing | advanced | virtual nodes
+m13-distributed-transactions | Distributed transactions and two-phase commit | advanced | 2PC; coordinators
+m13-backpressure | Backpressure, load shedding and graceful degradation | advanced | queues; admission control
+m13-retry-storms | Retry storms and resilience engineering | advanced | amplification; budgets
+m13-concurrency-patterns | Concurrency patterns | advanced | producer-consumer; thread pool; actor; read-write lock; double-checked locking; channels
+
+## m14 | Security, Reliability and Observability | ops | Secure, measurable, recoverable systems.
+m14-authn-vs-authz | Authentication versus authorization | beginner | identity; permissions
+m14-oauth-oidc | OAuth 2.0 and OpenID Connect | intermediate | flows; tokens
+m14-jwt | JWT validation and limitations | intermediate | signing; revocation
+m14-rbac-pbac | Role-based and policy-based authorization | intermediate | claims; policies
+m14-passwords-secrets | Secure password storage and secret management | intermediate | hashing; vaults
+m14-tls-encryption | TLS and encryption at rest | intermediate | certificates; keys
+m14-owasp | SQL injection, XSS, CSRF and SSRF | intermediate | OWASP top 10
+m14-least-privilege-audit | Least privilege and audit trails | intermediate | audit logs
+m14-multi-tenant-security | Multi-tenant security | advanced | row-level security
+m14-sli-slo-sla | SLI, SLO, SLA and error budgets | intermediate | availability math
+m14-observability | Logs, metrics, traces and OpenTelemetry | intermediate | three pillars
+m14-alerting-incidents | Alerting and incident response | intermediate | on-call; postmortems
+m14-dr | Backups, disaster recovery, RTO and RPO | intermediate | restore drills
+m14-chaos | Chaos engineering | advanced | experiments; blast radius
+
+## m15 | Deployment, Infrastructure and Cloud Architecture | ops | From laptop to production.
+m15-environments | Development, testing, staging and production | beginner | parity
+m15-docker | Docker, Dockerfiles and Docker Compose | beginner | images; layers; compose
+m15-ci-cd | CI/CD with GitHub Actions and Azure DevOps | intermediate | pipelines
+m15-reverse-proxy-iis | Reverse proxies and IIS hosting for ASP.NET Core | intermediate | IIS; Nginx; YARP
+m15-azure-compute | Azure App Service, Container Apps and AKS | intermediate | choosing compute
+m15-azure-data | Azure Database for PostgreSQL, Cache for Redis, Service Bus and Blob Storage | intermediate | managed services
+m15-apim | Azure API Management | intermediate | gateway policies
+m15-iac | Infrastructure as Code | intermediate | Bicep; Terraform
+m15-kubernetes | Kubernetes fundamentals and autoscaling | advanced | pods; deployments; HPA
+m15-deployment-strategies | Blue-green, canary and rolling deployments | intermediate | risk control
+m15-db-migrations-deploy | Database migrations during deployments | advanced | expand/contract
+m15-cost-reliability | Cost monitoring and infrastructure reliability | intermediate | budgets; tagging
+
+## m16 | Advanced Architecture Patterns | hld | Big-system patterns, the problems they solve, and what they cost.
+m16-monolith-vs-microservices | Modular monolith versus microservices | advanced | decision criteria
+m16-service-boundaries | Service boundaries and domain-driven decomposition | advanced | contexts; data ownership
+m16-gateway-bff | API gateway and Backend for Frontend | intermediate | aggregation; BFF
+m16-cqrs | CQRS in production | advanced | read models; lag
+m16-event-sourcing | Event sourcing in production | advanced | snapshots; versioning
+m16-saga-orchestration-choreography | Saga orchestration and choreography | advanced | workflows
+m16-strangler-acl | Strangler fig migration and anti-corruption layer | advanced | legacy migration
+m16-cdc | Change data capture | advanced | Debezium; logical replication
+m16-multi-tenancy | Multi-tenancy | advanced | silo; pool; bridge
+m16-multi-region | Multi-region, active-active and active-passive | advanced | data sovereignty
+m16-search-architecture | Search architecture | advanced | inverted index; OpenSearch
+m16-workflow-engines | Workflow engines and feature flags | advanced | durable execution; flags
+m16-cloud-design-patterns | Cloud design patterns catalogue | advanced | sidecar; ambassador; valet key; gatekeeper; throttling; leader election; geode; deployment stamps; compensating transaction
+m16-multi-level-caching | Multi-level caching and rate limiting at scale | advanced | L1/L2; distributed limits
+m16-architecture-evolution | Cost-aware architecture and architecture evolution | advanced | fitness functions
+
+## m17 | Real-World HLD Case Studies | hld | Twenty complete system design walkthroughs.
+m17-url-shortener | URL shortener | beginner | ids; redirects; caching
+m17-pastebin | Pastebin | beginner | object storage; expiry
+m17-file-storage | File storage service (Drive-style) | advanced | chunking; sync; dedupe
+m17-notification-platform | Notification platform | intermediate | fan-out; channels; preferences
+m17-chat | Chat application (WhatsApp-style) | advanced | websockets; delivery receipts
+m17-news-feed | Social media news feed | advanced | fan-out on write vs read
+m17-video-streaming | Video streaming platform (YouTube-style) | advanced | transcoding; ABR; CDN
+m17-ride-hailing | Ride-hailing platform (Uber-style) | advanced | geo index; matching
+m17-food-delivery | Food delivery platform | advanced | orders; dispatch; tracking
+m17-ecommerce | E-commerce platform (Amazon-style) | advanced | catalog; cart; checkout; inventory
+m17-movie-booking | Movie ticket booking system | intermediate | seat locking
+m17-hotel-reservation | Hotel reservation system | intermediate | inventory; overbooking
+m17-payment-system | Payment processing system | advanced | ledger; idempotency; reconciliation
+m17-autocomplete | Search autocomplete service | intermediate | tries; top-k
+m17-rate-limiter | Distributed rate limiter | intermediate | Redis; algorithms
+m17-logging-analytics | Logging and analytics platform | advanced | ingestion; OLAP
+m17-collaborative-editor | Real-time collaborative editor | advanced | OT; CRDT
+m17-online-exam | Online examination platform | intermediate | spikes; integrity
+m17-lms | Learning management system | intermediate | content; progress
+m17-multi-tenant-pm | Multi-tenant enterprise project management system | advanced | tenancy; permissions
+
+## m18 | Real-World LLD Case Studies | lld | Twenty object-oriented design problems, fully implemented.
+m18-parking-lot | Parking lot | beginner | spots; tickets; pricing
+m18-elevator | Elevator control system | advanced | scheduling; state
+m18-atm | ATM | intermediate | state; transactions
+m18-vending-machine | Vending machine | beginner | state pattern
+m18-library | Library management system | beginner | loans; reservations; fines
+m18-movie-ticket | Movie ticket booking | intermediate | seat holds; concurrency
+m18-chess | Chess | advanced | moves; validation
+m18-snake-ladder | Snake and ladder | beginner | board; dice
+m18-tic-tac-toe | Tic-tac-toe | beginner | board; win check
+m18-card-games | Card games | intermediate | deck; rules engine
+m18-food-ordering | Food ordering | intermediate | cart; order states
+m18-hotel-booking | Hotel booking | intermediate | availability
+m18-payment-gateway | Payment gateway abstraction | intermediate | providers; adapters
+m18-notification-dispatcher | Notification dispatcher | intermediate | channels; retries
+m18-logging-framework | Logging framework | intermediate | sinks; levels
+m18-rate-limiter | Rate limiter (in-process) | intermediate | token bucket
+m18-file-system | File system abstraction | intermediate | composite
+m18-inventory-reservation | Inventory reservation | advanced | holds; expiry
+m18-order-processing | Order processing | advanced | state; events
+m18-leave-workflow | Employee leave and approval workflow | intermediate | approvals; chain
+
+## m19 | Interview and Architecture Review | career | Communicate, defend and review designs.
+m19-interview-structure | How system design interviews work | beginner | format; scoring
+m19-clarifying-questions | Asking good clarifying questions and stating assumptions | beginner | question bank
+m19-estimation-practice | Estimation practice drills | intermediate | timed drills
+m19-defending-choices | Defending database and messaging choices | intermediate | trade-off language
+m19-overengineering | Recognising overengineering in interviews | intermediate | right-sizing
+m19-design-review | Reviewing another engineer's design | advanced | checklists; security
+m19-changing-requirements | Handling changing requirements and migrations | advanced | evolving designs
+m19-mock-interviews | Mock interviews with rubrics | advanced | timed sessions
+
+## m20 | Capstone Projects and Graduation | career | Three substantial projects that prove mastery.
+m20-capstone-a | Capstone A — Enterprise modular monolith | advanced | project and contract management
+m20-capstone-b | Capstone B — Distributed order processing | advanced | services; RabbitMQ; saga
+m20-capstone-c | Capstone C — Production-style communication platform | advanced | real-time; search; observability

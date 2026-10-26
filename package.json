@@ -1,0 +1,51 @@
+{
+  "name": "system-design-lab",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "content": "node scripts/build-content.ts",
+    "predev": "npm run content",
+    "dev": "vite",
+    "build": "npm run content && tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "check:cs": "node scripts/cs-check-all.ts",
+    "lint": "oxlint"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.10",
+    "@monaco-editor/react": "^4.7.0",
+    "@xyflow/react": "^12.12.0",
+    "highlight.js": "^11.12.0",
+    "jszip": "^3.10.2",
+    "mermaid": "^12.2.0",
+    "minisearch": "^7.2.0",
+    "monaco-editor": "^0.57.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^7.18.4",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/typography": "^0.5.20",
+    "@tailwindcss/vite": "^4.3.3",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "jsdom": "^29.1.1",
+    "node": "^26.12.0",
+    "oxlint": "^1.81.0",
+    "playwright": "^1.64.1",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.5"
+  }
+}
