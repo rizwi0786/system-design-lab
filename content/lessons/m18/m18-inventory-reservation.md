@@ -7,7 +7,7 @@ status: reviewed
 template: lld-case
 minutes: 100
 prerequisites: [m07-lifecycle-state, m13-concurrency-patterns, m10-idempotency, m09-locking, m08-aggregates]
-related: [m18-movie-ticket, m18-order-processing, m17-ecommerce, m12-idempotent-consumers, m12-sagas]
+related: [m18-movie-ticket, m18-order-processing, m17-ecommerce, m17-flash-sale, m12-idempotent-consumers, m12-sagas]
 tags: [lld, concurrency, idempotency, expiry, inventory, state-machine]
 patterns: [State, Facade, Result, Idempotency Key]
 summary: Design a stock reservation engine that places time-limited holds during checkout, confirms or releases them, expires abandoned holds, never oversells under concurrency, and turns retried requests into safe replays with idempotency keys.
@@ -22,7 +22,7 @@ references:
     url: https://martinfowler.com/eaaCatalog/optimisticOfflineLock.html
 ---
 
-Every online shop has the same nightmare during a big sale: 5,000 people try to buy the last 200 units of a phone, payment takes 30 seconds to two minutes, some shoppers abandon checkout, and the network retries requests at random. If you take stock away only when payment succeeds, you sell units you do not have. If you take it away as soon as someone clicks "Buy", abandoned carts lock it up forever. The answer is a **reservation** (a hold): stock is set aside for a limited time while the customer pays. This case study designs that engine in C#.
+Every online shop has the same nightmare during a big sale: 5,000 people try to buy the last 200 units of a phone, payment takes 30 seconds to two minutes, some shoppers abandon checkout, and the network retries requests at random. If you take stock away only when payment succeeds, you sell units you do not have. If you take it away as soon as someone clicks "Buy", abandoned carts lock it up forever. The answer is a **reservation** (a hold): stock is set aside for a limited time while the customer pays. This case study designs that engine in C#. The system-level view (waiting rooms, hot-row sharding, queues in front of checkout) is the [flash sale HLD case](#/lesson/m17-flash-sale).
 
 ## Learning objectives
 
@@ -519,7 +519,11 @@ public sealed class InventoryService
             {
                 if (entry.Retired) continue;                     // lost a race with cleanup; start again
                 if (entry.Fingerprint != fingerprint) throw new IdempotencyConflictException(request.IdempotencyKey);
-                if (entry.ReservationId is Guid existing) return ReserveResult.Ok(_reservations[existing], replayed: true);
+                if (entry.ReservationId is Guid existing)
+                {
+                    var previous = _reservations[existing];
+                    lock (previous.Gate) return ReserveResult.Ok(previous, replayed: true);   // entry -> reservation: same global order
+                }
 
                 var result = TryHold(request.CustomerId, lines);
                 if (result.Succeeded) entry.ReservationId = result.Reservation!.Id;
@@ -1073,7 +1077,7 @@ CREATE TABLE reservations (
 CREATE INDEX ON reservations (expires_at) WHERE status = 'held';   -- the sweeper's "priority queue"
 ```
 
-Run the stock updates for all lines (in SKU order, to avoid deadlocks between transactions) and the reservation insert in **one transaction**. A unique-violation on `idempotency_key` means "duplicate": read the existing row and compare fingerprints. The sweeper runs `UPDATE reservations SET status='expired' WHERE status='held' AND expires_at <= now() ... RETURNING` and releases stock in the same transaction; with `FOR UPDATE SKIP LOCKED`, several sweeper instances can share the work. A `CHECK (reserved >= 0 AND reserved <= on_hand)` constraint on `stock` is the database's last line of defence for N1.
+Run the stock updates for all lines (in SKU order, to avoid deadlocks between transactions) and the reservation insert in **one transaction**. A unique-violation on `idempotency_key` means "duplicate": read the existing row and compare fingerprints. Confirm across servers is also one conditional statement: `UPDATE reservations SET status = 'confirmed' WHERE id = $1 AND status = 'held' AND expires_at > now()`; zero rows means it was already expired, released or confirmed, so read the row to decide between "replay" and "refuse". The sweeper picks a batch with `SELECT id FROM reservations WHERE status = 'held' AND expires_at <= now() ORDER BY expires_at LIMIT 500 FOR UPDATE SKIP LOCKED`, marks those rows `expired` and releases their stock in the same transaction; `SKIP LOCKED` lets several sweeper instances share the work without blocking each other or a confirm that is in flight. A `CHECK (reserved >= 0 AND reserved <= on_hand)` constraint on `stock` is the database's last line of defence for N1.
 
 ### Redis for hot SKUs
 
@@ -2037,7 +2041,7 @@ A: It returns only the due holds in deadline order, so each sweep costs O(k log 
 
 :::quiz pass=70
 ::q single
-The phone has 1 unit left. Two shoppers' requests arrive at the same moment. Both servers run `if (available >= 1) { reserved++; }` against a shared in-memory dictionary without locks. What can happen?
+The phone has 1 unit left. Two shoppers' requests arrive at the same moment on one server. Both request threads run `if (available >= 1) { reserved++; }` against a shared in-memory dictionary without locks. What can happen?
 - [ ] One request always waits for the other.
 - [x] Both see available = 1 and both reserve, so the shop oversells by one unit.
 - [ ] The dictionary throws, so nothing is reserved.

@@ -89,7 +89,7 @@ Cache-Control: public, max-age=60, stale-while-revalidate=30
 Date: Mon, 19 Oct 2026 06:15:02 GMT
 ```
 
-HTTP/2 and HTTP/3 send the *same meaning* in a compact binary encoding with compressed headers (HPACK in HTTP/2, QPACK in HTTP/3). The semantics (methods, status codes, headers) are defined once, in RFC 9110, and shared by all three versions. So everything about methods, status codes and caching applies whichever version is on the wire.
+HTTP/2 and HTTP/3 send the *same meaning* in a compact binary encoding with compressed headers (HPACK in HTTP/2, QPACK in HTTP/3). The semantics (methods, status codes, headers) are defined once, in RFC 9110, and shared by all three versions; RFC 9112, 9113 and 9114 only define how HTTP/1.1, HTTP/2 and HTTP/3 carry them on the wire. So everything about methods, status codes and caching applies whichever version is on the wire.
 
 ### Methods: safe and idempotent
 
@@ -129,7 +129,7 @@ The pairs people confuse most:
 | `401` vs `403` | 401: "I don't know who you are" (missing or invalid credentials). 403: "I know who you are, and you're not allowed." |
 | `400` vs `422` | 400: the request is malformed (bad JSON, wrong type). 422: well-formed but fails business validation ("departure time 25:00"). Many APIs use 400 for both; pick one rule and stick to it. |
 | `404` vs `410` | 410 says "it existed and is gone for good" — useful for search engines and caches. |
-| `409` vs `412` | 409: conflicts with the current state ("route already exists", "inspection already approved"). 412: a precondition header you sent (`If-Match`) did not hold. |
+| `409` vs `412` | 409: conflicts with the current state ("route already exists", "ticket already cancelled"). 412: a precondition header you sent (`If-Match`) did not hold. |
 | `429` vs `503` | 429: *you* are sending too much. 503: *the server* is overloaded or in maintenance. Both may carry `Retry-After`. |
 | `502` vs `503` vs `504` | 502: a gateway got a bad answer from upstream. 503: service unavailable. 504: a gateway timed out waiting for upstream. All three usually come from a load balancer or proxy, which tells you *where* to look. |
 
@@ -622,7 +622,7 @@ Notes on the choices:
 - **`stale-while-revalidate=30`** lets the CDN answer instantly for 30 s after expiry while it refreshes in the background, so riders never wait on a revalidation.
 - **`Vary: Accept-Encoding`** because compression produces different bytes for Brotli and gzip clients.
 - **Compression over HTTPS** can leak secrets through the BREACH attack when a response mixes attacker-controlled input with secrets (like CSRF tokens). Public timetables are fine; for authenticated pages that echo user input, think before enabling it.
-- **The outbound client** sets a timeout, prefers HTTP/2, recycles connections every 5 minutes, and closes idle ones before a typical 60-second load balancer timeout would.
+- **The outbound client** sets a timeout, prefers HTTP/2, recycles connections every 5 minutes, and closes idle ones before a typical 60-second load balancer timeout would. In production you would usually also add `.AddStandardResilienceHandler()` from `Microsoft.Extensions.Http.Resilience` (retries with jitter for idempotent calls, a circuit breaker, per-attempt and total timeouts). If you do, let its total-request timeout be the deadline and leave `HttpClient.Timeout` longer than that; otherwise the 3-second client timeout cuts off its retries. See [Timeouts, retries and backoff with jitter](#/lesson/m10-timeouts-retries).
 - **ASP.NET Core does not answer `HEAD` automatically** for `MapGet` endpoints. If clients need `HEAD`, map it explicitly with `MapMethods(..., ["HEAD"], ...)`.
 
 For responses whose body is expensive to build, ASP.NET Core's **output caching** middleware (`AddOutputCache`) can store responses in the server and serve them for repeated requests; it complements, not replaces, the `Cache-Control` headers that downstream caches read. See [Caching in ASP.NET Core](#/lesson/m03-caching).
@@ -770,23 +770,23 @@ public static class ETagMatcher
 Add `IfModifiedSince(string? header, DateTimeOffset lastModified)` that parses an HTTP-date and returns true when the resource has *not* changed since then (ignore it when `If-None-Match` is present, as RFC 9110 requires).
 :::
 
-:::exercise id=m10-http-fundamentals-ex2 difficulty=beginner kind=written title="Methods and status codes for a tender portal"
-A state government's e-tender portal is adding an API. Open the **API design playground** (`#/playground/api`) and model these eight operations as endpoints. For each, choose the method, path, success status code and the main error status codes, and say whether a client may blindly retry it after a timeout.
+:::exercise id=m10-http-fundamentals-ex2 difficulty=beginner kind=written title="Methods and status codes for a train-ticket booking API"
+A train-ticket booking app is adding a public API. Open the **API design playground** (`#/playground/api`) and model these eight operations as endpoints. For each, choose the method, path, success status code and the main error status codes, and say whether a client may blindly retry it after a timeout.
 
-1. Read one tender's details.
-2. List open tenders in a district.
-3. A contractor submits a bid (money is involved: bid security of ₹2,00,000).
-4. Replace a draft bid's documents list in full.
-5. Withdraw (delete) a draft bid.
-6. A contractor tries to view another contractor's bid.
-7. A bid arrives one second after the deadline.
-8. The document-scanning service behind the API times out.
+1. Read one train's details (route, stops, classes).
+2. List trains between two stations on a date.
+3. A passenger books tickets (money is involved: a fare of ₹2,450 paid by UPI).
+4. Replace the passenger list of a held (not yet paid) booking in full.
+5. Release (delete) a held, unpaid booking.
+6. A user tries to view another user's booking.
+7. A booking request arrives one second after booking for that train has closed.
+8. The payment-gateway service behind the API times out.
 
 Use the playground's lint panel and fix every error it reports. Paste your final table into your notes.
 ::acceptance
 - Reads use `GET` with no body; the list is paginated.
-- Bid submission is `POST` returning `201 Created` with a `Location` header and requires an `Idempotency-Key`.
-- Full replacement uses `PUT` (idempotent), withdrawal uses `DELETE` returning `204`.
+- Booking is `POST` returning `201 Created` with a `Location` header and requires an `Idempotency-Key`.
+- Full replacement uses `PUT` (idempotent), release uses `DELETE` returning `204`.
 - Case 6 uses `403` (or `404` if you deliberately hide existence) with a reason; case 7 uses `409` or `422` with a reason, not `400` or `500`.
 - Case 8 is `504` if the API acts as a gateway to that service, or `503`, with `Retry-After` considered.
 - Retry answer is correct for each row: safe/idempotent yes, `POST` only with an idempotency key.
@@ -795,29 +795,28 @@ Start from the method table in this lesson: which operations only read, which re
 ::hint
 For each row, ask "if this request ran twice, would the world look different?" That answers the retry column.
 ::hint
-Who is wrong in case 7: the client's request format, or the state of the tender? That separates 400 from 409/422.
+Who is wrong in case 7: the client's request format, or the state of the train's booking window? That separates 400 from 409/422.
 ::hint
-A sample row: `POST /v1/tenders/{tenderId}/bids` → `201` + `Location: /v1/bids/{bidId}`; errors 400, 401, 403, 409 (deadline passed); retry only with the same `Idempotency-Key`.
+A sample row: `POST /v1/trains/{trainNo}/bookings` → `201` + `Location: /v1/bookings/{bookingId}`; errors 400, 401, 403, 409 (booking closed or seats gone); retry only with the same `Idempotency-Key`.
 ::solution
 | # | Endpoint | Success | Errors | Blind retry? |
 |---|---|---|---|---|
-| 1 | `GET /v1/tenders/{tenderId}` | 200 (+ ETag) | 404 | Yes (safe) |
-| 2 | `GET /v1/tenders?district=pune&status=open&limit=50&cursor=...` | 200 | 400 (bad filter) | Yes (safe) |
-| 3 | `POST /v1/tenders/{tenderId}/bids` with `Idempotency-Key` | 201 + Location | 400, 401, 403, 409, 422 | Only with the same idempotency key |
-| 4 | `PUT /v1/bids/{bidId}/documents` with `If-Match` | 200 or 204 | 400, 404, 409 (bid already submitted), 412, 428 | Yes (idempotent), and `If-Match` prevents lost updates |
-| 5 | `DELETE /v1/bids/{bidId}` | 204 | 404, 409 (already submitted) | Yes (idempotent; a second call may return 404) |
-| 6 | `GET /v1/bids/{bidId}` by another contractor | — | 403, or 404 to avoid revealing that the bid exists | Retrying is pointless |
-| 7 | `POST .../bids` after the deadline | — | 409 Conflict (state of the tender forbids it) or 422; never 500 | No — it will fail the same way |
-| 8 | Scanner timeout | — | 504 Gateway Timeout if the API proxies the scanner; 503 + `Retry-After` if the API itself is degraded | Safe methods yes; the bid POST only with the key |
+| 1 | `GET /v1/trains/{trainNo}` | 200 (+ ETag) | 404 | Yes (safe) |
+| 2 | `GET /v1/trains?from=PUNE&to=CSMT&date=2026-11-02&limit=50&cursor=...` | 200 | 400 (bad station code or date) | Yes (safe) |
+| 3 | `POST /v1/trains/{trainNo}/bookings` with `Idempotency-Key` | 201 + Location | 400, 401, 403, 409, 422 | Only with the same idempotency key |
+| 4 | `PUT /v1/bookings/{bookingId}/passengers` with `If-Match` | 200 or 204 | 400, 404, 409 (booking already paid), 412, 428 | Yes (idempotent), and `If-Match` prevents lost updates |
+| 5 | `DELETE /v1/bookings/{bookingId}` | 204 | 404, 409 (already paid: use the cancellation and refund flow instead) | Yes (idempotent; a second call may return 404) |
+| 6 | `GET /v1/bookings/{bookingId}` by another user | — | 403, or 404 to avoid revealing that the booking exists | Retrying is pointless |
+| 7 | `POST .../bookings` after booking has closed | — | 409 Conflict (the train's state forbids it) or 422; never 500 | No — it will fail the same way |
+| 8 | Payment-gateway timeout | — | 504 Gateway Timeout if the API proxies the gateway; 503 + `Retry-After` if the API itself is degraded | Safe methods yes; the booking POST only with the key |
 
-Why `404` is a legitimate choice in case 6: in tenders, revealing that *a* bid exists for a tender can leak competitive information. Many systems return 404 for "exists but not yours" for that reason; document the choice.
+Why `404` is a legitimate choice in case 6: a booking holds passengers' names, ages and phone numbers. Answering `403` confirms that booking id exists, which helps someone enumerating ids. Many systems return 404 for "exists but not yours" for that reason; document the choice.
 ::mistakes
-- `POST /getTender` or `/submitBid` — the method is the verb; the path names the resource.
+- `POST /getTrain` or `/bookTicket` — the method is the verb; the path names the resource.
 - Returning `200` for every outcome with a `success` flag inside.
-- Using `400` for the deadline case: the request was well-formed; the tender's *state* rejected it.
-- Calling bid submission retry-safe without an idempotency key.
+- Using `400` for the booking-closed case: the request was well-formed; the train's *state* rejected it.
+- Calling ticket booking retry-safe without an idempotency key.
 :::
-
 :::exercise id=m10-http-fundamentals-ex3 difficulty=intermediate kind=code title="Is this cached response still fresh?"
 Write the freshness logic a cache uses (RFC 9111) for a private cache (a phone) and a shared cache (a CDN).
 ::requirements
@@ -1327,7 +1326,8 @@ Edge cases worth a test: an `If-None-Match` list containing the current tag; a w
 - **Public transport and maps apps** cache static data (stops, routes, timetables) aggressively with ETags and serve live positions over a separate stream. The split between "changes daily" and "changes every second" is the main design decision.
 - **Government portals during peak days** (exam results, tax filing deadlines) survive mostly because static and semi-static pages are served from a CDN with sensible `Cache-Control`; the origin handles only the personalised requests.
 - **Payment and booking APIs** publish exactly which calls are safe to retry and require idempotency keys on `POST`, because mobile networks guarantee timeouts at scale.
-- **Collaborative admin tools** (timetable editors, BOQ editors on infrastructure projects, CMS editors) use `ETag` + `If-Match` to stop silent overwrites between two people editing the same record.
+- **Collaborative admin tools** (timetable editors, product-catalogue editors in online shops, CMS editors)
+ use `ETag` + `If-Match` to stop silent overwrites between two people editing the same record.
 - **Large web properties** enable HTTP/3 at the CDN; public reports from CDN operators and browser vendors show a significant share of browser traffic now uses it. Inside data centres, HTTP/2 (often via gRPC) remains the norm.
 
 ## Interview questions

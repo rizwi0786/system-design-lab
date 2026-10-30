@@ -75,7 +75,7 @@ Each bullet becomes a class. Two ideas make the design good rather than just wor
 ### Non-functional requirements
 
 - **Deterministic tests.** Every rule must be testable without real randomness.
-- **Reproducibility.** Given a seed, a game can be replayed exactly. That's useful for bug reports ("game 4812 went wrong").
+- **Reproducibility.** Given a seed, a game can be replayed exactly on the same build. That's useful for bug reports ("game 4812 went wrong"). .NET does not promise that `new Random(seed)` produces the same sequence across runtime versions, so anything that must replay months later (a disputed online game) stores the rolls themselves in the turn log, not just the seed.
 - **Fail fast on bad configuration.** Invalid boards are rejected when built, with every problem listed at once.
 - **Small and readable.** No class over about 100 lines. This is a beginner case study, and the code should stay readable.
 
@@ -314,12 +314,11 @@ public sealed class BoardBuilder
 {
     private int _size = 100;
     private readonly List<Jump> _jumps = [];
+    private readonly List<JumpKind> _kinds = [];   // what the caller declared, so a "ladder" that goes down is caught
 
     public BoardBuilder WithSize(int size) { _size = size; return this; }
     public BoardBuilder AddSnake(int head, int tail) { _jumps.Add(new Jump(head, tail)); _kinds.Add(JumpKind.Snake); return this; }
     public BoardBuilder AddLadder(int bottom, int top) { _jumps.Add(new Jump(bottom, top)); _kinds.Add(JumpKind.Ladder); return this; }
-
-    private readonly List<JumpKind> _kinds = [];
 
     public Board Build()
     {
@@ -520,6 +519,8 @@ Points worth noticing:
 - **`random.Next(1, Faces + 1)`.** The upper bound of `Random.Next` is exclusive. Writing `Next(1, 6)` is a classic bug: it never rolls a 6.
 - **`PlayToEnd` has a `maxTurns` guard.** With a buggy rule (say, a bounce-back that can loop), a `while (true)` hangs your test runner. A guard turns a hang into a clear failure.
 - **`Player.Position` has an `internal set`.** The UI can read positions but can't move tokens.
+- **`Game` is not thread-safe, on purpose.** One game is driven by one caller at a time. If a web server receives "roll" from two browser tabs at once, serialise commands per game (a lock, or one `Channel<T>` consumer per game) outside the domain class rather than sprinkling locks inside it.
+- **State changes before observers run.** `PlayTurn` updates positions and the log, then raises `TurnPlayed`. If a subscriber throws, the game is still consistent, but the exception reaches the caller. A UI that must never break play should catch inside its own handler.
 
 ## Automated testing
 

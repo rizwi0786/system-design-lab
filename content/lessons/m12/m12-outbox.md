@@ -49,13 +49,13 @@ It also helps to know basic SQL transactions (`BEGIN`, `COMMIT`, `ROLLBACK`).
 
 ## Explain it like I'm a beginner
 
-Think of a busy government office that issues building permits. When a clerk approves a permit, two things must happen: the approval is written in the **register** (the database), and a **letter** goes to the applicant (the message).
+Think of a busy government office that issues driving licences. When a clerk approves a licence, two things must happen: the approval is written in the **register** (the database), and a **letter** goes to the applicant (the message).
 
-A careless clerk writes in the register and then walks to the post room. If the clerk is called away on the way, the register says "approved" but no letter ever goes out. Another careless clerk posts the letter first and then writes in the register. If the register write fails (the page is torn, the pen runs out), the applicant has a letter for a permit that officially does not exist.
+A careless clerk writes in the register and then walks to the post room. If the clerk is called away on the way, the register says "approved" but no letter ever goes out. Another careless clerk posts the letter first and then writes in the register. If the register write fails (the page is torn, the pen runs out), the applicant has a letter for a licence that officially does not exist.
 
 A careful office does it differently. The clerk writes the approval **and** a line in an "outgoing letters" column on the **same page** of the register, in one go. Either the whole line is written or none of it is. Later, a post-room assistant walks through the register, finds lines marked "letter not yet sent", posts each letter and ticks it as sent.
 
-If the assistant posts a letter and faints before ticking it, the next assistant posts it again. The applicant gets two copies of the same letter, which is annoying but harmless: they recognise the permit number and ignore the duplicate.
+If the assistant posts a letter and faints before ticking it, the next assistant posts it again. The applicant gets two copies of the same letter, which is annoying but harmless: they recognise the licence number and ignore the duplicate.
 
 - The "outgoing letters" column is the **outbox table**.
 - Writing both in one go is a **database transaction**.
@@ -168,6 +168,8 @@ FOR UPDATE SKIP LOCKED;
 
 `FOR UPDATE` locks the selected rows until the relay's transaction ends. `SKIP LOCKED` makes a second relay instance skip rows the first has locked instead of waiting. The relay publishes the batch and updates `published_at` in the same transaction that holds the locks.
 
+That transaction stays open while the relay talks to the broker, so keep batches small (around 100 rows) and broker timeouts short: a transaction left open for minutes stops autovacuum from removing dead rows anywhere in the database. If publishing can be slow, use a short **lease** instead: in one quick transaction, `UPDATE outbox SET locked_until = now() + interval '30 seconds' WHERE id IN (SELECT id ... FOR UPDATE SKIP LOCKED) RETURNING *`, then publish with no transaction open, then mark the rows published; rows whose lease expires are picked up again. To cut latency without polling faster, the writer can run `NOTIFY outbox_new` in the same transaction (delivered only on commit) and the relay can `LISTEN` and wake up early, keeping the timed poll as a safety net because notifications are not stored while the relay is disconnected.
+
 **Transaction log tailing (CDC).** PostgreSQL writes every committed change to its write-ahead log (WAL). With **logical decoding** (`wal_level = logical`) a tool such as Debezium reads inserts into the outbox table from a replication slot and publishes them to Kafka. Debezium's outbox event router turns each row into a message, using `aggregate_id` as the key. No polling queries hit the table.
 
 | | Polling relay | CDC (log tailing) |
@@ -192,7 +194,7 @@ Ordering has three traps.
 
 **Trap 3: more than one relay.** With `SKIP LOCKED`, relay A may lock events 1 and 3 of an order while relay B grabs event 2. Each publishes its own rows, so the broker may receive 2 before 1. Options:
 
-- Run **one active relay** at a time. Each instance tries `SELECT pg_try_advisory_lock(73001)`; only the winner relays, the others wait as hot standbys.
+- Run **one active relay** at a time. Each instance tries `SELECT pg_try_advisory_lock(73001)`; only the winner relays, the others wait as hot standbys. A session-level advisory lock belongs to one connection, so the leader must keep that connection open for as long as it relays, and the lock must not be taken through a pooler in transaction mode (such as PgBouncer with `pool_mode = transaction`), where the next statement may run on a different server connection.
 - **Partition the work**: relay instance *k* of *N* only handles rows where `hashtext(aggregate_id) % N = k`, so each aggregate has exactly one owner.
 - Accept unordered delivery and make consumers order-tolerant by carrying a per-aggregate version number.
 
@@ -1605,7 +1607,7 @@ Also test: two events for one order where the first fails (the second must not b
 - **.NET messaging libraries.** MassTransit, NServiceBus and Wolverine each provide a transactional outbox that stores outgoing messages in the application's database (often via EF Core) and dispatches them in the background. Knowing the parts helps you set batch sizes, cleanup and monitoring sensibly.
 - **CDC platforms.** Debezium with Kafka Connect is a widely used open-source way to tail PostgreSQL, MySQL and SQL Server logs; its outbox event router is designed for exactly the table in this lesson.
 - **Payments.** A system like a UPI payment aggregator records a transaction status change and the merchant notification in one transaction, then delivers webhooks from that table with retries. Merchants receive duplicates occasionally and deduplicate on the transaction id.
-- **Infrastructure project platforms.** When a site engineer approves a measurement book entry, the approval and an `MbApproved` event for the billing service are written together; the billing service raises the contractor bill from the event. Without the outbox, an approval could exist with no bill, which is exactly the kind of gap an audit finds.
+- **Clinic and hospital appointments.** When a patient books a consultation, the booking and an `AppointmentBooked` event for the reminder and billing services are written together; the billing service raises the consultation invoice and the reminder service schedules the SMS from that event. Without the outbox, a booking could exist with no invoice and no reminder, which is exactly the kind of gap that shows up as a no-show and an unbilled visit.
 - **E-commerce.** "Order placed" fans out to warehouse, notifications, analytics and loyalty points. An outbox lets the order service stay simple and fast while every downstream team consumes the same reliable stream.
 
 ## Interview questions

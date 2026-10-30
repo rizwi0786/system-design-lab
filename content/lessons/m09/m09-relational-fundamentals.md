@@ -338,9 +338,9 @@ COMMIT;
 
 The foreign keys verify customer 311 and products 17 and 93 exist. `quantity > 0` passes. The composite primary key would reject a second line for product 17 on this order.
 
-**Step 4 — Try a bad line.** A later edit sends `(1042, 17, 0, 62.00)`. Two things go wrong at once: product 17 is already on the order (primary key) and quantity is 0 (check). PostgreSQL reports the first violation it hits; the statement fails either way, and nothing is half-written.
+**Step 4 — Try a bad line.** A later edit sends `(1042, 17, 0, 62.00)`. Two things go wrong at once: product 17 is already on the order (primary key) and quantity is 0 (check). PostgreSQL reports only the first violation it hits. In practice that is the `CHECK` (`23514`): `NOT NULL` and `CHECK` constraints are tested before the row goes into the unique index, and foreign keys are checked last, at the end of the statement. The statement fails either way, and nothing is half-written.
 
-**Step 5 — Record the payment.** UPI payment of ₹172.50 (2 × 62.00 + 48.50) with `provider_ref = 'UPI-7781-AX'`, status `captured`, `paid_at = now()`. If the gateway sends the same callback twice, the unique `provider_ref` rejects the second insert, which is exactly what you want for payments.
+**Step 5 — Record the payment.** UPI payment of ₹172.50 (2 × 62.00 + 48.50) with `provider_ref = 'UPI-7781-AX'`, status `captured`, `paid_at = now()`. If the gateway sends the same callback twice, the unique `provider_ref` rejects the second insert, which is exactly what you want for payments. A webhook handler usually writes `INSERT ... ON CONFLICT (provider_ref) DO NOTHING` and treats "no row inserted" as "already processed", so the retry gets a success response instead of an error.
 
 **Step 6 — Deliver.** `UPDATE orders SET status = 'delivered', delivered_at = now() WHERE order_id = 1042;` The check `delivered_at >= placed_at` passes. If a clock-skewed server set `delivered_at` to yesterday, the check would catch it.
 
@@ -611,7 +611,7 @@ Design notes:
 :::
 
 :::callout type=tradeoff title="Foreign keys are not free"
-Each foreign key adds an index lookup to every insert and update of the referencing column, and a check against children on every delete of a parent. For normal business tables (thousands to millions of rows a day) the cost is small and the protection is large. For very high-rate append-only tables, measure before adding them, and if you leave them out, document who validates the references instead.
+Each foreign key adds an index lookup to every insert and update of the referencing column, and a check against children on every delete of a parent. PostgreSQL requires an index on the *referenced* key (it must be a primary or unique key) but does **not** create one on the *referencing* column: without an index on `payments (order_id)`, every delete of an order scans the whole `payments` table. Index foreign-key columns you join on or delete parents by. For normal business tables (thousands to millions of rows a day) the cost is small and the protection is large. For very high-rate append-only tables, measure before adding them, and if you leave them out, document who validates the references instead.
 :::
 
 ## Practical playground
@@ -1263,7 +1263,7 @@ public async Task Duplicate_email_is_rejected_by_the_database()
 ## Real-world application
 
 - **E-commerce and quick-commerce platforms** keep orders, customers and payments relational precisely because money and inventory need the guarantees described here. Catalogue attributes that vary per category often go into `jsonb` alongside.
-- **Government and infrastructure systems** (tender registries, land records, project progress reporting) rely heavily on referential integrity: a progress entry must reference a real project, a real contractor and a valid reporting period. Natural keys such as a contract number are kept as unique constraints, with surrogate keys for joins.
+- **Hospital, school and government systems** (clinic appointment booking, college admissions, land records) rely heavily on referential integrity: an appointment must reference a real patient, a real doctor and a valid slot. Natural keys such as a health ID or an admission number are kept as unique constraints, with surrogate keys for joins.
 - **Payment reconciliation** depends on a unique constraint on the provider's reference. Without it, a replayed webhook creates a duplicate payment that takes a human hours to untangle.
 - **Multi-service systems** often share nothing but ids. When two services keep separate databases, foreign keys cannot span them, so the ids are validated at the API boundary or accepted as eventually consistent. Knowing what a foreign key gives you tells you what you lose when you split the data.
 

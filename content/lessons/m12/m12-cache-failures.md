@@ -72,7 +72,7 @@ Every failure mode in this lesson is a way the miss ratio jumps suddenly, either
 
 **Defences.**
 
-1. **Request coalescing (single-flight).** Within one process, the first miss for a key starts the load; later misses for the same key **wait for that same task** instead of starting their own. With 20 API instances, the worst case drops from 1,000 queries to 20 (one per instance). `HybridCache.GetOrCreateAsync` does this for you; the implementation below builds it by hand.
+1. **Request coalescing (single-flight).** Within one process, the first miss for a key starts the load; later misses for the same key **wait for that same task** instead of starting their own. With 20 API instances, the worst case drops from 1,000 queries to 20 (one per instance). `HybridCache.GetOrCreateAsync` (.NET 9+, `Microsoft.Extensions.Caching.Hybrid`) does this for you; the implementation below builds it by hand. Note that HybridCache's stampede protection is **per process**: it does not coordinate across instances, so the worst case is still one load per instance.
 2. **Distributed lock on rebuild.** Before loading, try `SET rebuild:deals <id> NX PX 5000`. Only the instance that wins runs the query; the others wait briefly and re-read the cache, or serve the stale value. This takes the worst case from 20 to 1, at the cost of extra round trips and lock edge cases (the lock expiring mid-rebuild, the holder crashing). Use it when even one query per instance is too many.
 3. **Stale-while-revalidate (soft and hard TTL).** Store the value with a *soft* expiry (say 5 minutes) and a *hard* expiry (say 1 hour). After the soft expiry, keep serving the old value while **one** background refresh runs. Readers never wait and never stampede. Requires that slightly stale data is acceptable — which it was, or you would not cache it.
 4. **Probabilistic early expiration (XFetch).** Instead of all readers seeing the expiry at the same instant, each reader *independently* decides to refresh slightly early, with a probability that rises as expiry approaches. Vattani, Chierichetti and Lowenstein (VLDB 2015) proved this rule is optimal under their model:
@@ -119,7 +119,7 @@ Worked example: 10 million SKUs, target p = 1 %.
 - m = −10,000,000 × ln(0.01) ÷ 0.4805 = 10,000,000 × 4.605 ÷ 0.4805 ≈ **95.85 million bits ≈ 12 MB**.
 - k = 9.585 × 0.693 ≈ 6.6 → **7 hash functions**.
 
-So about 9.6 bits per item for 1 % false positives; each extra 4.8 bits per item cuts the rate by another 10× (p = 0.1 % needs about 14.4 bits per item). 12 MB fits in every API instance's memory, or in Redis (Redis Stack offers a `BF.*` module; a plain Redis bitmap with `SETBIT`/`GETBIT` works too).
+So about 9.6 bits per item for 1 % false positives; each extra 4.8 bits per item cuts the rate by another 10× (p = 0.1 % needs about 14.4 bits per item). 12 MB fits in every API instance's memory, or in Redis (Redis 8 ships Bloom filters as `BF.*` commands; Valkey, the open-source fork created after Redis's 2024 licence change, offers them through its `valkey-bloom` module; a plain bitmap with `SETBIT`/`GETBIT` works on either).
 
 **Limits.**
 
@@ -1574,8 +1574,8 @@ Add a second test where the work throws: every waiter gets the exception, and th
 - **Exam results, ticket sales, and government scheme launches** in India regularly face 50–100× normal traffic in minutes. Pre-warming, Bloom filters for id validation, CDN offload and load shedding with a friendly retry page are the standard toolkit.
 - **News and sports sites** handle hot keys (a breaking story, a live score) with very short L1 TTLs and CDN micro-caching (1–5 s).
 - **E-commerce flash sales** separate "show the page" (cacheable, can be a second stale) from "take the stock" (atomic, source of truth), exactly as in exercise 4.
-- **Libraries** have absorbed many of these defences: .NET's `HybridCache` coalesces per key; CDNs offer request collapsing and stale-while-revalidate (`Cache-Control: stale-while-revalidate`); Redis Stack provides Bloom filters.
-- **Infrastructure dashboards** used in review meetings often trigger stampedes: thirty officials open the same project dashboard at 10:00 when the meeting starts. Coalescing and a 1-minute cache on the aggregate turn thirty heavy queries into one.
+- **Libraries** have absorbed many of these defences: .NET's `HybridCache` coalesces per key; CDNs offer request collapsing and stale-while-revalidate (`Cache-Control: stale-while-revalidate`); Redis 8 and Valkey (via a module) provide Bloom filters.
+- **SaaS team dashboards** often trigger stampedes: a whole sales team opens the same "this week's revenue" dashboard when the Monday 10:00 stand-up starts. Coalescing and a 1-minute cache on the aggregate turn thirty heavy queries into one.
 
 ## Interview questions
 

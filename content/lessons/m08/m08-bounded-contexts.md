@@ -47,15 +47,15 @@ Helpful but optional: [Adapter](#/lesson/m06-adapter), because an anti-corruptio
 
 ## Explain it like I'm a beginner
 
-Imagine a company that sells construction materials to contractors: cement, steel bars, aggregates, tiles. Three departments sit on three floors of the same building.
+Imagine a company that supplies restaurants, hotels and cloud kitchens through an ordering app: rice, cooking oil, cleaning supplies, electric kettles and other small kitchen appliances. Three departments sit on three floors of the same building.
 
 - **Sales**, on floor 1, talks about *customers*. To them a customer is a company that might buy, with a sales rep assigned, a credit limit and a pipeline stage ("quoted", "negotiating", "won").
 - **Billing**, on floor 2, also talks about *customers*. To them a customer is a legal entity with a GST number (GSTIN), a registered address, payment terms ("net 30") and an outstanding balance.
-- **Logistics**, on floor 3, barely says "customer". They say *consignee* and *delivery site*: a plot with a pin code, a gate contact's phone number and a crane availability window.
+- **Logistics**, on floor 3, barely says "customer". They say *consignee* and *receiving point*: a restaurant's back door with a pin code, a kitchen contact's phone number and a receiving window (many kitchens accept deliveries only between 7 and 10 am, before lunch prep).
 
 Same word, three meanings. If you ask "how many customers do we have?", Sales says 1,400 (including prospects), Billing says 620 (entities we have ever invoiced), and Logistics shrugs.
 
-Now imagine a software team builds **one** `Customer` class to serve all three floors. It gets `PipelineStage`, `Gstin`, `CreditLimit`, `GateContactPhone`, `CraneWindowStart`… 47 properties. Every floor's change request touches the same class. Billing adds a mandatory `Gstin` validation, and suddenly Sales cannot save a prospect that has not registered for GST yet. Nobody can say which properties are allowed to be empty for whom. That class is a *shared model*, and shared models rot.
+Now imagine a software team builds **one** `Customer` class to serve all three floors. It gets `PipelineStage`, `Gstin`, `CreditLimit`, `KitchenContactPhone`, `ReceivingWindowStart`… 47 properties. Every floor's change request touches the same class. Billing adds a mandatory `Gstin` validation, and suddenly Sales cannot save a prospect that has not registered for GST yet. Nobody can say which properties are allowed to be empty for whom. That class is a *shared model*, and shared models rot.
 
 A **bounded context** is the opposite decision: draw a line around each floor and let each one have its own model with its own words. Inside the Sales line, `Customer` means exactly one thing. Inside the Billing line, `Customer` means exactly one other thing. The lines are the boundaries; the words inside each line are its **ubiquitous language**, "ubiquitous" because *everyone* inside that boundary (developers, testers, the sales manager) uses the same words with the same meaning, in conversation, in code and in the database.
 
@@ -129,7 +129,7 @@ DRY (don't repeat yourself) is about duplicating *knowledge*, not duplicating *f
 
 ## Visual explanation
 
-### Context map for the materials marketplace
+### Context map for the restaurant-supplies marketplace
 
 ```mermaid
 flowchart LR
@@ -219,7 +219,7 @@ public class Customer
     public decimal CreditLimit { get; set; }         // Sales
     public string PipelineStage { get; set; } = "";  // Sales: "Quoted", "Won"...
     public string PaymentTerms { get; set; } = "";   // Billing: "Net30"
-    public string? GateContactPhone { get; set; }    // Logistics
+    public string? KitchenContactPhone { get; set; } // Logistics
     public bool IsBlocked { get; set; }              // Billing meaning? Sales meaning? Both?
 }
 ```
@@ -248,7 +248,7 @@ The next section shows a compilable modular monolith: one ASP.NET Core process, 
 Project layout (single web project, folders per context; in a bigger system each folder becomes a class library with a reference rule enforced by the build):
 
 ```text
-BuildMart.Api/
+ChefMart.Api/
   Program.cs
   Contracts/Sales/SalesOrderConfirmedV1.cs      // published language
   Infrastructure/InProcessEventBus.cs
@@ -266,7 +266,7 @@ BuildMart.Api/
 ### The published language
 
 ```csharp file=Contracts/Sales/SalesOrderConfirmedV1.cs
-namespace BuildMart.Contracts.Sales;
+namespace ChefMart.Contracts.Sales;
 
 /// <summary>Published language: the shape Sales promises to keep stable for everyone downstream.
 /// Rules: additive changes only within V1; breaking changes get a V2 type and a parallel-publish period.</summary>
@@ -290,7 +290,7 @@ Amounts travel as integers in the smallest unit (paise) so no context has to gue
 ```csharp file=Infrastructure/InProcessEventBus.cs
 using Microsoft.Extensions.DependencyInjection;
 
-namespace BuildMart.Infrastructure;
+namespace ChefMart.Infrastructure;
 
 public interface IIntegrationEventHandler<in T>
 {
@@ -316,7 +316,7 @@ public sealed class InProcessEventBus(IServiceProvider services) : IEventBus
 ### Sales context
 
 ```csharp file=Sales/Customer.cs
-namespace BuildMart.Sales;
+namespace ChefMart.Sales;
 
 public enum PipelineStage { Prospect, Quoted, Negotiating, Won, Lost }
 
@@ -343,9 +343,9 @@ public sealed class Customer
 ```
 
 ```csharp file=Sales/Order.cs
-using BuildMart.Contracts.Sales;
+using ChefMart.Contracts.Sales;
 
-namespace BuildMart.Sales;
+namespace ChefMart.Sales;
 
 public enum OrderStatus { Draft, Confirmed, Cancelled }
 
@@ -397,9 +397,9 @@ public sealed class Order
 ```
 
 ```csharp file=Sales/SalesOrderService.cs
-using BuildMart.Infrastructure;
+using ChefMart.Infrastructure;
 
-namespace BuildMart.Sales;
+namespace ChefMart.Sales;
 
 public interface ISalesRepository
 {
@@ -440,7 +440,7 @@ public sealed class SalesOrderService(ISalesRepository repo, IEventBus bus, Time
 ### Billing context
 
 ```csharp file=Billing/Money.cs
-namespace BuildMart.Billing;
+namespace ChefMart.Billing;
 
 /// <summary>Billing value object. Stored in paise so arithmetic is exact.</summary>
 public readonly record struct Money(long Paise, string Currency)
@@ -464,7 +464,7 @@ public readonly record struct Money(long Paise, string Currency)
 ```
 
 ```csharp file=Billing/BillingAccount.cs
-namespace BuildMart.Billing;
+namespace ChefMart.Billing;
 
 public readonly record struct BillingAccountId(Guid Value);
 
@@ -495,7 +495,7 @@ public sealed class BillingAccount
 ```
 
 ```csharp file=Billing/Invoice.cs
-namespace BuildMart.Billing;
+namespace ChefMart.Billing;
 
 public readonly record struct InvoiceId(Guid Value);
 
@@ -563,12 +563,13 @@ public sealed class Invoice
 ```
 
 ```csharp file=Billing/Ports.cs
-namespace BuildMart.Billing;
+namespace ChefMart.Billing;
 
 /// <summary>Ports owned by Billing. The ACL uses them; infrastructure implements them.</summary>
 public interface ITaxRateLookup
 {
-    /// <summary>GST rate in percent for an HSN code, e.g. 18 for 1806 (chocolate), 28 for 2523 (cement).</summary>
+    /// <summary>GST rate in percent for an HSN code, e.g. 5 for 1006 (packaged rice), 18 for 8516 (electric kettles).
+    /// Rates are illustrative: GST rates change by notification, so production code loads them from dated configuration.</summary>
     decimal RateFor(string hsnCode);
 }
 
@@ -595,10 +596,9 @@ public sealed class StaticTaxRateLookup : ITaxRateLookup
 {
     private static readonly Dictionary<string, decimal> Rates = new()
     {
-        ["2523"] = 28m,   // cement
-        ["7214"] = 18m,   // steel bars
-        ["6907"] = 18m,   // tiles
-        ["2517"] = 5m,    // aggregates / crushed stone
+        ["8516"] = 18m,   // electric kettles and similar appliances
+        ["3402"] = 18m,   // detergents and cleaning preparations
+        ["1006"] = 5m,    // packaged rice
     };
     public decimal RateFor(string hsnCode) => Rates.TryGetValue(hsnCode, out var r) ? r : 18m;
 }
@@ -614,9 +614,9 @@ public sealed class InMemoryBillingAccountDirectory : IBillingAccountDirectory
 ### The anti-corruption layer
 
 ```csharp file=Billing/Acl/SalesOrderTranslator.cs
-using BuildMart.Contracts.Sales;
+using ChefMart.Contracts.Sales;
 
-namespace BuildMart.Billing.Acl;
+namespace ChefMart.Billing.Acl;
 
 public interface ISalesOrderTranslator
 {
@@ -646,11 +646,11 @@ public sealed class SalesOrderTranslator(ITaxRateLookup taxRates, IBillingAccoun
 ```
 
 ```csharp file=Billing/Acl/SalesOrderConfirmedHandler.cs
-using BuildMart.Contracts.Sales;
-using BuildMart.Infrastructure;
+using ChefMart.Contracts.Sales;
+using ChefMart.Infrastructure;
 using Microsoft.Extensions.Logging;
 
-namespace BuildMart.Billing.Acl;
+namespace ChefMart.Billing.Acl;
 
 public sealed class SalesOrderConfirmedHandler(
     ISalesOrderTranslator translator,
@@ -685,11 +685,11 @@ public sealed class SalesOrderConfirmedHandler(
 ### Composition root
 
 ```csharp file=Program.cs
-using BuildMart.Billing;
-using BuildMart.Billing.Acl;
-using BuildMart.Contracts.Sales;
-using BuildMart.Infrastructure;
-using BuildMart.Sales;
+using ChefMart.Billing;
+using ChefMart.Billing.Acl;
+using ChefMart.Contracts.Sales;
+using ChefMart.Infrastructure;
+using ChefMart.Sales;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -720,7 +720,7 @@ app.MapPost("/sales/orders/{id:guid}/confirm", async (Guid id, SalesOrderService
 app.Run();
 ```
 
-Three things to notice in the wiring. First, `Sales` has no `using BuildMart.Billing` anywhere, and `Billing` has no `using BuildMart.Sales`; both reference only `BuildMart.Contracts`. In a multi-project solution you make this a build error by not adding the project reference. Second, the handler is idempotent: an in-process bus never redelivers, but a real broker will, so the ACL is the right place for the dedupe check. Third, the account directory is Billing's: Billing decides how a Sales account code maps to a billing account, not Sales.
+Three things to notice in the wiring. First, `Sales` has no `using ChefMart.Billing` anywhere, and `Billing` has no `using ChefMart.Sales`; both reference only `ChefMart.Contracts`. In a multi-project solution you make this a build error by not adding the project reference. Second, the handler is idempotent: an in-process bus never redelivers, but a real broker will, so the ACL is the right place for the dedupe check. Third, the account directory is Billing's: Billing decides how a Sales account code maps to a billing account, not Sales.
 
 ## Bad design vs good design
 
@@ -784,7 +784,7 @@ namespace Billing
     // The ACL: the only Billing code that reads Sales vocabulary.
     public static class SalesOrderTranslator
     {
-        private static decimal RateFor(string hsn) => hsn switch { "2523" => 28m, "2517" => 5m, _ => 18m };
+        private static decimal RateFor(string hsn) => hsn switch { "8516" => 18m, "1006" => 5m, _ => 12m };
         public static Invoice ToInvoice(SalesOrderConfirmedV1 m)
         {
             var inv = new Invoice();
@@ -803,8 +803,8 @@ public static class Program
     public static void Main()
     {
         var order = new Sales.Order("ACC-4471");
-        order.Lines.Add(new Sales.OrderLine("CEM-OPC53", "2523", 100, 385.50m));   // 100 bags of cement
-        order.Lines.Add(new Sales.OrderLine("AGG-20MM", "2517", 12, 1450m));      // 12 tonnes of aggregate
+        order.Lines.Add(new Sales.OrderLine("KETTLE-1L5", "8516", 100, 785.50m));  // 100 electric kettles
+        order.Lines.Add(new Sales.OrderLine("RICE-BAS-25", "1006", 12, 1450m));   // 12 bags of basmati rice (25 kg)
 
         var message = order.Confirm();
         var invoice = Billing.SalesOrderTranslator.ToInvoice(message);
@@ -821,7 +821,7 @@ public static class Program
 ## Exercises
 
 :::exercise id=m08-bounded-contexts-ex1 difficulty=beginner kind=design title="Split a shared Product into per-context models"
-A tile retailer has one `Product` class used by Catalog, Warehouse and Billing. It has 31 properties, including `DisplayName`, `MarketingDescription`, `ImageUrls`, `HsnCode`, `GstRatePercent`, `BinLocation`, `ReorderLevel`, `UnitsPerPallet`, `WeightKg` and `IsDiscontinued`. Redesign it as three context-specific models and show the relationships. Use the LLD designer (the starter JSON is loaded for you) to produce your class model.
+A kitchen-appliance retailer has one `Product` class used by Catalog, Warehouse and Billing. It has 31 properties, including `DisplayName`, `MarketingDescription`, `ImageUrls`, `HsnCode`, `GstRatePercent`, `BinLocation`, `ReorderLevel`, `UnitsPerPallet`, `WeightKg` and `IsDiscontinued`. Redesign it as three context-specific models and show the relationships. Use the LLD designer (the starter JSON is loaded for you) to produce your class model.
 ::requirements
 - Each context gets its own type with only the fields it needs.
 - The three types share an identifier so they can be correlated, but not a base class.
@@ -896,8 +896,8 @@ Implement `SalesOrderTranslator.Translate`. It receives a `SalesOrderConfirmedV1
 - If the directory has no billing account for the Sales account code, return `null` (the handler parks the message).
 - The draft's `SourceReference` is the Sales `OrderId`.
 ::acceptance
-- A message with two lines produces a draft with two lines and the right rates (28 % for HSN 2523, 5 % for 2517).
-- The total of a draft with 100 × ₹385.50 at 28 % and 12 × ₹1,450 at 5 % is ₹67,614.00 (net ₹55,950 + tax ₹11,664).
+- A message with two lines produces a draft with two lines and the right rates (18 % for HSN 8516, 5 % for 1006).
+- The total of a draft with 100 × ₹785.50 at 18 % and 12 × ₹1,450 at 5 % is ₹1,10,959.00 (net ₹95,950 + tax ₹15,009).
 - An unknown account code yields `null`, not an exception.
 ::hint
 Start with the account lookup; if it is `null`, you are done early.
@@ -975,11 +975,11 @@ public class TranslatorTests
 {
     private sealed class FakeRates : ITaxRateLookup
     {
-        public decimal RateFor(string hsn) => hsn switch { "2523" => 28m, "2517" => 5m, _ => 18m };
+        public decimal RateFor(string hsn) => hsn switch { "8516" => 18m, "1006" => 5m, _ => 12m };
     }
     private sealed class FakeDirectory : IBillingAccountDirectory
     {
-        public static readonly BillingAccount Known = new(new BillingAccountId(Guid.NewGuid()), "Shree Builders Pvt Ltd", "06AAACS1234A1Z5");
+        public static readonly BillingAccount Known = new(new BillingAccountId(Guid.NewGuid()), "Spice Route Restaurants Pvt Ltd", "06AAACS1234A1Z5");
         public BillingAccount? FindBySalesAccountCode(string code) => code == "ACC-4471" ? Known : null;
     }
 
@@ -987,8 +987,8 @@ public class TranslatorTests
         Guid.NewGuid(), account, new DateTimeOffset(2026, 4, 1, 10, 0, 0, TimeSpan.Zero), "INR",
         new List<ConfirmedLineV1>
         {
-            new("CEM-OPC53", "2523", 100, 38550),
-            new("AGG-20MM", "2517", 12, 145000),
+            new("KETTLE-1L5", "8516", 100, 78550),
+            new("RICE-BAS-25", "1006", 12, 145000),
         });
 
     [Fact]
@@ -997,7 +997,7 @@ public class TranslatorTests
         var draft = new SalesOrderTranslator(new FakeRates(), new FakeDirectory()).Translate(Message("ACC-4471"));
         Assert.NotNull(draft);
         Assert.Equal(2, draft!.Lines.Count);
-        Assert.Equal(28m, draft.Lines[0].TaxRatePercent);
+        Assert.Equal(18m, draft.Lines[0].TaxRatePercent);
         Assert.Equal(5m, draft.Lines[1].TaxRatePercent);
         Assert.Equal(FakeDirectory.Known.Id, draft.AccountId);
     }
@@ -1006,7 +1006,7 @@ public class TranslatorTests
     public void Total_includes_tax()
     {
         var draft = new SalesOrderTranslator(new FakeRates(), new FakeDirectory()).Translate(Message("ACC-4471"))!;
-        Assert.Equal(6_761_400L, draft.Total().Paise);
+        Assert.Equal(11_095_900L, draft.Total().Paise);
     }
 
     [Fact]
@@ -1091,7 +1091,7 @@ public sealed class SalesOrderTranslator
 }
 ```
 
-Checking the number: 100 × 38,550 paise = 3,855,000 net, 28 % tax = 1,079,400. 12 × 145,000 = 1,740,000 net, 5 % tax = 87,000. Net 5,595,000 + tax 1,166,400 = 6,761,400 paise = ₹67,614.00. The arithmetic happens in Billing's `Money`, not in the translator; the translator only renames and re-types.
+Checking the number: 100 × 78,550 paise = 7,855,000 net, 18 % tax = 1,413,900. 12 × 145,000 = 1,740,000 net, 5 % tax = 87,000. Net 9,595,000 + tax 1,500,900 = 11,095,900 paise = ₹1,10,959.00. The arithmetic happens in Billing's `Money`, not in the translator; the translator only renames and re-types.
 ::mistakes
 - Throwing on an unknown account. The message is valid; Billing simply is not ready for it. Parking is a business outcome, not an error.
 - Doing tax arithmetic inside the translator. The translator maps; `InvoiceLineDraft` computes.
@@ -1166,7 +1166,7 @@ public class UpcasterTests
     [Fact]
     public void V1_is_upcast_to_v2()
     {
-        var v1 = new SalesOrderConfirmedV1(Guid.NewGuid(), "ACC-1", When, "INR", new List<ConfirmedLineV1> { new("S1", "2523", 2, 100), new("S2", "2517", 1, 50) });
+        var v1 = new SalesOrderConfirmedV1(Guid.NewGuid(), "ACC-1", When, "INR", new List<ConfirmedLineV1> { new("S1", "8516", 2, 100), new("S2", "1006", 1, 50) });
         var v2 = MessageUpcaster.ToV2(new MessageEnvelope(SalesOrderConfirmedV1.SchemaVersion, v1));
         Assert.Equal(v1.OrderId, v2.OrderId);
         Assert.Equal("ACC-1", v2.SalesAccountCode);
@@ -1369,14 +1369,14 @@ Bounded contexts give you three testing layers that are each cheap:
 public class InvoiceTests
 {
     private static BillingAccount Account(PaymentTerms terms = PaymentTerms.Net30) =>
-        new(new BillingAccountId(Guid.NewGuid()), "Shree Builders Pvt Ltd", "06AAACS1234A1Z5", terms);
+        new(new BillingAccountId(Guid.NewGuid()), "Spice Route Restaurants Pvt Ltd", "06AAACS1234A1Z5", terms);
 
     [Fact]
     public void Due_date_follows_payment_terms()
     {
         var issued = new DateTimeOffset(2026, 4, 1, 0, 0, 0, TimeSpan.Zero);
         var draft = new InvoiceDraft(Account().Id, Guid.NewGuid(), issued, "INR",
-            new[] { new InvoiceLineDraft("CEM", 10, Money.FromPaise(38550, "INR"), 28m) });
+            new[] { new InvoiceLineDraft("KETTLE-1L5", 10, Money.FromPaise(78550, "INR"), 18m) });
         var invoice = Invoice.Issue(draft, Account(PaymentTerms.Net30));
         Assert.Equal(issued.AddDays(30), invoice.DueOn);
     }
@@ -1387,7 +1387,7 @@ public class InvoiceTests
         var account = Account();
         account.PlaceOnHold();
         var draft = new InvoiceDraft(account.Id, Guid.NewGuid(), DateTimeOffset.UtcNow, "INR",
-            new[] { new InvoiceLineDraft("CEM", 1, Money.FromPaise(100, "INR"), 28m) });
+            new[] { new InvoiceLineDraft("KETTLE-1L5", 1, Money.FromPaise(100, "INR"), 18m) });
         Assert.Throws<InvalidOperationException>(() => Invoice.Issue(draft, account));
     }
 }
@@ -1402,20 +1402,20 @@ public class InvoiceTests
 public void V1_contract_has_not_changed()
 {
     var sample = new SalesOrderConfirmedV1(Guid.Empty, "ACC-1", DateTimeOffset.UnixEpoch, "INR",
-        new[] { new ConfirmedLineV1("S", "2523", 1, 100) });
+        new[] { new ConfirmedLineV1("S", "8516", 1, 100) });
     var json = System.Text.Json.JsonSerializer.Serialize(sample);
-    const string expected = "{\"OrderId\":\"00000000-0000-0000-0000-000000000000\",\"AccountCode\":\"ACC-1\",\"ConfirmedAt\":\"1970-01-01T00:00:00+00:00\",\"Currency\":\"INR\",\"Lines\":[{\"Sku\":\"S\",\"HsnCode\":\"2523\",\"Quantity\":1,\"UnitPricePaise\":100}]}";
+    const string expected = "{\"OrderId\":\"00000000-0000-0000-0000-000000000000\",\"AccountCode\":\"ACC-1\",\"ConfirmedAt\":\"1970-01-01T00:00:00+00:00\",\"Currency\":\"INR\",\"Lines\":[{\"Sku\":\"S\",\"HsnCode\":\"8516\",\"Quantity\":1,\"UnitPricePaise\":100}]}";
     Assert.Equal(expected, json);
 }
 ```
 
-**4. An architecture test.** In a multi-project solution, a test that reflects over the `BuildMart.Billing` assembly and asserts it references no type from `BuildMart.Sales` (libraries such as NetArchTest do this; a hand-rolled check over `Assembly.GetReferencedAssemblies()` works too). This turns the boundary from a convention into a failing build.
+**4. An architecture test.** In a multi-project solution, a test that reflects over the `ChefMart.Billing` assembly and asserts it references no type from `ChefMart.Sales` (libraries such as NetArchTest do this; a hand-rolled check over `Assembly.GetReferencedAssemblies()` works too). This turns the boundary from a convention into a failing build.
 
 ## Real-world application
 
 - **Modular monoliths in .NET**: each bounded context becomes a project (or a folder with an `InternalsVisibleTo` discipline), with a `Contracts` project holding published-language records. The in-process bus becomes a real broker only when a context moves out of process. See [Domain-driven modular monoliths](#/lesson/m08-ddd-modular-monolith).
 - **Payments and settlements**: a system like a UPI payment app has a Payments context (intents, authorisations) and a Settlement context (batches, bank reconciliation). "Transaction" means something different in each; the published language between them is a settled-payment event, and reconciliation code never reads the payments tables.
-- **Infrastructure project platforms**: a highway programme-management system has Progress (physical work done, chainages), Finance (bills certified, payments released) and Contracts (variations, claims). "Milestone" is a schedule concept in Progress and a payment trigger in Finance. Treating them as two words that happen to be spelled the same, linked by a published `MilestoneAchievedV1`, avoids a decade of ambiguous status columns.
+- **Online learning platforms**: a course marketplace has Catalogue (courses, instructors, previews), Learning (enrolments, progress, certificates) and Payouts (instructor revenue share, refunds). "Completion" is a progress concept in Learning and a revenue trigger in Payouts (some instructors are paid per completed learner). Treating them as two words that happen to be spelled the same, linked by a published `CourseCompletedV1`, avoids years of ambiguous status columns.
 - **Government and vendor APIs** (GST portal, insurers, payment gateways, map providers) are the canonical conformist relationships. Wrapping each in an ACL is what lets you swap a vendor in a sprint instead of a year.
 - **Microservices**: service boundaries that ignore bounded contexts (one service per table, or per team's whim) produce the "distributed monolith": every change spans five services. Context-aligned services are the ones that can actually deploy independently. See [Microservices architecture](#/lesson/m02-microservices).
 

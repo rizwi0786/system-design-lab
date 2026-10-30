@@ -810,7 +810,7 @@ Things to try:
 ## Exercises
 
 :::exercise id=m01-interfaces-abstract-ex1 difficulty=beginner kind=code title="Shapes that keep a promise"
-A land-survey app needs to work out the area and boundary length of plots of different shapes. Implement the `IShape` interface for a circle, a rectangle and a right triangle, and a helper that adds up areas.
+A home-interiors app quotes flooring by area and skirting (the strip along the bottom of the walls) by perimeter, for rooms and terraces of different shapes. Sizes are in feet, so areas come out in square feet, the unit flooring shops quote in. Implement the `IShape` interface for a circle, a rectangle and a right triangle, and a helper that adds up areas.
 ::requirements
 - `Circle(radius)`: area = π × r², perimeter = 2 × π × r. Use `Math.PI`.
 - `Rectangle(width, height)`: area = w × h, perimeter = 2 × (w + h).
@@ -927,8 +927,8 @@ public class ShapesTests
     [Fact]
     public void Total_area_works_for_any_shapes()
     {
-        var plots = new List<IShape> { new Rectangle(20, 15), new Circle(10), new RightTriangle(30, 40) };
-        Assert.Equal(1214.159, ShapeMath.TotalArea(plots), 3);
+        var rooms = new List<IShape> { new Rectangle(20, 15), new Circle(10), new RightTriangle(30, 40) };
+        Assert.Equal(1214.159, ShapeMath.TotalArea(rooms), 3);
     }
 
     [Fact] public void Zero_size_rejected() => Assert.Throws<ArgumentOutOfRangeException>(() => new Rectangle(0, 5));
@@ -1661,7 +1661,7 @@ public void Payslip_uses_category_and_pay() =>
 - **.NET itself is full of interfaces.** `IEnumerable<T>` is the promise "you can loop over me", kept by `List<T>`, arrays, `HashSet<T>` and database query results. `IDisposable` means "call `Dispose` when you're done". `IComparable<T>` means "I can be sorted". `ILogger<T>` lets ASP.NET Core send logs to the console, files or cloud services without your code changing.
 - **ASP.NET Core uses abstract classes too.** `ControllerBase` gives controllers shared helpers like `Ok()` and `NotFound()`. `BackgroundService` is an abstract class with one abstract method, `ExecuteAsync`, that you fill in to write a background job.
 - **Payment systems** put each provider (UPI, cards, wallets) behind one payment interface, so checkout code doesn't change when a provider is added.
-- **Infrastructure project software** often has an abstract `Measurement` or `BillItem` base with shared data (item code, quantity, unit), and subclasses for earthwork, concrete or steel with their own calculation rules.
+- **Subscription and SaaS billing** often has an abstract `Plan` base with shared data (plan code, billing cycle, currency), and subclasses for flat-rate, per-seat and usage-based plans, each with its own `MonthlyCharge()` rule.
 - **Generic math** in .NET (`INumber<T>`, `IParsable<T>`) uses static abstract members so one method can work with `int`, `decimal` and `double` alike.
 
 ## Interview questions
@@ -1686,7 +1686,7 @@ Choose an abstract class when several classes are genuinely "a kind of" the same
 ::q advanced
 What are static abstract members in interfaces, and what problem do they solve?
 ::a
-Since C# 11, interfaces can declare `static abstract` (and `static virtual`) members that each implementing type must provide. With a generic constraint like `where T : IParsable<T>`, code can call `T.Parse(...)` or `T.Zero`, asking the *type* for something before any instance exists. That was impossible before, because static members weren't part of interfaces. It powers .NET's generic math (`INumber<T>`, so one `Sum<T>` works for `int`, `decimal` and `double`) and `IParsable<T>`/`ISpanParsable<T>`, which framework features like minimal-API binding use. Limitations: these members can only be used through a type parameter constrained to the interface, not through an interface-typed variable, and the pattern usually needs the "curiously recurring" form `ICode<TSelf> where TSelf : ICode<TSelf>`.
+Since C# 11, interfaces can declare `static abstract` (and `static virtual`) members that each implementing type must provide. With a generic constraint like `where T : IParsable<T>`, code can call `T.Parse(...)` or `T.Zero`, asking the *type* for something before any instance exists. That was impossible before, because static members weren't part of interfaces. It powers .NET's generic math (`INumber<T>`, so one `Sum<T>` works for `int`, `decimal` and `double`) and `IParsable<T>`/`ISpanParsable<T>`, which framework features like minimal-API binding use. Limitations: these members can only be used through a type parameter constrained to the interface, not through an interface-typed variable, and such an interface can't itself be used as a generic type argument (`List<IParsable<int>>` is rejected). The "curiously recurring" form `ICode<TSelf> where TSelf : ICode<TSelf>` is needed only when a member mentions the implementing type, as in `static abstract TSelf Parse(string s, IFormatProvider? provider)`; a member like `static abstract string CodePrefix` would work without it. The lesson uses the recurring form anyway because it is the shape you will meet in .NET's own interfaces.
 ::q advanced
 A colleague adds an interface for every class in the project "for testability and flexibility". What do you think?
 ::a

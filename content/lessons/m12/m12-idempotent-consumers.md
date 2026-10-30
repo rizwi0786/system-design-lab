@@ -22,7 +22,7 @@ references:
     url: https://docs.stripe.com/api/idempotent_requests
 ---
 
-A highway project's billing system approves a ₹4,80,000 payout to a subcontractor. The approval service publishes `PayoutApproved`; the payout consumer calls the bank's IMPS API. The consumer pod is killed during a deploy right after the bank confirms the transfer, before it acknowledges the message. The broker does exactly what it should and redelivers. The consumer, which has no memory of the first attempt, pays again. The subcontractor is happy; the finance controller is not, and recovering ₹4,80,000 from a vendor takes weeks of letters. [Delivery guarantees](#/lesson/m12-delivery-guarantees) showed that this redelivery cannot be prevented. This lesson shows how to make it harmless.
+A food-delivery platform's settlement system approves a ₹4,80,000 weekly payout to a busy cloud-kitchen partner, its share of a week's orders. The approval service publishes `PayoutApproved`; the payout consumer calls the bank's IMPS API. The consumer pod is killed during a deploy right after the bank confirms the transfer, before it acknowledges the message. The broker does exactly what it should and redelivers. The consumer, which has no memory of the first attempt, pays again. The restaurant is happy; the finance team is not, and recovering ₹4,80,000 from a restaurant partner takes weeks of emails, calls and adjusted settlements. [Delivery guarantees](#/lesson/m12-delivery-guarantees) showed that this redelivery cannot be prevented. This lesson shows how to make it harmless.
 
 ## Learning objectives
 
@@ -102,7 +102,7 @@ BEGIN;
 INSERT INTO inbox (consumer, message_id) VALUES ('ledger-posting', $1)
 ON CONFLICT DO NOTHING;
 -- If the INSERT affected 0 rows, this message was already processed: ROLLBACK (or COMMIT nothing) and ack.
-INSERT INTO ledger_entries (contractor_id, project_code, amount_inr, source_message) VALUES ($2, $3, $4, $1);
+INSERT INTO ledger_entries (restaurant_id, period_code, amount_inr, source_message) VALUES ($2, $3, $4, $1);
 COMMIT;
 -- Ack the message only after COMMIT succeeds.
 ```
@@ -114,7 +114,7 @@ The `consumer` column matters: the same message is legitimately processed by sev
 ```sql
 CREATE TABLE payouts (
     payout_id        text PRIMARY KEY,          -- the business key from the approval system
-    contractor_id    text NOT NULL,
+    restaurant_id    text NOT NULL,
     amount_inr       numeric(14,2) NOT NULL CHECK (amount_inr > 0),
     idempotency_key  text NOT NULL UNIQUE,
     status           text NOT NULL CHECK (status IN ('pending', 'completed')),
@@ -151,7 +151,7 @@ This is exactly the behaviour you want, at the default `READ COMMITTED` isolatio
 | Key | Catches | Misses | Notes |
 |---|---|---|---|
 | Producer-generated message id (UUID) | Broker redeliveries, producer retries with the same id, DLQ replays | Upstream double-submits that create new messages | Must be generated once, when the event is created (for example in the outbox row), and never regenerated on retry |
-| Business key (`payout_id`, `payment_id`, `order_id + event_type`) | All of the above, plus upstream duplicates | Legitimate repeated events for the same entity (a second partial payout) | Model repeats explicitly: `payout_id` per payout, not per contractor |
+| Business key (`payout_id`, `payment_id`, `order_id + event_type`) | All of the above, plus upstream duplicates | Legitimate repeated events for the same entity (a second partial payout) | Model repeats explicitly: `payout_id` per payout, not per restaurant |
 | Content hash | Accidental duplicates without ids | Two genuinely identical events (two ₹500 top-ups on one day) | Avoid for money; useful as a last resort for legacy feeds |
 | Broker delivery tag or Kafka offset | Nothing reliable | Republished messages get new offsets; delivery tags are per channel | Never use as a cross-system key |
 
@@ -176,9 +176,9 @@ The same idea applies to emails and SMS (store "sent" with the provider's messag
 Idempotency stops repeats of the *same* message. A related problem is an *older* message arriving after a newer one (a retry from a DLQ, or competing consumers). If events carry a version or sequence number per entity, a guarded write makes the handler order-tolerant too:
 
 ```sql
-UPDATE contractor_bank_details
+UPDATE restaurant_bank_details
 SET account_no = $2, ifsc = $3, version = $4
-WHERE contractor_id = $1 AND version < $4;   -- ignores repeats and stale versions alike
+WHERE restaurant_id = $1 AND version < $4;   -- ignores repeats and stale versions alike
 ```
 
 ### Sizing and cleaning the inbox
@@ -191,7 +191,7 @@ The inbox grows with every processed message. Estimates for a payments platform:
 
 How long to keep ids? Longer than the longest window in which a duplicate can arrive: broker redelivery (minutes), retry tiers (hours), DLQ retention and replay (often 14 days), and Kafka offset resets (up to the topic retention). If your DLQ keeps messages for 14 days, keep inbox rows for at least 14 days and preferably 30. Deleting an id too early turns a late replay into a duplicate.
 
-Clean up cheaply: partition the inbox by day (`PARTITION BY RANGE (processed_at)`) and drop old partitions, which is far cheaper than `DELETE` of millions of rows followed by vacuum. For smaller volumes, a nightly batched `DELETE ... WHERE processed_at < now() - interval '30 days'` is fine.
+Clean up cheaply: partition the inbox by day and drop old partitions, which is far cheaper than `DELETE` of millions of rows followed by vacuum. One PostgreSQL rule shapes the design: a primary key or unique constraint on a partitioned table **must include the partition key**. Partitioning by `processed_at` would therefore force `PRIMARY KEY (consumer, message_id, processed_at)`, and a redelivery a minute later has a different `processed_at`, so it would slip straight through. Partition instead by a date that is **stable across deliveries** and travels in the message, such as the producer's `occurred_on` (set once in the outbox row): `PRIMARY KEY (consumer, message_id, occurred_on)` with `PARTITION BY RANGE (occurred_on)`. Keep a few days of slack before dropping a partition, because a late replay of an old message must still find its partition. For smaller volumes, a nightly batched `DELETE ... WHERE processed_at < now() - interval '30 days'` is fine.
 
 ### When it is unnecessary
 
@@ -214,7 +214,7 @@ Clean up cheaply: partition the inbox by day (`PARTITION BY RANGE (processed_at)
 
 ```mermaid
 flowchart LR
-    BRK["Broker (at-least-once)"] -->|"ContractorBillApproved"| LP["Ledger posting consumer"]
+    BRK["Broker (at-least-once)"] -->|"SettlementApproved"| LP["Ledger posting consumer"]
     BRK -->|"PayoutApproved"| PX["Payout executor consumer"]
     subgraph PG["PostgreSQL (one database)"]
         INBOX[("inbox: PK consumer, message_id")]
@@ -313,14 +313,14 @@ public enum PayoutStatus { Pending, Completed }
 
 public sealed record PayoutRow(
     string PayoutId,
-    string ContractorId,
+    string RestaurantId,
     decimal AmountInr,
     string IdempotencyKey,
     PayoutStatus Status,
     string? BankReference,
     DateTimeOffset CreatedAt);
 
-public sealed record LedgerEntry(Guid EntryId, string ContractorId, string ProjectCode, decimal AmountInr, Guid SourceMessageId);
+public sealed record LedgerEntry(Guid EntryId, string RestaurantId, string PeriodCode, decimal AmountInr, Guid SourceMessageId);
 
 /// <summary>Operations available inside one database transaction.</summary>
 public interface IPayoutsTransaction
@@ -486,9 +486,9 @@ public sealed class FakeBankGateway : IBankGateway
 namespace Payouts.Consumers;
 
 /// <summary>MessageId is generated once by the producer (in its outbox row) and kept across retries and replays.</summary>
-public sealed record ContractorBillApproved(Guid MessageId, string BillId, string ContractorId, string ProjectCode, decimal AmountInr);
+public sealed record SettlementApproved(Guid MessageId, string SettlementId, string RestaurantId, string PeriodCode, decimal AmountInr);
 
-public sealed record PayoutApproved(Guid MessageId, string PayoutId, string ContractorId, string BeneficiaryAccount, string Ifsc, decimal AmountInr);
+public sealed record PayoutApproved(Guid MessageId, string PayoutId, string RestaurantId, string BeneficiaryAccount, string Ifsc, decimal AmountInr);
 
 public enum HandleOutcome
 {
@@ -513,9 +513,9 @@ public sealed class LedgerPostingHandler(IPayoutsDb db, ILogger<LedgerPostingHan
 {
     public const string ConsumerName = "ledger-posting";
 
-    public async Task<HandleOutcome> HandleAsync(ContractorBillApproved message, CancellationToken ct)
+    public async Task<HandleOutcome> HandleAsync(SettlementApproved message, CancellationToken ct)
     {
-        if (message.AmountInr <= 0) throw new ArgumentException($"Bill {message.BillId} has a non-positive amount.");
+        if (message.AmountInr <= 0) throw new ArgumentException($"Settlement {message.SettlementId} has a non-positive amount.");
 
         var outcome = await db.InTransactionAsync(tx =>
         {
@@ -524,12 +524,12 @@ public sealed class LedgerPostingHandler(IPayoutsDb db, ILogger<LedgerPostingHan
                 return Task.FromResult(HandleOutcome.Duplicate);   // 0 rows: someone already did this
 
             // INSERT INTO ledger_entries ...; COMMIT;
-            tx.InsertLedgerEntry(new LedgerEntry(Guid.NewGuid(), message.ContractorId, message.ProjectCode, message.AmountInr, message.MessageId));
+            tx.InsertLedgerEntry(new LedgerEntry(Guid.NewGuid(), message.RestaurantId, message.PeriodCode, message.AmountInr, message.MessageId));
             return Task.FromResult(HandleOutcome.Processed);
         }, ct);
 
         if (outcome == HandleOutcome.Duplicate)
-            logger.LogInformation("Duplicate {MessageId} for bill {BillId} ignored", message.MessageId, message.BillId);
+            logger.LogInformation("Duplicate {MessageId} for settlement {SettlementId} ignored", message.MessageId, message.SettlementId);
         return outcome;   // the caller acks only after this returns
     }
 }
@@ -554,13 +554,13 @@ public sealed class PayoutHandler(IPayoutsDb db, IBankGateway bank, TimeProvider
             var existing = tx.GetPayout(message.PayoutId);
             if (existing is not null) return Task.FromResult((existing, false));
 
-            var row = new PayoutRow(message.PayoutId, message.ContractorId, message.AmountInr,
+            var row = new PayoutRow(message.PayoutId, message.RestaurantId, message.AmountInr,
                 IdempotencyKeyFor(message.PayoutId), PayoutStatus.Pending, null, clock.GetUtcNow());
             tx.TryInsertPayout(row);
             return Task.FromResult((row, true));
         }, ct);
 
-        if (payout.AmountInr != message.AmountInr || payout.ContractorId != message.ContractorId)
+        if (payout.AmountInr != message.AmountInr || payout.RestaurantId != message.RestaurantId)
             throw new ConflictingDuplicateException(
                 $"Payout {message.PayoutId} already exists with different data; refusing to pay. Needs human review.");
 
@@ -651,7 +651,7 @@ app.MapPost("/simulate/payout", async (PayoutApproved message, int? deliveries, 
     return Results.Ok(new { outcomes, bank.Calls, bank.MoneyMovements, payout = db.FindPayout(message.PayoutId) });
 });
 
-app.MapPost("/simulate/bill", async (ContractorBillApproved message, LedgerPostingHandler handler, InMemoryPayoutsDb db, CancellationToken ct) =>
+app.MapPost("/simulate/settlement", async (SettlementApproved message, LedgerPostingHandler handler, InMemoryPayoutsDb db, CancellationToken ct) =>
 {
     var first = await handler.HandleAsync(message, ct);
     var second = await handler.HandleAsync(message, ct);
@@ -688,10 +688,10 @@ await using (var inbox = new NpgsqlCommand(
 }
 
 await using (var post = new NpgsqlCommand(
-    "INSERT INTO ledger_entries (contractor_id, project_code, amount_inr, source_message) VALUES ($1, $2, $3, $4)", conn, tx))
+    "INSERT INTO ledger_entries (restaurant_id, period_code, amount_inr, source_message) VALUES ($1, $2, $3, $4)", conn, tx))
 {
-    post.Parameters.Add(new() { Value = message.ContractorId });
-    post.Parameters.Add(new() { Value = message.ProjectCode });
+    post.Parameters.Add(new() { Value = message.RestaurantId });
+    post.Parameters.Add(new() { Value = message.PeriodCode });
     post.Parameters.Add(new() { Value = message.AmountInr });
     post.Parameters.Add(new() { Value = message.MessageId });
     await post.ExecuteNonQueryAsync(ct);
@@ -732,7 +732,7 @@ The playground database has an `inbox`, a `ledger_entries` table and some proces
 1. Run the inbox insert for message `'2b7c...'` (see below) and look at the row count. Run it again: 0 rows.
 2. Wrap it in a transaction with a ledger insert, `ROLLBACK`, and confirm the inbox row is gone too.
 3. Find duplicate deliveries in `delivery_log` with `GROUP BY message_id HAVING count(*) > 1`.
-4. Write the guarded update for `contractor_bank_details` that ignores stale versions, and run it with an old version number.
+4. Write the guarded update for `restaurant_bank_details` that ignores stale versions, and run it with an old version number.
 
 ```sql
 -- 1. First processing inserts one row; repeating it inserts none.
@@ -751,8 +751,8 @@ CREATE TABLE inbox (
 );
 CREATE TABLE ledger_entries (
   entry_id       bigserial PRIMARY KEY,
-  contractor_id  text NOT NULL,
-  project_code   text NOT NULL,
+  restaurant_id  text NOT NULL,
+  period_code   text NOT NULL,
   amount_inr     integer NOT NULL CHECK (amount_inr > 0),
   source_message uuid NOT NULL
 );
@@ -762,8 +762,8 @@ CREATE TABLE delivery_log (
   consumer     text NOT NULL,
   delivered_at timestamptz NOT NULL
 );
-CREATE TABLE contractor_bank_details (
-  contractor_id text PRIMARY KEY,
+CREATE TABLE restaurant_bank_details (
+  restaurant_id text PRIMARY KEY,
   account_no    text NOT NULL,
   ifsc          text NOT NULL,
   version       integer NOT NULL
@@ -772,15 +772,15 @@ INSERT INTO inbox (consumer, message_id, processed_at) VALUES
   ('ledger-posting', '2b7c1d3e-0000-4000-8000-000000000001', '2026-10-18 09:00:00+05:30'),
   ('ledger-posting', '2b7c1d3e-0000-4000-8000-000000000002', '2026-10-18 09:05:00+05:30'),
   ('notifications',  '2b7c1d3e-0000-4000-8000-000000000001', '2026-10-18 09:00:02+05:30');
-INSERT INTO ledger_entries (contractor_id, project_code, amount_inr, source_message) VALUES
-  ('CTR-ARORA', 'NH-48-PKG-3', 480000, '2b7c1d3e-0000-4000-8000-000000000001'),
-  ('CTR-COAST', 'NH-66-PKG-1', 210000, '2b7c1d3e-0000-4000-8000-000000000002');
+INSERT INTO ledger_entries (restaurant_id, period_code, amount_inr, source_message) VALUES
+  ('RST-ARORA', '2026-W42', 480000, '2b7c1d3e-0000-4000-8000-000000000001'),
+  ('RST-COAST', '2026-W42', 210000, '2b7c1d3e-0000-4000-8000-000000000002');
 INSERT INTO delivery_log (message_id, consumer, delivered_at) VALUES
   ('2b7c1d3e-0000-4000-8000-000000000001', 'ledger-posting', '2026-10-18 09:00:00+05:30'),
   ('2b7c1d3e-0000-4000-8000-000000000001', 'ledger-posting', '2026-10-18 09:00:31+05:30'),
   ('2b7c1d3e-0000-4000-8000-000000000002', 'ledger-posting', '2026-10-18 09:05:00+05:30'),
   ('2b7c1d3e-0000-4000-8000-000000000001', 'notifications',  '2026-10-18 09:00:02+05:30');
-INSERT INTO contractor_bank_details VALUES ('CTR-ARORA', '50100012345678', 'HDFC0001234', 3);
+INSERT INTO restaurant_bank_details VALUES ('RST-ARORA', '50100012345678', 'HDFC0001234', 3);
 ```
 :::
 
@@ -794,7 +794,7 @@ For each consumer action, say whether running it twice is harmless. If not, rewr
 3. `INSERT INTO shipments (order_id, courier) VALUES ($1, $2)` on `OrderPacked`
 4. Send an SMS "Your OTP is 482913" on `OtpRequested`
 5. `UPDATE products SET price = $2 WHERE sku = $1` on `PriceChanged` events that may arrive out of order
-6. Call a partner API `POST /bookings` to book a crane for a site on `CraneRequested`
+6. Call a cab partner's API `POST /bookings` to book a hotel guest's airport pickup on `PickupRequested`
 ::acceptance
 - Each case says harmless or not, with a reason.
 - Every non-idempotent case gets a concrete rewrite.
@@ -814,7 +814,7 @@ For an external API, what can you send so that the partner recognises a retry?
 3. **Not idempotent** if `order_id` is not unique: two shipments. Add `UNIQUE (order_id)` and `ON CONFLICT (order_id) DO NOTHING`. Technique: business-key constraint.
 4. **Not idempotent**: a second SMS. Record `sms_sent (otp_request_id)` with a unique key before or with sending, and pass a dedupe reference to the SMS provider if it supports one. Note the residual risk: if the process crashes after the provider accepts the SMS but before recording it, a duplicate SMS is still possible without provider support; for OTPs this is usually acceptable.
 5. **Repeats are harmless, but out-of-order delivery is not**: an older price can overwrite a newer one. Rewrite: `UPDATE products SET price = $2, price_version = $3 WHERE sku = $1 AND price_version < $3`. Technique: natural idempotency with a version guard.
-6. **Not idempotent**: two cranes booked. Record the intent (`crane_requests` row keyed by `request_id`, status `pending`), then call `POST /bookings` with `Idempotency-Key: crane:<request_id>` if the partner supports it, then record the booking reference. If the partner does not support keys, query by your reference before retrying, or ask them to add a unique client reference field.
+6. **Not idempotent**: two cabs turn up at the hotel. Record the intent (`pickup_requests` row keyed by `request_id`, status `pending`), then call `POST /bookings` with `Idempotency-Key: pickup:<request_id>` if the partner supports it, then record the booking reference. If the partner does not support keys, query by your reference before retrying, or ask them to add a unique client reference field.
 ::mistakes
 - Calling case 1 non-idempotent because it is an `UPDATE`; setting a final value is idempotent.
 - Fixing case 5 with an inbox: it stops repeats but not stale versions.
@@ -1268,97 +1268,97 @@ If balances are derived (`SELECT sum(amount) FROM payments WHERE account = $1`) 
 :::exercise id=m12-idempotent-consumers-ex4 difficulty=intermediate kind=sql ordered=true title="The overpayment damage report"
 A payout consumer without deduplication ran for a week. Every delivery it processed is in `payout_deliveries`, and each one moved money. Some rows are **redeliveries** (same `message_id`), and some are **upstream duplicates** (a new `message_id` for the same `payout_id`). Each `payout_id` should have been paid exactly once.
 
-Write a query that returns, for every contractor: `contractor`, `paid_total` (sum of all delivered amounts), `correct_total` (sum counting each `payout_id` once) and `overpaid` (`paid_total - correct_total`), ordered by `contractor`.
+Write a query that returns, for every restaurant: `restaurant`, `paid_total` (sum of all delivered amounts), `correct_total` (sum counting each `payout_id` once) and `overpaid` (`paid_total - correct_total`), ordered by `restaurant`.
 ::setup
 ```sql
 CREATE TABLE payout_deliveries (
   delivery_id  integer PRIMARY KEY,
   message_id   text    NOT NULL,
   payout_id    text    NOT NULL,
-  contractor   text    NOT NULL,
+  restaurant   text    NOT NULL,
   amount_inr   integer NOT NULL CHECK (amount_inr > 0),
   delivered_at timestamptz NOT NULL
 );
 INSERT INTO payout_deliveries VALUES
- (1, 'm-01', 'PO-101', 'Arora Infra',        480000, '2026-10-12 10:00:00+05:30'),
- (2, 'm-01', 'PO-101', 'Arora Infra',        480000, '2026-10-12 10:00:45+05:30'),
- (3, 'm-02', 'PO-102', 'Arora Infra',        125000, '2026-10-13 11:20:00+05:30'),
- (4, 'm-03', 'PO-201', 'Coastal Builders',    90000, '2026-10-13 12:00:00+05:30'),
- (5, 'm-04', 'PO-202', 'Coastal Builders',   210000, '2026-10-14 09:15:00+05:30'),
- (6, 'm-05', 'PO-202', 'Coastal Builders',   210000, '2026-10-14 09:15:02+05:30'),
- (7, 'm-04', 'PO-202', 'Coastal Builders',   210000, '2026-10-14 09:16:10+05:30'),
- (8, 'm-06', 'PO-301', 'Deccan Earthmovers',  64000, '2026-10-15 15:40:00+05:30');
+ (1, 'm-01', 'PO-101', 'Arora Kitchen',        480000, '2026-10-12 10:00:00+05:30'),
+ (2, 'm-01', 'PO-101', 'Arora Kitchen',        480000, '2026-10-12 10:00:45+05:30'),
+ (3, 'm-02', 'PO-102', 'Arora Kitchen',        125000, '2026-10-13 11:20:00+05:30'),
+ (4, 'm-03', 'PO-201', 'Coastal Curry House',    90000, '2026-10-13 12:00:00+05:30'),
+ (5, 'm-04', 'PO-202', 'Coastal Curry House',   210000, '2026-10-14 09:15:00+05:30'),
+ (6, 'm-05', 'PO-202', 'Coastal Curry House',   210000, '2026-10-14 09:15:02+05:30'),
+ (7, 'm-04', 'PO-202', 'Coastal Curry House',   210000, '2026-10-14 09:16:10+05:30'),
+ (8, 'm-06', 'PO-301', 'Deccan Biryani Co',  64000, '2026-10-15 15:40:00+05:30');
 ```
 ::check
 ```sql
 WITH once_per_payout AS (
-  SELECT DISTINCT ON (payout_id) payout_id, contractor, amount_inr
+  SELECT DISTINCT ON (payout_id) payout_id, restaurant, amount_inr
   FROM payout_deliveries
   ORDER BY payout_id, delivered_at, delivery_id
 ),
 correct AS (
-  SELECT contractor, SUM(amount_inr) AS correct_total
+  SELECT restaurant, SUM(amount_inr) AS correct_total
   FROM once_per_payout
-  GROUP BY contractor
+  GROUP BY restaurant
 ),
 paid AS (
-  SELECT contractor, SUM(amount_inr) AS paid_total
+  SELECT restaurant, SUM(amount_inr) AS paid_total
   FROM payout_deliveries
-  GROUP BY contractor
+  GROUP BY restaurant
 )
-SELECT p.contractor, p.paid_total, c.correct_total, p.paid_total - c.correct_total AS overpaid
+SELECT p.restaurant, p.paid_total, c.correct_total, p.paid_total - c.correct_total AS overpaid
 FROM paid p
-JOIN correct c USING (contractor)
-ORDER BY p.contractor;
+JOIN correct c USING (restaurant)
+ORDER BY p.restaurant;
 ```
 ::acceptance
-- Arora Infra: paid 1,085,000, correct 605,000, overpaid 480,000 (one redelivery of PO-101).
-- Coastal Builders: paid 720,000, correct 300,000, overpaid 420,000 (PO-202 paid three times: a redelivery and an upstream duplicate).
-- Deccan Earthmovers: overpaid 0.
-- Rows are ordered by contractor.
+- Arora Kitchen: paid 1,085,000, correct 605,000, overpaid 480,000 (one redelivery of PO-101).
+- Coastal Curry House: paid 720,000, correct 300,000, overpaid 420,000 (PO-202 paid three times: a redelivery and an upstream duplicate).
+- Deccan Biryani Co: overpaid 0.
+- Rows are ordered by restaurant.
 ::hint
 Deduplicate by the **business key** (`payout_id`), not by `message_id`: `m-05` is a different message for the same payout.
 ::hint
 `SELECT DISTINCT ON (payout_id) ... ORDER BY payout_id, delivered_at` keeps the first delivery of each payout.
 ::hint
-Compute two aggregates per contractor (all rows, and deduplicated rows) in separate CTEs, then join them.
+Compute two aggregates per restaurant (all rows, and deduplicated rows) in separate CTEs, then join them.
 ::hint
 ```sql
 WITH once_per_payout AS (
-  SELECT DISTINCT ON (payout_id) payout_id, contractor, amount_inr
+  SELECT DISTINCT ON (payout_id) payout_id, restaurant, amount_inr
   FROM payout_deliveries
   ORDER BY payout_id, delivered_at, delivery_id
 )
-SELECT contractor, SUM(amount_inr) FROM once_per_payout GROUP BY contractor;
+SELECT restaurant, SUM(amount_inr) FROM once_per_payout GROUP BY restaurant;
 ```
 ::solution
 ```sql
 WITH once_per_payout AS (
-  SELECT DISTINCT ON (payout_id) payout_id, contractor, amount_inr
+  SELECT DISTINCT ON (payout_id) payout_id, restaurant, amount_inr
   FROM payout_deliveries
   ORDER BY payout_id, delivered_at, delivery_id
 ),
 correct AS (
-  SELECT contractor, SUM(amount_inr) AS correct_total
+  SELECT restaurant, SUM(amount_inr) AS correct_total
   FROM once_per_payout
-  GROUP BY contractor
+  GROUP BY restaurant
 ),
 paid AS (
-  SELECT contractor, SUM(amount_inr) AS paid_total
+  SELECT restaurant, SUM(amount_inr) AS paid_total
   FROM payout_deliveries
-  GROUP BY contractor
+  GROUP BY restaurant
 )
-SELECT p.contractor, p.paid_total, c.correct_total, p.paid_total - c.correct_total AS overpaid
+SELECT p.restaurant, p.paid_total, c.correct_total, p.paid_total - c.correct_total AS overpaid
 FROM paid p
-JOIN correct c USING (contractor)
-ORDER BY p.contractor;
+JOIN correct c USING (restaurant)
+ORDER BY p.restaurant;
 ```
 
-Deduplicating by `message_id` would report Coastal Builders' correct total as 510,000, missing the upstream duplicate `m-05`. That is the same reason the fixed consumer needs a business-key constraint on `payout_id`, not only an inbox keyed by message id. This query is also what a nightly reconciliation job runs, comparing your ledger with the bank statement, so overpayments are caught within a day even if a bug slips through.
+Deduplicating by `message_id` would report Coastal Curry House' correct total as 510,000, missing the upstream duplicate `m-05`. That is the same reason the fixed consumer needs a business-key constraint on `payout_id`, not only an inbox keyed by message id. This query is also what a nightly reconciliation job runs, comparing your ledger with the bank statement, so overpayments are caught within a day even if a bug slips through.
 ::mistakes
 - `COUNT(DISTINCT message_id)`-style deduplication, which misses upstream duplicates.
 - Summing `DISTINCT amount_inr`, which wrongly merges two different payouts that happen to have the same amount.
-- Forgetting `ORDER BY contractor`, which the check requires.
+- Forgetting `ORDER BY restaurant`, which the check requires.
 :::
 
 :::exercise id=m12-idempotent-consumers-ex5 difficulty=advanced kind=code title="Pay exactly once through an external bank API"
@@ -1658,7 +1658,7 @@ public static async Task AssertIdempotent<T>(Func<T, Task<HandleOutcome>> handle
 - **Payment APIs.** Providers such as Stripe document idempotency keys for POST requests; card networks and UPI use unique transaction references so that a retried request is recognised. Payment gateways in India commonly require a merchant-generated order or transaction id, which plays the same role.
 - **Banking integrations.** Bank payout APIs typically offer a status-enquiry endpoint by client reference. Reliable payout systems record intent first, enquire on uncertainty, and reconcile daily against bank statements, the same flow as exercise 5 plus a safety net.
 - **Webhooks.** Webhook senders retry until they receive a 2xx, so receivers store the webhook's event id with a unique constraint before acting. See [webhooks](#/lesson/m10-webhooks).
-- **Infrastructure project platforms.** Contractor billing, measurement-book entries and progress claims flow between site, consultant and client systems; deduplicating by bill number and claim id stops a re-sync from a field tablet from double-counting work done or payments due.
+- **Marketplace settlements.** Food-delivery, ride-hailing and e-commerce platforms settle with thousands of restaurants, drivers and sellers every week; deduplicating by settlement id and order id stops a re-sync from a partner app, or a replayed event, from double-counting earnings or paying a partner twice.
 
 ## Interview questions
 
@@ -1699,7 +1699,7 @@ You cannot put the external call in your database transaction, so record intent:
 - Add a **business-key** unique constraint to catch upstream duplicates with new message ids.
 - In PostgreSQL, the unique index safely referees **concurrent duplicates**; check-then-insert in code does not.
 - For **external side effects**, record intent, call with a **stable idempotency key**, record the outcome; enquire before retrying if the provider has no keys.
-- Keep inbox ids longer than any duplicate window (redelivery, retry tiers, DLQ replay, offset resets); partition by day and drop old partitions.
+- Keep inbox ids longer than any duplicate window (redelivery, retry tiers, DLQ replay, offset resets); partition by a stable message date (part of the primary key) and drop old partitions.
 - Refuse **conflicting duplicates** (same key, different data) instead of silently acking them.
 
 **Terminology:** idempotent, idempotent consumer (Idempotent Receiver), natural idempotency, inbox table, deduplication key, message id, business key, idempotency key, recorded intent, guarded transition, version check, conflicting duplicate, retention window, reconciliation.
@@ -1722,7 +1722,7 @@ A: Longer than the latest a duplicate can arrive, including retry tiers, DLQ rep
 Q: What is a conflicting duplicate?
 A: Same business key but different data; it is a bug or fraud, so it should be dead-lettered for review, not acked.
 Q: Cheapest way to clean a large inbox?
-A: Partition it by day and drop old partitions instead of deleting rows.
+A: Partition it by a day that is stable across deliveries (the event's own date, included in the primary key) and drop old partitions instead of deleting rows.
 :::
 
 ## Knowledge check
@@ -1772,10 +1772,10 @@ Which are good inbox retention choices? (Select all that apply.)
 > Ids must outlive every way a duplicate can arrive. Partition dropping makes long retention cheap to clean.
 ::q single
 For which consumer is an inbox table least necessary?
-- [ ] Posting ledger entries for approved contractor bills.
+- [ ] Posting ledger entries for approved restaurant settlements.
 - [ ] Crediting cashback to wallets.
 - [x] Upserting the latest status of a shipment keyed by shipment id, with a version check.
-- [ ] Creating crane bookings from requests.
+- [ ] Creating airport-pickup cab bookings from requests.
 > A versioned upsert is naturally idempotent and order-tolerant. The others are additive effects that need dedupe.
 ::q single
 The same `PayoutId` arrives with amount ₹4,80,000 and later with ₹48,00,000. What should the consumer do with the second?

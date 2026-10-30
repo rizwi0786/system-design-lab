@@ -83,7 +83,7 @@ Every decision has a **cost of reversal**: the work needed to undo it later. Plo
 | Use `decimal` instead of `double` for salary | Days, plus checking every report | Borderline |
 | Store all data in one PostgreSQL database vs one per feature | Months of migration work | Yes |
 | Deploy as one application vs many services | Months to a year | Yes |
-| Identity: company Azure AD/Entra ID single sign-on vs our own password table | Weeks to months, plus user re-onboarding | Yes |
+| Identity: company single sign-on (Microsoft Entra ID) vs our own password table | Weeks to months, plus user re-onboarding | Yes |
 | Host employee data only in an India region | Months, plus legal review | Yes |
 | Expose a public API that 30 client companies integrate with | Very high: you no longer control the callers | Yes |
 
@@ -157,7 +157,7 @@ Notice the percentiles. An average hides the slow requests: if 95 requests take 
 
 ### When architecture work is unnecessary
 
-Not every project needs an architecture phase. A two-week internal tool for 20 users, a prototype for a tender demo, or a script that runs once can go straight to code. The test is simple: **if you are wrong, how expensive is it to fix?** If the answer is "a day", just build it. Over-architecting a small system (five projects, three message queues, a service mesh for an app with 50 users) is just as real a failure as under-architecting a big one.
+Not every project needs an architecture phase. A two-week internal tool for 20 users, a prototype for a hackathon demo, or a script that runs once can go straight to code. The test is simple: **if you are wrong, how expensive is it to fix?** If the answer is "a day", just build it. Over-architecting a small system (five projects, three message queues, a service mesh for an app with 50 users) is just as real a failure as under-architecting a big one.
 
 ## Visual explanation
 
@@ -927,7 +927,7 @@ Edge cases: the latency recorder with exactly one sample, with capacity reached,
 
 ## Real-world application
 
-- **Government and infrastructure platforms** that serve many departments usually have strict hosting and audit requirements. Hosting region and audit logging are one-way doors decided at the start, while screens and reports change every month.
+- **Government and healthcare platforms**, such as a state hospital network's patient-records portal, usually have strict hosting and audit requirements. Hosting region and audit logging are one-way doors decided at the start, while screens and reports change every month.
 - **Large public platforms** such as a national payments network or a railway booking site are publicly documented as designing for extreme peaks (festival sales, Tatkal booking windows). Their key quality attribute is throughput at a predictable peak, and that drives queueing and capacity decisions.
 - **Banks** treat correctness and auditability as more important than raw speed: a transfer that takes 2 seconds is fine, a transfer applied twice is not.
 - **Cloud frameworks** such as the Azure Well-Architected Framework and the AWS Well-Architected Framework are essentially checklists of quality attributes (reliability, security, cost, operational excellence, performance) with questions for each.

@@ -7,7 +7,7 @@ status: reviewed
 template: hld-case
 minutes: 100
 prerequisites: [m11-capacity-estimation, m12-cache-failures, m13-backpressure, m10-idempotency, m10-rate-limiting]
-related: [m17-lms, m17-notification-platform, m16-multi-level-caching, m14-least-privilege-audit, m11-cdn]
+related: [m17-lms, m17-notification-platform, m17-flash-sale, m17-job-scheduler, m16-multi-level-caching, m14-least-privilege-audit, m11-cdn]
 tags: [hld, case-study, thundering-herd, autosave, timers, proctoring, integrity]
 patterns: []
 summary: Design an online exam platform for a million candidates starting at the same second — pre-staged encrypted papers, a server-authoritative timer, idempotent answer autosave, proctoring event pipelines and result publication — with capacity maths, a grading SQL exercise and C# for the integrity core.
@@ -156,8 +156,8 @@ The response gives the server's view, so the client never trusts its own clock:
 
 Design decisions:
 
-- **`clientSeq`** rises with every change in the attempt; the server keeps a save only if it is higher than the stored one, so a delayed retry never overwrites a newer answer.
-- **`425 Too Early`** with `Retry-After` tells clients when to fetch the key; the released key is cacheable for the slot.
+- **`clientSeq`** rises with every change in the attempt; the server keeps a save only if it is higher than the stored one, so a delayed retry never overwrites a newer answer. On resume (a new device, or a cleared browser), `GET state` returns the highest `clientSeq` the server has stored and the client continues from there; a fresh device that restarted at 1 would have every save rejected as `stale`.
+- **`425 Too Early`** with `Retry-After` tells clients when to fetch the key; the released key is cacheable for the slot. The `425` itself must be sent with `Cache-Control: no-store`: if a CDN edge cached "too early" for even a minute, every candidate behind that edge would start late.
 - **Remaining time comes from the server** on every response, correcting countdown drift.
 - Questions use **canonical ids**, because on-screen positions are shuffled.
 
@@ -325,7 +325,7 @@ A **thundering herd** is many clients doing the same expensive thing at the same
 - **Spread the instant**: client jitter of 0–5 s for the key; staggered lobby opening (by roll-number range) for logins; jittered final submits.
 - **Shield the origin**: with CDN caching and request coalescing (one origin fetch for many simultaneous misses), origin sees a handful of requests, not a million.
 
-**Confidentiality.** The bundle is encrypted with a per-slot key (AES-256-GCM), so before 10:00 a modified browser holds only ciphertext, and the key reaches no client early. Shuffling happens **on the client** from the paper set and a seed, so the bundle is one file for everyone and caches perfectly.
+**Confidentiality.** The bundle is encrypted with a per-slot key (AES-256-GCM), so before 10:00 a modified browser holds only ciphertext, and the key reaches no client early. Shuffling happens **on the client** from the paper set and a seed, so the bundle is one file for everyone and caches perfectly. The bundle holds questions and options only; the **answer key never leaves the server**, so even a fully decrypted bundle tells a candidate nothing about the correct answers. Because one key opens the paper for the whole slot, the key's custody (vault access, separation of duties, access logs) is the single most important control before T0.
 
 **Pre-scaling.** The start time is known, so the scheduler scales out and warms caches an hour before. Reactive autoscaling takes minutes; the spike lasts seconds.
 
@@ -601,7 +601,7 @@ public sealed class DeadlineSweeper(IAttemptRepository attempts, AttemptService 
 }
 ```
 
-In production the sweep is one set-based `UPDATE` per slot partition, run by a leader-elected scheduler. Paused attempts are excluded: their clock is stopped.
+In production the sweep is one set-based `UPDATE` per slot partition, run by a leader-elected scheduler (the [job scheduler](#/lesson/m17-job-scheduler) case study covers leases and missed runs). Paused attempts are excluded: their clock is stopped.
 
 ### 5. Proctoring at the scale of a million webcams
 
@@ -684,7 +684,7 @@ This worker uses a simple running total. Exercise 4 asks you to build the better
 
 **Provisional key and challenges.** Many exam bodies publish a provisional key, accept challenges for a few days, then publish a final key. Design for it: keys are **versioned** (`answer_key(version, question_id, correct_options)`), a question can be marked "bonus for all" or "multiple correct options", and grading is a **pure function of (answers, key version)**, so re-grading is just re-running the batch. Never update scores in place without the key version that produced them.
 
-**Result day.** Precompute every score card into a results store, warm the cache before publication (so no stampede is possible), serve reads from replicas behind a **virtual waiting room** that admits users at a fixed rate, and publish by flipping one flag, never by grading at 18:00.
+**Result day.** Precompute every score card into a results store, warm the cache before publication (so no stampede is possible), serve reads from replicas behind a **virtual waiting room** that admits users at a fixed rate (the [flash sale](#/lesson/m17-flash-sale) case study builds one), and publish by flipping one flag, never by grading at 18:00.
 
 ## Caching, queues and scaling
 
@@ -821,6 +821,7 @@ app.MapGet("/v1/slots/{slotId}/paper-key", (string slotId, PaperKeyGate gate, Ht
 {
     var (key, retryAfter) = gate.TryGetKey(slotId);
     if (key is not null) return Results.Ok(new { key });
+    http.Response.Headers.CacheControl = "no-store";   // never let an edge cache "too early"
     http.Response.Headers.RetryAfter = Math.Ceiling(retryAfter.TotalSeconds).ToString();
     return Results.StatusCode(425);   // Too Early
 });

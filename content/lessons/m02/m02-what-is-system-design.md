@@ -500,6 +500,12 @@ How the code maps to the diagram:
 4. **Queue** = `Channel<OrderPlaced>`, published through `IOrderEvents`. In production this would be a message broker so messages survive a restart.
 5. **Worker** = `NotificationWorker`, a `BackgroundService`. It handles duplicates and failures without affecting the customer's order.
 
+:::callout type=warning title="Two gaps a reviewer would point out"
+**The save-then-publish gap.** `PlaceAsync` saves the order and then publishes the message as two separate steps. If the server crashes between them, the order exists but no SMS is ever sent. Production systems close this gap with the [transactional outbox](#/lesson/m12-outbox): the message is written to an `outbox` table in the same PostgreSQL transaction as the order, and a background relay publishes it afterwards.
+
+**In-memory duplicate tracking.** The worker's `HashSet` forgets everything on restart and grows forever. A real worker records handled message ids in the database (an [idempotent consumer](#/lesson/m12-idempotent-consumers)), so a redelivered message after a restart still does not send a second SMS.
+:::
+
 ## Bad design vs good design
 
 **Bad: doing everything inside the request.**
@@ -1162,7 +1168,7 @@ public async Task Unknown_items_are_rejected()
 
 - **Food and grocery delivery apps** separate the fast path (browse, order) from slow work (notifications, invoices, partner payouts) using queues and workers, and serve images from CDNs.
 - **Government portals** such as results, tax or certificate services are mostly reads with sharp peaks; caching and CDNs carry the peak while the database handles the much smaller number of writes.
-- **Construction and infrastructure project tools** (site photos, inspection reports, drawings) store large files in object storage and keep only metadata in the database.
+- **Hospital and clinic systems** (X-ray and scan images, lab-report PDFs, prescriptions) store large files in object storage and keep only metadata and a link in the database.
 - **Small business systems** (a clinic's appointments, a shop's billing) often stay at "stage 2" for years: one app server or two, one managed database, backups. That is a success, not a failure to scale.
 - **Cloud architecture guidance**, such as Microsoft's Azure Architecture Center, describes the same building blocks and styles (for example "web-queue-worker"), which is a good place to see reference designs.
 

@@ -24,7 +24,7 @@ references:
     url: https://learn.microsoft.com/aspnet/core/signalr/redis-backplane
 ---
 
-A state procurement portal runs online reverse auctions for road-maintenance contracts. Fifteen pre-qualified contractors bid; each new lowest bid must reach every other bidder within a second, or the auction is unfair. Meanwhile 3,000 observers (department staff, journalists, the losing bidders' head offices) watch a live price board, and a few legacy kiosks behind strict corporate proxies refresh a page. Three audiences, three different needs, and plain HTTP request-response serves none of them well. This lesson is about the three ways a server can push data to a client, what each costs, and how the architecture changes when 300,000 clients hold a connection open at the same time.
+An online marketplace runs a Sunday evening of live auctions: refurbished phones, limited-edition sneakers, signed cricket bats. In a typical auction about fifteen registered bidders (who have paid a refundable deposit) compete; each new highest bid must reach every other bidder within a second, or the auction is unfair. Meanwhile 3,000 watchers (shoppers who might jump in, the seller, people who just enjoy the show) follow a live price board, and some of them are on office PCs behind strict corporate proxies that break anything fancier than a plain page request. Three audiences, three different needs, and plain HTTP request-response serves none of them well. This lesson is about the three ways a server can push data to a client, what each costs, and how the architecture changes when 300,000 clients hold a connection open at the same time.
 
 ## Learning objectives
 
@@ -87,11 +87,11 @@ retry: 3000
 
 id: 43
 event: bid
-data: {"amount":1842000,"by":"C07"}
+data: {"amount":1842000,"by":"B07"}
 
 id: 44
 event: bid
-data: {"amount":1839500,"by":"C12"}
+data: {"amount":1844500,"by":"B12"}
 
 : keep-alive
 ```
@@ -104,13 +104,17 @@ Strengths: ordinary HTTP (works with HTTP/2 multiplexing, so one TCP connection 
 
 A WebSocket starts as an HTTP `GET` with `Upgrade: websocket`. If the server agrees (`101 Switching Protocols`), the TCP connection stops being HTTP and becomes a framed, bidirectional message channel. Frames have a tiny header (2–14 bytes) instead of HTTP headers, support text and binary, and either side can send at any time. The protocol includes ping/pong control frames for liveness.
 
+Over HTTP/2 the handshake is different (an extended `CONNECT` request, RFC 8441) and the WebSocket becomes one stream on a shared connection; ASP.NET Core supports both, and `MapGet` endpoints that accept WebSockets work for either as long as you check `HttpContext.WebSockets.IsWebSocketRequest` rather than the `Upgrade` header.
+
 Strengths: lowest latency, lowest per-message overhead, bidirectional, binary. Weaknesses: not HTTP after the upgrade, so HTTP caching, compression negotiation and many gateway features do not apply; every intermediary must support the upgrade (modern ones do, but corporate proxies and some mobile carriers still break it); no built-in reconnection or replay, so you write both; and a server holding 50,000 sockets is now a stateful server, with consequences for deployment, draining and autoscaling.
 
 ### SignalR
 
 SignalR is ASP.NET Core's real-time library. It negotiates a transport (WebSockets, then SSE, then long polling), defines a hub protocol (JSON or MessagePack) on top, and gives you named methods in both directions, groups, and per-user messaging. For most .NET teams it is the right default: you write `Clients.Group("auction:A1").SendAsync("bidAccepted", bid)` and SignalR handles framing, keep-alives, and transport fallback.
 
-What SignalR does *not* do by itself: reach clients connected to a *different* server, or replay missed messages after a reconnection. The first is solved by a backplane; the second you build (this lesson shows how).
+What SignalR does *not* do by itself: reach clients connected to a *different* server, or replay missed messages after a long or cross-server reconnection. The first is solved by a backplane; the second you build (this lesson shows how). Since .NET 8 SignalR has *stateful reconnect* (`AllowStatefulReconnects` on the hub endpoint, `WithStatefulReconnect()` on the client): during a brief network blip the server buffers unacknowledged messages for that connection (about 100 KB by default) and replays them when the same client reconnects to the same server. It is useful, but it is lost when the server restarts or the buffer fills, so it complements a sequence-numbered replay rather than replacing it.
+
+**Sticky sessions.** SignalR's normal connection starts with a `negotiate` request and then opens the transport; SSE and long-polling transports also make many requests over the life of one logical connection. All of those must reach the *same* server, so a multi-server SignalR deployment needs sticky sessions (session affinity) at the load balancer. The two exceptions: every client uses WebSockets only with `SkipNegotiation = true`, or you use Azure SignalR Service, which holds the connections for you.
 
 ### The scaling problem: persistent connections
 
@@ -120,9 +124,9 @@ With request-response, a server handles a request in a few milliseconds and forg
 
 **Load balancer and OS limits.** Each connection is a file descriptor on the server and a tracked flow on the load balancer. Ulimits default to 1,024 on many Linux images; set them to hundreds of thousands. L7 load balancers have idle timeouts (often 60–240 seconds) that will kill a silent connection, which is why heartbeats exist. Cloud load balancers also have per-instance connection limits; read them before you plan.
 
-**Fan-out.** A bid in auction A1 must reach every client watching A1. If 3,000 observers watch A1 and they are spread over 6 servers, the server that received the bid must get the message to the other 5. This is the backplane's job: every server subscribes to a Redis pub/sub channel; a publish on any server reaches all servers; each server then delivers to *its* connections in the group. The backplane carries one message per event, not one per client. Fan-out to clients still happens on each node.
+**Fan-out.** A bid in auction A1 must reach every client watching A1. If 3,000 people watch A1 and they are spread over 6 servers, the server that received the bid must get the message to the other 5. This is the backplane's job: every server subscribes to a Redis pub/sub channel; a publish on any server reaches all servers; each server then delivers to *its* connections in the group. The backplane carries one message per event, not one per client. Fan-out to clients still happens on each node.
 
-Arithmetic for the auction portal at peak: 500 live auctions, 2 bids per second each, average 600 watchers per auction. Backplane traffic: 500 × 2 = 1,000 messages per second, trivial for Redis. Client deliveries: 1,000 × 600 = 600,000 messages per second across the fleet, or 100,000 per second per node with 6 nodes. At about 200 bytes each that is 20 MB/s per node of outbound traffic. Delivery, not the backplane, is what sizes the fleet.
+Arithmetic for the marketplace on a busy auction evening: 500 live auctions, 2 bids per second each, average 600 watchers per auction. Backplane traffic: 500 × 2 = 1,000 messages per second, trivial for Redis. Client deliveries: 1,000 × 600 = 600,000 messages per second across the fleet, or 100,000 per second per node with 6 nodes. At about 200 bytes each that is 20 MB/s per node of outbound traffic. Delivery, not the backplane, is what sizes the fleet.
 
 **Deployment.** Restarting a server disconnects every client on it. 50,000 clients reconnecting in the same second is a self-inflicted thundering herd. Drain gracefully (stop accepting, let clients reconnect elsewhere over a minute) and make clients back off with jitter (next section).
 
@@ -142,7 +146,7 @@ A push channel is a *notification* mechanism. If a bid absolutely must be record
 
 ### When polling is enough
 
-A dashboard that shows site-progress percentages updated hourly does not need WebSockets. A 60-second poll of a cached endpoint costs 3,000 observers × 1 request per minute = 50 RPS, easily absorbed, and it has no persistent-connection problems at all. Choose push when the latency requirement is under a few seconds, when the change rate is low compared to the poll rate (so polling wastes most requests), or when the client needs to send many small messages quickly (games, collaborative editing).
+A seller dashboard that shows today's order count, refreshed hourly, does not need WebSockets. A 60-second poll of a cached endpoint costs 3,000 sellers × 1 request per minute = 50 RPS, easily absorbed, and it has no persistent-connection problems at all. Choose push when the latency requirement is under a few seconds, when the change rate is low compared to the poll rate (so polling wastes most requests), or when the client needs to send many small messages quickly (games, collaborative editing).
 
 ## Visual explanation
 
@@ -150,9 +154,9 @@ A dashboard that shows site-progress percentages updated hourly does not need We
 
 ```mermaid
 flowchart LR
-    B["Bidders (15 per auction)"] -->|"WebSocket via SignalR"| LB["L7 load balancer (WebSocket aware, 240 s idle timeout)"]
-    O["Observers (up to 300,000)"] -->|"SSE"| LB
-    K["Legacy kiosks"] -->|"long polling"| LB
+    B["Bidders (15 per auction)"] -->|"WebSocket via SignalR"| LB["L7 load balancer (WebSocket aware, 240 s idle timeout, sticky sessions)"]
+    O["Watchers (up to 300,000)"] -->|"SSE"| LB
+    K["Office PCs behind strict proxies"] -->|"long polling"| LB
     LB --> N1["Realtime node 1 (SignalR + SSE)"]
     LB --> N2["Realtime node 2"]
     LB --> N3["Realtime node 3"]
@@ -164,7 +168,7 @@ flowchart LR
     B -. "POST /bids (or hub method)" .-> A
 ```
 
-Three audiences use three transports, all terminating at the same load balancer, which must be configured for long-lived connections (WebSocket upgrade support and a long idle timeout). Bids are *written* through the auction service, which validates and persists to PostgreSQL before publishing one message to Redis. Every realtime node is subscribed, receives the message once, and fans it out to the connections it holds for that auction. The nodes are interchangeable for reading, but each one is stateful for the connections it currently holds.
+Three audiences use three transports, all terminating at the same load balancer, which must be configured for long-lived connections (WebSocket upgrade support, a long idle timeout, and session affinity for SignalR clients that negotiate). Bids are *written* through the auction service, which validates and persists to PostgreSQL before publishing one message to Redis. Every realtime node is subscribed, receives the message once, and fans it out to the connections it holds for that auction. The nodes are interchangeable for reading, but each one is stateful for the connections it currently holds.
 
 ### Sequence: SSE with a drop and resume
 
@@ -193,7 +197,7 @@ The browser does most of the work: it reconnects on its own after the `retry` in
 
 ```mermaid
 sequenceDiagram
-    participant K as Kiosk
+    participant K as Office PC browser
     participant S as Realtime node
     K->>S: GET /updates?since=44
     Note over S: no new events, request waits (await on signal)
@@ -205,7 +209,7 @@ sequenceDiagram
     K->>S: GET /updates?since=45
 ```
 
-The kiosk always has one request in flight. The server releases it when an event arrives or when the 25-second timer fires with an empty list. Each cycle costs one full HTTP exchange, which is why this transport is the fallback, not the default.
+The office PC always has one request in flight. The server releases it when an event arrives or when the 25-second timer fires with an empty list. Each cycle costs one full HTTP exchange, which is why this transport is the fallback, not the default.
 
 ## Step-by-step example
 
@@ -217,7 +221,7 @@ One class, `AuctionFeed`, owns a ring buffer per auction. `Append` assigns the n
 
 ### Step 2 — SSE endpoint
 
-`GET /auctions/{id}/stream` sets the headers, reads `Last-Event-ID`, and loops: wait for events, write them as SSE frames, flush, repeat. When nothing happens for 15 seconds, write a comment as a heartbeat.
+`GET /auctions/{id}/stream` sets the headers, reads `Last-Event-ID`, and loops: wait for events, write them as SSE frames, flush, repeat. When nothing happens for 15 seconds, write a comment as a heartbeat. We write the frames by hand once so you see the protocol, then show the built-in .NET 10 result (`TypedResults.ServerSentEvents`) that does the formatting for you.
 
 ### Step 3 — long polling endpoint
 
@@ -237,6 +241,7 @@ Auction.Realtime/
   Realtime/
     AuctionFeed.cs
     SseEndpoints.cs
+    BuiltInSseEndpoints.cs
     LongPollEndpoints.cs
     BidHub.cs
     RawWebSocketEndpoints.cs
@@ -379,6 +384,57 @@ public static class SseEndpoints
 }
 ```
 
+Hand-written frames have one trap: a `data:` value must not contain a raw newline, or the frame ends early. Our payloads are single-line JSON, so this is safe; multi-line text needs one `data:` line per line. ASP.NET Core 10 ships a result that handles framing for you. It takes an `IAsyncEnumerable<SseItem<T>>` (strings are written as-is, other types are serialised to JSON) and sets `text/event-stream` and no-cache headers:
+
+```csharp file=Realtime/BuiltInSseEndpoints.cs
+using System.Globalization;
+using System.Net.ServerSentEvents;
+using System.Runtime.CompilerServices;
+
+namespace Auction.Realtime;
+
+public static class BuiltInSseEndpoints
+{
+    public static IEndpointRouteBuilder MapAuctionStreamBuiltIn(this IEndpointRouteBuilder app)
+    {
+        app.MapGet("/auctions/{auctionId}/stream2", (string auctionId, HttpRequest request, AuctionFeed feed, CancellationToken ct) =>
+        {
+            var last = long.TryParse(request.Headers["Last-Event-ID"].ToString(), out var l) ? l : 0;
+            return TypedResults.ServerSentEvents(ReadAsync(feed, auctionId, last, ct));
+        });
+        return app;
+    }
+
+    private static async IAsyncEnumerable<SseItem<string>> ReadAsync(
+        AuctionFeed feed, string auctionId, long last, [EnumeratorCancellation] CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            ReplayResult result;
+            try { result = await feed.WaitForAsync(auctionId, last, TimeSpan.FromSeconds(15), ct); }
+            catch (OperationCanceledException) { yield break; }
+
+            if (result.ResyncRequired)
+            {
+                last = result.LatestSeq;
+                yield return new SseItem<string>($"{{\"latest\":{last}}}", "resync") { EventId = last.ToString(CultureInfo.InvariantCulture) };
+            }
+            else if (result.Events.Count == 0)
+            {
+                yield return new SseItem<string>("{}", "heartbeat");   // a tiny event keeps proxies from timing out
+            }
+            foreach (var ev in result.Events)
+            {
+                last = ev.Seq;
+                yield return new SseItem<string>(ev.Data, ev.Type) { EventId = ev.Seq.ToString(CultureInfo.InvariantCulture) };
+            }
+        }
+    }
+}
+```
+
+Use the built-in result by default; hand-write frames only when you need something it does not do, such as comment-line heartbeats or a custom `retry:` field on the first frame.
+
 ```csharp file=Realtime/LongPollEndpoints.cs
 namespace Auction.Realtime;
 
@@ -404,15 +460,16 @@ using Microsoft.AspNetCore.SignalR;
 
 namespace Auction.Realtime;
 
-/// <summary>Bidders connect here (WebSockets when possible). Observers use SSE; they never need the hub.</summary>
+/// <summary>Bidders connect here (WebSockets when possible). Watchers use SSE; they never need the hub.</summary>
 public sealed class BidHub(AuctionFeed feed, ILogger<BidHub> logger) : Hub
 {
     public static string GroupName(string auctionId) => $"auction:{auctionId}";
 
     public async Task<long> JoinAuction(string auctionId, long lastSeq)
     {
+        // Join first, then replay: a live event may arrive twice (once live, once in the replay), but none is lost.
+        // The client ignores any sequence number it has already applied.
         await Groups.AddToGroupAsync(Context.ConnectionId, GroupName(auctionId));
-        // Replay anything the bidder missed while reconnecting, before live traffic resumes.
         var missed = feed.GetSince(auctionId, lastSeq);
         if (missed.ResyncRequired) await Clients.Caller.SendAsync("resync", missed.LatestSeq);
         else foreach (var ev in missed.Events) await Clients.Caller.SendAsync("bidAccepted", ev);
@@ -422,7 +479,8 @@ public sealed class BidHub(AuctionFeed feed, ILogger<BidHub> logger) : Hub
     public async Task PlaceBid(string auctionId, decimal amount)
     {
         if (amount <= 0) throw new HubException("Bid must be positive.");
-        // In production: validate against the auction rules and persist in PostgreSQL first, then publish.
+        // In production: validate against the auction rules (auction open, bidder has a deposit, amount beats the
+        // current highest bid by the minimum increment), persist in PostgreSQL first, then publish.
         var data = $"{{\"amount\":{amount.ToString(CultureInfo.InvariantCulture)},\"by\":\"{Context.ConnectionId[..6]}\"}}";
         var ev = feed.Append(auctionId, "bid", data);
         logger.LogInformation("Bid {Seq} on {AuctionId}: {Amount}", ev.Seq, auctionId, amount);
@@ -559,6 +617,7 @@ public static class ReconnectPolicy
 ```
 
 ```csharp file=Program.cs
+using System.Text.Json;
 using Auction.Realtime;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -577,16 +636,18 @@ var app = builder.Build();
 
 app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(15) });
 
-app.MapHub<BidHub>("/hubs/bids");
-app.MapAuctionStream();        // SSE for observers
-app.MapAuctionLongPoll();      // long polling for kiosks
+app.MapHub<BidHub>("/hubs/bids", o => o.AllowStatefulReconnects = true);   // buffers messages across brief blips (.NET 8+)
+app.MapAuctionStream();        // SSE for watchers, frames written by hand
+app.MapAuctionStreamBuiltIn(); // SSE for watchers, .NET 10 TypedResults.ServerSentEvents
+app.MapAuctionLongPoll();      // long polling for browsers behind strict proxies
 app.MapRawAuctionSocket();     // raw WebSocket, for illustration
 
 // Write path: bids are validated and persisted here (or in the hub), then published to every transport.
 app.MapPost("/auctions/{auctionId}/bids", (string auctionId, BidRequest bid, AuctionFeed feed) =>
 {
     if (bid.AmountPaise <= 0) return Results.BadRequest("Amount must be positive.");
-    var ev = feed.Append(auctionId, "bid", $"{{\"amount\":{bid.AmountPaise},\"by\":\"{bid.BidderId}\"}}");
+    // Serialise instead of interpolating: a bidder id containing a quote would otherwise corrupt every client's JSON.
+    var ev = feed.Append(auctionId, "bid", JsonSerializer.Serialize(new { amount = bid.AmountPaise, by = bid.BidderId }));
     return Results.Accepted(value: new { seq = ev.Seq });
 });
 
@@ -612,11 +673,13 @@ builder.Services.AddSignalR()
 
 With the backplane, *sequence numbers must be assigned in one place* (the auction service or a Redis `INCR` per auction), not by each node's feed, or two nodes will hand out the same number for different events. The feed on each node becomes a replica of the ordered stream, not the source of it. Azure SignalR Service is the managed alternative: it holds the connections for you, and your servers only publish.
 
+Two failure modes to plan for. Redis pub/sub is fire-and-forget: it stores nothing, so a node that loses its Redis connection for ten seconds silently misses ten seconds of events. Detect the gap (the next event's sequence number jumps) and make that node's clients resync. And Redis itself becomes a dependency of every live auction; run it with a replica and alert on backplane disconnects, because SignalR keeps accepting connections while it cannot deliver cross-node messages.
+
 ## Bad design vs good design
 
-**Bad: WebSockets for everything.** The observer page opens a WebSocket to show a read-only price board. Now 300,000 WebSocket connections need upgrade-aware proxies, stateful nodes and hand-written reconnection, for a feed that never sends anything upstream. SSE would give the same latency with browser-native reconnection and replay.
+**Bad: WebSockets for everything.** The watcher page opens a WebSocket to show a read-only price board. Now 300,000 WebSocket connections need upgrade-aware proxies, stateful nodes and hand-written reconnection, for a feed that never sends anything upstream. SSE would give the same latency with browser-native reconnection and replay.
 
-**Bad: no sequence numbers.** The client reconnects after a 4-second blip and simply resumes. The two bids placed during the blip are never shown; the bidder sees a stale price and bids too high. With `Last-Event-ID` and a replay buffer, the gap is filled automatically.
+**Bad: no sequence numbers.** The client reconnects after a 4-second blip and simply resumes. The two bids placed during the blip are never shown; the bidder sees a stale price, thinks they are still winning, and stops bidding seconds before the hammer falls. With `Last-Event-ID` and a replay buffer, the gap is filled automatically.
 
 **Bad: a 5-minute replay buffer in memory per connection.** Each connection keeps its own copy of recent events; 50,000 connections × 300 events × 200 bytes = 3 GB of duplicates. Keep one ring buffer per topic, shared by all connections.
 
@@ -624,7 +687,9 @@ With the backplane, *sequence numbers must be assigned in one place* (the auctio
 
 **Bad: broadcasting before persisting.** The hub sends `bidAccepted` to the group, then the database insert fails. Every bidder saw a bid that does not exist. Persist first, publish second; on failure, the client gets an error and nobody else saw anything.
 
-**Good:** the implementation above, plus a backplane for multiple nodes, persist-then-publish, one shared buffer per topic, heartbeats under the proxy timeout, and jittered backoff on the client.
+**Bad: SignalR on three servers without sticky sessions.** Clients that fall back to SSE or long polling send their `negotiate` call to node 1 and their next request to node 2, which has never heard of the connection id; they fail with 404s in a loop. Turn on session affinity, or force WebSockets with `SkipNegotiation`.
+
+**Good:** the implementation above, plus a backplane for multiple nodes, sticky sessions, persist-then-publish, one shared buffer per topic, heartbeats under the proxy timeout, and jittered backoff on the client.
 
 :::callout type=tip title="Choosing in one line"
 Many readers, one-way, text: SSE. Two-way, low latency, binary: WebSockets (via SignalR in .NET). Must work through anything: long polling. Updates slower than once a minute: just poll.
@@ -632,13 +697,13 @@ Many readers, one-way, text: SSE. Two-way, low latency, binary: WebSockets (via 
 
 ## Practical playground
 
-Open the HLD canvas with the starter graph below: a single realtime node, observers and bidders connected directly, and one database. Grow it to serve 300,000 observers and 2,000 bidders: add nodes, a WebSocket-aware load balancer, a backplane, and separate the write path (bids) from the push path. Annotate the idle timeout on the load balancer and estimate connections per node.
+Open the HLD canvas with the starter graph below: a single realtime node, watchers and bidders connected directly, and one database. Grow it to serve 300,000 watchers and 7,500 bidders (500 auctions × 15): add nodes, a WebSocket-aware load balancer, a backplane, and separate the write path (bids) from the push path. Annotate the idle timeout on the load balancer and estimate connections per node.
 
 :::playground type=hld title="Scale the auction realtime tier"
 ```json
 {
   "nodes": [
-    { "id": "obs", "type": "client", "label": "Observers (SSE)", "props": { "rps": 50 } },
+    { "id": "obs", "type": "client", "label": "Watchers (SSE)", "props": { "rps": 50 } },
     { "id": "bid", "type": "client", "label": "Bidders (WebSocket)", "props": { "rps": 100 } },
     { "id": "rt", "type": "app-server", "label": "Realtime node (SignalR + SSE)", "props": { "instances": 1 } },
     { "id": "db", "type": "database", "label": "PostgreSQL (bids)" }
@@ -768,9 +833,9 @@ For each scenario, choose polling, long polling, SSE or WebSockets (via SignalR 
 
 1. A public live-score page for a cricket match with up to 2 million viewers; scores change a few times a minute.
 2. A collaborative whiteboard where 10 engineers draw at the same time and each stroke must appear on everyone's screen within 100 ms.
-3. A contractor's billing dashboard that shows bill approval status; status changes a few times a day.
-4. An e-auction bidding console used by 15 bidders from offices with strict proxies; bids must propagate within 1 second.
-5. A site-camera page that streams detection alerts (text) from a server to a monitoring room display, and the display never sends anything back.
+3. A seller's payout page in a marketplace app that shows settlement status ("processing", "paid to bank"); status changes a few times a day.
+4. A live-auction bidding page used by 15 bidders, some of them on office networks with strict proxies; bids must propagate within 1 second.
+5. A warehouse wall display that streams parcel-scanner alerts ("bay 4 jammed") as text from a server; the display never sends anything back.
 ::acceptance
 - Scenario 1 is SSE (or CDN-cached polling) with fan-out reasoning, not WebSockets.
 - Scenario 2 is WebSockets, with latency and bidirectionality named.
@@ -786,7 +851,7 @@ Then network: proxies and firewalls that cannot handle upgrades push you towards
 ::solution
 1. **SSE, behind a CDN that supports streaming, or plain polling with CDN caching.** Two million one-way readers with a few changes a minute is a broadcast. WebSockets would mean 2 million stateful sockets for no benefit. Polling every 10 seconds against a CDN-cached JSON (TTL 5 s) is also reasonable: the origin sees a handful of requests per second regardless of audience size.
 2. **WebSockets.** Bidirectional, many small messages, 100 ms budget. Each stroke is a few bytes; HTTP headers per message would dominate. SignalR with the MessagePack protocol fits.
-3. **Polling** every 60 seconds, or just on page load with a manual refresh. A few changes a day means a push channel would sit idle for hours. 500 contractors polling once a minute is about 8 RPS.
+3. **Polling** every 60 seconds, or just on page load with a manual refresh. A few changes a day means a push channel would sit idle for hours. 500 sellers with the page open, polling once a minute, is about 8 RPS. (A mobile push notification when a payout lands is a nice extra, and costs no open connection.)
 4. **WebSockets with fallback.** Fifteen bidders need sub-second bidirectional updates, so WebSockets is the first choice. Strict proxies may block the upgrade, so the client must fall back to SSE plus `POST` for bids, or long polling. SignalR negotiates exactly this fallback chain automatically.
 5. **SSE.** One direction, text, modest fan-out. Browser-native reconnection with `Last-Event-ID` means the display catches up after a network blip without custom code.
 ::mistakes
@@ -797,7 +862,7 @@ Then network: proxies and firewalls that cannot handle upgrades push you towards
 :::exercise id=m10-realtime-ex3 difficulty=intermediate kind=code title="A replay buffer with sequence numbers"
 Implement `EventRing`, a bounded buffer of events with monotonically increasing sequence numbers starting at 1. `Append(data)` stores the event and returns its sequence number. `TryGetSince(lastSeq, out events)` returns the events with sequence greater than `lastSeq`, in order. It returns `false` (and an empty list) when the client cannot be caught up: `lastSeq` is greater than the latest sequence, or `lastSeq` is older than the oldest event the buffer still holds minus one.
 ::requirements
-- Capacity is fixed at construction; appending beyond it drops the oldest event.
+- Capacity is set in the constructor; appending beyond it drops the oldest event.
 - `TryGetSince(latest, out e)` returns `true` with an empty list (client is up to date).
 - `TryGetSince(0, ...)` returns every buffered event only if nothing has been dropped yet.
 - Thread-safe for concurrent `Append` and `TryGetSince`.
@@ -983,7 +1048,7 @@ Add `WaitForAsync(lastSeq, timeout, ct)` using a `TaskCompletionSource` that `Ap
 :::
 
 :::exercise id=m10-realtime-ex4 difficulty=intermediate kind=design title="Connection registry and groups for a realtime node"
-Design the classes a single realtime node needs to track its connections, their group memberships (auctions they watch), their last heartbeat, and deliver a message to a group. SignalR has these built in; design them as if you were writing a lightweight server for the raw WebSocket endpoint. Produce a class model (interfaces, classes, key members) and explain the thread-safety and ownership decisions.
+Design the classes a single realtime node needs to track its connections, their group memberships (auctions they bid in or watch), their last heartbeat, and deliver a message to a group. SignalR has these built in; design them as if you were writing a lightweight server for the raw WebSocket endpoint. Produce a class model (interfaces, classes, key members) and explain the thread-safety and ownership decisions.
 ::acceptance
 - A connection can belong to many groups and a group to many connections (and both lookups are fast).
 - Removing a connection removes it from every group in one operation.
@@ -1074,8 +1139,8 @@ classDiagram
 - Mixing heartbeat state into the connection object so that a test of group logic needs a clock.
 :::
 
-:::exercise id=m10-realtime-ex5 difficulty=advanced kind=hld title="300,000 observers, 2,000 bidders, 500 auctions"
-Design the real-time tier for the procurement portal at peak: 500 simultaneous auctions, 2,000 bidders on WebSockets, 300,000 observers, an average of 600 observers per auction, and 2 bids per second per auction. Bids must reach all bidders of that auction within 1 second; observers may lag by up to 3 seconds. Extend the starter graph. Show your arithmetic for node count, backplane traffic and per-node outbound message rate; state how you drain a node for deployment; and explain how a reconnecting client catches up.
+:::exercise id=m10-realtime-ex5 difficulty=advanced kind=hld title="300,000 watchers, 7,500 bidders, 500 auctions"
+Design the real-time tier for the marketplace's live-auction evening at peak: 500 simultaneous auctions, 15 bidders per auction on WebSockets (7,500 in total), 300,000 watchers on SSE (an average of 600 per auction), and 2 bids per second per auction. Bids must reach all bidders of that auction within 1 second; watchers may lag by up to 3 seconds. Extend the starter graph. Show your arithmetic for node count, backplane traffic and per-node outbound message rate; state how you drain a node for deployment; and explain how a reconnecting client catches up.
 ::acceptance
 - Node count derived from a stated memory-per-connection estimate (labelled as an estimate).
 - Backplane message rate versus client delivery rate are both computed and clearly different.
@@ -1083,19 +1148,19 @@ Design the real-time tier for the procurement portal at peak: 500 simultaneous a
 - Deployment drain and client backoff with jitter are described.
 - Replay or resync after reconnect is described, including where sequence numbers are assigned.
 ::hint
-Memory first: at roughly 30 KB per idle connection (estimate), how many GB do 302,000 connections need, and how many 16 GB nodes with headroom?
+Memory first: at roughly 30 KB per idle connection (estimate), how many GB do 307,500 connections need, and how many 16 GB nodes with headroom?
 ::hint
 Backplane sees each event once; clients see each event once per subscriber. Compute both.
 ::hint
-Observers tolerate 3 seconds: can you coalesce bids per auction into one update per second for them and cut delivery by half?
+Watchers tolerate 3 seconds: can you coalesce bids per auction into one update per second for them and cut delivery by half?
 ::hint
 Draining: stop accepting new connections at the load balancer, send a "reconnect" hint to clients in small batches over 60 seconds, then exit.
 ::starter
 ```json
 {
   "nodes": [
-    { "id": "obs", "type": "client", "label": "Observers (300,000, SSE)", "props": { "rps": 100 } },
-    { "id": "bid", "type": "client", "label": "Bidders (2,000, WebSocket)", "props": { "rps": 1000 } },
+    { "id": "obs", "type": "client", "label": "Watchers (300,000, SSE)", "props": { "rps": 100 } },
+    { "id": "bid", "type": "client", "label": "Bidders (7,500, WebSocket)", "props": { "rps": 1000 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
     { "id": "rt", "type": "app-server", "label": "Realtime nodes", "props": { "instances": 2 } },
     { "id": "db", "type": "database", "label": "PostgreSQL (bids)" }
@@ -1112,9 +1177,9 @@ Draining: stop accepting new connections at the load balancer, send a "reconnect
 ```json
 {
   "nodes": [
-    { "id": "obs", "type": "client", "label": "Observers (300,000, SSE)", "props": { "rps": 100 } },
-    { "id": "bid", "type": "client", "label": "Bidders (2,000, WebSocket via SignalR)", "props": { "rps": 1000 } },
-    { "id": "lb", "type": "load-balancer", "label": "L7 LB: WebSocket upgrade, 240 s idle, least-connections" },
+    { "id": "obs", "type": "client", "label": "Watchers (300,000, SSE)", "props": { "rps": 100 } },
+    { "id": "bid", "type": "client", "label": "Bidders (7,500, WebSocket via SignalR)", "props": { "rps": 1000 } },
+    { "id": "lb", "type": "load-balancer", "label": "L7 LB: WebSocket upgrade, 240 s idle, least-connections, sticky sessions" },
     { "id": "wsg", "type": "websocket-gateway", "label": "Realtime nodes (SignalR + SSE), 50k connections each", "props": { "instances": 8 } },
     { "id": "redis", "type": "cache", "label": "Redis: SignalR backplane + auction-events channel" },
     { "id": "api", "type": "app-server", "label": "Auction service: validate bid, assign seq, persist, publish", "props": { "instances": 3 } },
@@ -1137,13 +1202,15 @@ Draining: stop accepting new connections at the load balancer, send a "reconnect
 }
 ```
 
-**Node count.** 302,000 connections × about 30 KB each (estimate; measure under load) ≈ 9 GB of connection state. On 16 GB nodes keeping 50 % headroom for send buffers and bursts, that is about 8 GB usable per node, so 2 nodes could hold it, but a single node failure would then dump 150,000 reconnects onto the survivor. Choose **8 nodes at about 38,000 connections each**, so losing one moves only 12.5 % of clients. Raise file-descriptor limits to at least 100,000 per node.
+**Node count.** 300,000 watchers + 7,500 bidders = 307,500 connections × about 30 KB each (estimate; measure under load) ≈ 9.2 GB of connection state. On 16 GB nodes keeping 50 % headroom for send buffers and bursts, that is about 8 GB usable per node, so 2 nodes could almost hold it, but a single node failure would then dump about 150,000 reconnects onto the survivor. Choose **8 nodes at about 38,000 connections each**, so losing one moves only 12.5 % of clients. Raise file-descriptor limits to at least 100,000 per node.
 
 **Backplane rate.** 500 auctions × 2 bids/s = **1,000 messages per second** on Redis pub/sub. Trivial.
 
-**Client delivery rate.** Each bid goes to 600 observers + 15 bidders ≈ 615 recipients: 1,000 × 615 ≈ **615,000 deliveries per second** fleet-wide, about 77,000 per node. At 200 bytes each, that is about 15 MB/s outbound per node. This, not the backplane, is the sizing constraint. Because observers tolerate 3 seconds, **coalesce** observer updates: one SSE frame per auction per second carrying the current best bid instead of each bid, which cuts observer deliveries to 500 × 600 = 300,000 per second regardless of bid rate, with bidders still receiving every bid immediately.
+**Client delivery rate.** Each bid goes to 600 watchers + 15 bidders = 615 recipients: 1,000 × 615 = **615,000 deliveries per second** fleet-wide, about 77,000 per node. At 200 bytes each, that is about 15 MB/s outbound per node. This, not the backplane, is the sizing constraint. Because watchers tolerate 3 seconds, **coalesce** watcher updates: one SSE frame per auction per second carrying the current highest bid instead of each bid, which cuts watcher deliveries from 600,000 to 500 × 600 = 300,000 per second regardless of bid rate, while bidders still receive every bid immediately (1,000 × 15 = 15,000 per second).
 
-**Write path.** A bid is a hub call that the realtime node forwards to the auction service (or a direct `POST`). The service validates (auction open, bidder qualified, amount lower than current), assigns the next sequence number for that auction as part of the insert, commits to PostgreSQL, and only then publishes to Redis. Realtime nodes never invent sequence numbers.
+**Write path.** A bid is a hub call that the realtime node forwards to the auction service (or a direct `POST`). The service validates (auction open, bidder has paid the deposit, amount beats the current highest bid by the minimum increment), assigns the next sequence number for that auction as part of the insert, commits to PostgreSQL, and only then publishes to Redis. Realtime nodes never invent sequence numbers.
+
+**Sticky sessions.** Bidders that fall back from WebSockets to SSE or long polling make several requests per logical SignalR connection, so the load balancer uses session affinity (a cookie) for `/hubs/*`. Plain SSE watchers do not need it: each reconnect is a fresh request that any node can serve from its own buffer.
 
 **Draining.** Before deploying to a node: mark it unhealthy at the load balancer so new connections go elsewhere; send a `reconnect` hint to its clients in batches of 1,000 every second (about 40 seconds for a full node); clients reconnect with jittered backoff (1 s base, 30 s cap) and land on healthy nodes; then stop the process. Rolling one node at a time keeps the fleet at 7/8 capacity throughout.
 
@@ -1153,6 +1220,7 @@ Draining: stop accepting new connections at the load balancer, send a "reconnect
 - Two big nodes, so one failure halves capacity and causes a reconnect storm.
 - Letting realtime nodes assign sequence numbers, so replays across nodes disagree.
 - No snapshot endpoint, so every resync hits PostgreSQL.
+- Forgetting session affinity for SignalR clients that cannot use WebSockets.
 :::
 
 ## Automated testing
@@ -1186,7 +1254,8 @@ Assert.Equal("bid", ev.Type);
 - **Stock tickers and live sports scores** are almost always SSE or coalesced polling behind a CDN: enormous one-way audiences, modest update rates.
 - **Collaborative editors and multiplayer games** use WebSockets with binary protocols, often with their own replay and conflict-resolution layers on top.
 - **AI chat interfaces** stream tokens with SSE; the pattern you built here (`text/event-stream`, `data:` lines, reconnect) is exactly what they use.
-- **Construction monitoring platforms** push drone-processing progress, sensor alerts and approval-status changes to site and office dashboards; SSE for the office displays and a plain poll for the once-an-hour reports is usually the right split.
+- **Food-delivery and ride-hailing apps** push the order status and the rider's or driver's position to one customer at a time. Fan-out is tiny, so the hard parts are connection count, mobile battery and networks that drop constantly; many apps use a socket or SSE stream while the screen is open and switch to push notifications plus a poll on resume when the app is backgrounded.
+- **Chat and team-collaboration tools** (Slack-style) keep one WebSocket per open client for typing indicators, presence and messages, and treat the database as the source of truth: on reconnect the client asks for "messages after id N", exactly the replay pattern above.
 
 ## Interview questions
 
@@ -1202,7 +1271,7 @@ When data flows one way (server to client), is text, and the audience is large: 
 ::q intermediate
 What is a SignalR backplane, and what problem does it not solve?
 ::a
-With several server instances, a client is connected to exactly one of them. A group broadcast on instance 1 would only reach instance 1's clients. A backplane (Redis pub/sub, or Azure SignalR Service) makes every instance subscribe to a shared channel: a send on any instance is published once, each instance receives it and delivers it to its own connections in that group. It solves "reach clients on other nodes". It does not solve replay of missed messages after a reconnect, ordering across instances, or the per-node fan-out cost, which still scales with subscribers per node. Sequence numbers for replay must be assigned centrally, not by each node.
+With several server instances, a client is connected to exactly one of them. A group broadcast on instance 1 would only reach instance 1's clients. A backplane (Redis pub/sub, or Azure SignalR Service) makes every instance subscribe to a shared channel: a send on any instance is published once, each instance receives it and delivers it to its own connections in that group. It solves "reach clients on other nodes". It does not solve replay of missed messages after a reconnect (Redis pub/sub stores nothing; SignalR's stateful reconnect only covers brief blips on the same server), ordering across instances, sticky sessions for clients that negotiate and fall back from WebSockets, or the per-node fan-out cost, which still scales with subscribers per node. Sequence numbers for replay must be assigned centrally, not by each node.
 ::q intermediate
 Why are heartbeats necessary, and what interval would you choose?
 ::a
@@ -1245,6 +1314,8 @@ Q: Why full jitter on reconnect?
 A: So thousands of clients dropped at once spread their retries uniformly over the window instead of retrying in synchronised waves.
 Q: Default SignalR keep-alive and client timeout?
 A: KeepAliveInterval 15 s, ClientTimeoutInterval 30 s.
+Q: Why does a multi-server SignalR deployment usually need sticky sessions?
+A: The negotiate request and the transport requests (many of them for SSE and long polling) must reach the same server. Exceptions: WebSockets-only clients with SkipNegotiation, or Azure SignalR Service.
 Q: What sizes a realtime fleet: backplane rate or delivery rate?
 A: Delivery rate (events × subscribers), which is typically hundreds of times larger than the backplane rate (events once).
 Q: When is plain polling the right answer?
@@ -1255,7 +1326,7 @@ A: When data changes slower than the poll interval you would accept and latency 
 
 :::quiz pass=70
 ::q single
-A read-only live price board for 300,000 viewers, text updates a few times a second. Which transport fits best?
+A read-only live auction price board for 300,000 watchers, text updates a few times a second. Which transport fits best?
 - [ ] WebSockets, because it is fastest.
 - [x] SSE, because it is one-way, plain HTTP, and reconnection with replay is built into browsers.
 - [ ] Long polling, because it is simplest.

@@ -22,7 +22,7 @@ references:
     url: https://learn.microsoft.com/aspnet/core/migration/fx-to-core/inc/overview
 ---
 
-Most systems you will work on already exist. The big rewrite ("freeze features for 18 months, then switch over one weekend") fails often enough that it has its own folklore. The **strangler fig** approach replaces a legacy system one slice at a time while it keeps running, and the **anti-corruption layer** keeps the new code from inheriting the old system's confusing model. This lesson migrates a 15-year-old works-management system to ASP.NET Core and PostgreSQL, feature by feature and district by district, with data kept in sync in both directions so that every step can be rolled back.
+Most systems you will work on already exist. The big rewrite ("freeze features for 18 months, then switch over one weekend") fails often enough that it has its own folklore. The **strangler fig** approach replaces a legacy system one slice at a time while it keeps running, and the **anti-corruption layer** keeps the new code from inheriting the old system's confusing model. This lesson migrates a 15-year-old parcel-delivery system to ASP.NET Core and PostgreSQL, feature by feature and hub by hub, with data kept in sync in both directions so that every step can be rolled back.
 
 ## Learning objectives
 
@@ -47,9 +47,9 @@ By the end of this lesson you will be able to:
 
 A strangler fig is a tree that starts as a seed on a branch of an old tree. It grows roots down around the trunk. Over years its roots and branches take over, and eventually the old tree inside dies and rots away, leaving the fig standing in its shape. At no point was there "no tree".
 
-Migrating software this way means: put a **doorman** in front of the old system (a routing facade). At first the doorman sends every visitor to the old system. Then you build one new room, say "measurement entries", and tell the doorman to send those visitors to the new room. Then the next room. When nobody is sent to the old building any more, you demolish it.
+Migrating software this way means: put a **doorman** in front of the old system (a routing facade). At first the doorman sends every visitor to the old system. Then you build one new room, say "delivery-attempt entries", and tell the doorman to send those visitors to the new room. Then the next room. When nobody is sent to the old building any more, you demolish it.
 
-The new rooms still need some things from the old building, and the old building speaks a strange dialect: status `A` with flag `Y` means "completed", amounts are text in paise, dates are `dd/MM/yyyy` strings. You do not want that dialect spreading into the new rooms. So you hire an **interpreter** who stands at the border, translating old words into new ones and back. That interpreter is the **anti-corruption layer**.
+The new rooms still need some things from the old building, and the old building speaks a strange dialect: status `A` with flag `Y` means "delivered", amounts are text in paise, weights are written `2+450` for 2 kg 450 g, dates are `dd/MM/yyyy` strings. You do not want that dialect spreading into the new rooms. So you hire an **interpreter** who stands at the border, translating old words into new ones and back. That interpreter is the **anti-corruption layer**.
 
 And because some visitors still use the old building for reports, every change made in a new room is copied back to the old building's records until the old building is gone (**data synchronisation**).
 
@@ -59,7 +59,7 @@ And because some visitors still use the old building for reports, every change m
 
 A rewrite looks simpler: no compromises, no old code. In practice:
 
-- **The old system is the specification.** Fifteen years of fixes encode rules nobody wrote down (a district that rounds differently, a contractor category exempt from a deduction). A rewrite rediscovers them in production.
+- **The old system is the specification.** Fifteen years of fixes encode rules nobody wrote down (a hub that rounds parcel weight up to the next 500 g instead of 100 g, a merchant category exempt from the fuel surcharge). A rewrite rediscovers them in production.
 - **The business does not stop.** During an 18-month rewrite, the old system keeps changing, and the new one chases a moving target.
 - **Value arrives at the end.** Nothing reaches users until cut-over day, which is also the riskiest day.
 - **Cut-over is all or nothing.** If it fails, rolling back a whole system with weeks of new data is very hard.
@@ -68,9 +68,9 @@ The strangler fig turns one huge risky step into fifty small ones, each deliveri
 
 ### The running example
 
-The Public Works Department of a state runs **WMS**, a works-management system built in 2010: ASP.NET Web Forms, SQL Server, 600 stored procedures, one 140-column `WORK_ORDER` table. It handles work orders for roads and bridges, measurement-book entries (quantities of work done, recorded by site engineers), contractor bills and reports. About 4,000 users across 38 districts; around 20 requests per second at the end-of-month peak (an estimate from 4,000 users × 60 requests in the busiest hour ÷ 3,600 s ≈ 67 per second at the very top, 20 per second sustained).
+A regional parcel-delivery company runs **DakTrack**, a consignment-management system built in 2010: ASP.NET Web Forms, SQL Server, 600 stored procedures, one 140-column `CONSIGNMENT` table. It handles parcel bookings, delivery-attempt entries (recorded by delivery agents on their rounds: delivered, customer not home, address not found), cash-on-delivery (COD) remittances and invoices for merchant customers, and reports. About 4,000 users (hub staff, counter staff and delivery agents) across 38 hubs; around 20 requests per second at the evening peak when agents close their rounds (an estimate from 4,000 users × 60 requests in the busiest hour ÷ 3,600 s ≈ 67 per second at the very top, 20 per second sustained).
 
-The target: ASP.NET Core 10 services on PostgreSQL 17, organised by bounded context: **Works** (work orders), **Measurement**, **Billing**. Constraints: the state's audit reports still run from WMS's SQL Server for at least a year, and the department cannot freeze changes.
+The target: ASP.NET Core 10 services on PostgreSQL 17, organised by bounded context: **Shipments** (consignments), **Delivery** (delivery attempts and proof of delivery), **Billing**. Constraints: the finance team's COD reconciliation and merchant-invoice reports still run from DakTrack's SQL Server for at least a year, and the company cannot freeze changes.
 
 ### The four parts of a strangler migration
 
@@ -83,9 +83,9 @@ The target: ASP.NET Core 10 services on PostgreSQL 17, organised by bounded cont
 
 Pick a slice that is:
 
-- **Valuable**: users feel the improvement (the measurement-book entry screen is slow and not mobile-friendly; site engineers suffer daily).
+- **Valuable**: users feel the improvement (the delivery-attempt entry screen is slow and not mobile-friendly; delivery agents suffer on every round).
 - **Loosely coupled**: few stored procedures and tables touch it.
-- **Low risk**: mistakes are recoverable (a measurement entry can be corrected; a bill payment cannot be unpaid).
+- **Low risk**: mistakes are recoverable (a delivery-attempt entry can be corrected; a COD remittance paid to a merchant cannot be taken back).
 - **Representative**: it exercises the facade, ACL and sync, so you learn the hard parts early.
 
 Read-only features (dashboards, search, reports) are often the easiest first slice: the new service reads replicated data and never writes to legacy.
@@ -94,12 +94,14 @@ Read-only features (dashboards, search, reports) are often the easiest first sli
 
 The facade decides, per request, which backend serves it:
 
-- **By feature (path)**: `/measurements/*` goes to the new Measurement service; everything else goes to WMS.
-- **By tenant or region**: Measurement is live for districts Pune and Nashik only. The district comes from the user's claims or a header.
+- **By feature (path)**: `/deliveries/*` goes to the new Delivery service; everything else goes to DakTrack.
+- **By tenant or region**: Delivery is live for the Pune and Nashik hubs only. The hub comes from the user's claims or a header.
 - **By percentage**: 10 % of users get the new screen. Use a **stable hash** of the user id, not a random number per request, so a user does not bounce between old and new screens. Raising the percentage from 10 to 20 must keep the first 10 % on the new side (a monotonic bucket).
 - **Kill switch**: one configuration flag sends a feature back to legacy instantly. This only works if legacy data is still up to date, which is why sync matters.
 
 Order of precedence matters and should be explicit: kill switch first, then explicit tenant lists, then percentage.
+
+These are feature flags with a routing job. If you already run a flag system, use it for the percentages and kill switches instead of inventing configuration: `Microsoft.FeatureManagement` has percentage and targeting filters (users and groups, so a hub can be a group) and reads flags from configuration or Azure App Configuration, and OpenFeature gives a vendor-neutral API in front of whichever flag provider you use. Keep the precedence rules in one tested class either way, and delete migration flags once a slice is retired; old flags are their own kind of legacy.
 
 Sessions and authentication must work on both sides. Common approaches: move authentication to a shared identity provider (OpenID Connect) early, so both systems accept the same token; or use the **System.Web adapters** from Microsoft, which let ASP.NET Core share session and authentication with an ASP.NET Framework app during incremental migration.
 
@@ -107,29 +109,29 @@ Sessions and authentication must work on both sides. Common approaches: move aut
 
 Eric Evans named the anti-corruption layer in *Domain-Driven Design*: when your model must interact with another system's model, put a layer between them that translates, so the other model's concepts do not leak into yours.
 
-Legacy WMS has these "corruptions":
+Legacy DakTrack has these "corruptions":
 
 | Legacy | Meaning | New model |
 |---|---|---|
-| `STATUS_CD = 'A'`, `CLOSE_FLG = 'Y'` | Completed (the 2014 "close" feature reused active status plus a flag) | `WorkOrderStatus.Completed` |
-| `STATUS_CD = 'H'` | On hold | `WorkOrderStatus.OnHold` |
-| `AMT_PAISE = '0048250000'` | ₹4,82,500.00 as zero-padded text in paise | `decimal ContractValueInr = 482500.00m` |
-| `START_DT = '05/11/2019'` | Day first: 5 November 2019 | `DateOnly(2019, 11, 5)` |
-| `CHAINAGE_FROM = '12+450'` | 12 km 450 m along the road | `Chainage(12450)` metres |
-| `CHAINAGE_FROM = ''` | Not applicable (building works) | `null` |
-| `DIST_CD = 'PN'` | District code | `DistrictCode = "PN"` |
+| `STATUS_CD = 'A'`, `CLOSE_FLG = 'Y'` | Delivered (the 2014 "close" feature reused active status plus a flag) | `ConsignmentStatus.Delivered` |
+| `STATUS_CD = 'H'` | On hold (for example, held at the hub for an address check) | `ConsignmentStatus.OnHold` |
+| `AMT_PAISE = '0000482500'` | COD amount ₹4,825.00 as zero-padded text in paise | `decimal CodAmountInr = 4825.00m` |
+| `BOOKED_DT = '05/11/2025'` | Day first: 5 November 2025 | `DateOnly(2025, 11, 5)` |
+| `WT_DECL = '2+450'` | Declared weight: 2 kg 450 g | `Weight(2450)` grams |
+| `WT_DECL = ''` | Not applicable (document envelopes are charged flat) | `null` |
+| `HUB_CD = 'PN'` | Hub code | `HubCode = "PN"` |
 
 The ACL usually has three parts:
 
 - **A facade or gateway** that hides how you reach legacy (stored procedure calls, a SOAP endpoint, screen-scraping, a replicated table).
 - **A translator** that maps legacy shapes to domain objects and back. It is pure code, easy to test with "golden" examples taken from real legacy rows.
-- **An adapter** that implements a port defined by the new domain (`IWorkOrderRepository`), so the domain does not know legacy exists.
+- **An adapter** that implements a port defined by the new domain (`IConsignmentRepository`), so the domain does not know legacy exists.
 
 Rules for a good ACL:
 
 - **Translate at the border, once.** No legacy codes inside domain classes, ever.
 - **Fail loudly on unknown values.** An unknown status code should raise a `LegacyDataException` with the field and value, and be logged and counted; silently mapping it to "Active" corrupts data.
-- **Translate both ways.** Writes back to legacy need the canonical legacy form (`Completed` → `STATUS_CD = 'C'`, `CLOSE_FLG = 'Y'`), even if legacy also accepts the odd `'A'` + `'Y'` form.
+- **Translate both ways.** Writes back to legacy need the canonical legacy form (`Delivered` → `STATUS_CD = 'C'`, `CLOSE_FLG = 'Y'`), even if legacy also accepts the odd `'A'` + `'Y'` form.
 - **Keep it temporary but well-built.** The ACL lives as long as legacy does, often years. Test it like production code.
 
 An ACL is also useful permanently, not only in migrations: wrapping a partner's API or an ERP system whose model you do not control.
@@ -151,20 +153,20 @@ Data is the hardest part. For each entity, decide **who owns writes** in each ph
 
 **Avoid dual writes.** Writing to both databases from the request handler ("save to PostgreSQL, then save to SQL Server") fails halfway sooner or later, leaving them inconsistent with no record of which one is right. Write to one owner and sync asynchronously, with an outbox.
 
-**Avoid sync loops.** During phase 2, changes flow both ways for different entities, and sometimes the same entity (a legacy batch job still updates work-order status at night). A change written by the new service to legacy is captured by CDC and arrives back at the new service. Without protection, it is applied again, which triggers another sync, and so on. Defences:
+**Avoid sync loops.** During phase 2, changes flow both ways for different entities, and sometimes the same entity (a legacy batch job still marks parcels "returned to origin" at night). A change written by the new service to legacy is captured by CDC and arrives back at the new service. Without protection, it is applied again, which triggers another sync, and so on. Defences:
 
 - **Origin marker.** The sync writer sets a column (`LAST_UPD_BY = 'modern-sync'`) or uses a dedicated database login; the CDC consumer skips changes with that origin (echoes).
 - **Version check.** Apply a change only if its version is newer than the last version applied for that key; drop stale ones.
 - **Conflict detection.** If a change from the other side arrives while your own write to the same row is still in flight, you have a conflict. Log it, count it and pick a rule (owner wins, or park for a human). During a migration, conflicts should be rare; a non-zero rate means ownership is not as clear as you thought.
 
-**Reconcile.** Run a nightly comparison of row counts and checksums per district between legacy and new databases. Investigate any difference before it becomes a month of drift.
+**Reconcile.** Run a nightly comparison of row counts and checksums per hub between legacy and new databases. Investigate any difference before it becomes a month of drift.
 
 ### Verifying before cut-over: parallel runs
 
-For behaviour that must match legacy exactly (bill calculations, deductions), run both:
+For behaviour that must match legacy exactly (COD remittance and invoice calculations, surcharges, deductions), run both:
 
 - **Shadow traffic (dark launch).** The facade sends the request to legacy (whose answer the user gets) and asynchronously to the new service, then compares results and logs differences. Only safe for reads or for writes into an isolated shadow store.
-- **Parallel run of calculations.** For a month, compute every bill in both systems and compare. Each mismatch is either a bug in the new code or an undocumented legacy rule; both are worth knowing.
+- **Parallel run of calculations.** For a month, compute every merchant invoice in both systems and compare. Each mismatch is either a bug in the new code or an undocumented legacy rule; both are worth knowing.
 
 ### Failure modes
 
@@ -174,16 +176,16 @@ For behaviour that must match legacy exactly (bill calculations, deductions), ru
 | ACL leaks | Domain code checks `STATUS_CD == "A"` | Code review rule and tests: legacy types only in the ACL namespace |
 | Facade becomes a single point of failure | Proxy outage takes down old and new | Run it highly available; keep it thin (routing only, no business logic) |
 | Facade adds latency | Every request gets an extra hop | Usually 1–3 ms in-region (estimate); measure it |
-| Sync lag | User saves in new screen, old report does not show it | Measure lag; show "updated a few seconds ago"; move the report next |
+| Sync lag | Agent saves in the new screen, the old report does not show it | Measure lag; show "updated a few seconds ago"; move the report next |
 | Sync loop | CPU and write volume climb with no user activity | Origin markers, version checks, alert on sync volume |
-| Divergent rules | Same bill computes differently in old and new | Parallel runs, golden tests from legacy data |
+| Divergent rules | Same invoice computes differently in old and new | Parallel runs, golden tests from legacy data |
 | Rollback impossible | Kill switch sends users to stale legacy data | Keep reverse sync running until the slice is retired |
 | Shared database coupling | New service reads legacy tables directly at request time | Read from its own replica via CDC; ACL for any remaining calls |
 
 ### When a simpler alternative is better
 
 - **Small system, small team.** If the legacy app is 20 screens and one database, a focused rewrite in a few months can be cheaper than building a facade, ACL and sync.
-- **The problem is the framework, not the design.** If WMS's model is fine and only the platform is old, an in-place upgrade (for example the .NET Upgrade Assistant and System.Web adapters for incremental ASP.NET Core migration) moves you forward with less machinery than a full strangler with new databases.
+- **The problem is the framework, not the design.** If DakTrack's model is fine and only the platform is old, an in-place upgrade (for example the .NET Upgrade Assistant and System.Web adapters for incremental ASP.NET Core migration) moves you forward with less machinery than a full strangler with new databases.
 - **Modularise in place.** Refactoring the monolith into modules ([modular monolith](#/lesson/m16-monolith-vs-microservices)) may deliver most of the benefit without new deployables.
 - **Leave it alone.** A stable legacy system that rarely changes can simply be wrapped with an API and an ACL. Migration is not a goal in itself.
 - **Buy.** If the capability is a commodity (HR, accounting), replacing it with a product may beat rebuilding it.
@@ -204,10 +206,10 @@ For behaviour that must match legacy exactly (bill calculations, deductions), ru
 
 ```mermaid
 flowchart LR
-    U["Site engineers and officers"] --> F["Routing facade (YARP)"]
-    F -->|"/measurements, pilot districts"| MS["Measurement service (new)"]
-    F -->|"/works/orders"| WS["Works service (new)"]
-    F -->|"everything else"| WMS["Legacy WMS (Web Forms)"]
+    U["Delivery agents and hub staff"] --> F["Routing facade (YARP)"]
+    F -->|"/deliveries, pilot hubs"| MS["Delivery service (new)"]
+    F -->|"/shipments"| WS["Shipments service (new)"]
+    F -->|"everything else"| WMS["Legacy DakTrack (Web Forms)"]
     WS --> ACL["Anti-corruption layer"]
     ACL -->|"stored procs, translated"| SQL[("Legacy SQL Server")]
     WMS --> SQL
@@ -221,93 +223,93 @@ flowchart LR
     REC --> PG
 ```
 
-Users always hit the facade. Measurement entries for pilot districts and work-order screens go to the new services; everything else still goes to WMS. The Works service occasionally needs legacy-only data, which it gets through the ACL. CDC streams legacy changes into PostgreSQL so the new services have their own copy, skipping changes that the reverse sync itself wrote. The new services' changes leave through an outbox and the reverse sync worker writes them into SQL Server in legacy form, so old reports stay correct. Reconciliation compares the two stores every night.
+Users always hit the facade. Delivery-attempt entries for pilot hubs and consignment screens go to the new services; everything else still goes to DakTrack. The Shipments service occasionally needs legacy-only data, which it gets through the ACL. CDC streams legacy changes into PostgreSQL so the new services have their own copy, skipping changes that the reverse sync itself wrote. The new services' changes leave through an outbox and the reverse sync worker writes them into SQL Server in legacy form, so old reports stay correct. Reconciliation compares the two stores every night.
 
-### Sequence: putting a work order on hold in the new system
+### Sequence: putting a parcel on hold in the new system
 
 ```mermaid
 sequenceDiagram
-    participant U as Officer
+    participant U as Hub supervisor
     participant F as Facade
-    participant W as Works service
+    participant W as Shipments service
     participant PG as PostgreSQL
     participant RS as Reverse sync
     participant ACL as ACL
     participant SQL as Legacy SQL Server
     participant C as CDC consumer
-    U->>F: POST /works/orders/WO-2231/hold
-    F->>W: route rule works-orders, district PN
+    U->>F: POST /shipments/CN-2231/hold
+    F->>W: route rule shipments, hub PN
     W->>PG: update status OnHold + outbox row, one tx
     W-->>U: 200 OK
     RS->>PG: read outbox
-    RS->>ACL: OnHold for WO-2231
-    ACL->>SQL: usp_UpdateWoStatus 'H', origin modern-sync
+    RS->>ACL: OnHold for CN-2231
+    ACL->>SQL: usp_UpdateCnStatus 'H', origin modern-sync
     SQL-->>C: CDC change, origin modern-sync
     Note over C: echo of our own write, skipped
 ```
 
-The facade routes the request to the new Works service, which commits the change and an outbox row together and replies immediately. Moments later, the reverse sync worker translates the change through the ACL into the legacy stored-procedure call with the canonical code `'H'` and an origin marker. That write is captured by CDC like any other change, but the consumer recognises the origin and skips it, which is what prevents a sync loop.
+The facade routes the request to the new Shipments service, which commits the change and an outbox row together and replies immediately. Moments later, the reverse sync worker translates the change through the ACL into the legacy stored-procedure call with the canonical code `'H'` and an origin marker. That write is captured by CDC like any other change, but the consumer recognises the origin and skips it, which is what prevents a sync loop.
 
 ### Class diagram: the anti-corruption layer
 
 ```mermaid
 classDiagram
-    class IWorkOrderRepository {
+    class IConsignmentRepository {
         <<interface>>
-        +GetAsync(number) WorkOrder
-        +ChangeStatusAsync(order, status)
+        +GetAsync(number) Consignment
+        +ChangeStatusAsync(consignment, status)
     }
-    class WorkOrder {
+    class Consignment {
         +string Number
-        +WorkOrderStatus Status
-        +decimal ContractValueInr
-        +DateOnly StartDate
-        +Chainage From
+        +ConsignmentStatus Status
+        +decimal CodAmountInr
+        +DateOnly BookedOn
+        +Weight DeclaredWeight
     }
-    class LegacyWorkOrderRepository {
-        -ILegacyWorksGateway gateway
-        +GetAsync(number) WorkOrder
-        +ChangeStatusAsync(order, status)
+    class LegacyConsignmentRepository {
+        -ILegacyConsignmentGateway gateway
+        +GetAsync(number) Consignment
+        +ChangeStatusAsync(consignment, status)
     }
-    class WorkOrderTranslator {
-        +ToDomain(row) WorkOrder
+    class ConsignmentTranslator {
+        +ToDomain(row) Consignment
         +ToLegacyStatus(status) LegacyStatus
     }
-    class ILegacyWorksGateway {
+    class ILegacyConsignmentGateway {
         <<interface>>
-        +FindAsync(woNo) LegacyWorkOrderRow
-        +UpdateStatusAsync(woNo, code, flag, rowVer, origin)
+        +FindAsync(cnNo) LegacyConsignmentRow
+        +UpdateStatusAsync(cnNo, code, flag, rowVer, origin)
     }
-    class LegacyWorkOrderRow {
-        +string WO_NO
+    class LegacyConsignmentRow {
+        +string CN_NO
         +string STATUS_CD
         +string CLOSE_FLG
         +string AMT_PAISE
     }
-    IWorkOrderRepository <|.. LegacyWorkOrderRepository
-    LegacyWorkOrderRepository --> ILegacyWorksGateway
-    LegacyWorkOrderRepository --> WorkOrderTranslator
-    WorkOrderTranslator ..> LegacyWorkOrderRow
-    WorkOrderTranslator ..> WorkOrder
-    ILegacyWorksGateway ..> LegacyWorkOrderRow
+    IConsignmentRepository <|.. LegacyConsignmentRepository
+    LegacyConsignmentRepository --> ILegacyConsignmentGateway
+    LegacyConsignmentRepository --> ConsignmentTranslator
+    ConsignmentTranslator ..> LegacyConsignmentRow
+    ConsignmentTranslator ..> Consignment
+    ILegacyConsignmentGateway ..> LegacyConsignmentRow
 ```
 
-The domain owns `IWorkOrderRepository` and `WorkOrder`, and knows nothing else. `LegacyWorkOrderRepository` is the adapter that implements the domain's port. It uses `ILegacyWorksGateway` (the facade over stored procedures) and `WorkOrderTranslator` (pure mapping). Only these classes, in one namespace, ever see `LegacyWorkOrderRow`. When legacy is retired, you replace the adapter with a PostgreSQL repository and the domain does not change.
+The domain owns `IConsignmentRepository` and `Consignment`, and knows nothing else. `LegacyConsignmentRepository` is the adapter that implements the domain's port. It uses `ILegacyConsignmentGateway` (the facade over stored procedures) and `ConsignmentTranslator` (pure mapping). Only these classes, in one namespace, ever see `LegacyConsignmentRow`. When legacy is retired, you replace the adapter with a PostgreSQL repository and the domain does not change.
 
 ## Step-by-step example
 
 ### Step 1: put the facade in, change nothing
 
-Deploy YARP in front of WMS with a single catch-all route to legacy. Measure the added latency and error rate for a week. Nothing else changes, and that is the point: you now have a switch.
+Deploy YARP in front of DakTrack with a single catch-all route to legacy. Measure the added latency and error rate for a week. Nothing else changes, and that is the point: you now have a switch.
 
 ```json
 {
   "ReverseProxy": {
     "Routes": {
-      "legacy": { "ClusterId": "wms", "Match": { "Path": "{**catch-all}" } }
+      "legacy": { "ClusterId": "daktrack", "Match": { "Path": "{**catch-all}" } }
     },
     "Clusters": {
-      "wms": { "Destinations": { "d1": { "Address": "https://wms.internal/" } } }
+      "daktrack": { "Destinations": { "d1": { "Address": "https://daktrack.internal/" } } }
     }
   }
 }
@@ -315,19 +317,19 @@ Deploy YARP in front of WMS with a single catch-all route to legacy. Measure the
 
 ### Step 2: move authentication to a shared identity provider
 
-Both WMS and new services accept tokens from the state's OpenID Connect provider, so a user moving between old and new screens is not asked to log in again.
+Both DakTrack and the new services accept tokens from the company's OpenID Connect provider, so a user moving between old and new screens is not asked to log in again.
 
 ### Step 3: build the first read slice
 
-The Works service gets its own `work_orders` table, filled by CDC from `WORK_ORDER` through the translator. The new "work order details" page reads only from PostgreSQL. Route it for two pilot districts.
+The Shipments service gets its own `consignments` table, filled by CDC from `CONSIGNMENT` through the translator. The new "track a parcel" page reads only from PostgreSQL. Route it for two pilot hubs.
 
 ### Step 4: move writes, add reverse sync
 
-Status changes ("put on hold", "complete") move to the new service. It writes PostgreSQL plus outbox; the reverse sync worker updates SQL Server with origin `modern-sync`; the CDC consumer skips those echoes. Run reconciliation nightly.
+Status changes ("put on hold", "mark delivered") move to the new service. It writes PostgreSQL plus outbox; the reverse sync worker updates SQL Server with origin `modern-sync`; the CDC consumer skips those echoes. Run reconciliation nightly.
 
 ### Step 5: expand, verify, retire
 
-Raise the rollout district by district, then by percentage for the rest. When every work-order write has gone through the new service for a month with zero reconciliation differences, and the reports have moved, stop the reverse sync and remove the legacy screens. Record the decommission date. Then pick the next slice.
+Raise the rollout hub by hub, then by percentage for the rest. When every consignment write has gone through the new service for a month with zero reconciliation differences, and the reports have moved, stop the reverse sync and remove the legacy screens. Record the decommission date. Then pick the next slice.
 
 ## Production-style C# implementation
 
@@ -340,7 +342,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Options;
 
-namespace WorksMigration.Strangler;
+namespace ParcelMigration.Strangler;
 
 public enum Backend { Legacy, Modern }
 
@@ -348,23 +350,23 @@ public sealed class RouteRule
 {
     public string Feature { get; set; } = "";
     public string PathPrefix { get; set; } = "";
-    public List<string> Districts { get; set; } = new();
+    public List<string> Hubs { get; set; } = new();
     public int RolloutPercent { get; set; }
     public bool KillSwitch { get; set; }
 }
 
 public sealed class StranglerOptions
 {
-    public string LegacyBaseUrl { get; set; } = "https://wms.internal/";
+    public string LegacyBaseUrl { get; set; } = "https://daktrack.internal/";
     public List<RouteRule> Rules { get; set; } = new();
 }
 
 public sealed record RouteDecision(Backend Backend, string Feature, string Reason);
 
-/// <summary>Kill switch, then explicit districts, then a stable percentage. Unmapped paths go to legacy.</summary>
+/// <summary>Kill switch, then explicit pilot hubs, then a stable percentage. Unmapped paths go to legacy.</summary>
 public sealed class FeatureRouter(IOptionsMonitor<StranglerOptions> options)
 {
-    public RouteDecision Decide(string path, string? district, string userKey)
+    public RouteDecision Decide(string path, string? hub, string userKey)
     {
         var rule = options.CurrentValue.Rules
             .Where(r => r.PathPrefix.Length > 0 && path.StartsWith(r.PathPrefix, StringComparison.OrdinalIgnoreCase))
@@ -373,8 +375,8 @@ public sealed class FeatureRouter(IOptionsMonitor<StranglerOptions> options)
 
         if (rule is null) return new(Backend.Legacy, "unmapped", "no rule");
         if (rule.KillSwitch) return new(Backend.Legacy, rule.Feature, "kill switch");
-        if (district is not null && rule.Districts.Contains(district, StringComparer.OrdinalIgnoreCase))
-            return new(Backend.Modern, rule.Feature, "pilot district");
+        if (hub is not null && rule.Hubs.Contains(hub, StringComparer.OrdinalIgnoreCase))
+            return new(Backend.Modern, rule.Feature, "pilot hub");
         return StableBucket.Of(rule.Feature + ":" + userKey) < rule.RolloutPercent
             ? new(Backend.Modern, rule.Feature, "rollout bucket")
             : new(Backend.Legacy, rule.Feature, "outside rollout");
@@ -399,15 +401,15 @@ using System.Diagnostics;
 using System.Security.Claims;
 using Microsoft.Extensions.Options;
 
-namespace WorksMigration.Strangler;
+namespace ParcelMigration.Strangler;
 
 public sealed class StranglerMiddleware(RequestDelegate next, FeatureRouter router, LegacyForwarder forwarder, ILogger<StranglerMiddleware> logger)
 {
     public async Task InvokeAsync(HttpContext context)
     {
-        var district = context.User.FindFirstValue("district") ?? context.Request.Headers["X-District"].FirstOrDefault();
+        var hub = context.User.FindFirstValue("hub") ?? context.Request.Headers["X-Hub"].FirstOrDefault();
         var userKey = context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? context.Connection.RemoteIpAddress?.ToString() ?? "anonymous";
-        var decision = router.Decide(context.Request.Path.Value ?? "/", district, userKey);
+        var decision = router.Decide(context.Request.Path.Value ?? "/", hub, userKey);
 
         Activity.Current?.SetTag("strangler.backend", decision.Backend.ToString());
         Activity.Current?.SetTag("strangler.feature", decision.Feature);
@@ -465,141 +467,141 @@ public sealed class LegacyForwarder(IHttpClientFactory httpClientFactory, IOptio
 
 ### The new domain model and its port
 
-```csharp file=Works/WorkOrder.cs
-namespace WorksMigration.Works;
+```csharp file=Shipments/Consignment.cs
+namespace ParcelMigration.Shipments;
 
-public enum WorkOrderStatus { Active, OnHold, Completed, Cancelled }
+public enum ConsignmentStatus { InTransit, OnHold, Delivered, Cancelled }
 
-/// <summary>Distance along a road in metres, written "km+metres" (12+450 = 12,450 m).</summary>
-public readonly record struct Chainage(int Metres)
+/// <summary>Parcel weight in grams, written by legacy as "kg+grams" (2+450 = 2,450 g).</summary>
+public readonly record struct Weight(int Grams)
 {
-    public override string ToString() => $"{Metres / 1000}+{Metres % 1000:D3}";
+    public override string ToString() => $"{Grams / 1000}+{Grams % 1000:D3}";
 }
 
-public sealed record WorkOrder(
+public sealed record Consignment(
     string Number,
     string Description,
-    WorkOrderStatus Status,
-    decimal ContractValueInr,
-    DateOnly StartDate,
-    Chainage? From,
-    Chainage? To,
-    string DistrictCode,
+    ConsignmentStatus Status,
+    decimal CodAmountInr,
+    DateOnly BookedOn,
+    Weight? DeclaredWeight,
+    Weight? ActualWeight,
+    string HubCode,
     int SourceVersion);
 
 /// <summary>The domain's port. It has no idea legacy exists.</summary>
-public interface IWorkOrderRepository
+public interface IConsignmentRepository
 {
-    Task<WorkOrder?> GetAsync(string number, CancellationToken ct);
-    Task ChangeStatusAsync(WorkOrder order, WorkOrderStatus newStatus, CancellationToken ct);
+    Task<Consignment?> GetAsync(string number, CancellationToken ct);
+    Task ChangeStatusAsync(Consignment consignment, ConsignmentStatus newStatus, CancellationToken ct);
 }
 
-public sealed class WorkOrderService(IWorkOrderRepository repository)
+public sealed class ConsignmentService(IConsignmentRepository repository)
 {
-    public async Task<WorkOrder> PutOnHoldAsync(string number, CancellationToken ct)
+    public async Task<Consignment> PutOnHoldAsync(string number, CancellationToken ct)
     {
-        var order = await repository.GetAsync(number, ct) ?? throw new KeyNotFoundException(number);
-        if (order.Status is WorkOrderStatus.Completed or WorkOrderStatus.Cancelled)
-            throw new InvalidOperationException($"Work order {number} is {order.Status} and cannot be put on hold.");
-        await repository.ChangeStatusAsync(order, WorkOrderStatus.OnHold, ct);
-        return order with { Status = WorkOrderStatus.OnHold };
+        var consignment = await repository.GetAsync(number, ct) ?? throw new KeyNotFoundException(number);
+        if (consignment.Status is ConsignmentStatus.Delivered or ConsignmentStatus.Cancelled)
+            throw new InvalidOperationException($"Consignment {number} is {consignment.Status} and cannot be put on hold.");
+        await repository.ChangeStatusAsync(consignment, ConsignmentStatus.OnHold, ct);
+        return consignment with { Status = ConsignmentStatus.OnHold };
     }
 }
 ```
 
 ### The anti-corruption layer
 
-```csharp file=Acl/LegacyWorks.cs
+```csharp file=Acl/LegacyConsignments.cs
 using System.Globalization;
-using WorksMigration.Works;
+using ParcelMigration.Shipments;
 
-namespace WorksMigration.Acl;
+namespace ParcelMigration.Acl;
 
-/// <summary>The legacy WORK_ORDER row exactly as WMS stores it. Never used outside this namespace.</summary>
-public sealed record LegacyWorkOrderRow(
-    string WO_NO, string WO_DESC, string STATUS_CD, string CLOSE_FLG, string AMT_PAISE,
-    string START_DT, string CHAINAGE_FROM, string CHAINAGE_TO, string DIST_CD, int ROW_VER, string LAST_UPD_BY);
+/// <summary>The legacy CONSIGNMENT row exactly as DakTrack stores it. Never used outside this namespace.</summary>
+public sealed record LegacyConsignmentRow(
+    string CN_NO, string CN_DESC, string STATUS_CD, string CLOSE_FLG, string AMT_PAISE,
+    string BOOKED_DT, string WT_DECL, string WT_ACT, string HUB_CD, int ROW_VER, string LAST_UPD_BY);
 
 public sealed record LegacyStatus(string StatusCode, string CloseFlag);
 
-public sealed class LegacyDataException(string field, string value, string woNo)
-    : Exception($"Legacy work order {woNo}: unexpected {field} value '{value}'")
+public sealed class LegacyDataException(string field, string value, string cnNo)
+    : Exception($"Legacy consignment {cnNo}: unexpected {field} value '{value}'")
 {
     public string Field { get; } = field;
 }
 
-public interface ILegacyWorksGateway
+public interface ILegacyConsignmentGateway
 {
-    Task<LegacyWorkOrderRow?> FindAsync(string woNo, CancellationToken ct);
+    Task<LegacyConsignmentRow?> FindAsync(string cnNo, CancellationToken ct);
 
-    /// <summary>Calls usp_UpdateWoStatus; fails if ROW_VER changed (legacy optimistic concurrency).</summary>
-    Task UpdateStatusAsync(string woNo, LegacyStatus status, int expectedRowVersion, string origin, CancellationToken ct);
+    /// <summary>Calls usp_UpdateCnStatus; fails if ROW_VER changed (legacy optimistic concurrency).</summary>
+    Task UpdateStatusAsync(string cnNo, LegacyStatus status, int expectedRowVersion, string origin, CancellationToken ct);
 }
 
-public static class WorkOrderTranslator
+public static class ConsignmentTranslator
 {
     public const string SyncOrigin = "modern-sync";
 
-    public static WorkOrder ToDomain(LegacyWorkOrderRow r) => new(
-        Number: r.WO_NO.Trim(),
-        Description: r.WO_DESC.Trim(),
+    public static Consignment ToDomain(LegacyConsignmentRow r) => new(
+        Number: r.CN_NO.Trim(),
+        Description: r.CN_DESC.Trim(),
         Status: ToStatus(r),
-        ContractValueInr: ToRupees(r),
-        StartDate: ToDate(r),
-        From: ToChainage(r.CHAINAGE_FROM, "CHAINAGE_FROM", r.WO_NO),
-        To: ToChainage(r.CHAINAGE_TO, "CHAINAGE_TO", r.WO_NO),
-        DistrictCode: r.DIST_CD.Trim().ToUpperInvariant(),
+        CodAmountInr: ToRupees(r),
+        BookedOn: ToDate(r),
+        DeclaredWeight: ToWeight(r.WT_DECL, "WT_DECL", r.CN_NO),
+        ActualWeight: ToWeight(r.WT_ACT, "WT_ACT", r.CN_NO),
+        HubCode: r.HUB_CD.Trim().ToUpperInvariant(),
         SourceVersion: r.ROW_VER);
 
-    /// <summary>Canonical legacy form for writes, even though legacy also accepts 'A' + 'Y' for completed.</summary>
-    public static LegacyStatus ToLegacyStatus(WorkOrderStatus status) => status switch
+    /// <summary>Canonical legacy form for writes, even though legacy also accepts 'A' + 'Y' for delivered.</summary>
+    public static LegacyStatus ToLegacyStatus(ConsignmentStatus status) => status switch
     {
-        WorkOrderStatus.Active => new("A", "N"),
-        WorkOrderStatus.OnHold => new("H", "N"),
-        WorkOrderStatus.Completed => new("C", "Y"),
-        WorkOrderStatus.Cancelled => new("X", "N"),
+        ConsignmentStatus.InTransit => new("A", "N"),
+        ConsignmentStatus.OnHold => new("H", "N"),
+        ConsignmentStatus.Delivered => new("C", "Y"),
+        ConsignmentStatus.Cancelled => new("X", "N"),
         _ => throw new ArgumentOutOfRangeException(nameof(status))
     };
 
-    private static WorkOrderStatus ToStatus(LegacyWorkOrderRow r) => (r.STATUS_CD.Trim().ToUpperInvariant(), r.CLOSE_FLG.Trim().ToUpperInvariant()) switch
+    private static ConsignmentStatus ToStatus(LegacyConsignmentRow r) => (r.STATUS_CD.Trim().ToUpperInvariant(), r.CLOSE_FLG.Trim().ToUpperInvariant()) switch
     {
-        ("A", "Y") => WorkOrderStatus.Completed,              // 2014 "close" feature reused active + flag
-        ("A", _) => WorkOrderStatus.Active,
-        ("H", _) => WorkOrderStatus.OnHold,
-        ("C", _) => WorkOrderStatus.Completed,
-        ("X", _) => WorkOrderStatus.Cancelled,
-        _ => throw new LegacyDataException("STATUS_CD", r.STATUS_CD, r.WO_NO)
+        ("A", "Y") => ConsignmentStatus.Delivered,            // 2014 "close" feature reused active + flag
+        ("A", _) => ConsignmentStatus.InTransit,
+        ("H", _) => ConsignmentStatus.OnHold,
+        ("C", _) => ConsignmentStatus.Delivered,
+        ("X", _) => ConsignmentStatus.Cancelled,
+        _ => throw new LegacyDataException("STATUS_CD", r.STATUS_CD, r.CN_NO)
     };
 
-    private static decimal ToRupees(LegacyWorkOrderRow r) =>
+    private static decimal ToRupees(LegacyConsignmentRow r) =>
         long.TryParse(r.AMT_PAISE.Trim(), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var paise)
             ? paise / 100m
-            : throw new LegacyDataException("AMT_PAISE", r.AMT_PAISE, r.WO_NO);
+            : throw new LegacyDataException("AMT_PAISE", r.AMT_PAISE, r.CN_NO);
 
-    private static DateOnly ToDate(LegacyWorkOrderRow r) =>
-        DateOnly.TryParseExact(r.START_DT.Trim(), "dd/MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)
+    private static DateOnly ToDate(LegacyConsignmentRow r) =>
+        DateOnly.TryParseExact(r.BOOKED_DT.Trim(), "dd/MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)
             ? d
-            : throw new LegacyDataException("START_DT", r.START_DT, r.WO_NO);
+            : throw new LegacyDataException("BOOKED_DT", r.BOOKED_DT, r.CN_NO);
 
-    private static Chainage? ToChainage(string raw, string field, string woNo)
+    private static Weight? ToWeight(string raw, string field, string cnNo)
     {
         var s = raw.Trim();
-        if (s.Length == 0) return null;                          // building works have no chainage
+        if (s.Length == 0) return null;                          // document envelopes are charged flat: no weight
         var parts = s.Split('+');
-        if (parts.Length == 2 && int.TryParse(parts[0], out var km) && int.TryParse(parts[1], out var m) && m is >= 0 and < 1000)
-            return new Chainage(km * 1000 + m);
-        throw new LegacyDataException(field, raw, woNo);
+        if (parts.Length == 2 && int.TryParse(parts[0], out var kg) && int.TryParse(parts[1], out var g) && g is >= 0 and < 1000)
+            return new Weight(kg * 1000 + g);
+        throw new LegacyDataException(field, raw, cnNo);
     }
 }
 
 /// <summary>The adapter: implements the domain's port on top of legacy, translating at the border.</summary>
-public sealed class LegacyWorkOrderRepository(ILegacyWorksGateway gateway, ILogger<LegacyWorkOrderRepository> logger) : IWorkOrderRepository
+public sealed class LegacyConsignmentRepository(ILegacyConsignmentGateway gateway, ILogger<LegacyConsignmentRepository> logger) : IConsignmentRepository
 {
-    public async Task<WorkOrder?> GetAsync(string number, CancellationToken ct)
+    public async Task<Consignment?> GetAsync(string number, CancellationToken ct)
     {
         var row = await gateway.FindAsync(number, ct);
         if (row is null) return null;
-        try { return WorkOrderTranslator.ToDomain(row); }
+        try { return ConsignmentTranslator.ToDomain(row); }
         catch (LegacyDataException ex)
         {
             logger.LogError(ex, "ACL translation failed on field {Field}", ex.Field);   // count these; never guess
@@ -607,32 +609,32 @@ public sealed class LegacyWorkOrderRepository(ILegacyWorksGateway gateway, ILogg
         }
     }
 
-    public Task ChangeStatusAsync(WorkOrder order, WorkOrderStatus newStatus, CancellationToken ct) =>
-        gateway.UpdateStatusAsync(order.Number, WorkOrderTranslator.ToLegacyStatus(newStatus), order.SourceVersion,
-            WorkOrderTranslator.SyncOrigin, ct);
+    public Task ChangeStatusAsync(Consignment consignment, ConsignmentStatus newStatus, CancellationToken ct) =>
+        gateway.UpdateStatusAsync(consignment.Number, ConsignmentTranslator.ToLegacyStatus(newStatus), consignment.SourceVersion,
+            ConsignmentTranslator.SyncOrigin, ct);
 }
 
-public sealed class InMemoryLegacyWorksGateway : ILegacyWorksGateway
+public sealed class InMemoryLegacyConsignmentGateway : ILegacyConsignmentGateway
 {
     private readonly Lock _gate = new();
-    private readonly Dictionary<string, LegacyWorkOrderRow> _rows = new(StringComparer.OrdinalIgnoreCase)
+    private readonly Dictionary<string, LegacyConsignmentRow> _rows = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["WO-2231"] = new("WO-2231", "Widening of SH-60, km 12 to 18", "A", "N", "0048250000", "05/11/2019", "12+450", "18+000", "PN", 7, "wms"),
-        ["WO-3107"] = new("WO-3107", "Taluka office building repairs", "A", "Y", "0000875050", "14/02/2022", "", "", "NS", 3, "wms")
+        ["CN-2231"] = new("CN-2231", "Mixer grinder, Pune to Nashik", "A", "N", "0000482500", "05/11/2025", "2+450", "2+600", "PN", 7, "daktrack"),
+        ["CN-3107"] = new("CN-3107", "Documents envelope, Nashik local", "A", "Y", "0000000000", "14/02/2026", "", "", "NS", 3, "daktrack")
     };
 
-    public Task<LegacyWorkOrderRow?> FindAsync(string woNo, CancellationToken ct)
+    public Task<LegacyConsignmentRow?> FindAsync(string cnNo, CancellationToken ct)
     {
-        lock (_gate) return Task.FromResult(_rows.GetValueOrDefault(woNo));
+        lock (_gate) return Task.FromResult(_rows.GetValueOrDefault(cnNo));
     }
 
-    public Task UpdateStatusAsync(string woNo, LegacyStatus status, int expectedRowVersion, string origin, CancellationToken ct)
+    public Task UpdateStatusAsync(string cnNo, LegacyStatus status, int expectedRowVersion, string origin, CancellationToken ct)
     {
         lock (_gate)
         {
-            var row = _rows.GetValueOrDefault(woNo) ?? throw new KeyNotFoundException(woNo);
-            if (row.ROW_VER != expectedRowVersion) throw new InvalidOperationException($"{woNo} changed in legacy (ROW_VER {row.ROW_VER}).");
-            _rows[woNo] = row with { STATUS_CD = status.StatusCode, CLOSE_FLG = status.CloseFlag, ROW_VER = row.ROW_VER + 1, LAST_UPD_BY = origin };
+            var row = _rows.GetValueOrDefault(cnNo) ?? throw new KeyNotFoundException(cnNo);
+            if (row.ROW_VER != expectedRowVersion) throw new InvalidOperationException($"{cnNo} changed in legacy (ROW_VER {row.ROW_VER}).");
+            _rows[cnNo] = row with { STATUS_CD = status.StatusCode, CLOSE_FLG = status.CloseFlag, ROW_VER = row.ROW_VER + 1, LAST_UPD_BY = origin };
         }
         return Task.CompletedTask;
     }
@@ -642,30 +644,30 @@ public sealed class InMemoryLegacyWorksGateway : ILegacyWorksGateway
 ### The CDC consumer: legacy changes into the new store, without echoes
 
 ```csharp file=Sync/LegacyChangeConsumer.cs
-using WorksMigration.Acl;
-using WorksMigration.Works;
+using ParcelMigration.Acl;
+using ParcelMigration.Shipments;
 
-namespace WorksMigration.Sync;
+namespace ParcelMigration.Sync;
 
-/// <summary>One change captured from legacy WORK_ORDER (for example by Debezium from SQL Server CDC).</summary>
-public sealed record LegacyRowChanged(LegacyWorkOrderRow Row, long Position);
+/// <summary>One change captured from legacy CONSIGNMENT (for example by Debezium from SQL Server CDC).</summary>
+public sealed record LegacyRowChanged(LegacyConsignmentRow Row, long Position);
 
 public enum SyncOutcome { Applied, SkippedEcho, SkippedStale, Rejected }
 
-public interface IModernWorkOrderStore
+public interface IModernConsignmentStore
 {
-    WorkOrder? Find(string number);
-    void Upsert(WorkOrder order);
+    Consignment? Find(string number);
+    void Upsert(Consignment consignment);
 }
 
-public sealed class InMemoryModernWorkOrderStore : IModernWorkOrderStore
+public sealed class InMemoryModernConsignmentStore : IModernConsignmentStore
 {
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, WorkOrder> _rows = new(StringComparer.OrdinalIgnoreCase);
-    public WorkOrder? Find(string number) => _rows.GetValueOrDefault(number);
-    public void Upsert(WorkOrder order) => _rows[order.Number] = order;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Consignment> _rows = new(StringComparer.OrdinalIgnoreCase);
+    public Consignment? Find(string number) => _rows.GetValueOrDefault(number);
+    public void Upsert(Consignment consignment) => _rows[consignment.Number] = consignment;
 }
 
-public sealed class LegacyChangeConsumer(IModernWorkOrderStore store, ILogger<LegacyChangeConsumer> logger)
+public sealed class LegacyChangeConsumer(IModernConsignmentStore store, ILogger<LegacyChangeConsumer> logger)
 {
     private long _rejected;
     public long RejectedCount => Interlocked.Read(ref _rejected);
@@ -673,16 +675,22 @@ public sealed class LegacyChangeConsumer(IModernWorkOrderStore store, ILogger<Le
     public SyncOutcome Apply(LegacyRowChanged change)
     {
         var row = change.Row;
-        if (row.LAST_UPD_BY == WorkOrderTranslator.SyncOrigin)
-            return SyncOutcome.SkippedEcho;                                    // our own reverse-sync write
+        if (row.LAST_UPD_BY == ConsignmentTranslator.SyncOrigin)
+        {
+            // Our own reverse-sync write: do not apply it again, but remember the legacy version it produced,
+            // so the next genuine legacy change is not mistaken for a stale one and later writes carry the right ROW_VER.
+            var mine = store.Find(row.CN_NO.Trim());
+            if (mine is not null && mine.SourceVersion < row.ROW_VER) store.Upsert(mine with { SourceVersion = row.ROW_VER });
+            return SyncOutcome.SkippedEcho;
+        }
 
-        var current = store.Find(row.WO_NO.Trim());
+        var current = store.Find(row.CN_NO.Trim());
         if (current is not null && current.SourceVersion >= row.ROW_VER)
             return SyncOutcome.SkippedStale;                                   // replay or out-of-order delivery
 
         try
         {
-            store.Upsert(WorkOrderTranslator.ToDomain(row));
+            store.Upsert(ConsignmentTranslator.ToDomain(row));
             return SyncOutcome.Applied;
         }
         catch (LegacyDataException ex)
@@ -698,10 +706,10 @@ public sealed class LegacyChangeConsumer(IModernWorkOrderStore store, ILogger<Le
 ### Wiring
 
 ```csharp file=Program.cs
-using WorksMigration.Acl;
-using WorksMigration.Strangler;
-using WorksMigration.Sync;
-using WorksMigration.Works;
+using ParcelMigration.Acl;
+using ParcelMigration.Strangler;
+using ParcelMigration.Sync;
+using ParcelMigration.Shipments;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -709,25 +717,25 @@ builder.Services.Configure<StranglerOptions>(builder.Configuration.GetSection("S
 builder.Services.PostConfigure<StranglerOptions>(o =>
 {
     if (o.Rules.Count == 0)
-        o.Rules.Add(new RouteRule { Feature = "works-orders", PathPrefix = "/works/orders", Districts = ["PN", "NS"], RolloutPercent = 10 });
+        o.Rules.Add(new RouteRule { Feature = "shipments", PathPrefix = "/shipments", Hubs = ["PN", "NS"], RolloutPercent = 10 });
 });
 builder.Services.AddHttpClient("legacy", c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddSingleton<FeatureRouter>();
 builder.Services.AddSingleton<LegacyForwarder>();
-builder.Services.AddSingleton<ILegacyWorksGateway, InMemoryLegacyWorksGateway>();
-builder.Services.AddSingleton<IWorkOrderRepository, LegacyWorkOrderRepository>();
-builder.Services.AddSingleton<WorkOrderService>();
-builder.Services.AddSingleton<IModernWorkOrderStore, InMemoryModernWorkOrderStore>();
+builder.Services.AddSingleton<ILegacyConsignmentGateway, InMemoryLegacyConsignmentGateway>();
+builder.Services.AddSingleton<IConsignmentRepository, LegacyConsignmentRepository>();
+builder.Services.AddSingleton<ConsignmentService>();
+builder.Services.AddSingleton<IModernConsignmentStore, InMemoryModernConsignmentStore>();
 builder.Services.AddSingleton<LegacyChangeConsumer>();
 
 var app = builder.Build();
 
 app.UseMiddleware<StranglerMiddleware>();                 // before endpoints: legacy-routed requests never reach them
 
-app.MapGet("/works/orders/{number}", async (string number, IWorkOrderRepository repo, CancellationToken ct) =>
-    await repo.GetAsync(number, ct) is { } wo ? Results.Ok(wo) : Results.NotFound());
+app.MapGet("/shipments/{number}", async (string number, IConsignmentRepository repo, CancellationToken ct) =>
+    await repo.GetAsync(number, ct) is { } cn ? Results.Ok(cn) : Results.NotFound());
 
-app.MapPost("/works/orders/{number}/hold", async (string number, WorkOrderService service, CancellationToken ct) =>
+app.MapPost("/shipments/{number}/hold", async (string number, ConsignmentService service, CancellationToken ct) =>
 {
     try { return Results.Ok(await service.PutOnHoldAsync(number, ct)); }
     catch (KeyNotFoundException) { return Results.NotFound(); }
@@ -737,7 +745,7 @@ app.MapPost("/works/orders/{number}/hold", async (string number, WorkOrderServic
 app.Run();
 ```
 
-In phase 2 the repository registration switches from `LegacyWorkOrderRepository` to a PostgreSQL repository with an outbox, and a reverse-sync `BackgroundService` reads that outbox and calls `ILegacyWorksGateway.UpdateStatusAsync` with the sync origin. The domain service and endpoints do not change; that is the payoff of the port.
+In phase 2 the repository registration switches from `LegacyConsignmentRepository` to a PostgreSQL repository with an outbox, and a reverse-sync `BackgroundService` reads that outbox and calls `ILegacyConsignmentGateway.UpdateStatusAsync` with the sync origin. The domain service and endpoints do not change; that is the payoff of the port.
 
 With YARP, the custom middleware is replaced by configuration plus a small transform or a custom `IProxyConfigFilter` that applies the same `FeatureRouter` logic:
 
@@ -752,21 +760,21 @@ app.MapReverseProxy();
 **Bad: legacy codes in the domain.**
 
 ```csharp
-public bool IsCompleted(WorkOrder wo) => wo.StatusCd == "C" || (wo.StatusCd == "A" && wo.CloseFlg == "Y");
+public bool IsDelivered(Consignment c) => c.StatusCd == "C" || (c.StatusCd == "A" && c.CloseFlg == "Y");
 ```
 
-Every new feature now has to remember the 2014 quirk, and the quirk outlives the legacy system. **Good:** translate once in the ACL; the domain sees `WorkOrderStatus.Completed`.
+Every new feature now has to remember the 2014 quirk, and the quirk outlives the legacy system. **Good:** translate once in the ACL; the domain sees `ConsignmentStatus.Delivered`.
 
 **Bad: dual writes from the request.**
 
 ```csharp
-await _pg.SaveAsync(order, ct);
-await _legacy.SaveAsync(order, ct);   // fails 0.1 % of the time: the two stores now disagree, silently
+await _pg.SaveAsync(consignment, ct);
+await _legacy.SaveAsync(consignment, ct);   // fails 0.1 % of the time: the two stores now disagree, silently
 ```
 
 **Good:** write once to the owner with an outbox; sync asynchronously with retries, origin markers and reconciliation.
 
-**Bad: silent defaults in translation.** `_ => WorkOrderStatus.Active` for unknown codes. A new legacy code `'S'` (suspended) appears from a stored-procedure change and suspended works show as active in the new app. **Good:** throw `LegacyDataException`, log the field and value, count it and alert.
+**Bad: silent defaults in translation.** `_ => ConsignmentStatus.InTransit` for unknown codes. A new legacy code `'R'` (returned to origin) appears from a stored-procedure change, and returned parcels show as in transit in the new app while merchants wait for them. **Good:** throw `LegacyDataException`, log the field and value, count it and alert.
 
 **Bad: per-request random rollout.** Users flip between the old and new screens on every click, and support cannot reproduce issues. **Good:** a stable hash of user and feature, with the decision visible in a response header.
 
@@ -778,23 +786,23 @@ A kill switch that sends users back to legacy is useless if legacy has not recei
 
 ## Practical playground
 
-The graph below is WMS today. Open it in the HLD canvas and design the phase-2 migration:
+The graph below is DakTrack today. Open it in the HLD canvas and design the phase-2 migration:
 
-1. Insert an `api-gateway` (YARP) between users and WMS.
-2. Add a new Works `app-server` with its own PostgreSQL `database`.
+1. Insert an `api-gateway` (YARP) between users and DakTrack.
+2. Add a new Shipments `app-server` with its own PostgreSQL `database`.
 3. Add a `worker` for the CDC pipeline from SQL Server to PostgreSQL, and a `worker` for reverse sync.
 4. Add a `scheduler` for nightly reconciliation and `monitoring` for sync lag, echo count and translation rejects.
-5. Label the facade's routes: which paths, which districts, which percentage.
+5. Label the facade's routes: which paths, which hubs, which percentage.
 
-:::playground type=hld title="Strangle the works-management system"
+:::playground type=hld title="Strangle the consignment-management system"
 ```json
 {
   "nodes": [
-    { "id": "users", "type": "client", "label": "4,000 users, 38 districts", "props": { "rps": 20 } },
+    { "id": "users", "type": "client", "label": "4,000 users, 38 hubs", "props": { "rps": 20 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
-    { "id": "wms", "type": "app-server", "label": "Legacy WMS (Web Forms)", "props": { "instances": 2 } },
+    { "id": "wms", "type": "app-server", "label": "Legacy DakTrack (Web Forms)", "props": { "instances": 2 } },
     { "id": "sql", "type": "database", "label": "SQL Server (600 stored procedures)" },
-    { "id": "reports", "type": "worker", "label": "Audit reports (SSRS)" }
+    { "id": "reports", "type": "worker", "label": "Finance reports (SSRS)" }
   ],
   "edges": [
     { "from": "users", "to": "lb", "kind": "sync" },
@@ -809,40 +817,40 @@ The graph below is WMS today. Open it in the HLD canvas and design the phase-2 m
 ## Exercises
 
 :::exercise id=m16-strangler-acl-ex1 difficulty=beginner kind=written title="Pick the first three slices"
-WMS has these capabilities: (a) work-order details page (read-only, 40 % of traffic); (b) measurement-book entry by site engineers (writes, painful on mobile); (c) contractor bill calculation and payment (writes money, complex deductions); (d) audit reports run monthly from SQL Server; (e) user and role administration (rarely used). Propose the order of the first three slices, the routing rule for each (by path, district or percentage), and the data strategy for each (CDC read copy, write ownership with reverse sync, or leave in legacy). Explain why bill calculation should not be first.
+DakTrack has these capabilities: (a) parcel tracking page (read-only, 40 % of traffic); (b) delivery-attempt entry by delivery agents (writes, painful on mobile); (c) merchant COD remittance and invoice calculation (moves money, complex surcharges and deductions); (d) finance reports run monthly from SQL Server; (e) user and role administration (rarely used). Propose the order of the first three slices, the routing rule for each (by path, hub or percentage), and the data strategy for each (CDC read copy, write ownership with reverse sync, or leave in legacy). Explain why COD remittance should not be first.
 ::acceptance
 - The first slice is low-risk and valuable, typically (a) as a read slice on CDC data.
-- Measurement entry is a write slice with reverse sync so legacy reports and bills stay correct.
-- Bill calculation is deferred and needs a parallel run before cut-over.
+- Delivery-attempt entry is a write slice with reverse sync so legacy reports and remittances stay correct.
+- COD remittance is deferred and needs a parallel run before cut-over.
 - Each slice has a routing rule and a data strategy.
 ::hint
 Which slice can be built without writing anything to legacy?
 ::hint
 Which slice hurts users most today, and how bad is a mistake there?
 ::hint
-What would you need to be confident a new bill calculation matches 15 years of legacy rules?
+What would you need to be confident a new remittance calculation matches 15 years of legacy rules?
 ::hint
 Reports read SQL Server directly; what must keep SQL Server up to date while writes move?
 ::solution
-1. **Work-order details (a)**: read slice. Route `/works/orders/*` for two pilot districts, then by percentage. Data: CDC from `WORK_ORDER` into the Works service's PostgreSQL, translated by the ACL. Nothing is written to legacy, so the risk is display bugs only. It proves the facade, CDC and translator.
-2. **Measurement-book entry (b)**: write slice. Route `/measurements/*` by district (site engineers work per district, which makes support easy). The Measurement service owns writes; an outbox and reverse sync keep SQL Server's measurement tables current, because bills and audit reports still read them. Kill switch tested in staging.
-3. **User and role administration (e)** or **audit reports (d)**: either is a reasonable third. Moving reports off SQL Server (to read PostgreSQL) is what eventually lets you stop reverse sync, so it is often the strategic third slice.
+1. **Parcel tracking (a)**: read slice. Route `/shipments/*` for two pilot hubs, then by percentage. Data: CDC from `CONSIGNMENT` into the Shipments service's PostgreSQL, translated by the ACL. Nothing is written to legacy, so the risk is display bugs only. It proves the facade, CDC and translator.
+2. **Delivery-attempt entry (b)**: write slice. Route `/deliveries/*` by hub (agents work from one hub, which makes support easy). The Delivery service owns writes; an outbox and reverse sync keep SQL Server's delivery tables current, because COD remittances and finance reports still read them. Kill switch tested in staging.
+3. **User and role administration (e)** or **finance reports (d)**: either is a reasonable third. Moving reports off SQL Server (to read PostgreSQL) is what eventually lets you stop reverse sync, so it is often the strategic third slice.
 
-**Why not bills first:** they move money, have the most undocumented rules (deductions, rounding, exemptions) and a mistake cannot be undone easily. Bills need a parallel run (compute in both systems for a month, explain every difference) and should come after the team has learned the facade, ACL and sync on lower-risk slices.
+**Why not COD remittance first:** it moves money to merchants, has the most undocumented rules (surcharges, deductions, rounding, exemptions) and a mistake cannot be undone easily. It needs a parallel run (compute in both systems for a month, explain every difference) and should come after the team has learned the facade, ACL and sync on lower-risk slices.
 ::mistakes
 - Starting with the hardest, most valuable slice "to prove the approach".
 - Moving writes without reverse sync while reports still read legacy.
-- Routing by random percentage for site engineers, so support cannot tell which system someone used.
+- Routing by random percentage for delivery agents, so support cannot tell which system someone used.
 :::
 
 :::exercise id=m16-strangler-acl-ex2 difficulty=beginner kind=code title="Translate legacy status and money"
-Implement the core of the ACL translator for two legacy fields. `LegacyTranslator.ToStatus(statusCd, closeFlg)` maps legacy codes to `WorkStatus`, and `ToLegacy(status)` produces the canonical legacy form. `LegacyTranslator.ToRupees(amtPaise)` turns zero-padded paise text into rupees.
+Implement the core of the ACL translator for two legacy fields. `LegacyTranslator.ToStatus(statusCd, closeFlg)` maps legacy codes to `ShipmentStatus`, and `ToLegacy(status)` produces the canonical legacy form. `LegacyTranslator.ToRupees(amtPaise)` turns zero-padded paise text into rupees.
 ::requirements
 - Inputs may have surrounding spaces and any letter case.
-- `'A'` with close flag `'Y'` → `Completed`; `'A'` otherwise → `Active`; `'H'` → `OnHold`; `'C'` → `Completed`; `'X'` → `Cancelled`.
+- `'A'` with close flag `'Y'` → `Delivered`; `'A'` otherwise → `InTransit`; `'H'` → `OnHold`; `'C'` → `Delivered`; `'X'` → `Cancelled`.
 - Any other status code throws `LegacyDataException` whose `Field` is `"STATUS_CD"` and `Value` is the original input.
-- `ToLegacy`: Active → ("A","N"), OnHold → ("H","N"), Completed → ("C","Y"), Cancelled → ("X","N").
-- `ToRupees("0048250000")` = 482500.00m. A leading `-` is allowed. Empty or non-numeric text throws `LegacyDataException` with `Field` `"AMT_PAISE"`.
+- `ToLegacy`: InTransit → ("A","N"), OnHold → ("H","N"), Delivered → ("C","Y"), Cancelled → ("X","N").
+- `ToRupees("0000482500")` = 4825.00m. A leading `-` is allowed. Empty or non-numeric text throws `LegacyDataException` with `Field` `"AMT_PAISE"`.
 ::acceptance
 - All five status mappings, including the overloaded `'A'` + `'Y'`.
 - Unknown codes fail loudly with field and value.
@@ -861,7 +869,7 @@ Remember to keep the original (untrimmed) value in the exception for debugging.
 using System;
 using System.Globalization;
 
-public enum WorkStatus { Active, OnHold, Completed, Cancelled }
+public enum ShipmentStatus { InTransit, OnHold, Delivered, Cancelled }
 
 public sealed class LegacyDataException : Exception
 {
@@ -877,9 +885,9 @@ public sealed class LegacyDataException : Exception
 
 public static class LegacyTranslator
 {
-    public static WorkStatus ToStatus(string statusCd, string closeFlg) => throw new NotImplementedException();
+    public static ShipmentStatus ToStatus(string statusCd, string closeFlg) => throw new NotImplementedException();
 
-    public static (string StatusCd, string CloseFlg) ToLegacy(WorkStatus status) => throw new NotImplementedException();
+    public static (string StatusCd, string CloseFlg) ToLegacy(ShipmentStatus status) => throw new NotImplementedException();
 
     public static decimal ToRupees(string amtPaise) => throw new NotImplementedException();
 }
@@ -891,37 +899,37 @@ using Xunit;
 public class LegacyTranslatorTests
 {
     [Theory]
-    [InlineData("A", "N", WorkStatus.Active)]
-    [InlineData("A", "", WorkStatus.Active)]
-    [InlineData("A", "Y", WorkStatus.Completed)]
-    [InlineData(" a ", "y", WorkStatus.Completed)]
-    [InlineData("H", "N", WorkStatus.OnHold)]
-    [InlineData("C", "Y", WorkStatus.Completed)]
-    [InlineData("X", "N", WorkStatus.Cancelled)]
-    public void Maps_legacy_status(string code, string flag, WorkStatus expected) =>
+    [InlineData("A", "N", ShipmentStatus.InTransit)]
+    [InlineData("A", "", ShipmentStatus.InTransit)]
+    [InlineData("A", "Y", ShipmentStatus.Delivered)]
+    [InlineData(" a ", "y", ShipmentStatus.Delivered)]
+    [InlineData("H", "N", ShipmentStatus.OnHold)]
+    [InlineData("C", "Y", ShipmentStatus.Delivered)]
+    [InlineData("X", "N", ShipmentStatus.Cancelled)]
+    public void Maps_legacy_status(string code, string flag, ShipmentStatus expected) =>
         Assert.Equal(expected, LegacyTranslator.ToStatus(code, flag));
 
     [Fact]
     public void Unknown_status_fails_loudly()
     {
-        var ex = Assert.Throws<LegacyDataException>(() => LegacyTranslator.ToStatus("S ", "N"));
+        var ex = Assert.Throws<LegacyDataException>(() => LegacyTranslator.ToStatus("R ", "N"));
         Assert.Equal("STATUS_CD", ex.Field);
-        Assert.Equal("S ", ex.Value);
+        Assert.Equal("R ", ex.Value);
     }
 
     [Fact]
     public void Reverse_mapping_is_canonical()
     {
-        Assert.Equal(("C", "Y"), LegacyTranslator.ToLegacy(WorkStatus.Completed));
-        Assert.Equal(("H", "N"), LegacyTranslator.ToLegacy(WorkStatus.OnHold));
-        Assert.Equal(("A", "N"), LegacyTranslator.ToLegacy(WorkStatus.Active));
-        Assert.Equal(("X", "N"), LegacyTranslator.ToLegacy(WorkStatus.Cancelled));
+        Assert.Equal(("C", "Y"), LegacyTranslator.ToLegacy(ShipmentStatus.Delivered));
+        Assert.Equal(("H", "N"), LegacyTranslator.ToLegacy(ShipmentStatus.OnHold));
+        Assert.Equal(("A", "N"), LegacyTranslator.ToLegacy(ShipmentStatus.InTransit));
+        Assert.Equal(("X", "N"), LegacyTranslator.ToLegacy(ShipmentStatus.Cancelled));
     }
 
     [Fact]
     public void Converts_paise_text_to_rupees()
     {
-        Assert.Equal(482500.00m, LegacyTranslator.ToRupees("0048250000"));
+        Assert.Equal(4825.00m, LegacyTranslator.ToRupees("0000482500"));
         Assert.Equal(8750.50m, LegacyTranslator.ToRupees(" 0000875050 "));
         Assert.Equal(-125.00m, LegacyTranslator.ToRupees("-12500"));
     }
@@ -930,7 +938,7 @@ public class LegacyTranslatorTests
     public void Rejects_bad_amounts()
     {
         Assert.Equal("AMT_PAISE", Assert.Throws<LegacyDataException>(() => LegacyTranslator.ToRupees("")).Field);
-        Assert.Equal("AMT_PAISE", Assert.Throws<LegacyDataException>(() => LegacyTranslator.ToRupees("4,82,500")).Field);
+        Assert.Equal("AMT_PAISE", Assert.Throws<LegacyDataException>(() => LegacyTranslator.ToRupees("4,825.00")).Field);
     }
 }
 ```
@@ -941,7 +949,7 @@ Normalise, switch on the tuple with the special case first, and throw with the o
 using System;
 using System.Globalization;
 
-public enum WorkStatus { Active, OnHold, Completed, Cancelled }
+public enum ShipmentStatus { InTransit, OnHold, Delivered, Cancelled }
 
 public sealed class LegacyDataException : Exception
 {
@@ -957,27 +965,27 @@ public sealed class LegacyDataException : Exception
 
 public static class LegacyTranslator
 {
-    public static WorkStatus ToStatus(string statusCd, string closeFlg)
+    public static ShipmentStatus ToStatus(string statusCd, string closeFlg)
     {
         var code = (statusCd ?? "").Trim().ToUpperInvariant();
         var flag = (closeFlg ?? "").Trim().ToUpperInvariant();
         return (code, flag) switch
         {
-            ("A", "Y") => WorkStatus.Completed,
-            ("A", _) => WorkStatus.Active,
-            ("H", _) => WorkStatus.OnHold,
-            ("C", _) => WorkStatus.Completed,
-            ("X", _) => WorkStatus.Cancelled,
+            ("A", "Y") => ShipmentStatus.Delivered,
+            ("A", _) => ShipmentStatus.InTransit,
+            ("H", _) => ShipmentStatus.OnHold,
+            ("C", _) => ShipmentStatus.Delivered,
+            ("X", _) => ShipmentStatus.Cancelled,
             _ => throw new LegacyDataException("STATUS_CD", statusCd ?? "")
         };
     }
 
-    public static (string StatusCd, string CloseFlg) ToLegacy(WorkStatus status) => status switch
+    public static (string StatusCd, string CloseFlg) ToLegacy(ShipmentStatus status) => status switch
     {
-        WorkStatus.Active => ("A", "N"),
-        WorkStatus.OnHold => ("H", "N"),
-        WorkStatus.Completed => ("C", "Y"),
-        WorkStatus.Cancelled => ("X", "N"),
+        ShipmentStatus.InTransit => ("A", "N"),
+        ShipmentStatus.OnHold => ("H", "N"),
+        ShipmentStatus.Delivered => ("C", "Y"),
+        ShipmentStatus.Cancelled => ("X", "N"),
         _ => throw new ArgumentOutOfRangeException(nameof(status))
     };
 
@@ -993,22 +1001,22 @@ public static class LegacyTranslator
 
 Build the test cases from real legacy rows ("golden" examples): export 1,000 rows, translate them all in a test, and fail on any exception. That one test usually finds the undocumented codes before production does.
 ::mistakes
-- Putting `("A", _)` before `("A", "Y")`, so completed work orders appear active.
+- Putting `("A", _)` before `("A", "Y")`, so delivered parcels appear in transit.
 - Defaulting unknown codes to `Active`.
 - Parsing amounts with `double`, losing paise precision.
 - Using the current culture, so a server with a different locale parses differently.
 :::
 
 :::exercise id=m16-strangler-acl-ex3 difficulty=intermediate kind=code title="A cut-over router with stable rollout"
-Implement `CutoverRouter`, which decides for each request whether the legacy or modern backend serves it. Rules are matched by **longest path prefix**. Precedence: kill switch → legacy; district in the rule's pilot list → modern; otherwise a stable bucket of `feature + ":" + userId` below `RolloutPercent` → modern; else legacy. Unmapped paths go to legacy. Use the provided `Bucket.Of`.
+Implement `CutoverRouter`, which decides for each request whether the legacy or modern backend serves it. Rules are matched by **longest path prefix**. Precedence: kill switch → legacy; hub in the rule's pilot list → modern; otherwise a stable bucket of `feature + ":" + userId` below `RolloutPercent` → modern; else legacy. Unmapped paths go to legacy. Use the provided `Bucket.Of`.
 ::requirements
-- `CutoverRouter(IEnumerable<CutoverRule> rules)`; `Route(path, district, userId)` returns `Side.Legacy` or `Side.Modern`.
+- `CutoverRouter(IEnumerable<CutoverRule> rules)`; `Route(path, hub, userId)` returns `Side.Legacy` or `Side.Modern`.
 - Prefix matching is case-insensitive; the longest matching prefix wins.
-- District comparison is case-insensitive; `district` may be null.
+- Hub comparison is case-insensitive; `hub` may be null.
 - The same user always gets the same answer for a feature, and increasing `RolloutPercent` never moves a user from modern back to legacy.
 ::acceptance
-- Longest prefix wins (`/works/orders/print` can have a different rule from `/works/orders`).
-- Kill switch overrides pilot districts.
+- Longest prefix wins (`/shipments/labels` can have a different rule from `/shipments`).
+- Kill switch overrides pilot hubs.
 - 0 % sends everyone to legacy, 100 % everyone to modern, 30 % about 30 % of users.
 - Rollout is monotonic.
 ::hint
@@ -1020,7 +1028,7 @@ Monotonic rollout comes for free from `Bucket.Of(key) < percent`: a user in buck
 ::hint
 ```csharp
 if (rule is null || rule.KillSwitch) return Side.Legacy;
-if (district is not null && rule.PilotDistricts.Contains(district, StringComparer.OrdinalIgnoreCase)) return Side.Modern;
+if (hub is not null && rule.PilotHubs.Contains(hub, StringComparer.OrdinalIgnoreCase)) return Side.Modern;
 return Bucket.Of(rule.Feature + ":" + userId) < rule.RolloutPercent ? Side.Modern : Side.Legacy;
 ```
 ::starter
@@ -1033,7 +1041,7 @@ using System.Text;
 
 public enum Side { Legacy, Modern }
 
-public sealed record CutoverRule(string Feature, string PathPrefix, IReadOnlyList<string> PilotDistricts, int RolloutPercent, bool KillSwitch = false);
+public sealed record CutoverRule(string Feature, string PathPrefix, IReadOnlyList<string> PilotHubs, int RolloutPercent, bool KillSwitch = false);
 
 public static class Bucket
 {
@@ -1045,7 +1053,7 @@ public sealed class CutoverRouter
 {
     public CutoverRouter(IEnumerable<CutoverRule> rules) => throw new NotImplementedException();
 
-    public Side Route(string path, string? district, string userId) => throw new NotImplementedException();
+    public Side Route(string path, string? hub, string userId) => throw new NotImplementedException();
 }
 ```
 ::tests
@@ -1056,54 +1064,54 @@ using Xunit;
 
 public class CutoverRouterTests
 {
-    private static CutoverRule Orders(int percent, bool kill = false) =>
-        new("works-orders", "/works/orders", new[] { "PN", "NS" }, percent, kill);
+    private static CutoverRule Shipments(int percent, bool kill = false) =>
+        new("shipments", "/shipments", new[] { "PN", "NS" }, percent, kill);
 
     [Fact]
     public void Unmapped_paths_go_to_legacy() =>
-        Assert.Equal(Side.Legacy, new CutoverRouter(new[] { Orders(100) }).Route("/bills/77", "PN", "u1"));
+        Assert.Equal(Side.Legacy, new CutoverRouter(new[] { Shipments(100) }).Route("/invoices/77", "PN", "u1"));
 
     [Fact]
-    public void Pilot_districts_go_modern_case_insensitively() =>
-        Assert.Equal(Side.Modern, new CutoverRouter(new[] { Orders(0) }).Route("/Works/Orders/WO-1", "pn", "u1"));
+    public void Pilot_hubs_go_modern_case_insensitively() =>
+        Assert.Equal(Side.Modern, new CutoverRouter(new[] { Shipments(0) }).Route("/Shipments/CN-1", "pn", "u1"));
 
     [Fact]
-    public void Kill_switch_beats_pilot_district() =>
-        Assert.Equal(Side.Legacy, new CutoverRouter(new[] { Orders(100, kill: true) }).Route("/works/orders/WO-1", "PN", "u1"));
+    public void Kill_switch_beats_pilot_hub() =>
+        Assert.Equal(Side.Legacy, new CutoverRouter(new[] { Shipments(100, kill: true) }).Route("/shipments/CN-1", "PN", "u1"));
 
     [Fact]
     public void Longest_prefix_wins()
     {
         var router = new CutoverRouter(new[]
         {
-            Orders(100),
-            new CutoverRule("works-print", "/works/orders/print", Array.Empty<string>(), 0)
+            Shipments(100),
+            new CutoverRule("shipment-labels", "/shipments/labels", Array.Empty<string>(), 0)
         });
-        Assert.Equal(Side.Modern, router.Route("/works/orders/WO-1", null, "u1"));
-        Assert.Equal(Side.Legacy, router.Route("/works/orders/print/WO-1", null, "u1"));
+        Assert.Equal(Side.Modern, router.Route("/shipments/CN-1", null, "u1"));
+        Assert.Equal(Side.Legacy, router.Route("/shipments/labels/CN-1", null, "u1"));
     }
 
     [Fact]
     public void Percentages_are_respected()
     {
         var users = Enumerable.Range(0, 10_000).Select(i => "user-" + i).ToList();
-        Assert.All(users.Take(200), u => Assert.Equal(Side.Legacy, new CutoverRouter(new[] { Orders(0) }).Route("/works/orders/1", null, u)));
-        Assert.All(users.Take(200), u => Assert.Equal(Side.Modern, new CutoverRouter(new[] { Orders(100) }).Route("/works/orders/1", null, u)));
-        var thirty = new CutoverRouter(new[] { Orders(30) });
-        var modern = users.Count(u => thirty.Route("/works/orders/1", null, u) == Side.Modern);
+        Assert.All(users.Take(200), u => Assert.Equal(Side.Legacy, new CutoverRouter(new[] { Shipments(0) }).Route("/shipments/1", null, u)));
+        Assert.All(users.Take(200), u => Assert.Equal(Side.Modern, new CutoverRouter(new[] { Shipments(100) }).Route("/shipments/1", null, u)));
+        var thirty = new CutoverRouter(new[] { Shipments(30) });
+        var modern = users.Count(u => thirty.Route("/shipments/1", null, u) == Side.Modern);
         Assert.InRange(modern, 2_700, 3_300);
     }
 
     [Fact]
     public void Rollout_is_stable_and_monotonic()
     {
-        var at10 = new CutoverRouter(new[] { Orders(10) });
-        var at20 = new CutoverRouter(new[] { Orders(20) });
+        var at10 = new CutoverRouter(new[] { Shipments(10) });
+        var at20 = new CutoverRouter(new[] { Shipments(20) });
         foreach (var u in Enumerable.Range(0, 2_000).Select(i => "u" + i))
         {
-            Assert.Equal(at10.Route("/works/orders/1", "MU", u), at10.Route("/works/orders/9", "MU", u));
-            if (at10.Route("/works/orders/1", "MU", u) == Side.Modern)
-                Assert.Equal(Side.Modern, at20.Route("/works/orders/1", "MU", u));
+            Assert.Equal(at10.Route("/shipments/1", "MU", u), at10.Route("/shipments/9", "MU", u));
+            if (at10.Route("/shipments/1", "MU", u) == Side.Modern)
+                Assert.Equal(Side.Modern, at20.Route("/shipments/1", "MU", u));
         }
     }
 }
@@ -1118,7 +1126,7 @@ using System.Text;
 
 public enum Side { Legacy, Modern }
 
-public sealed record CutoverRule(string Feature, string PathPrefix, IReadOnlyList<string> PilotDistricts, int RolloutPercent, bool KillSwitch = false);
+public sealed record CutoverRule(string Feature, string PathPrefix, IReadOnlyList<string> PilotHubs, int RolloutPercent, bool KillSwitch = false);
 
 public static class Bucket
 {
@@ -1133,19 +1141,19 @@ public sealed class CutoverRouter
     public CutoverRouter(IEnumerable<CutoverRule> rules) =>
         _rules = rules.OrderByDescending(r => r.PathPrefix.Length).ToList();     // longest prefix first
 
-    public Side Route(string path, string? district, string userId)
+    public Side Route(string path, string? hub, string userId)
     {
         var rule = _rules.FirstOrDefault(r => path.StartsWith(r.PathPrefix, StringComparison.OrdinalIgnoreCase));
         if (rule is null || rule.KillSwitch) return Side.Legacy;
-        if (district is not null && rule.PilotDistricts.Contains(district, StringComparer.OrdinalIgnoreCase)) return Side.Modern;
+        if (hub is not null && rule.PilotHubs.Contains(hub, StringComparer.OrdinalIgnoreCase)) return Side.Modern;
         return Bucket.Of(rule.Feature + ":" + userId) < rule.RolloutPercent ? Side.Modern : Side.Legacy;
     }
 }
 ```
 
-Sorting once in the constructor makes each decision a short linear scan; with a few dozen rules that is plenty. Including the feature name in the bucket key means a user who is in the first 10 % for work orders is not automatically in the first 10 % for every feature, which spreads the risk of early adopters.
+Sorting once in the constructor makes each decision a short linear scan; with a few dozen rules that is plenty. Including the feature name in the bucket key means a user who is in the first 10 % for shipments is not automatically in the first 10 % for every feature, which spreads the risk of early adopters.
 ::alternatives
-Route by tenant or organisation id instead of user id when a whole office should switch together (so colleagues see the same screens). Use a feature-flag service for the percentages if one already exists, but keep the precedence rules in one tested place.
+Route by tenant, hub or organisation id instead of user id when a whole office should switch together (so colleagues see the same screens). Use a feature-flag service for the percentages if one already exists (`Microsoft.FeatureManagement` targeting filters, or an OpenFeature provider), but keep the precedence rules in one tested place.
 ::mistakes
 - Using `Random` per request, which makes users bounce between systems.
 - Matching the first rule in configuration order rather than the longest prefix.
@@ -1153,26 +1161,26 @@ Route by tenant or organisation id instead of user id when a whole office should
 :::
 
 :::exercise id=m16-strangler-acl-ex4 difficulty=intermediate kind=hld title="Design the data flow for phase 2"
-Measurement entries (about 15,000 a day, peaking at 3,000 in the last afternoon of the month) are moving to the new Measurement service on PostgreSQL. Bills (still in WMS) and audit reports read the legacy `MB_ENTRY` table. A nightly legacy job also updates `MB_ENTRY.CHECKED_FLG` when an executive engineer approves entries in WMS. Extend the starter graph: facade, new service, CDC, reverse sync, loop prevention, reconciliation and monitoring. State the write owner for each field, and how rollback works.
+Delivery-attempt entries (about 15,000 a day, peaking at 3,000 in the four evening hours when agents close their rounds) are moving to the new Delivery service on PostgreSQL. COD remittances (still in DakTrack) and finance reports read the legacy `DLV_ATTEMPT` table. A nightly legacy job also updates `DLV_ATTEMPT.VERIFIED_FLG` when a hub supervisor verifies proof of delivery in DakTrack. Extend the starter graph: facade, new service, CDC, reverse sync, loop prevention, reconciliation and monitoring. State the write owner for each field, and how rollback works.
 ::acceptance
-- The Measurement service owns entry creation and edits; legacy still owns `CHECKED_FLG` until approvals move.
-- Reverse sync writes new entries into `MB_ENTRY` with an origin marker; CDC brings `CHECKED_FLG` changes back, skipping echoes.
+- The Delivery service owns entry creation and edits; legacy still owns `VERIFIED_FLG` until verification moves.
+- Reverse sync writes new entries into `DLV_ATTEMPT` with an origin marker; CDC brings `VERIFIED_FLG` changes back, skipping echoes.
 - No dual writes from the request path.
 - Reconciliation and sync-lag monitoring are present, with a rollback story.
 ::hint
-Field-level ownership is allowed during migration: who writes `quantity`, who writes `CHECKED_FLG`?
+Field-level ownership is allowed during migration: who writes `outcome`, who writes `VERIFIED_FLG`?
 ::hint
 3,000 entries in an afternoon is about 0.2 per second (3,000 ÷ 4 h ÷ 3,600 s). What does that say about sync throughput?
 ::hint
-What must be true about `MB_ENTRY` for the kill switch to send engineers back to WMS safely?
+What must be true about `DLV_ATTEMPT` for the kill switch to send agents back to DakTrack safely?
 ::starter
 ```json
 {
   "nodes": [
-    { "id": "eng", "type": "client", "label": "Site engineers (mobile)" },
-    { "id": "wms", "type": "app-server", "label": "Legacy WMS" },
-    { "id": "sql", "type": "database", "label": "SQL Server (MB_ENTRY, bills)" },
-    { "id": "night", "type": "scheduler", "label": "Nightly approval job" }
+    { "id": "eng", "type": "client", "label": "Delivery agents (mobile)" },
+    { "id": "wms", "type": "app-server", "label": "Legacy DakTrack" },
+    { "id": "sql", "type": "database", "label": "SQL Server (DLV_ATTEMPT, remittances)" },
+    { "id": "night", "type": "scheduler", "label": "Nightly verification job" }
   ],
   "edges": [
     { "from": "eng", "to": "wms", "kind": "sync" },
@@ -1185,29 +1193,29 @@ What must be true about `MB_ENTRY` for the kill switch to send engineers back to
 ```json
 {
   "nodes": [
-    { "id": "eng", "type": "client", "label": "Site engineers (mobile)" },
-    { "id": "gw", "type": "api-gateway", "label": "YARP facade: /measurements by district" },
-    { "id": "ms", "type": "app-server", "label": "Measurement service", "props": { "instances": 2 } },
+    { "id": "eng", "type": "client", "label": "Delivery agents (mobile)" },
+    { "id": "gw", "type": "api-gateway", "label": "YARP facade: /deliveries by hub" },
+    { "id": "ms", "type": "app-server", "label": "Delivery service", "props": { "instances": 2 } },
     { "id": "pg", "type": "database", "label": "PostgreSQL: entries + outbox", "props": { "replicas": 1 } },
-    { "id": "wms", "type": "app-server", "label": "Legacy WMS (bills, approvals)" },
-    { "id": "sql", "type": "database", "label": "SQL Server (MB_ENTRY, bills)" },
-    { "id": "night", "type": "scheduler", "label": "Nightly approval job (owns CHECKED_FLG)" },
+    { "id": "wms", "type": "app-server", "label": "Legacy DakTrack (remittances, verification)" },
+    { "id": "sql", "type": "database", "label": "SQL Server (DLV_ATTEMPT, remittances)" },
+    { "id": "night", "type": "scheduler", "label": "Nightly verification job (owns VERIFIED_FLG)" },
     { "id": "rs", "type": "worker", "label": "Reverse sync via ACL, origin=modern-sync" },
-    { "id": "cdc", "type": "worker", "label": "CDC from MB_ENTRY, skips modern-sync echoes" },
-    { "id": "rec", "type": "scheduler", "label": "Nightly reconciliation: counts and checksums per district" },
+    { "id": "cdc", "type": "worker", "label": "CDC from DLV_ATTEMPT, skips modern-sync echoes" },
+    { "id": "rec", "type": "scheduler", "label": "Nightly reconciliation: counts and checksums per hub" },
     { "id": "mon", "type": "monitoring", "label": "Sync lag, echo and conflict counts, translation rejects" }
   ],
   "edges": [
     { "from": "eng", "to": "gw", "kind": "sync" },
-    { "from": "gw", "to": "ms", "kind": "sync", "label": "pilot districts" },
+    { "from": "gw", "to": "ms", "kind": "sync", "label": "pilot hubs" },
     { "from": "gw", "to": "wms", "kind": "sync", "label": "everything else" },
     { "from": "ms", "to": "pg", "kind": "sync", "label": "entry + outbox, one tx" },
     { "from": "rs", "to": "pg", "kind": "async", "label": "read outbox" },
-    { "from": "rs", "to": "sql", "kind": "sync", "label": "insert/update MB_ENTRY" },
+    { "from": "rs", "to": "sql", "kind": "sync", "label": "insert/update DLV_ATTEMPT" },
     { "from": "wms", "to": "sql", "kind": "sync" },
-    { "from": "night", "to": "sql", "kind": "sync", "label": "CHECKED_FLG" },
+    { "from": "night", "to": "sql", "kind": "sync", "label": "VERIFIED_FLG" },
     { "from": "cdc", "to": "sql", "kind": "async", "label": "change stream" },
-    { "from": "cdc", "to": "pg", "kind": "sync", "label": "apply CHECKED_FLG, version check" },
+    { "from": "cdc", "to": "pg", "kind": "sync", "label": "apply VERIFIED_FLG, version check" },
     { "from": "rec", "to": "pg", "kind": "sync" },
     { "from": "rec", "to": "sql", "kind": "sync" },
     { "from": "mon", "to": "rs", "kind": "sync" },
@@ -1216,17 +1224,17 @@ What must be true about `MB_ENTRY` for the kill switch to send engineers back to
 }
 ```
 
-**Ownership.** The Measurement service owns creating and editing entries (quantity, item, location, photos). Legacy still owns `CHECKED_FLG` because approvals have not moved. Field-level ownership is explicit and documented; neither side writes the other's fields.
+**Ownership.** The Delivery service owns creating and editing attempt entries (outcome, time, GPS location, photo or OTP proof). Legacy still owns `VERIFIED_FLG` because verification has not moved. Field-level ownership is explicit and documented; neither side writes the other's fields.
 
-**Flow.** An entry is saved to PostgreSQL with an outbox row in one transaction. The reverse sync worker inserts or updates `MB_ENTRY` through the ACL, setting `LAST_UPD_BY = 'modern-sync'`, so bills and reports keep working. CDC on `MB_ENTRY` brings approval changes back; changes whose origin is `modern-sync` are skipped (echoes), and a version check discards stale ones.
+**Flow.** An entry is saved to PostgreSQL with an outbox row in one transaction. The reverse sync worker inserts or updates `DLV_ATTEMPT` through the ACL, setting `LAST_UPD_BY = 'modern-sync'`, so remittances and reports keep working. CDC on `DLV_ATTEMPT` brings verification changes back; changes whose origin is `modern-sync` are skipped (echoes), and a version check discards stale ones.
 
-**Throughput.** 3,000 entries in four hours is about 0.2 per second, so one sync worker is ample; sync lag should be seconds. Alert if lag exceeds 5 minutes on the last day of the month, because bills are prepared from these entries.
+**Throughput.** 3,000 entries in four hours is about 0.2 per second, so one sync worker is ample; sync lag should be seconds. Alert if lag exceeds 5 minutes in the evening, because the overnight COD remittance run is prepared from these entries.
 
-**Rollback.** Because reverse sync keeps `MB_ENTRY` current, the facade's kill switch can send pilot districts back to WMS screens at any time. Test it in staging before each rollout step. After rollback, CDC keeps the new store current, so rolling forward again is also safe.
+**Rollback.** Because reverse sync keeps `DLV_ATTEMPT` current, the facade's kill switch can send pilot hubs back to DakTrack screens at any time. Test it in staging before each rollout step. After rollback, CDC keeps the new store current, so rolling forward again is also safe.
 
-**Reconciliation.** Nightly per district: entry counts and a checksum of (entry id, quantity, CHECKED_FLG) in both stores. Any difference opens a ticket the next morning.
+**Reconciliation.** Nightly per hub: entry counts and a checksum of (entry id, outcome, VERIFIED_FLG) in both stores. Any difference opens a ticket the next morning.
 ::mistakes
-- Letting the Measurement service write `CHECKED_FLG` while the nightly job also writes it.
+- Letting the Delivery service write `VERIFIED_FLG` while the nightly job also writes it.
 - Writing to SQL Server directly from the request handler (dual write).
 - Forgetting that CDC will see the reverse sync's own writes.
 :::
@@ -1291,19 +1299,19 @@ public class SyncGuardTests
     public void Foreign_changes_apply_once()
     {
         var g = new SyncGuard("modern");
-        Assert.Equal(SyncDecision.Apply, g.Evaluate(new ChangeEvent("MB-1", 1, "wms")));
-        Assert.Equal(SyncDecision.SkipStale, g.Evaluate(new ChangeEvent("MB-1", 1, "wms")));
-        Assert.Equal(SyncDecision.Apply, g.Evaluate(new ChangeEvent("MB-1", 2, "wms")));
+        Assert.Equal(SyncDecision.Apply, g.Evaluate(new ChangeEvent("DA-1", 1, "daktrack")));
+        Assert.Equal(SyncDecision.SkipStale, g.Evaluate(new ChangeEvent("DA-1", 1, "daktrack")));
+        Assert.Equal(SyncDecision.Apply, g.Evaluate(new ChangeEvent("DA-1", 2, "daktrack")));
     }
 
     [Fact]
     public void Echoes_are_skipped()
     {
         var g = new SyncGuard("modern");
-        g.Evaluate(new ChangeEvent("MB-2", 4, "wms"));
-        g.RecordLocalWrite("MB-2", 4);
-        Assert.Equal(SyncDecision.SkipEcho, g.Evaluate(new ChangeEvent("MB-2", 5, "modern")));
-        Assert.Equal(SyncDecision.Apply, g.Evaluate(new ChangeEvent("MB-2", 6, "nightly-job")));
+        g.Evaluate(new ChangeEvent("DA-2", 4, "daktrack"));
+        g.RecordLocalWrite("DA-2", 4);
+        Assert.Equal(SyncDecision.SkipEcho, g.Evaluate(new ChangeEvent("DA-2", 5, "modern")));
+        Assert.Equal(SyncDecision.Apply, g.Evaluate(new ChangeEvent("DA-2", 6, "nightly-job")));
         Assert.Equal(0, g.Conflicts);
     }
 
@@ -1311,27 +1319,27 @@ public class SyncGuardTests
     public void Out_of_order_old_versions_are_stale()
     {
         var g = new SyncGuard("modern");
-        g.Evaluate(new ChangeEvent("MB-3", 9, "wms"));
-        Assert.Equal(SyncDecision.SkipStale, g.Evaluate(new ChangeEvent("MB-3", 7, "wms")));
+        g.Evaluate(new ChangeEvent("DA-3", 9, "daktrack"));
+        Assert.Equal(SyncDecision.SkipStale, g.Evaluate(new ChangeEvent("DA-3", 7, "daktrack")));
     }
 
     [Fact]
     public void Foreign_change_while_local_write_pending_is_a_conflict()
     {
         var g = new SyncGuard("modern");
-        g.Evaluate(new ChangeEvent("MB-4", 2, "wms"));
-        g.RecordLocalWrite("MB-4", 2);
-        Assert.Equal(SyncDecision.Conflict, g.Evaluate(new ChangeEvent("MB-4", 3, "nightly-job")));
+        g.Evaluate(new ChangeEvent("DA-4", 2, "daktrack"));
+        g.RecordLocalWrite("DA-4", 2);
+        Assert.Equal(SyncDecision.Conflict, g.Evaluate(new ChangeEvent("DA-4", 3, "nightly-job")));
         Assert.Equal(1, g.Conflicts);
-        Assert.Equal(SyncDecision.Apply, g.Evaluate(new ChangeEvent("MB-4", 4, "wms")));
+        Assert.Equal(SyncDecision.Apply, g.Evaluate(new ChangeEvent("DA-4", 4, "daktrack")));
     }
 
     [Fact]
     public void Keys_are_independent()
     {
         var g = new SyncGuard("modern");
-        g.RecordLocalWrite("MB-5", 1);
-        Assert.Equal(SyncDecision.Apply, g.Evaluate(new ChangeEvent("MB-6", 1, "wms")));
+        g.RecordLocalWrite("DA-5", 1);
+        Assert.Equal(SyncDecision.Apply, g.Evaluate(new ChangeEvent("DA-6", 1, "daktrack")));
     }
 }
 ```
@@ -1398,20 +1406,20 @@ Add a pending-write timeout: if an echo has not appeared within 10 minutes, repo
 
 ## Automated testing
 
-**Golden tests for the ACL.** Export a few thousand real rows (masked for personal data) and keep them as test fixtures. A test translates every row and fails on any `LegacyDataException`; a second test round-trips domain → legacy → domain and asserts equality. When legacy changes a stored procedure, these tests catch new codes before production does.
+**Golden tests for the ACL.** Export a few thousand real rows (masked for personal data such as names, phone numbers and addresses) and keep them as test fixtures. A test translates every row and fails on any `LegacyDataException`; a second test round-trips domain → legacy → domain and asserts equality. When legacy changes a stored procedure, these tests catch new codes before production does.
 
 ```csharp
 [Fact]
 public void Translator_handles_every_golden_row()
 {
-    var rows = GoldenRows.Load("work_orders_2026-09.json");          // masked export
-    var failures = rows.Select(r => { try { WorkOrderTranslator.ToDomain(r); return null; } catch (LegacyDataException e) { return e.Message; } })
+    var rows = GoldenRows.Load("consignments_2026-09.json");          // masked export
+    var failures = rows.Select(r => { try { ConsignmentTranslator.ToDomain(r); return null; } catch (LegacyDataException e) { return e.Message; } })
                        .Where(m => m is not null).ToList();
     Assert.Empty(failures);
 }
 ```
 
-**Router tests.** Precedence (kill switch, districts, percentage), longest-prefix matching, stability and monotonic rollout, as in exercise 3. Also an end-to-end test with `WebApplicationFactory` asserting the `X-Served-By` header for a few paths and claims.
+**Router tests.** Precedence (kill switch, hubs, percentage), longest-prefix matching, stability and monotonic rollout, as in exercise 3. Also an end-to-end test with `WebApplicationFactory` asserting the `X-Served-By` header for a few paths and claims.
 
 **Sync tests.** Echo skipping, stale versions, conflicts and replays (exercise 5). Feed the consumer the same change stream twice and assert the store is unchanged the second time.
 
@@ -1441,7 +1449,7 @@ A translation layer between your model and another system's model, so the other 
 ::q intermediate
 How do you route traffic during an incremental migration?
 ::a
-Through a facade such as YARP or an API gateway. Rules match by path (feature), and within a feature by tenant or region (pilot districts) and by percentage. Percentages use a stable hash of the user or tenant and feature so a user always gets the same side and increasing the percentage only adds users. A kill switch per feature sends traffic back to legacy instantly. Authentication must work on both sides, usually through a shared identity provider or session-sharing adapters.
+Through a facade such as YARP or an API gateway. Rules match by path (feature), and within a feature by tenant or region (pilot hubs) and by percentage. Percentages use a stable hash of the user or tenant and feature so a user always gets the same side and increasing the percentage only adds users. A kill switch per feature sends traffic back to legacy instantly. Authentication must work on both sides, usually through a shared identity provider or session-sharing adapters.
 ::q intermediate
 Why are dual writes dangerous during a migration, and what do you do instead?
 ::a
@@ -1473,7 +1481,7 @@ When the system is small enough that a focused rewrite is cheaper than building 
 - Parallel runs and golden tests find undocumented legacy rules before users do.
 - Plan decommissioning from day one, or the migration never ends.
 
-**Terminology**: strangler fig, routing facade, YARP, slice, pilot district, stable bucket, kill switch, anti-corruption layer, translator, gateway, adapter, port, write owner, CDC, reverse sync, dual write, echo, origin marker, conflict, reconciliation, parallel run, shadow traffic, decommission.
+**Terminology**: strangler fig, routing facade, YARP, slice, pilot hub, stable bucket, kill switch, anti-corruption layer, translator, gateway, adapter, port, write owner, CDC, reverse sync, dual write, echo, origin marker, conflict, reconciliation, parallel run, shadow traffic, decommission.
 
 :::flashcards
 Q: What is the first step of a strangler fig migration?
@@ -1507,7 +1515,7 @@ A team wants to migrate a 15-year-old system with 600 stored procedures. What sh
 - [ ] A full rewrite behind a feature flag.
 > The facade gives you a place to switch traffic, slice by slice. Everything else builds on it.
 ::q single
-Users report that the new work-order screen and the old one alternate on each page load. What is the most likely cause?
+Users report that the new tracking screen and the old one alternate on each page load. What is the most likely cause?
 - [ ] The kill switch is on.
 - [x] Rollout percentage is decided with a random number per request instead of a stable hash.
 - [ ] The ACL is translating statuses incorrectly.
@@ -1515,13 +1523,13 @@ Users report that the new work-order screen and the old one alternate on each pa
 > A stable bucket of user and feature keeps each user on one side.
 ::q single
 A legacy row has `STATUS_CD = 'S'`, which the ACL does not know. What should happen?
-- [ ] Map it to Active so the screen still works.
+- [ ] Map it to InTransit so the screen still works.
 - [ ] Drop the row silently.
 - [x] Throw a translation error with the field and value, log and count it, and fix the mapping.
 - [ ] Store the raw code in the domain object.
 > Guessing silently corrupts data in the new system; failing loudly finds undocumented codes quickly.
 ::q single
-The new Measurement service saves an entry to PostgreSQL and then to SQL Server in the same request. What is the risk?
+The new Delivery service saves an attempt entry to PostgreSQL and then to SQL Server in the same request. What is the risk?
 - [ ] It is slower.
 - [x] A failure between the two writes leaves the stores inconsistent with no record of which is right.
 - [ ] SQL Server will deadlock.
@@ -1544,8 +1552,8 @@ Which conditions must hold before you retire a slice's reverse sync? (Select all
 > Reverse sync is what keeps rollback cheap; turning it off is a deliberate decision with clear preconditions.
 ::q single
 Which slice is usually the best first candidate?
-- [ ] Contractor bill payment, because it is the most valuable.
-- [x] A read-only page served from a CDC copy, for pilot districts.
+- [ ] Merchant COD remittance, because it is the most valuable.
+- [x] A read-only page served from a CDC copy, for pilot hubs.
 - [ ] User administration, because it is rarely used.
 - [ ] Everything at once, to avoid running two systems.
 > A read slice proves the facade, translator and CDC with low risk, and users notice the improvement.

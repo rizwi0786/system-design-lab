@@ -144,7 +144,7 @@ PostgreSQL also offers a built-in token: the system column **`xmin`**, the id of
 
 A deadlock needs a cycle of waits: T1 holds A and waits for B; T2 holds B and waits for A. Typical real causes:
 
-- Two transactions updating the same rows in different orders (seat swap 14↔15 and 15↔14; transferring stock between two depots in opposite directions).
+- Two transactions updating the same rows in different orders (seat swap 14↔15 and 15↔14; transferring stock between two stores in opposite directions).
 - A batch job updating rows in physical order while the API updates them in id order.
 - Foreign keys plus `FOR UPDATE` on parents and children in different orders.
 
@@ -1252,52 +1252,52 @@ PostgreSQL does the equivalent when a backend has waited `deadlock_timeout`: it 
 :::
 
 :::exercise id=m09-locking-ex5 difficulty=advanced kind=written title="Fix the 2 am deadlocks in stock transfers"
-A construction-materials company moves stock between depots. Two code paths exist:
+A pharmacy chain moves medicine stock between its stores. Two code paths exist:
 
-- **Transfer API** (daytime, ~5/s): `BEGIN; UPDATE stock SET qty = qty - $n WHERE depot = $from AND sku = $sku; UPDATE stock SET qty = qty + $n WHERE depot = $to AND sku = $sku; INSERT INTO movement ...; COMMIT;`
-- **Nightly rebalancer** (2:00 to 2:40): for each SKU, loops over depots in descending order of surplus and issues transfers using the same code, with a 150 ms call to a route-planning service between the two `UPDATE`s to pick a truck.
+- **Transfer API** (daytime, ~5/s): `BEGIN; UPDATE stock SET qty = qty - $n WHERE store = $from AND sku = $sku; UPDATE stock SET qty = qty + $n WHERE store = $to AND sku = $sku; INSERT INTO movement ...; COMMIT;`
+- **Nightly rebalancer** (2:00 to 2:40): for each SKU, loops over stores in descending order of surplus and issues transfers using the same code, with a 150 ms call to a courier-booking service between the two `UPDATE`s to reserve a delivery van.
 
 Every night the log shows 30 to 80 `ERROR: deadlock detected` messages, and a few daytime transfers fail with the same error during month-end. Some failed daytime transfers were simply lost because the API returned 500.
 
 Explain why the deadlocks happen (draw or describe the cycle), propose a fix to each code path, add a safe retry policy, and estimate how your change affects lock hold time and deadlock probability. Mention how you would confirm the fix in production.
 ::acceptance
 - Identifies opposite-order row locking (A→B versus B→A on the same SKU) as the cycle.
-- Fixes ordering by locking both stock rows in a deterministic order (for example by `depot` then `sku`) before updating.
-- Moves the route-planning call out of the transaction.
+- Fixes ordering by locking both stock rows in a deterministic order (for example by `store` then `sku`) before updating.
+- Moves the courier call out of the transaction.
 - Adds retry on `40P01` and `40001` for the whole transaction with backoff and jitter, plus idempotency for the API.
 - Uses numbers for lock hold time before and after.
 - Names a concrete production signal to confirm the fix (log lines, `pg_stat_database.deadlocks`, lock wait metrics).
 ::hint
-What happens when the rebalancer moves SKU X from Pune to Nashik while the API moves SKU X from Nashik to Pune at the same moment?
+What happens when the rebalancer moves SKU X from the Pune store to the Nashik store while the API moves SKU X from Nashik to Pune at the same moment?
 ::hint
 How long does the rebalancer hold the first row lock before it asks for the second?
 ::hint
-`SELECT ... WHERE (depot, sku) IN (...) ORDER BY depot, sku FOR NO KEY UPDATE` takes both locks in one deterministic order.
+`SELECT ... WHERE (store, sku) IN (...) ORDER BY store, sku FOR NO KEY UPDATE` takes both locks in one deterministic order.
 ::hint
 `pg_stat_database` has a `deadlocks` counter per database.
 ::solution
-**The cycle.** A transfer locks the *source* row first and the *destination* row second. Two transfers of the same SKU in opposite directions lock in opposite orders: T1 locks (Pune, CEM-OPC53) and wants (Nashik, CEM-OPC53); T2 locks (Nashik, CEM-OPC53) and wants (Pune, CEM-OPC53). Neither can proceed. The rebalancer makes this likely: within one SKU it issues many transfers among the same few depots, and in a concurrent batch (or alongside the API) some go in opposite directions. Month-end daytime volume does the same with the API alone.
+**The cycle.** A transfer locks the *source* row first and the *destination* row second. Two transfers of the same SKU in opposite directions lock in opposite orders: T1 locks (Pune, PCM-500) and wants (Nashik, PCM-500); T2 locks (Nashik, PCM-500) and wants (Pune, PCM-500). Neither can proceed. The rebalancer makes this likely: within one SKU it issues many transfers among the same few stores, and in a concurrent batch (or alongside the API) some go in opposite directions. Month-end daytime volume does the same with the API alone.
 
-**Why it is so frequent at night.** The 150 ms route-planning call sits *between* the two `UPDATE`s, so the first lock is held for at least 150 ms while the second is requested. The daytime path holds the first lock for perhaps 1 to 2 ms (an estimate) before taking the second. The window in which an opposite-direction transfer can grab the other row is roughly 100× wider at night, and the probability of a deadlock grows with that window.
+**Why it is so frequent at night.** The 150 ms courier call sits *between* the two `UPDATE`s, so the first lock is held for at least 150 ms while the second is requested. The daytime path holds the first lock for perhaps 1 to 2 ms (an estimate) before taking the second. The window in which an opposite-direction transfer can grab the other row is roughly 100× wider at night, and the probability of a deadlock grows with that window.
 
 **Fix 1: lock in a deterministic order, all at once.**
 
 ```sql
 BEGIN;
-SELECT depot, sku, qty FROM stock
-WHERE (depot, sku) IN (($from, $sku), ($to, $sku))
-ORDER BY depot, sku
+SELECT store, sku, qty FROM stock
+WHERE (store, sku) IN (($from, $sku), ($to, $sku))
+ORDER BY store, sku
 FOR NO KEY UPDATE;
 -- check source qty >= n in the application (or rely on CHECK (qty >= 0))
-UPDATE stock SET qty = qty - $n WHERE depot = $from AND sku = $sku;
-UPDATE stock SET qty = qty + $n WHERE depot = $to   AND sku = $sku;
-INSERT INTO movement (id, from_depot, to_depot, sku, qty, request_id) VALUES (...);
+UPDATE stock SET qty = qty - $n WHERE store = $from AND sku = $sku;
+UPDATE stock SET qty = qty + $n WHERE store = $to   AND sku = $sku;
+INSERT INTO movement (id, from_store, to_store, sku, qty, request_id) VALUES (...);
 COMMIT;
 ```
 
 Now both transactions request (Nashik, X) before (Pune, X), alphabetically. One waits briefly for the other; no cycle can form. `FOR NO KEY UPDATE` is enough because the key does not change, and it does not block foreign-key checks from `movement`.
 
-**Fix 2: no network calls inside the transaction.** The rebalancer calls the route planner *first*, outside any transaction, to choose the truck, then runs the short transaction above. Lock hold time drops from 150+ ms to about 2 ms. Better still, the rebalancer computes all moves for a SKU first and applies them in one transaction, locking all affected rows in one ordered `SELECT ... FOR NO KEY UPDATE`.
+**Fix 2: no network calls inside the transaction.** The rebalancer calls the courier service *first*, outside any transaction, to reserve the van, then runs the short transaction above. Lock hold time drops from 150+ ms to about 2 ms. Better still, the rebalancer computes all moves for a SKU first and applies them in one transaction, locking all affected rows in one ordered `SELECT ... FOR NO KEY UPDATE`.
 
 **Fix 3: retry safely.** Wrap the whole transaction (connection, `BEGIN`, lock, updates, `COMMIT`) in a retry for SQLSTATE `40P01` and `40001`: up to 4 attempts, full-jitter backoff starting at 20 ms and capped at 500 ms. Make the API idempotent with a client `request_id` stored in `movement` under a `UNIQUE` constraint; a retry after an ambiguous failure then either succeeds once or hits `23505`, which the API maps to "already applied" instead of a 500. No transfer is lost.
 

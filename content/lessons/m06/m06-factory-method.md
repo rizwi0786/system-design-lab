@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 70
 prerequisites: [m01-interfaces-abstract, m01-oop-pillars, m03-dependency-injection, m04-ocp]
-related: [m06-abstract-factory, m06-template-method, m06-strategy, m06-builder, m06-prototype, m06-dependency-injection-pattern]
+related: [m06-abstract-factory, m06-template-method, m06-strategy, m06-builder, m06-dependency-injection-pattern]
 tags: [creational, gof, reports, notifications, approvals]
 patterns: [Factory Method]
 summary: Let a subclass (or a registered function) decide which concrete class to create, so the code that uses the object never writes `new ConcreteThing()`. Learn the GoF form, its modern .NET variants, and when a plain constructor is better.
@@ -180,7 +180,7 @@ classDiagram
     class IReportWriter {
         <<interface>>
         +WriteHeaderAsync(ProgressReport report, CancellationToken ct) Task
-        +WriteRowAsync(ChainageProgress row, CancellationToken ct) Task
+        +WriteRowAsync(ModuleProgress row, CancellationToken ct) Task
         +WriteFooterAsync(ReportTotals totals, CancellationToken ct) Task
     }
     class CsvReportWriter
@@ -210,7 +210,7 @@ sequenceDiagram
     E->>E: CreateWriter(output)  [factory method]
     E->>W: new HtmlReportWriter(output)
     E->>W: WriteHeaderAsync(report)
-    loop each chainage row, ordered by km
+    loop each module row, ordered by module number
         E->>W: WriteRowAsync(row)
     end
     E->>W: WriteFooterAsync(totals)
@@ -218,11 +218,11 @@ sequenceDiagram
     E-->>API: done
 ```
 
-The endpoint picks an exporter by format. From then on, the flow is the *base class's* `ExportAsync`: it calls its own factory method, which is the only step that differs between HTML and CSV, and then drives the writer through header, rows and footer. Ordering rows by kilometre and computing the totals happen once, in the base class, for every format.
+The endpoint picks an exporter by format. From then on, the flow is the *base class's* `ExportAsync`: it calls its own factory method, which is the only step that differs between HTML and CSV, and then drives the writer through header, rows and footer. Ordering rows by module number and computing the totals happen once, in the base class, for every format.
 
 ## Step-by-step example
 
-Our scenario: a highway project publishes a monthly progress report by chainage (kilometre ranges along the road), for example "km 12.000–14.500, bituminous layer, planned 80 %, actual 64 %". Clients want CSV for spreadsheets and HTML for email. A PDF version is coming next quarter.
+Our scenario: an online coding school runs batches of its "ASP.NET Core Bootcamp". Each month it publishes a progress report per batch, one row per course module, for example "Module 3, Async and await: planned 80 % of learners finished, actual 64 %". Mentors want CSV for spreadsheets, and learners' managers (for company-sponsored batches) want HTML for email. A PDF version is coming next quarter.
 
 ### Step 1 — the naive version
 
@@ -230,22 +230,22 @@ Our scenario: a highway project publishes a monthly progress report by chainage 
 public async Task ExportAsync(ProgressReport r, Stream output, string format)
 {
     using var sw = new StreamWriter(output);
-    if (format == "csv") await sw.WriteLineAsync("From km,To km,Activity,Planned %,Actual %");
-    else if (format == "html") await sw.WriteLineAsync($"<h1>{r.ProjectName}</h1><table>");
+    if (format == "csv") await sw.WriteLineAsync("Module,Title,Planned %,Actual %");
+    else if (format == "html") await sw.WriteLineAsync($"<h1>{r.BatchName}</h1><table>");
     foreach (var row in r.Rows)
     {
-        if (format == "csv") await sw.WriteLineAsync($"{row.FromKm},{row.ToKm},{row.Activity},...");
-        else if (format == "html") await sw.WriteLineAsync($"<tr><td>{row.FromKm}</td>...");
+        if (format == "csv") await sw.WriteLineAsync($"{row.ModuleNo},{row.Title},...");
+        else if (format == "html") await sw.WriteLineAsync($"<tr><td>{row.ModuleNo}</td>...");
     }
     if (format == "html") await sw.WriteLineAsync("</table>");
 }
 ```
 
-Each format is spread across three `if` chains. Adding PDF means touching every one of them. A bug in HTML escaping lives in the same method as CSV quoting. And the activity name isn't escaped at all.
+Each format is spread across three `if` chains. Adding PDF means touching every one of them. A bug in HTML escaping lives in the same method as CSV quoting. And the module title isn't escaped at all, so a title like `EF Core, "tracking" vs no-tracking` breaks the CSV columns.
 
 ### Step 2 — find what varies and what doesn't
 
-Fixed: the order (header, rows sorted by km, totals) and the totals calculation. Varies: *how* each part is written. So the product is "a thing that writes header, row and footer": `IReportWriter`.
+Fixed: the order (header, rows sorted by module number, totals) and the totals calculation. Varies: *how* each part is written. So the product is "a thing that writes header, row and footer": `IReportWriter`.
 
 ### Step 3 — gather each format into one class
 
@@ -262,7 +262,7 @@ Register each exporter as `ReportExporter`. A small catalogue builds a dictionar
 ## Production-style C# implementation
 
 ```text
-Infra.Api/
+Courses.Api/
   Program.cs
   Reports/ProgressReport.cs
   Reports/IReportWriter.cs
@@ -274,26 +274,27 @@ Infra.Api/
 ```
 
 ```csharp file=Reports/ProgressReport.cs
-namespace Infra.Reports;
+namespace Courses.Reports;
 
-public sealed record ChainageProgress(decimal FromKm, decimal ToKm, string Activity, decimal PlannedPercent, decimal ActualPercent)
+/// <summary>One course module: the share of learners expected to have finished it by now, and the share who did.</summary>
+public sealed record ModuleProgress(int ModuleNo, string Title, decimal PlannedPercent, decimal ActualPercent)
 {
     public decimal SlippagePercent => PlannedPercent - ActualPercent;
 }
 
-public sealed record ProgressReport(string ProjectName, DateOnly Month, IReadOnlyList<ChainageProgress> Rows);
+public sealed record ProgressReport(string BatchName, DateOnly Month, IReadOnlyList<ModuleProgress> Rows);
 
 public sealed record ReportTotals(int Rows, decimal AveragePlanned, decimal AverageActual, int RowsSlippingOver10);
 ```
 
 ```csharp file=Reports/IReportWriter.cs
-namespace Infra.Reports;
+namespace Courses.Reports;
 
 /// <summary>Product: writes one report in one format. Disposing flushes the output.</summary>
 public interface IReportWriter : IAsyncDisposable
 {
     Task WriteHeaderAsync(ProgressReport report, CancellationToken ct);
-    Task WriteRowAsync(ChainageProgress row, CancellationToken ct);
+    Task WriteRowAsync(ModuleProgress row, CancellationToken ct);
     Task WriteFooterAsync(ReportTotals totals, CancellationToken ct);
 }
 ```
@@ -301,7 +302,7 @@ public interface IReportWriter : IAsyncDisposable
 ```csharp file=Reports/ReportExporter.cs
 using System.Text.RegularExpressions;
 
-namespace Infra.Reports;
+namespace Courses.Reports;
 
 /// <summary>Creator. ExportAsync is the fixed process (a template method);
 /// CreateWriter is the factory method each format overrides.</summary>
@@ -322,13 +323,13 @@ public abstract partial class ReportExporter
 
         await using var writer = CreateWriter(output);
         await writer.WriteHeaderAsync(report, ct);
-        foreach (var row in report.Rows.OrderBy(r => r.FromKm))
+        foreach (var row in report.Rows.OrderBy(r => r.ModuleNo))
             await writer.WriteRowAsync(row, ct);
         await writer.WriteFooterAsync(CalculateTotals(report), ct);
     }
 
     public string FileNameFor(ProgressReport report) =>
-        $"{NonSlugChars().Replace(report.ProjectName.ToLowerInvariant(), "-").Trim('-')}-{report.Month:yyyy-MM}.{FileExtension}";
+        $"{NonSlugChars().Replace(report.BatchName.ToLowerInvariant(), "-").Trim('-')}-{report.Month:yyyy-MM}.{FileExtension}";
 
     private static ReportTotals CalculateTotals(ProgressReport r) => r.Rows.Count == 0
         ? new ReportTotals(0, 0m, 0m, 0)
@@ -347,7 +348,7 @@ public abstract partial class ReportExporter
 using System.Globalization;
 using System.Text;
 
-namespace Infra.Reports;
+namespace Courses.Reports;
 
 public sealed class CsvReportExporter : ReportExporter
 {
@@ -365,15 +366,15 @@ public sealed class CsvReportWriter(Stream output) : IReportWriter
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
     public Task WriteHeaderAsync(ProgressReport report, CancellationToken ct) =>
-        _w.WriteLineAsync("From km,To km,Activity,Planned %,Actual %,Slippage %".AsMemory(), ct);
+        _w.WriteLineAsync("Module,Title,Planned %,Actual %,Slippage %".AsMemory(), ct);
 
-    public Task WriteRowAsync(ChainageProgress r, CancellationToken ct) =>
+    public Task WriteRowAsync(ModuleProgress r, CancellationToken ct) =>
         _w.WriteLineAsync(string.Join(',',
-            r.FromKm.ToString("0.000", Inv), r.ToKm.ToString("0.000", Inv), Escape(r.Activity),
+            r.ModuleNo.ToString(Inv), Escape(r.Title),
             r.PlannedPercent.ToString(Inv), r.ActualPercent.ToString(Inv), r.SlippagePercent.ToString(Inv)).AsMemory(), ct);
 
     public Task WriteFooterAsync(ReportTotals t, CancellationToken ct) =>
-        _w.WriteLineAsync($"TOTAL,,{t.Rows} rows,{t.AveragePlanned.ToString(Inv)},{t.AverageActual.ToString(Inv)},".AsMemory(), ct);
+        _w.WriteLineAsync($"TOTAL,{t.Rows} modules,{t.AveragePlanned.ToString(Inv)},{t.AverageActual.ToString(Inv)},".AsMemory(), ct);
 
     public async ValueTask DisposeAsync()
     {
@@ -395,7 +396,7 @@ using System.Globalization;
 using System.Net;
 using System.Text;
 
-namespace Infra.Reports;
+namespace Courses.Reports;
 
 public sealed class HtmlReportExporter : ReportExporter
 {
@@ -412,12 +413,12 @@ public sealed class HtmlReportWriter(Stream output) : IReportWriter
     private static string N(decimal d) => d.ToString("0.0", CultureInfo.InvariantCulture);
 
     public Task WriteHeaderAsync(ProgressReport r, CancellationToken ct) => _w.WriteLineAsync((
-        $"<!doctype html><meta charset=\"utf-8\"><h1>{E(r.ProjectName)}: {r.Month:MMMM yyyy}</h1>" +
-        "<table><thead><tr><th>Chainage (km)</th><th>Activity</th><th>Planned %</th><th>Actual %</th></tr></thead><tbody>").AsMemory(), ct);
+        $"<!doctype html><meta charset=\"utf-8\"><h1>{E(r.BatchName)}: {r.Month.ToString("MMMM yyyy", CultureInfo.InvariantCulture)}</h1>" +
+        "<table><thead><tr><th>Module</th><th>Title</th><th>Planned %</th><th>Actual %</th></tr></thead><tbody>").AsMemory(), ct);
 
-    public Task WriteRowAsync(ChainageProgress r, CancellationToken ct) => _w.WriteLineAsync((
-        $"<tr{(r.SlippagePercent > 10m ? " class=\"slipping\"" : "")}><td>{r.FromKm:0.000}–{r.ToKm:0.000}</td>" +
-        $"<td>{E(r.Activity)}</td><td>{N(r.PlannedPercent)}</td><td>{N(r.ActualPercent)}</td></tr>").AsMemory(), ct);
+    public Task WriteRowAsync(ModuleProgress r, CancellationToken ct) => _w.WriteLineAsync((
+        $"<tr{(r.SlippagePercent > 10m ? " class=\"slipping\"" : "")}><td>{r.ModuleNo}</td>" +
+        $"<td>{E(r.Title)}</td><td>{N(r.PlannedPercent)}</td><td>{N(r.ActualPercent)}</td></tr>").AsMemory(), ct);
 
     public Task WriteFooterAsync(ReportTotals t, CancellationToken ct) => _w.WriteLineAsync((
         $"</tbody><tfoot><tr><td colspan=\"2\">{t.Rows} rows, {t.RowsSlippingOver10} slipping over 10 %</td>" +
@@ -432,7 +433,7 @@ public sealed class HtmlReportWriter(Stream output) : IReportWriter
 ```
 
 ```csharp file=Reports/ReportExporterCatalog.cs
-namespace Infra.Reports;
+namespace Courses.Reports;
 
 /// <summary>Finds the concrete creator for a format. Built once from DI registrations.</summary>
 public sealed class ReportExporterCatalog
@@ -454,29 +455,29 @@ public sealed class ReportExporterCatalog
 ```
 
 ```csharp file=Reports/SampleProgressReportSource.cs
-namespace Infra.Reports;
+namespace Courses.Reports;
 
 public interface IProgressReportSource
 {
-    Task<ProgressReport?> GetAsync(string projectId, DateOnly month, CancellationToken ct);
+    Task<ProgressReport?> GetAsync(string batchId, DateOnly month, CancellationToken ct);
 }
 
-/// <summary>Stand-in for a PostgreSQL query over the project's daily progress entries.</summary>
+/// <summary>Stand-in for a PostgreSQL query over learners' module completions.</summary>
 public sealed class SampleProgressReportSource : IProgressReportSource
 {
-    public Task<ProgressReport?> GetAsync(string projectId, DateOnly month, CancellationToken ct) =>
-        Task.FromResult<ProgressReport?>(projectId != "nh-48-pkg-3" ? null : new ProgressReport(
-            "NH-48 Package 3", month,
+    public Task<ProgressReport?> GetAsync(string batchId, DateOnly month, CancellationToken ct) =>
+        Task.FromResult<ProgressReport?>(batchId != "aspnet-batch-12" ? null : new ProgressReport(
+            "ASP.NET Core Bootcamp Batch 12", month,
             [
-                new ChainageProgress(14.500m, 17.000m, "Granular sub-base", 95m, 91m),
-                new ChainageProgress(12.000m, 14.500m, "Bituminous layer (DBM)", 80m, 64m),
-                new ChainageProgress(17.000m, 19.250m, "Culvert at km 18.2, \"box\" type", 60m, 58m),
+                new ModuleProgress(2, "Minimal APIs and routing", 95m, 91m),
+                new ModuleProgress(3, "Async and await", 80m, 64m),
+                new ModuleProgress(4, "EF Core, \"tracking\" vs no-tracking", 60m, 58m),
             ]));
 }
 ```
 
 ```csharp file=Program.cs
-using Infra.Reports;
+using Courses.Reports;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -488,8 +489,8 @@ builder.Services.AddSingleton<IProgressReportSource, SampleProgressReportSource>
 
 var app = builder.Build();
 
-app.MapGet("/projects/{projectId}/reports/{year:int}/{month:int}.{format}",
-    async (string projectId, int year, int month, string format,
+app.MapGet("/batches/{batchId}/reports/{year:int}/{month:int}.{format}",
+    async (string batchId, int year, int month, string format,
            ReportExporterCatalog catalog, IProgressReportSource source, CancellationToken ct) =>
     {
         if (!catalog.TryFind(format, out var exporter))
@@ -497,7 +498,7 @@ app.MapGet("/projects/{projectId}/reports/{year:int}/{month:int}.{format}",
                                    statusCode: StatusCodes.Status400BadRequest);
         if (month is < 1 or > 12) return Results.Problem("Month must be 1–12.", statusCode: StatusCodes.Status400BadRequest);
 
-        var report = await source.GetAsync(projectId, new DateOnly(year, month, 1), ct);
+        var report = await source.GetAsync(batchId, new DateOnly(year, month, 1), ct);
         if (report is null) return Results.NotFound();
 
         // Stream straight into the response body: no buffering of large reports in memory.
@@ -509,7 +510,7 @@ app.Run();
 
 Design notes:
 
-- **`ExportAsync` is not virtual.** The process (ordering, totals, disposal) is the creator's promise. Subclasses only answer "which writer?". That stops a future exporter from forgetting to sort rows.
+- **`ExportAsync` is not virtual.** The process (ordering, totals, disposal) is the creator's promise. Subclasses only answer "which writer?". That stops a future exporter from forgetting to sort modules.
 - **The factory method's contract is documented**: it must not close the caller's stream. Both writers use `leaveOpen: true`. Write down contracts like this; subclasses can't guess them.
 - **Security lives in the product.** CSV escaping, including a guard against spreadsheet formula injection (a cell starting with `=` or `+`), and HTML encoding are each in exactly one class.
 - **Choosing the creator is not the pattern's job.** The catalogue does that. Factory Method answers "who creates the writer?", and DI plus the catalogue answer "which exporter?".
@@ -614,8 +615,8 @@ public static class Program
 {
     public static void Main()
     {
-        var cols = new[] { "Chainage", "Activity", "Actual %" };
-        var rows = new List<string[]> { new[] { "12.0-14.5", "DBM", "64" }, new[] { "14.5-17.0", "GSB", "91" } };
+        var cols = new[] { "Module", "Title", "Actual %" };
+        var rows = new List<string[]> { new[] { "2", "Minimal APIs", "91" }, new[] { "3", "Async and await", "64" } };
         foreach (Exporter e in new Exporter[] { new CsvExporter(), new TsvExporter() })
             Console.WriteLine($"--- {e.GetType().Name}\n{e.Export(cols, rows)}");
     }
@@ -1380,7 +1381,7 @@ public class ReportExporterTests
     {
         public List<string> Calls { get; } = new();
         public Task WriteHeaderAsync(ProgressReport r, CancellationToken ct) { Calls.Add("header"); return Task.CompletedTask; }
-        public Task WriteRowAsync(ChainageProgress row, CancellationToken ct) { Calls.Add($"row {row.FromKm}"); return Task.CompletedTask; }
+        public Task WriteRowAsync(ModuleProgress row, CancellationToken ct) { Calls.Add($"row {row.ModuleNo}"); return Task.CompletedTask; }
         public Task WriteFooterAsync(ReportTotals t, CancellationToken ct) { Calls.Add($"footer {t.Rows}/{t.RowsSlippingOver10}"); return Task.CompletedTask; }
         public ValueTask DisposeAsync() { Calls.Add("disposed"); return ValueTask.CompletedTask; }
     }
@@ -1394,21 +1395,21 @@ public class ReportExporterTests
     }
 
     [Fact]
-    public async Task Writes_rows_sorted_by_km_then_footer_then_disposes()
+    public async Task Writes_rows_sorted_by_module_then_footer_then_disposes()
     {
         var w = new RecordingWriter();
-        var report = new ProgressReport("P", new DateOnly(2026, 9, 1), new[]
+        var report = new ProgressReport("Batch", new DateOnly(2026, 9, 1), new[]
         {
-            new ChainageProgress(14.5m, 17m, "GSB", 95, 91),
-            new ChainageProgress(12m, 14.5m, "DBM", 80, 64),   // slipping 16 %
+            new ModuleProgress(3, "Async and await", 80, 64),   // slipping 16 %
+            new ModuleProgress(2, "Minimal APIs", 95, 91),
         });
         await new TestExporter(w).ExportAsync(report, new MemoryStream(), CancellationToken.None);
-        Assert.Equal(new[] { "header", "row 12", "row 14.5", "footer 2/1", "disposed" }, w.Calls);
+        Assert.Equal(new[] { "header", "row 2", "row 3", "footer 2/1", "disposed" }, w.Calls);
     }
 }
 ```
 
-Then test each **concrete product** on its own with a `MemoryStream`: CSV quoting (`Culvert "box"` becomes `"Culvert ""box"""`), formula defusing (`=SUM(A1)` becomes `'=SUM(A1)`), HTML encoding (`<script>` becomes `&lt;script&gt;`), and that the caller's stream is still open after disposal (`Assert.True(ms.CanWrite)`).
+Then test each **concrete product** on its own with a `MemoryStream`: CSV quoting (`EF Core, "tracking"` becomes `"EF Core, ""tracking"""`), formula defusing (`=SUM(A1)` becomes `'=SUM(A1)`), HTML encoding (`<script>` becomes `&lt;script&gt;`), and that the caller's stream is still open after disposal (`Assert.True(ms.CanWrite)`).
 
 Finally a **wiring test**: build the real `ServiceCollection`, resolve `ReportExporterCatalog`, and assert `Formats` contains `csv` and `html`. That catches the forgotten registration when someone adds PDF.
 
@@ -1418,7 +1419,7 @@ Finally a **wiring test**: build the real `ServiceCollection`, resolve `ReportEx
 - **ASP.NET Core MVC**: controller helpers such as `Ok()`, `NotFound()` and `File()` are factory methods returning `IActionResult` products; `IControllerActivator` creates controllers. Minimal APIs offer static factory methods in `Results` and `TypedResults`.
 - **HTTP**: `IHttpClientFactory.CreateClient(name)` creates configured clients and manages handler lifetimes. `ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { ... })` is a delegate factory method.
 - **Streams and readers**: `XmlReader.Create`, `File.Create` and `Channel.CreateBounded<T>` are static factory methods that return the right subtype for the options you pass.
-- **Business systems**: report exporters (CSV/Excel/PDF), notification messages per channel, document renderers in approval systems, and workflow step creation, as in this lesson's exercises.
+- **Business systems**: report exporters (CSV/Excel/PDF) in learning platforms, shops and clinics, notification messages per channel, document renderers in approval systems, and workflow step creation, as in this lesson's exercises.
 
 ## Interview questions
 
@@ -1513,7 +1514,7 @@ There is exactly one implementation of `IInvoiceNumberGenerator` and no plans fo
 - [ ] Replace it with an Abstract Factory.
 > Constructor injection already gives a test seam. Add a factory when there is real variation in what gets created.
 ::q single
-Where should "rows are always sorted by chainage before writing" live in the exporter design?
+Where should "rows are always sorted by module number before writing" live in the exporter design?
 - [x] In the creator's non-virtual `ExportAsync`.
 - [ ] In each concrete writer.
 - [ ] In the endpoint.

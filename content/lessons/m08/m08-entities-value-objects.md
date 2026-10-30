@@ -8,9 +8,9 @@ template: lesson
 minutes: 80
 prerequisites: [m07-entities-values-services, m07-immutability, m07-equality-identity, m07-encapsulation-invariants]
 related: [m08-aggregates, m08-repositories-domain-services, m08-domain-events, m07-validation-rules, m06-anti-patterns]
-tags: [ddd, tactical-design, value-objects, entities, records, procurement]
+tags: [ddd, tactical-design, value-objects, entities, records, food-delivery]
 patterns: [Entity, Value Object]
-summary: Build the two smallest DDD building blocks properly in C# 14 — entities that keep their identity while they change, and immutable, self-validating value objects such as Money, Quantity, Address and GSTIN — using a procurement domain.
+summary: Build the two smallest DDD building blocks properly in C# 14 — entities that keep their identity while they change, and immutable, self-validating value objects such as Money, Quantity, Address and GSTIN — using the ingredient purchasing of a cloud-kitchen chain.
 references:
   - title: "Eric Evans — Domain-Driven Design: Tackling Complexity in the Heart of Software (2003), chapter 5"
     url: https://www.domainlanguage.com/ddd/
@@ -26,13 +26,13 @@ references:
 
 In [Module 7](#/lesson/m07-entities-values-services) you learned to sort the nouns in a model into entities, value objects and services. This lesson is where Domain-Driven Design (DDD) turns that sorting into a discipline. We go deeper on three questions: how an entity keeps its identity while everything else about it changes, how a value object protects itself so that it can never exist in an invalid state, and how both look in modern C# with records, strongly typed ids and validation in constructors.
 
-The running example is procurement for an infrastructure consultancy: engineers raise a purchase requisition for cement, steel or survey equipment, a vendor is picked, and money changes hands. We stop at the point where [aggregates](#/lesson/m08-aggregates) begin; that is the next lesson.
+The running example is ingredient purchasing for a chain of cloud kitchens (delivery-only restaurants that take orders through food-delivery apps): a kitchen manager raises a purchase requisition for rice, paneer or cooking oil, a vendor (supplier) is picked, and money changes hands. We stop at the point where [aggregates](#/lesson/m08-aggregates) begin; that is the next lesson.
 
 ## Learning objectives
 
 By the end of this lesson you will be able to:
 
-1. Explain the two tests that separate an entity from a value object (does it have a life story? is it interchangeable with a copy?) and apply them to a procurement model.
+1. Explain the two tests that separate an entity from a value object (does it have a life story? is it interchangeable with a copy?) and apply them to a purchasing model.
 2. Implement a value object as a C# record that validates itself in the constructor, so an invalid `Money`, `Quantity`, `Pincode` or `Gstin` cannot be created.
 3. Decide between `record class`, `readonly record struct` and a plain class for a given value object, and name the pitfall of each.
 4. Implement an entity base class with identity-based equality and a strongly typed id, so a `VendorId` cannot be passed where a `RequisitionId` is expected.
@@ -51,13 +51,13 @@ If those are fresh, this lesson will feel like the "production" version of them.
 
 ## Explain it like I'm a beginner
 
-Imagine a site office in Nagpur ordering 40 tonnes of steel reinforcement bars. Three kinds of "thing" appear in that sentence.
+Imagine a cloud kitchen in Nagpur ordering 400 kg of basmati rice for next week's biryani orders. Three kinds of "thing" appear in that sentence.
 
-**The vendor** supplying the steel is a company. Next year it may change its name, move its office, or get a new bank account. It is still the same vendor, with the same vendor code in your system, and the same history of late and on-time deliveries. Something that stays "the same one" while its details change is an **entity**. Its identity is not its name or address; it is an id that never changes.
+**The vendor** supplying the rice is a company. Next year it may change its name, move its office, or get a new bank account. It is still the same vendor, with the same vendor code in your system, and the same history of late and on-time deliveries. Something that stays "the same one" while its details change is an **entity**. Its identity is not its name or address; it is an id that never changes.
 
-**40 tonnes** is a measurement. If you cross out "40 tonnes" on the order and write "40 tonnes" again, nothing changed. Two quantities with the same number and unit are not "two similar quantities"; they are the same quantity. Something that is fully described by its content, and interchangeable with any copy that has the same content, is a **value object**. The same goes for `₹58,000.00`, for a six-digit pincode, and for a GST registration number.
+**400 kg** is a measurement. If you cross out "400 kg" on the order and write "400 kg" again, nothing changed. Two quantities with the same number and unit are not "two similar quantities"; they are the same quantity. Something that is fully described by its content, and interchangeable with any copy that has the same content, is a **value object**. The same goes for `₹38,000.00`, for a six-digit pincode, and for a GST registration number.
 
-**The order itself** is interesting. It has a number (PO-2026-0417), a status and a story: raised, approved, delivered, paid. It is an entity. But its lines ("40 tonnes of TMT bars at ₹58,000 per tonne") are closer to values: if you delete a line and add an identical one, nothing meaningful has changed.
+**The order itself** is interesting. It has a number (PO-2026-0417), a status and a story: raised, approved, delivered, paid. It is an entity. But its lines ("400 kg of basmati rice at ₹95 per kg") are closer to values: if you delete a line and add an identical one, nothing meaningful has changed.
 
 Why does the distinction matter in code?
 
@@ -81,7 +81,7 @@ An entity has three defining properties:
 2. **A life cycle.** It is created, changes state through business operations ("approve", "deactivate", "move to new address") and may eventually be archived.
 3. **Equality by identity.** Two instances with the same id are the same entity. Everything else may differ (one may be an older snapshot).
 
-Where does the id come from? Three common options, each with a trade-off:
+Where does the id come from? Four common options, each with a trade-off:
 
 | Source of id | Pros | Cons |
 |---|---|---|
@@ -90,7 +90,7 @@ Where does the id come from? Three common options, each with a trade-off:
 | Client-generated `Guid` v7 (`Guid.CreateVersion7()`, .NET 9+) | Id exists at `new`; time-ordered, so index inserts are mostly appends | 16 bytes versus 8; sortable ids leak creation time (fine for most back-office systems) |
 | Business code (`PO-2026-0417`) | Meaningful to users | Sequence generation needs coordination; codes sometimes get "recycled" or renumbered, which breaks identity |
 
-Our implementation uses `Guid.CreateVersion7()` wrapped in a `readonly record struct`. Human-readable codes like `PO-2026-0417` are then a *property* of the entity, not its identity.
+Our implementation uses `Guid.CreateVersion7()` wrapped in a `readonly record struct`. Human-readable codes like `PO-2026-0417` are then a *property* of the entity, not its identity. (PostgreSQL 17 stores the id in a `uuid` column but has no built-in v7 generator; `uuidv7()` arrived in PostgreSQL 18, so generating the id in the application is also the portable choice.)
 
 ### Value object: content first
 
@@ -101,7 +101,7 @@ A value object has four defining properties:
 3. **Self-validating.** The constructor rejects invalid input, so an instance that exists is always valid. This is the big payoff: it turns "validate everywhere" into "validate once".
 4. **Side-effect-free behaviour.** `Quantity.Add`, `Money.Multiply`, `ContractPeriod.Overlaps` are pure functions. Easy to test, safe to share between threads, safe to cache.
 
-Fowler's test for "is it a value?" is practical: *would it be a problem if two things with the same values were swapped?* For ₹500 notes, no. For two employees with the same name, yes.
+Fowler's test for "is it a value?" is practical: *would it be a problem if two things with the same values were swapped?* For ₹500 notes, no. For two customers with the same name, yes.
 
 ### Primitive obsession and why it costs money
 
@@ -176,7 +176,7 @@ classDiagram
         +Deactivate()
     }
     class PurchaseRequisition {
-        +string ProjectCode
+        +string KitchenCode
         +Currency Currency
         +IReadOnlyList~RequisitionLine~ Lines
         +Money Total
@@ -257,7 +257,7 @@ This is the "validate once at the door" idea as a timeline. Each value object ch
 
 ## Step-by-step example
 
-We will grow the procurement model in five steps.
+We will grow the purchasing model in five steps.
 
 ### Step 1 — the primitive-obsessed version
 
@@ -281,7 +281,7 @@ public class RequisitionLine
 }
 ```
 
-Every property is public and settable. `Gstin` can be `"hello"`. `Qty` can be `-3`. Someone can write `line.UnitPrice = 58000; line.Currency = "USD";` for a vendor paid in rupees. Any rule about these values lives somewhere else, probably in a 300-line service, probably twice.
+Every property is public and settable. `Gstin` can be `"hello"`. `Qty` can be `-3`. Someone can write `line.UnitPrice = 95; line.Currency = "USD";` for a vendor paid in rupees. Any rule about these values lives somewhere else, probably in a 300-line service, probably twice.
 
 ### Step 2 — find the values
 
@@ -334,7 +334,7 @@ The HTTP request still arrives as strings and decimals (JSON has no `Money` type
 Project layout (one ASP.NET Core project; the domain folder has no reference to ASP.NET Core or any database library):
 
 ```text
-Procurement.Api/
+KitchenPurchasing.Api/
   Program.cs
   Domain/
     DomainException.cs
@@ -351,14 +351,14 @@ Procurement.Api/
 ```
 
 ```csharp file=Domain/DomainException.cs
-namespace Procurement.Domain;
+namespace KitchenPurchasing.Domain;
 
 /// <summary>Thrown when a business rule is violated. Mapped to HTTP 400 at the API boundary.</summary>
 public sealed class DomainException(string message) : Exception(message);
 ```
 
 ```csharp file=Domain/Entity.cs
-namespace Procurement.Domain;
+namespace KitchenPurchasing.Domain;
 
 /// <summary>Base class for entities: equality is by identity and concrete type, never by content.</summary>
 public abstract class Entity<TId> : IEquatable<Entity<TId>> where TId : notnull
@@ -385,7 +385,7 @@ public abstract class Entity<TId> : IEquatable<Entity<TId>> where TId : notnull
 Why compare `GetType()` too? Without it, a `Vendor` and a `Contract` that happened to share a `Guid` would be "equal". With strongly typed ids that cannot happen anyway, but the check costs nothing and documents the intent.
 
 ```csharp file=Domain/Ids.cs
-namespace Procurement.Domain;
+namespace KitchenPurchasing.Domain;
 
 /// <summary>Strongly typed ids. A VendorId can never be passed where a RequisitionId is expected.</summary>
 public readonly record struct VendorId(Guid Value)
@@ -404,7 +404,7 @@ public readonly record struct RequisitionId(Guid Value)
 `Guid.CreateVersion7()` (available since .NET 9) produces time-ordered ids, which keeps PostgreSQL B-tree inserts mostly sequential. For a back-office system this is a free win over random v4 ids.
 
 ```csharp file=Domain/Money.cs
-namespace Procurement.Domain;
+namespace KitchenPurchasing.Domain;
 
 public sealed record Currency
 {
@@ -479,12 +479,12 @@ public sealed record Money
 }
 ```
 
-Three design choices worth noticing. First, `Currency` has a private constructor and named instances, so `Currency.Inr` is the normal way to get one, and `FromCode` is the controlled door for data coming from outside. Second, `Money` rejects negative amounts. That is a *domain decision* for this procurement system (credit notes are modelled separately); a general accounting library would allow negatives. Third, `Multiply` rounds. Rounding policy is a business rule and must live in one place; here it is banker's rounding to two decimals.
+Three design choices worth noticing. First, `Currency` has a private constructor and named instances, so `Currency.Inr` is the normal way to get one, and `FromCode` is the controlled door for data coming from outside. Second, `Money` rejects negative amounts. That is a *domain decision* for this purchasing system (credit notes and refunds are modelled separately); a general accounting library would allow negatives. Third, `Multiply` rounds. Rounding policy is a business rule and must live in one place; here it is banker's rounding to two decimals.
 
 ```csharp file=Domain/Quantity.cs
-namespace Procurement.Domain;
+namespace KitchenPurchasing.Domain;
 
-public enum UnitOfMeasure { Nos, Metre, SquareMetre, CubicMetre, Kilogram, Tonne, Litre }
+public enum UnitOfMeasure { Nos, Gram, Kilogram, Millilitre, Litre }
 
 /// <summary>A positive measured amount with a unit. Adding quantities of different units is a domain error.</summary>
 public sealed record Quantity
@@ -515,7 +515,7 @@ public sealed record Quantity
 ```
 
 ```csharp file=Domain/Address.cs
-namespace Procurement.Domain;
+namespace KitchenPurchasing.Domain;
 
 public sealed record Pincode
 {
@@ -556,7 +556,7 @@ public sealed record Address
 ```csharp file=Domain/Gstin.cs
 using System.Text.RegularExpressions;
 
-namespace Procurement.Domain;
+namespace KitchenPurchasing.Domain;
 
 /// <summary>Indian GST registration number: 2-digit state code, 10-char PAN, entity code, 'Z', check character.
 /// The format is validated here; the checksum algorithm is out of scope for this lesson.</summary>
@@ -581,7 +581,7 @@ public sealed partial record Gstin
 ```
 
 ```csharp file=Domain/Vendor.cs
-namespace Procurement.Domain;
+namespace KitchenPurchasing.Domain;
 
 /// <summary>A supplier. Identity is the VendorId; everything else can change over the vendor's life.</summary>
 public sealed class Vendor : Entity<VendorId>
@@ -627,7 +627,7 @@ public sealed class Vendor : Entity<VendorId>
 `ReplaceGstin` shows a rule that belongs to the *entity*, not the value: a single `Gstin` is valid on its own, but *changing* this vendor's GSTIN to one from another state is a vendor-level decision. That is the dividing line between value-object validation (always true for any instance) and entity rules (true for this entity's transitions).
 
 ```csharp file=Domain/PurchaseRequisition.cs
-namespace Procurement.Domain;
+namespace KitchenPurchasing.Domain;
 
 /// <summary>A line is a value object: replacing it with an identical line changes nothing.</summary>
 public sealed record RequisitionLine(string Description, Quantity Quantity, Money UnitPrice)
@@ -644,14 +644,14 @@ public sealed class PurchaseRequisition : Entity<RequisitionId>
 {
     private readonly List<RequisitionLine> _lines = new();
 
-    public string ProjectCode { get; }
+    public string KitchenCode { get; }
     public Currency Currency { get; }
     public IReadOnlyList<RequisitionLine> Lines => _lines;
     public Money Total => _lines.Aggregate(Money.Zero(Currency), (sum, line) => sum + line.LineTotal);
 
-    public PurchaseRequisition(RequisitionId id, string projectCode, Currency currency) : base(id)
+    public PurchaseRequisition(RequisitionId id, string kitchenCode, Currency currency) : base(id)
     {
-        ProjectCode = string.IsNullOrWhiteSpace(projectCode) ? throw new DomainException("Project code is required.") : projectCode.Trim();
+        KitchenCode = string.IsNullOrWhiteSpace(kitchenCode) ? throw new DomainException("Kitchen code is required.") : kitchenCode.Trim();
         Currency = currency ?? throw new DomainException("Currency is required.");
     }
 
@@ -670,13 +670,13 @@ public sealed class PurchaseRequisition : Entity<RequisitionId>
 }
 ```
 
-`RemoveLine` relies on record equality. Because a line is a value, "remove the 40 t steel line at ₹58,000" is unambiguous without a line id. When lines need to be edited individually (change quantity on line 3, attach a comment to line 2), they have gained identity and should become child entities. That is a judgement call and it is covered in the [aggregates](#/lesson/m08-aggregates) lesson.
+`RemoveLine` relies on record equality. Because a line is a value, "remove the 400 kg rice line at ₹95" is unambiguous without a line id. When lines need to be edited individually (change the quantity on line 3, attach a note to line 2), they have gained identity and should become child entities. That is a judgement call and it is covered in the [aggregates](#/lesson/m08-aggregates) lesson.
 
 ```csharp file=Infrastructure/VendorDirectory.cs
 using System.Collections.Concurrent;
-using Procurement.Domain;
+using KitchenPurchasing.Domain;
 
-namespace Procurement.Infrastructure;
+namespace KitchenPurchasing.Infrastructure;
 
 /// <summary>In-memory stand-in for a repository. The real one (EF Core + PostgreSQL) appears in the repositories lesson.</summary>
 public sealed class VendorDirectory
@@ -695,8 +695,8 @@ public sealed class VendorDirectory
 ```
 
 ```csharp file=Program.cs
-using Procurement.Domain;
-using Procurement.Infrastructure;
+using KitchenPurchasing.Domain;
+using KitchenPurchasing.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<VendorDirectory>();
@@ -743,15 +743,15 @@ public sealed record VendorResponse(Guid Id, string LegalName, string Gstin, str
 Notice the two different status codes. A malformed GSTIN is a *bad request* (400). Deactivating a vendor that is already inactive is a *conflict with the current state* (409). Both are `DomainException`s in the domain; the API layer decides how to present them. Many teams add a small exception hierarchy (`InvalidValueException`, `InvalidStateException`) to make that mapping automatic; see [Error handling and domain exceptions](#/lesson/m07-domain-exceptions).
 
 :::callout type=tip title="Persisting value objects"
-With EF Core you map a value object either as an *owned type* (its properties become columns on the owner's table: `registered_address_city`, `registered_address_pincode`) or, for single-value wrappers like `Gstin` and `VendorId`, with a `ValueConverter` that unwraps to `string`/`uuid` and re-wraps on load. The domain classes stay free of attributes. For `Money`, store `amount numeric(18,2)` and `currency char(3)` as two columns of an owned type; never store money as `double precision`.
+With EF Core you map a multi-field value object as a *complex type* (`ComplexProperty`, EF Core 8+; EF Core 10 adds optional complex types and JSON mapping) or as the older *owned type*; either way its properties become columns on the owner's table (`registered_address_city`, `registered_address_pincode`). Complex types fit value objects better because they have no hidden key and are compared by value. Single-value wrappers like `Gstin` and `VendorId` are mapped with a `ValueConverter` that unwraps to `string`/`uuid` and re-wraps on load. The domain classes stay free of attributes. For `Money`, store `amount numeric(18,2)` and `currency char(3)` as two columns of the complex type; never store money as `double precision`.
 :::
 
 ## Bad design vs good design
 
-**Bad**: the Step 1 classes. Every field public, every rule elsewhere. Concrete problems we have seen in real procurement systems built this way:
+**Bad**: the Step 1 classes. Every field public, every rule elsewhere. Typical problems in purchasing systems built this way:
 
-- A report summed `UnitPrice * Qty` across lines in two currencies and printed "₹4,20,000" where ₹1,10,000 of it was actually USD 1,320.
-- A CSV import stored pincodes as integers; leading zeros were impossible, and `110001` and `11001` were both accepted.
+- A report summed `UnitPrice * Qty` across lines in two currencies and printed "₹4,20,000" where ₹1,10,000 of it was actually USD 1,320 (imported olive oil and cheese).
+- A CSV import stored pincodes as integers with no length check, so the five-digit typo `11001` was accepted next to the real `110001`, and deliveries to it bounced for weeks.
 - `UpdateVendor(Guid vendorId, Guid contractId)` was called with the arguments swapped in one code path for eight months.
 
 **Good**: the implementation above. Mixed currencies throw at the first `Add`. Pincodes are validated at the door. `VendorId` and `ContractId` are different types, so swapping them is a compile error.
@@ -759,7 +759,7 @@ With EF Core you map a value object either as an *owned type* (its properties be
 **When the "bad" version is acceptable**: a throwaway internal tool with one user and no arithmetic on its fields. Rich types pay off in proportion to the number of rules and operations the values carry. If a value has no rule and no behaviour, leave it as a primitive and move on.
 
 :::callout type=mistake title="Validation that only lives in the API layer"
-Teams often put `[Required]`, `[RegularExpression]` or FluentValidation rules on the request DTO and call the domain "validated". Then a nightly import job, a message consumer or a unit test builds the entity directly and skips all of it. Domain validation in constructors is the only layer every code path must pass through. Keep both layers: DTO validation for friendly messages, constructor validation for guarantees.
+Teams often put `[Required]`, `[RegularExpression]` or FluentValidation rules on the request DTO (minimal APIs in .NET 10 validate data annotations automatically once you call `builder.Services.AddValidation()`) and call the domain "validated". Then a nightly import job, a message consumer or a unit test builds the entity directly and skips all of it. Domain validation in constructors is the only layer every code path must pass through. Keep both layers: DTO validation for friendly messages, constructor validation for guarantees.
 :::
 
 :::callout type=tradeoff title="Exceptions or Result for value-object construction?"
@@ -768,7 +768,7 @@ Constructors cannot return a `Result<T>`, so a value object that validates in it
 
 ## Practical playground
 
-The playground has the `Money`, `Quantity` and `Pincode` value objects wired to a small console demo. Run it, then try: add a `Litre` quantity to a `Tonne` quantity, create a pincode starting with `0`, and multiply money by a factor that produces a half-paisa. Watch which line throws and why.
+The playground has the `Money`, `Quantity` and `Pincode` value objects wired to a small console demo. Run it, then try: add a `Litre` quantity to a `Kilogram` quantity, create a pincode starting with `0`, and multiply money by a factor that produces a half-paisa. Watch which line throws and why.
 
 :::playground type=csharp title="Value objects in action"
 ```csharp file=Program.cs
@@ -793,7 +793,7 @@ public sealed record Money
     public override string ToString() => $"{Currency} {Amount:N2}";
 }
 
-public enum Unit { Nos, Tonne, Litre }
+public enum Unit { Nos, Kilogram, Litre }
 
 public sealed record Quantity
 {
@@ -823,9 +823,9 @@ public static class Program
 {
     public static void Main()
     {
-        var steel = new Quantity(40m, Unit.Tonne);
-        var rate = Money.Inr(58000m);
-        Console.WriteLine($"{steel} x {rate} = {rate.Multiply(steel.Value)}");
+        var rice = new Quantity(400m, Unit.Kilogram);
+        var rate = Money.Inr(95m);
+        Console.WriteLine($"{rice} x {rate} = {rate.Multiply(rice.Value)}");
 
         var a = Money.Inr(100m);
         var b = Money.Inr(100m);
@@ -834,7 +834,7 @@ public static class Program
         Console.WriteLine(new Pincode("440001").Value);
 
         // TODO: uncomment one at a time and read the exception message.
-        // Console.WriteLine(steel.Add(new Quantity(5m, Unit.Litre)));
+        // Console.WriteLine(rice.Add(new Quantity(5m, Unit.Litre)));
         // Console.WriteLine(new Pincode("040001"));
         // Console.WriteLine(Money.Inr(10.01m).Multiply(0.5m));
     }
@@ -1024,17 +1024,17 @@ Add `Money Max(Money other)` and `IComparable<Money>` so lines can be sorted by 
 :::
 
 :::exercise id=m08-entities-value-objects-ex2 difficulty=beginner kind=code title="A self-validating Quantity"
-Implement the `Quantity` value object for a bill of quantities: a positive number with a unit of measure.
+Implement the `Quantity` value object for a requisition line: a positive number with a unit of measure, such as 400 kg of rice or 24 Nos of paneer blocks.
 ::requirements
 - Zero or negative values throw `DomainException`.
 - A count (`UnitOfMeasure.Nos`) must be a whole number; `2.5 Nos` throws.
 - `Add` requires the same unit; otherwise throw `DomainException`.
 - `Add` returns a new `Quantity` and never changes the receiver.
 ::acceptance
-- `new Quantity(0, Tonne)` and `new Quantity(-1, Metre)` throw.
-- `new Quantity(2.5m, Nos)` throws; `new Quantity(2.5m, Tonne)` is fine.
-- `new Quantity(40, Tonne).Add(new Quantity(2.5m, Tonne))` has `Value == 42.5m`.
-- Adding `Tonne` to `Litre` throws.
+- `new Quantity(0, Kilogram)` and `new Quantity(-1, Litre)` throw.
+- `new Quantity(2.5m, Nos)` throws; `new Quantity(2.5m, Kilogram)` is fine.
+- `new Quantity(40, Kilogram).Add(new Quantity(2.5m, Kilogram))` has `Value == 42.5m`.
+- Adding `Kilogram` to `Litre` throws.
 - Two quantities with the same value and unit are equal (`==`).
 ::hint
 All the rules about a *single* quantity belong in the constructor. The rule about *two* quantities (same unit) belongs in `Add`.
@@ -1059,7 +1059,7 @@ public sealed class DomainException : Exception
     public DomainException(string message) : base(message) { }
 }
 
-public enum UnitOfMeasure { Nos, Metre, SquareMetre, CubicMetre, Kilogram, Tonne, Litre }
+public enum UnitOfMeasure { Nos, Gram, Kilogram, Millilitre, Litre }
 
 public sealed record Quantity
 {
@@ -1088,7 +1088,7 @@ public class QuantityTests
     [InlineData(0)]
     [InlineData(-1)]
     public void Non_positive_values_throw(decimal value) =>
-        Assert.Throws<DomainException>(() => new Quantity(value, UnitOfMeasure.Tonne));
+        Assert.Throws<DomainException>(() => new Quantity(value, UnitOfMeasure.Kilogram));
 
     [Fact]
     public void Fractional_count_throws() =>
@@ -1096,19 +1096,19 @@ public class QuantityTests
 
     [Fact]
     public void Fractional_weight_is_fine() =>
-        Assert.Equal(2.5m, new Quantity(2.5m, UnitOfMeasure.Tonne).Value);
+        Assert.Equal(2.5m, new Quantity(2.5m, UnitOfMeasure.Kilogram).Value);
 
     [Fact]
     public void Adds_same_unit()
     {
-        var sum = new Quantity(40m, UnitOfMeasure.Tonne).Add(new Quantity(2.5m, UnitOfMeasure.Tonne));
+        var sum = new Quantity(40m, UnitOfMeasure.Kilogram).Add(new Quantity(2.5m, UnitOfMeasure.Kilogram));
         Assert.Equal(42.5m, sum.Value);
-        Assert.Equal(UnitOfMeasure.Tonne, sum.Unit);
+        Assert.Equal(UnitOfMeasure.Kilogram, sum.Unit);
     }
 
     [Fact]
     public void Add_different_unit_throws() =>
-        Assert.Throws<DomainException>(() => new Quantity(1m, UnitOfMeasure.Tonne).Add(new Quantity(1m, UnitOfMeasure.Litre)));
+        Assert.Throws<DomainException>(() => new Quantity(1m, UnitOfMeasure.Kilogram).Add(new Quantity(1m, UnitOfMeasure.Litre)));
 
     [Fact]
     public void Add_does_not_mutate_receiver()
@@ -1120,7 +1120,7 @@ public class QuantityTests
 
     [Fact]
     public void Equal_by_value() =>
-        Assert.True(new Quantity(3m, UnitOfMeasure.Metre) == new Quantity(3m, UnitOfMeasure.Metre));
+        Assert.True(new Quantity(3m, UnitOfMeasure.Litre) == new Quantity(3m, UnitOfMeasure.Litre));
 }
 ```
 ::solution
@@ -1132,7 +1132,7 @@ public sealed class DomainException : Exception
     public DomainException(string message) : base(message) { }
 }
 
-public enum UnitOfMeasure { Nos, Metre, SquareMetre, CubicMetre, Kilogram, Tonne, Litre }
+public enum UnitOfMeasure { Nos, Gram, Kilogram, Millilitre, Litre }
 
 public sealed record Quantity
 {
@@ -1162,40 +1162,40 @@ public sealed record Quantity
 The `Enum.IsDefined` check matters because an enum is just an integer underneath: `(UnitOfMeasure)42` compiles and would otherwise slip through from a badly mapped database column.
 ::mistakes
 - Allowing zero quantity "because the user might not know yet". A requisition line with nothing on it is not a line; model "unknown" explicitly if you really need it.
-- Converting units inside `Add` (tonnes to kilograms). Conversion is a separate, explicit operation with its own rules; silent conversion hides mistakes.
+- Converting units inside `Add` (grams to kilograms). Conversion is a separate, explicit operation with its own rules; silent conversion hides mistakes.
 ::extensions
-Add `Quantity ConvertTo(UnitOfMeasure target)` supporting `Kilogram <-> Tonne` and `Metre <-> ...` only where a conversion makes sense, throwing for `Tonne -> Litre`.
+Add `Quantity ConvertTo(UnitOfMeasure target)` supporting `Gram <-> Kilogram` and `Millilitre <-> Litre` only, throwing for `Kilogram -> Litre` (the density of cooking oil is a product fact, not a unit rule).
 :::
 
-:::exercise id=m08-entities-value-objects-ex3 difficulty=intermediate kind=design title="Model a works contract: what is an entity, what is a value?"
-A contract-management module needs to model a **works contract** between the consultancy and a contractor. Analysts gave you these facts:
+:::exercise id=m08-entities-value-objects-ex3 difficulty=intermediate kind=design title="Model a service contract: what is an entity, what is a value?"
+The kitchen chain hires outside agencies for work such as building its ordering app or running a festival marketing campaign. A contract-management module needs to model a **service contract** between the chain and an agency. Analysts gave you these facts:
 
-- A contract has a contract number (`CON-2026-031`), a contractor, a contract value with currency, a start and end date, and a list of payment milestones.
-- Each milestone has a title, a percentage of the contract value, a planned date, and a status (Pending, Claimed, Certified, Paid). Engineers update milestones one by one over months.
-- The contractor has a name, GSTIN and bank account (account number + IFSC). The same contractor appears on many contracts.
-- Legal wants to know the number of days a contract runs and whether two contracts for the same contractor overlap in time.
+- A contract has a contract number (`CON-2026-031`), an agency, a contract value with currency (for example ₹12 lakh), a start and end date, and a list of payment milestones ("designs approved", "app live on the Play Store").
+- Each milestone has a title, a percentage of the contract value, a planned date, and a status (Pending, Submitted, Accepted, Paid). The chain's project manager updates milestones one by one over months.
+- The agency has a name, GSTIN and bank account (account number + IFSC). The same agency appears on many contracts.
+- Legal wants to know the number of days a contract runs and whether two contracts with the same agency overlap in time.
 
 Produce an LLD class model in the designer: decide for every concept whether it is an entity, a value object or an enum; give value objects their rules; give entities their behaviour methods. Record `kind` as `class`, `record` or `enum`.
 ::acceptance
-- `WorksContract`, `Milestone` and `Contractor` are entities (`kind: class`) with strongly typed ids.
+- `ServiceContract`, `Milestone` and `Agency` are entities (`kind: class`) with strongly typed ids.
 - `Money`, `ContractPeriod`, `Percentage`, `Gstin` and `BankAccount` are value objects (`kind: record`) with at least one stated rule each in `responsibility`.
 - `MilestoneStatus` is an enum.
-- `WorksContract` references `Contractor` **by id**, not by holding the object.
-- `WorksContract` exposes behaviour (for example `AddMilestone`, `Reschedule`) and has no public setters listed.
+- `ServiceContract` references `Agency` **by id**, not by holding the object.
+- `ServiceContract` exposes behaviour (for example `AddMilestone`, `Reschedule`) and has no public setters listed.
 - `ContractPeriod` carries `Days` and `Overlaps(other)`.
 ::hint
 Apply the two tests from the lesson to each noun: does it have a life story (entity)? would swapping it for an identical copy be a problem (entity) or harmless (value)?
 ::hint
 Milestones are "updated one by one over months". That is a life story. Lines that are never edited individually could be values; these cannot.
 ::hint
-A contractor "appears on many contracts" and exists before and after any one contract. That is a separate entity, and holding a reference by id keeps the contract independent of the contractor's changes. (The aggregates lesson formalises this.)
+An agency "appears on many contracts" and exists before and after any one contract. That is a separate entity, and holding a reference by id keeps the contract independent of the agency's changes. (The aggregates lesson formalises this.)
 ::hint
 Legal's two questions (days, overlap) are pure functions of start and end date. That is behaviour on a `ContractPeriod` value object, not on the contract.
 ::starter
 ```json
 {
   "classes": [
-    { "id": "WorksContract", "name": "WorksContract", "kind": "class", "fields": ["-ContractId Id", "-string Number"], "methods": [], "responsibility": "TODO" },
+    { "id": "ServiceContract", "name": "ServiceContract", "kind": "class", "fields": ["-ContractId Id", "-string Number"], "methods": [], "responsibility": "TODO" },
     { "id": "Money", "name": "Money", "kind": "record", "fields": ["+decimal Amount", "+Currency Currency"], "methods": ["+Money Add(Money other)"], "responsibility": "Amount in one currency; never negative; max 2 decimals" }
   ],
   "relations": []
@@ -1205,21 +1205,21 @@ Legal's two questions (days, overlap) are pure functions of start and end date. 
 ```json
 {
   "classes": [
-    { "id": "WorksContract", "name": "WorksContract", "kind": "class",
-      "fields": ["-ContractId Id", "-string Number", "-ContractorId ContractorId", "-Money ContractValue", "-ContractPeriod Period", "-List~Milestone~ _milestones"],
+    { "id": "ServiceContract", "name": "ServiceContract", "kind": "class",
+      "fields": ["-ContractId Id", "-string Number", "-AgencyId AgencyId", "-Money ContractValue", "-ContractPeriod Period", "-List~Milestone~ _milestones"],
       "methods": ["+void AddMilestone(string title, Percentage share, DateOnly plannedOn)", "+void Reschedule(ContractPeriod newPeriod)", "+Milestone GetMilestone(MilestoneId id)", "+Percentage AllocatedShare()"],
-      "responsibility": "Entity. Identity: ContractId. Rule: milestone shares must not exceed 100 %. References the contractor by id." },
+      "responsibility": "Entity. Identity: ContractId. Rule: milestone shares must not exceed 100 %. References the agency by id." },
     { "id": "Milestone", "name": "Milestone", "kind": "class",
       "fields": ["-MilestoneId Id", "-string Title", "-Percentage Share", "-DateOnly PlannedOn", "-MilestoneStatus Status"],
-      "methods": ["+void Claim()", "+void Certify()", "+void MarkPaid()", "+Money AmountFor(Money contractValue)"],
-      "responsibility": "Entity (child of the contract). Status moves Pending -> Claimed -> Certified -> Paid only in that order." },
-    { "id": "Contractor", "name": "Contractor", "kind": "class",
-      "fields": ["-ContractorId Id", "-string LegalName", "-Gstin Gstin", "-BankAccount BankAccount"],
+      "methods": ["+void Submit()", "+void Accept()", "+void MarkPaid()", "+Money AmountFor(Money contractValue)"],
+      "responsibility": "Entity (child of the contract). Status moves Pending -> Submitted -> Accepted -> Paid only in that order." },
+    { "id": "Agency", "name": "Agency", "kind": "class",
+      "fields": ["-AgencyId Id", "-string LegalName", "-Gstin Gstin", "-BankAccount BankAccount"],
       "methods": ["+void ChangeBankAccount(BankAccount account)", "+void Rename(string name)"],
       "responsibility": "Entity. Exists independently of any contract." },
     { "id": "ContractId", "name": "ContractId", "kind": "record", "fields": ["+Guid Value"], "methods": ["+ContractId New()"], "responsibility": "Strongly typed id (readonly record struct)" },
     { "id": "MilestoneId", "name": "MilestoneId", "kind": "record", "fields": ["+Guid Value"], "methods": [], "responsibility": "Strongly typed id" },
-    { "id": "ContractorId", "name": "ContractorId", "kind": "record", "fields": ["+Guid Value"], "methods": [], "responsibility": "Strongly typed id" },
+    { "id": "AgencyId", "name": "AgencyId", "kind": "record", "fields": ["+Guid Value"], "methods": [], "responsibility": "Strongly typed id" },
     { "id": "Money", "name": "Money", "kind": "record", "fields": ["+decimal Amount", "+Currency Currency"],
       "methods": ["+Money Add(Money other)", "+Money Multiply(decimal factor)"], "responsibility": "Value. Never negative; max 2 decimals; same-currency arithmetic only" },
     { "id": "ContractPeriod", "name": "ContractPeriod", "kind": "record", "fields": ["+DateOnly Start", "+DateOnly End"],
@@ -1228,34 +1228,34 @@ Legal's two questions (days, overlap) are pure functions of start and end date. 
       "methods": ["+Percentage Add(Percentage other)", "+Money Of(Money amount)"], "responsibility": "Value. Between 0 and 100 inclusive" },
     { "id": "Gstin", "name": "Gstin", "kind": "record", "fields": ["+string Value"], "methods": ["+string StateCode"], "responsibility": "Value. 15-character GST format" },
     { "id": "BankAccount", "name": "BankAccount", "kind": "record", "fields": ["+string AccountNumber", "+string Ifsc"], "methods": [], "responsibility": "Value. IFSC is 11 chars: 4 letters, '0', 6 alphanumerics; account number 9-18 digits" },
-    { "id": "MilestoneStatus", "name": "MilestoneStatus", "kind": "enum", "fields": ["Pending", "Claimed", "Certified", "Paid"], "methods": [], "responsibility": "" }
+    { "id": "MilestoneStatus", "name": "MilestoneStatus", "kind": "enum", "fields": ["Pending", "Submitted", "Accepted", "Paid"], "methods": [], "responsibility": "" }
   ],
   "relations": [
-    { "from": "WorksContract", "to": "Milestone", "kind": "composition", "multiplicity": "1..*" },
-    { "from": "WorksContract", "to": "ContractorId", "kind": "association", "label": "references by id" },
-    { "from": "WorksContract", "to": "Money", "kind": "composition" },
-    { "from": "WorksContract", "to": "ContractPeriod", "kind": "composition" },
+    { "from": "ServiceContract", "to": "Milestone", "kind": "composition", "multiplicity": "1..*" },
+    { "from": "ServiceContract", "to": "AgencyId", "kind": "association", "label": "references by id" },
+    { "from": "ServiceContract", "to": "Money", "kind": "composition" },
+    { "from": "ServiceContract", "to": "ContractPeriod", "kind": "composition" },
     { "from": "Milestone", "to": "Percentage", "kind": "composition" },
     { "from": "Milestone", "to": "MilestoneStatus", "kind": "association" },
-    { "from": "Contractor", "to": "Gstin", "kind": "composition" },
-    { "from": "Contractor", "to": "BankAccount", "kind": "composition" }
+    { "from": "Agency", "to": "Gstin", "kind": "composition" },
+    { "from": "Agency", "to": "BankAccount", "kind": "composition" }
   ]
 }
 ```
 
 Reasoning, concept by concept:
 
-- **WorksContract** — entity. Has a number, a story (drafted, running, closed) and milestones that change. Holds `ContractorId`, not `Contractor`, so a contractor renaming itself does not require touching the contract, and the contract can be loaded without loading the contractor.
-- **Milestone** — entity, but a *child* one: it has no meaning outside its contract, yet engineers update individual milestones, so each needs an id. (In the next lesson this becomes "an entity inside the WorksContract aggregate".)
-- **Contractor** — entity, independent life. Its `BankAccount` is a value: if the contractor changes banks, the old account value is replaced by a new one, not edited.
+- **ServiceContract** — entity. Has a number, a story (drafted, running, closed) and milestones that change. Holds `AgencyId`, not `Agency`, so an agency renaming itself does not require touching the contract, and the contract can be loaded without loading the agency.
+- **Milestone** — entity, but a *child* one: it has no meaning outside its contract, yet the project manager updates individual milestones, so each needs an id. (In the next lesson this becomes "an entity inside the ServiceContract aggregate".)
+- **Agency** — entity, independent life. Its `BankAccount` is a value: if the agency changes banks, the old account value is replaced by a new one, not edited.
 - **ContractPeriod** — value with behaviour. `Days` and `Overlaps` are pure functions, so Legal's questions are answered by the value, and they are trivially unit-tested.
-- **Percentage** — value with a range rule. It also owns `Of(Money)` so "20 % of ₹1.2 crore" is computed in one place with one rounding policy.
+- **Percentage** — value with a range rule. It also owns `Of(Money)` so "20 % of ₹12 lakh" is computed in one place with one rounding policy.
 - **MilestoneStatus** — enum, because the set is closed and the transitions are the milestone's job, not the status's.
 ::alternatives
-Some teams make `Milestone` a value object and replace the whole list on every edit. That works when milestones are set once at signing and never touched. The moment someone asks "who certified milestone 3 and when?", the milestone has a history, and history implies identity.
+Some teams make `Milestone` a value object and replace the whole list on every edit. That works when milestones are set once at signing and never touched. The moment someone asks "who accepted milestone 3 and when?", the milestone has a history, and history implies identity.
 ::mistakes
-- Making `Contractor` a property of `WorksContract` (holding the object). It drags the contractor's whole state into every contract load and creates two sources of truth for the contractor's name.
-- Modelling `Percentage` as `decimal`. Someone will pass `0.2` where `20` is expected, and a milestone will be worth ₹24,000 instead of ₹24,00,000.
+- Making `Agency` a property of `ServiceContract` (holding the object). It drags the agency's whole state into every contract load and creates two sources of truth for the agency's name.
+- Modelling `Percentage` as `decimal`. Someone will pass `0.2` where `20` is expected, and a 20 % milestone on a ₹12 lakh contract will be worth ₹2,400 instead of ₹2,40,000.
 :::
 
 :::exercise id=m08-entities-value-objects-ex4 difficulty=intermediate kind=code title="ContractPeriod: a value object with behaviour"
@@ -1619,7 +1619,7 @@ public sealed record Money
 
 Why can the remainder never exceed `ratios.Length - 1`? Each share loses less than one paisa to floor division, so the total loss is less than the number of shares. Handing one paisa to each of the first `remainder` parts therefore never runs out of parts.
 
-Where should this live? In `Money`, because it is a rule about money, independent of contracts. The `WorksContract` entity calls `ContractValue.Allocate(milestoneShares)` and never does arithmetic itself.
+Where should this live? In `Money`, because it is a rule about money, independent of contracts. The `ServiceContract` entity calls `ContractValue.Allocate(milestoneShares)` and never does arithmetic itself.
 ::alternatives
 Give the remainder to the *last* part, or to the *largest* part. Any deterministic rule works as long as finance agrees and it is written once. Some systems take percentages as `decimal` and allocate with `Percentage.Of(Money)`; that still needs a final "distribute the remainder" step.
 ::mistakes
@@ -1667,7 +1667,7 @@ Entities need a different set:
 ```csharp
 public class VendorTests
 {
-    private static Vendor NewVendor(VendorId id, string name = "Shree Steel Traders") =>
+    private static Vendor NewVendor(VendorId id, string name = "Shree Dairy Farms") =>
         new(id, name, new Gstin("27AABCU9603R1ZX"), new Address("Plot 4, MIDC", null, "Nagpur", "Maharashtra", new Pincode("440016")));
 
     [Fact]
@@ -1696,16 +1696,16 @@ A useful habit: write the invalid-input tests first (`[Theory]` with `InlineData
 ## Real-world application
 
 - **Payments and billing systems** use a `Money` type almost universally; the allocation operation from exercise 5 is what splits a bill between payers or a tax between line items without losing a unit. Many open-source libraries (for example NodaMoney in .NET) implement exactly these rules.
-- **Procurement and ERP software** models units of measure as values so that "40 t" and "40,000 kg" are compared correctly and "40 t + 5 L" is rejected. Mistakes here are expensive: a unit mix-up on a bulk order can mean a shipment that is 1,000× too small.
+- **Purchasing, inventory and grocery-delivery software** models units of measure as values so that "2 kg" and "2,000 g" are compared correctly and "2 kg + 5 L" is rejected. Mistakes here are expensive: a gram/kilogram mix-up on a bulk order can mean a delivery that is 1,000× too small.
 - **Government and compliance systems** in India validate GSTIN, PAN, IFSC and pincode formats at every entry point. A single `Gstin` type keeps that rule in one place, which matters when the format changes (as the GST system has done for some entity codes).
 - **Strongly typed ids** are now common in ASP.NET Core codebases, often generated with source generators, specifically to stop the "swapped Guid arguments" bug. They also make logs and traces easier to read.
-- **Time-ordered GUIDs** (`Guid.CreateVersion7`) were added to .NET 9 precisely because random GUID primary keys hurt index locality in PostgreSQL and SQL Server under heavy insert loads.
+- **Time-ordered GUIDs** (`Guid.CreateVersion7`, added in .NET 9) are popular as primary keys because random v4 GUIDs hurt index locality in PostgreSQL and SQL Server under heavy insert loads.
 
 ## Interview questions
 
 :::interview
 ::q beginner
-What is the difference between an entity and a value object? Give one example of each from an e-commerce or procurement system.
+What is the difference between an entity and a value object? Give one example of each from an e-commerce or food-delivery system.
 ::a
 An entity is defined by a stable identity and has a life cycle: an `Order` is still the same order after its status changes from Placed to Shipped. Two entities are equal only if their ids are equal. A value object is defined by its content and is immutable: `Money(500, INR)` is interchangeable with any other `Money(500, INR)`, and you never change one, you compute a new one. Examples: `Customer`, `Order`, `Vendor` are entities; `Money`, `Address`, `Quantity`, `DateRange` are values.
 ::q beginner
@@ -1721,7 +1721,7 @@ When would you choose a `readonly record struct` over a `sealed record` for a va
 ::a
 Choose the struct for tiny, hot-path values such as strongly typed ids or a two-field coordinate where allocation pressure matters, and where `default` has a sensible "empty" meaning. The pitfall is that `default(T)` for a struct bypasses your constructor entirely, so a `default(Money)` has `Amount = 0` and `Currency = null`. Larger structs are also copied on every pass, which can cost more than the allocation saved. For composite domain values with rules, a `sealed record` class is the safer default.
 ::q advanced
-A legacy procurement system passes `decimal amount, string currency` through 60 methods. Product wants multi-currency support next quarter. How would you introduce a `Money` type without a big-bang rewrite?
+A legacy purchasing system passes `decimal amount, string currency` through 60 methods. Product wants multi-currency support next quarter. How would you introduce a `Money` type without a big-bang rewrite?
 ::a
 Strangle it from the edges inward. First add `Money` with the rules and tests, plus implicit or explicit conversions to and from the primitive pair at the boundary (a `ToPrimitives()` and a `From(decimal, string)` factory). Then change the *storage* and *API DTO* mapping so values enter the system as `Money` once. Next, convert the deepest pure calculations (totals, tax) to take `Money`, keeping thin adapter overloads that accept the primitives and delegate. Each step compiles and ships. Track progress by counting the remaining `(decimal, string)` signatures; delete the adapters when the count reaches zero. The key is that the type's *rules* arrive on day one, even while the signatures migrate over weeks.
 ::q advanced
@@ -1768,7 +1768,7 @@ A: Work in integer paise, floor-divide each share, then hand the leftover paise 
 
 :::quiz pass=70
 ::q single
-A `RequisitionLine` record holds description, quantity and unit price. Engineers never edit a line; they delete and re-add. A new requirement says "track who changed the quantity on each line and when". What changes?
+A `RequisitionLine` record holds description, quantity and unit price. Kitchen managers never edit a line; they delete and re-add. A new requirement says "track who changed the quantity on each line and when". What changes?
 - [ ] Nothing; add a `ChangedBy` property to the record.
 - [x] The line now has a history, which means identity; it should become a child entity with its own id.
 - [ ] Move the line into a separate database table.

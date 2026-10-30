@@ -43,19 +43,19 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Picture a road engineer asked to connect a village of 300 people to the district highway. One engineer proposes a six-lane expressway with flyovers, toll plazas and a service road "in case the village grows". Another proposes a dirt track that turns to mud every monsoon. Both are bad engineers.
+Picture a new café owner in Kochi who expects about 60 customers a day and asks two consultants to plan the kitchen. One proposes an industrial kitchen for 2,000 meals a day, with a walk-in freezer and a conveyor dishwasher, "in case you become a chain". The other proposes a single induction plate and no fridge. Both are bad advice.
 
-The first one has **overengineered**: the expressway costs fifty times more, takes three years, and needs a maintenance crew the panchayat cannot afford. The village needed a two-lane paved road.
+The first one has **overengineered**: the kitchen costs fifty times more, takes six months to fit out, and needs staff the café cannot afford. The café needed a proper four-burner stove, a fridge and an exhaust hood.
 
-The second one has **underengineered**: the stated requirement was "usable all year", and a dirt track does not meet it.
+The second one has **underengineered**: the stated requirement was "pass the food-safety inspection and serve lunch rush without a queue out of the door", and one induction plate with no fridge meets neither.
 
-The good engineer builds a two-lane paved road with proper drainage, and does two cheap things for the future: buys a strip of land wide enough for four lanes (because buying land later is very expensive), and puts culverts where future widening would need them. They do **not** build the extra lanes now.
+The good consultant plans the four-burner kitchen, and does two cheap things for the future: signs a lease with an option on the empty shop next door (because moving premises later is very expensive), and asks for wiring that can take a second oven. They do **not** buy the second oven now.
 
 That is right-sizing (fitting the design to the requirement). In system design:
 
-- the expressway is Kafka, sharding, microservices and multi-region for a small system,
-- the dirt track is a single server with no backups for a payment system,
-- the extra land is a cheap decision now that keeps an expensive option open later, like putting `tenant_id` on every table from day one.
+- the industrial kitchen is Kafka, sharding, microservices and multi-region for a small system,
+- the single induction plate is a single server with no backups for a payment system,
+- the lease option is a cheap decision now that keeps an expensive option open later, like putting `tenant_id` on every table from day one.
 
 ## First-principles explanation
 
@@ -113,11 +113,11 @@ YAGNI is **not** "never plan ahead". It is "don't **build** ahead; do make sure 
 
 ### One-way doors and two-way doors
 
-Some decisions are cheap to reverse (two-way doors), and some are very expensive to reverse (one-way doors). Spend design effort on the second kind, even if the need is in the future, because they are the land you buy before the road.
+Some decisions are cheap to reverse (two-way doors), and some are very expensive to reverse (one-way doors). Spend design effort on the second kind, even if the need is in the future, because they are the lease option you sign before you need the space.
 
 **Cheap now, expensive later (do them now):**
 
-- Identifiers that will survive sharding or merging (UUIDs or another globally unique id, rather than ids that only make sense inside one database).
+- Identifiers that will survive sharding or merging (UUIDs or another globally unique id, rather than ids that only make sense inside one database). Prefer time-ordered ones such as UUIDv7 (`Guid.CreateVersion7()` since .NET 9) so B-tree inserts stay local; the [unique ID generator](#/lesson/m17-unique-id-generator) case study compares the options.
 - A `tenant_id` column on every tenant-owned table in a multi-tenant system.
 - Idempotency keys on any operation that moves money or triggers side effects.
 - Timestamps stored in UTC with time zones recorded where the user's local time matters.
@@ -195,7 +195,7 @@ We take four prompts and, for each, show an over-designed answer, an under-desig
 
 ### Example A — Leave management for 2,000 employees
 
-*Requirements:* 2,000 employees of an engineering consultancy across 12 offices apply for leave, managers approve, HR exports monthly. Peak: Monday mornings, perhaps 5 requests per second. 99.5 % availability in office hours is fine.
+*Requirements:* 2,000 employees of an online travel company across 12 offices apply for leave, managers approve, HR exports monthly. Peak: Monday mornings, perhaps 5 requests per second. 99.5 % availability in office hours is fine.
 
 **Over-designed:** an API gateway, five microservices (employee, leave, approval, notification, reporting), Kafka between them, Cassandra for leave history "for scale", Redis cluster, Kubernetes across two regions.
 
@@ -213,7 +213,7 @@ Why it fails: a disk failure loses every leave record, which matters for payroll
 
 **Over-designed:** a custom distributed id generator with consensus, Cassandra across three regions, Kafka for click events, a stream processor, a Redis cluster with 12 shards.
 
-Why it fails: 40 writes per second does not need a distributed id generator; a database sequence encoded in base 62, or random ids with a uniqueness check, is enough. Twelve cache shards for about 10 GB of hot data is paying for memory you don't use.
+Why it fails: 40 writes per second does not need a distributed id generator; a database sequence encoded in base 62, or random ids with a uniqueness check, is enough. A dedicated id service earns its place only at many thousands of ids per second across many writers ([see the case study](#/lesson/m17-unique-id-generator)). Twelve cache shards for about 10 GB of hot data is paying for memory you don't use.
 
 **Under-designed:** a single database with no cache, every redirect a database read.
 
@@ -233,9 +233,9 @@ Why it fails: duplicate deliveries mark an invoice paid twice or send two receip
 
 **Right-sized:** verify the webhook signature, insert the event id into a `processed_events` table with a unique constraint in the same transaction that updates the invoice and writes an outbox row for the email, return 200 quickly. A background worker sends emails from the outbox. About 20,000 events a day (a fraction of one per second on average) needs no broker at all. This is the case where the right-sized answer has **more** components than the naive one, because the requirement (exactly-once effect) demands them.
 
-### Example D — Sensor platform for bridge monitoring
+### Example D — Sensor platform for an EV charging network
 
-*Requirements:* 150 bridges, 40 sensors each (strain, vibration, temperature), one reading per sensor per second, alerts within 30 seconds when thresholds are crossed, 2 years of history for engineers.
+*Requirements:* 150 charging hubs, 40 chargers each, one reading per charger per second (power, voltage, cable temperature), alerts within 30 seconds when a charger overheats or faults, 2 years of history for warranty claims and reliability analysis.
 
 Numbers: 150 × 40 = 6,000 readings per second, about 5 × 10^8 per day. At 50 bytes each: about 26 GB per day, about 19 TB over two years before compression.
 
@@ -245,7 +245,7 @@ Numbers: 150 × 40 = 6,000 readings per second, about 5 × 10^8 per day. At 50 b
 
 Why it fails: nightly alerts miss the 30-second requirement completely, and 19 TB in a single heavily indexed table will be slow and expensive.
 
-**Right-sized:** gateways at each bridge batch readings every few seconds into a managed ingestion endpoint or queue; a consumer evaluates thresholds in memory and raises alerts within seconds; readings are stored in a time-series-friendly layout (PostgreSQL with time partitioning, a time-series extension, or a managed time-series service) with older data downsampled to per-minute aggregates and raw data archived to object storage. The stream processor is justified here by the alert latency requirement at 6,000 readings per second, but it can be a simple consumer, not a cluster.
+**Right-sized:** gateways at each hub batch readings every few seconds into a managed ingestion endpoint or queue; a consumer evaluates thresholds in memory and raises alerts within seconds; readings are stored in a time-series-friendly layout (PostgreSQL with time partitioning, a time-series extension, or a managed time-series service) with older data downsampled to per-minute aggregates and raw data archived to object storage. The stream processor is justified here by the alert latency requirement at 6,000 readings per second, but it can be a simple consumer, not a cluster.
 
 ### A two-question self-check
 
@@ -550,7 +550,7 @@ Classify each statement as over-engineered, under-engineered or right-sized for 
 4. B2B invoicing for 400 customers: "Event sourcing so we can rebuild any invoice's history."
 5. Wallet top-ups via a payment gateway: "We call the gateway and, if it times out, we retry the same request."
 6. Chat app with 10 million DAU: "Messages stored in a single PostgreSQL table, sharded later if needed, with conversation id as the planned shard key."
-7. Drone survey platform storing 2 TB of imagery a month: "Images in object storage, metadata in PostgreSQL."
+7. Wedding-photo sharing app storing 2 TB of photos a month: "Images in object storage, metadata in PostgreSQL."
 8. Startup MVP with 3 engineers: "Kubernetes, a service mesh, and GitOps from day one."
 ::acceptance
 - All eight classified, each with a reason that cites a number or a stated requirement.
@@ -571,7 +571,7 @@ Item 4: "rebuild history" may be served by an append-only audit table. Does the 
 4. **Over-engineered**: 400 customers' invoices are a CRUD workload; an append-only audit table or row versioning gives history without event sourcing's versioning and projection costs.
 5. **Under-engineered**: retrying without an idempotency key can double-charge when the first request succeeded but its response timed out. Missing: an idempotency key per top-up, and a status check before retrying.
 6. **Under-engineered** as stated: 10^7 × 40 ÷ 86,400 ≈ 4,600 messages per second average, ~14,000 at peak, plus reads. A single table on one primary will not keep up for long. Choosing the shard key is good preparation, but this scale needs partitioning from the start.
-7. **Right-sized**: 2 TB a month of imagery belongs in object storage; metadata and queries belong in PostgreSQL.
+7. **Right-sized**: 2 TB a month of photos belongs in object storage; metadata and queries belong in PostgreSQL.
 8. **Over-engineered**: three engineers cannot operate a service mesh and Kubernetes while building a product. A managed app platform and a CI pipeline are enough.
 ::mistakes
 - Calling item 6 right-sized because "shard later" sounds like YAGNI; the numbers say "later" is now.
@@ -934,7 +934,7 @@ Note the precedence in `c.Kind is Kind.Database or Kind.ShardedDatabase && !c.Hi
 :::
 
 :::exercise id=m19-overengineering-ex5 difficulty=advanced kind=written title="An evolution path for 100x"
-For example D (bridge monitoring: 150 bridges, 6,000 readings per second, alerts within 30 seconds, 2 years of history), the interviewer asks: "The ministry wants this for 15,000 bridges in three years. What changes, and when?" Write a staged evolution path with three stages. For each stage, give the design change, the measurable trigger, the preparation already made in the earlier stage, and a rough cost driver. Finish with two things you would deliberately **not** do yet, and why.
+For example D (EV charging: 150 hubs, 6,000 readings per second, alerts within 30 seconds, 2 years of history), the interviewer asks: "The company plans 15,000 hubs in three years. What changes, and when?" Write a staged evolution path with three stages. For each stage, give the design change, the measurable trigger, the preparation already made in the earlier stage, and a rough cost driver. Finish with two things you would deliberately **not** do yet, and why.
 ::acceptance
 - Stages are complete working systems, each with a measurable trigger.
 - The arithmetic for 100x is shown (readings per second, storage per day).
@@ -945,21 +945,21 @@ For example D (bridge monitoring: 150 bridges, 6,000 readings per second, alerts
 ::hint
 What breaks first: ingestion, alert evaluation, or storage cost?
 ::hint
-Preparations: a bridge id on every reading and alert (natural partition key), gateway batching with a versioned message format, raw data archived to object storage by time.
+Preparations: a hub id on every reading and alert (natural partition key), gateway batching with a versioned message format, raw data archived to object storage by time.
 ::hint
 Not-yet candidates: multi-region active-active, a custom time-series engine, per-sensor machine-learning models.
 ::solution
-*Arithmetic.* 15,000 bridges × 40 sensors = 600,000 readings per second, about 5 × 10^10 per day. At 50 bytes: about 2.6 TB per day raw, about 1.9 PB over two years before compression and downsampling.
+*Arithmetic.* 15,000 hubs × 40 chargers = 600,000 readings per second, about 5 × 10^10 per day. At 50 bytes: about 2.6 TB per day raw, about 1.9 PB over two years before compression and downsampling.
 
-**Stage 1 (today, 150 bridges).** Gateways batch readings every 5 s into a managed ingestion queue; one consumer group evaluates thresholds in memory; readings stored in time-partitioned PostgreSQL (or a time-series extension), per-minute aggregates kept for 2 years, raw data archived to object storage after 30 days. *Preparations (one-way doors):* `bridge_id` on every reading, alert and aggregate; a versioned binary batch format from gateways; raw archive layout partitioned by date and bridge so it can be queried by a lake engine later; alert rules stored as data, not code. *Cost driver:* storage of raw readings.
+**Stage 1 (today, 150 hubs).** Gateways batch readings every 5 s into a managed ingestion queue; one consumer group evaluates thresholds in memory; readings stored in time-partitioned PostgreSQL (or a time-series extension), per-minute aggregates kept for 2 years, raw data archived to object storage after 30 days. *Preparations (one-way doors):* `hub_id` on every reading, alert and aggregate; a versioned binary batch format from gateways; raw archive layout partitioned by date and hub so it can be queried by a lake engine later; alert rules stored as data, not code. *Cost driver:* storage of raw readings.
 
-**Stage 2 (trigger: ingestion consumer lag above 10 s for 15 minutes, or about 1,000 bridges, ~40,000 readings per second).** Replace the queue with a partitioned log keyed by `bridge_id`, so alert evaluation scales by adding consumers per partition; move time-series storage to a managed time-series service or a horizontally scaling store; downsample to per-minute aggregates in the stream, not after the fact. *Prepared by:* `bridge_id` as the partition key, the versioned batch format. *Cost driver:* stream throughput units and time-series storage.
+**Stage 2 (trigger: ingestion consumer lag above 10 s for 15 minutes, or about 1,000 hubs, ~40,000 readings per second).** Replace the queue with a partitioned log keyed by `hub_id`, so alert evaluation scales by adding consumers per partition; move time-series storage to a managed time-series service or a horizontally scaling store; downsample to per-minute aggregates in the stream, not after the fact. *Prepared by:* `hub_id` as the partition key, the versioned batch format. *Cost driver:* stream throughput units and time-series storage.
 
-**Stage 3 (trigger: about 5,000 bridges, or storage cost per bridge per month above the agreed budget).** Split by geography: regional ingestion clusters (for example north, south, east, west), each with its own log and storage, feeding a national aggregate store for dashboards; raw archive queried with a lake engine for engineering analysis. *Prepared by:* the archive layout and `bridge_id` everywhere. *Cost driver:* raw archive, mitigated by compression and lifecycle tiers.
+**Stage 3 (trigger: about 5,000 hubs, or storage cost per hub per month above the agreed budget).** Split by geography: regional ingestion clusters (for example north, south, east, west), each with its own log and storage, feeding a national aggregate store for dashboards; raw archive queried with a lake engine for battery and reliability analysis. *Prepared by:* the archive layout and `hub_id` everywhere. *Cost driver:* raw archive, mitigated by compression and lifecycle tiers.
 
-**Not yet.** (1) Multi-region active-active for the whole platform: the requirement is alerts within 30 s, and regional ingestion in stage 3 already limits blast radius; revisit if the ministry sets an RTO under 15 minutes for a regional outage. (2) Per-sensor machine-learning anomaly detection: thresholds meet today's requirement; revisit when engineers have labelled a year of anomalies to train on.
+**Not yet.** (1) Multi-region active-active for the whole platform: the requirement is alerts within 30 s, and regional ingestion in stage 3 already limits blast radius; revisit if the business sets an RTO under 15 minutes for a regional outage. (2) Per-sensor machine-learning anomaly detection: thresholds meet today's requirement; revisit when the operations team has labelled a year of faults to train on.
 ::mistakes
-- Jumping straight to the stage-3 design for 150 bridges.
+- Jumping straight to the stage-3 design for 150 hubs.
 - Triggers like "when we grow" instead of a metric with a threshold.
 - No preparations, so each stage is a rewrite.
 :::
@@ -1089,7 +1089,7 @@ Also test the boundaries of every threshold (exactly 0.999, exactly 2,000 GB) be
 
 - **Design reviews.** "Which requirement pays for this box?" is the single most useful review question, and it applies to production designs exactly as it does in interviews ([see design reviews](#/lesson/m19-design-review)).
 - **Cloud cost reviews.** Many cloud bills are dominated by components added "for scale" that run at low utilisation: idle clusters, unused replicas, cross-region replication nobody needs. Right-sizing reviews often find large savings without any loss of capability.
-- **Government and infrastructure projects.** Tender specifications sometimes demand impressive architectures (microservices, Kubernetes, "big data") for modest workloads. A consultant who can show, with numbers, that a simpler design meets every stated requirement at lower cost and risk adds real value, and can still show the evolution path if scale arrives.
+- **Enterprise and public-sector RFPs.** Requests for proposal sometimes demand impressive architectures (microservices, Kubernetes, "big data") for modest workloads. A consultant who can show, with numbers, that a simpler design meets every stated requirement at lower cost and risk adds real value, and can still show the evolution path if scale arrives.
 - **Startups.** The famous early architectures of many successful products were simple monoliths on one database. They were replaced when growth demanded it, with real data about where the load was.
 - **Incidents.** A surprising share of outages involve components added for resilience (a misconfigured failover, a cache stampede, a broker partition). Each component you do not need is one you never have to debug.
 
@@ -1117,7 +1117,7 @@ How do you answer "what if it grows 100x?" without redrawing the whole system?
 ::a
 Redo the arithmetic, say what breaks first and at roughly which multiple, and lay out a staged path: stage 2 at about 10x (replicas, cache, queue), stage 3 at about 50–100x (partitioning by a key already in the data, extracting the hottest module, a log for many consumers). Give each stage a measurable trigger and point to the preparations already in the stage-1 design. Then explain why not building it now is a feature: no monthly cost for unused capacity, and better decisions made with real load data.
 ::q advanced
-A client's tender requires "microservices on Kubernetes" for a system with 50 users. What do you do?
+A client's request for proposal (RFP) requires "microservices on Kubernetes" for a system with 50 users. What do you do?
 ::a
 First, understand why: it may be a standardisation policy, a hosting platform the client already runs, or a misunderstanding. If the platform exists and is operated by someone else, deploying a modular monolith as one or two containers on it meets the letter and the spirit at low cost. If the requirement is "microservices" as an architecture, show with numbers what it costs in delivery time, operations and risk for 50 users, propose a modular monolith with module boundaries that could be extracted, and document the decision and the trigger for extraction. Comply where it's cheap, push back with evidence where it's expensive, and never quietly ignore a contractual requirement.
 :::

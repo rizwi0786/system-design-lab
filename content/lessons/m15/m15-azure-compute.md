@@ -24,7 +24,7 @@ references:
     url: https://learn.microsoft.com/aspnet/core/host-and-deploy/health-checks
 ---
 
-A team runs a construction-management API on two virtual machines in a company data centre. Site engineers upload daily progress from 300 project sites, monthly bills are generated on the 1st, and a PDF report generator eats all the CPU for two hours at month-end. The VMs are patched by hand, the second one sits idle 28 days a month, and nobody wants to be on call for the operating system. The team is told to "move to Azure". The first real decision is not the database or the network. It is: **where will our code run, and how much of the machine do we still want to own?**
+A team runs **SchoolDesk**, a school-management API, on two virtual machines in a company data centre. Teachers at 300 schools mark attendance and enter marks every day, parents check homework and pay fees from a mobile app, monthly fee invoices for about 4.5 lakh students are generated on the 1st, and a PDF generator for fee statements and report cards eats all the CPU for two hours at month-end. The VMs are patched by hand, the second one sits idle 28 days a month, and nobody wants to be on call for the operating system. The team is told to "move to Azure". The first real decision is not the database or the network. It is: **where will our code run, and how much of the machine do we still want to own?**
 
 ## Learning objectives
 
@@ -152,7 +152,7 @@ Autoscaling is a feedback loop: *measure → decide → add capacity → wait fo
 
 Prices change by region, tier and month, and discounts (reserved instances, savings plans) change them again, so **use the Azure pricing calculator for real numbers**. What matters for design is the *shape* of each bill.
 
-Assume (illustrative numbers only, not a price list) that one production-grade compute instance with 2 vCPU and 8 GB costs about ₹12,000 per month, and the construction API needs 2 such instances on a normal day and 6 for two hours at month-end.
+Assume (illustrative numbers only, not a price list) that one production-grade compute instance with 2 vCPU and 8 GB costs about ₹12,000 per month, and the SchoolDesk API needs 2 such instances on a normal day and 6 for two hours at month-end.
 
 - **App Service.** You pay for plan instances. With autoscale: 2 instances all month plus 4 more for about 2 hours ≈ 2 × ₹12,000 + a small extra ≈ **₹24,000–25,000**. Without autoscale you'd run 6 all month: ₹72,000. Deployment slots run on the same plan, so a warm staging slot uses the same instances' capacity.
 - **Container Apps (Consumption).** You pay for vCPU-seconds and GiB-seconds actually allocated to replicas. Two replicas running all month cost roughly what two small instances would; the month-end burst adds a few hours of extra replicas; the PDF job only costs while it runs. If the API can scale to zero at night (internal tools often can), the bill drops further. For steady, heavy load, a dedicated workload profile can be cheaper than per-second billing.
@@ -182,15 +182,15 @@ What you can't reproduce locally: real autoscaling latency on Azure, managed ide
 
 ```mermaid
 flowchart LR
-    Users["Site engineers (300 sites)"] --> FD["Front door or Application Gateway (TLS)"]
+    Users["Teachers and parents (300 schools)"] --> FD["Front door or Application Gateway (TLS)"]
     subgraph AS["Option A: App Service plan (2 to 6 instances)"]
-        API1["Construction API (code deploy)"]
+        API1["SchoolDesk API (code deploy)"]
         Slot["Staging slot"]
     end
     subgraph ACA["Option B: Container Apps environment"]
         API2["API app (min 1, max 10 replicas)"]
         Worker["Billing worker (scales on queue length, min 0)"]
-        Job["PDF report job (cron, month-end)"]
+        Job["PDF statements job (cron, month-end)"]
     end
     subgraph K8S["Option C: AKS cluster"]
         Ingress["Ingress controller"] --> Pods["API pods (HPA 2 to 10)"]
@@ -219,10 +219,10 @@ sequenceDiagram
     participant Plat as Container Apps platform
     participant R2 as New replica
     participant R1 as Existing replica
-    Q->>KEDA: 9,000 messages waiting at month-end
+    Q->>KEDA: 9,000 invoice messages waiting on the 1st
     KEDA->>Plat: desired replicas = 9000 / 500 per replica = 18, capped at max 10
     Plat->>R2: schedule and start container
-    R2->>R2: warm up, load tariff tables
+    R2->>R2: warm up, load fee structures
     Plat->>R2: startup probe GET /health/startup
     R2-->>Plat: 200 OK
     Plat->>R2: readiness probe GET /health/ready
@@ -239,15 +239,15 @@ The queue length, not CPU, drives the scale decision: with a target of 500 messa
 
 ## Step-by-step example
 
-We'll take the construction API from "runs on a VM" to "runs on Container Apps", rehearsing everything locally first.
+We'll take the SchoolDesk API from "runs on a VM" to "runs on Container Apps", rehearsing everything locally first.
 
 ### Step 1 — classify the workloads
 
 | Component | Traffic shape | Needs |
 |---|---|---|
-| Construction API | 150 RPS daytime, near zero at night, 600 RPS on the 1st (estimates from logs) | Low latency, always on |
-| Billing worker | Bursty: 9,000 messages on the 1st, few otherwise | Scale with queue, can be zero |
-| PDF report generator | 2 hours a month, CPU heavy | Runs to completion |
+| SchoolDesk API | 150 RPS in school hours, near zero at night, 600 RPS on the 1st when parents pay fees (estimates from logs) | Low latency, always on |
+| Billing worker | Bursty: 9,000 invoice messages on the 1st (one per class section: 300 schools × about 30 sections), few otherwise | Scale with queue, can be zero |
+| PDF statement generator | 2 hours a month, CPU heavy | Runs to completion |
 
 Three components, bursty, event-driven, no Kubernetes-specific needs, a team of four developers with no platform engineers. The decision table points to **Container Apps**. App Service would also host the API well; it is the worker and the job that tip the balance.
 
@@ -257,17 +257,17 @@ Three components, bursty, event-driven, no Kubernetes-specific needs, a team of 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY . .
-RUN dotnet publish Construction.Api/Construction.Api.csproj -c Release -o /app
+RUN dotnet publish SchoolDesk.Api/SchoolDesk.Api.csproj -c Release -o /app
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
 COPY --from=build /app .
 USER $APP_UID
 EXPOSE 8080
-ENTRYPOINT ["dotnet", "Construction.Api.dll"]
+ENTRYPOINT ["dotnet", "SchoolDesk.Api.dll"]
 ```
 
-.NET container images listen on port 8080 by default and include a non-root user (`APP_UID`). Smaller images pull faster, which directly shortens scale-out and cold starts.
+.NET container images listen on port 8080 by default and include a non-root user (`APP_UID`). Smaller images pull faster, which directly shortens scale-out and cold starts; the chiseled variant (`aspnet:10.0-noble-chiseled`, no shell or package manager) is smaller still and already runs as non-root. A real Dockerfile copies the `.csproj` files and restores before copying the rest, so the restore layer is cached; see [Docker](#/lesson/m15-docker).
 
 ### Step 3 — make the app platform-ready
 
@@ -280,7 +280,7 @@ services:
   api:
     build: .
     environment:
-      ConnectionStrings__Main: "Host=db;Database=construction;Username=app;Password=dev-only"
+      ConnectionStrings__Main: "Host=db;Database=schooldesk;Username=app;Password=dev-only"
       Shutdown__DrainDelay: "00:00:05"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
@@ -311,7 +311,7 @@ template: {
   containers: [
     {
       name: 'api'
-      image: 'myregistry.azurecr.io/construction-api:1.8.0'
+      image: 'myregistry.azurecr.io/schooldesk-api:1.8.0'
       resources: { cpu: json('0.5'), memory: '1Gi' }
       probes: [
         { type: 'Startup',   httpGet: { path: '/health/startup', port: 8080 }, periodSeconds: 5, failureThreshold: 24 }
@@ -440,7 +440,7 @@ public sealed class WarmupService(LifecycleState state, ILogger<WarmupService> l
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // Real work here: load tariff tables, open the first pooled DB connections, JIT hot paths.
+        // Real work here: load fee structures and grading rules, open the first pooled DB connections, JIT hot paths.
         await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
         state.MarkWarmedUp();
         logger.LogInformation("Warm-up complete, instance is ready");
@@ -561,7 +561,7 @@ Autoscaling compute without capping it to the database's connection budget turns
 
 ## Practical playground
 
-The canvas shows the construction platform as it would look lifted straight onto one large App Service plan: the API, a billing worker and the PDF generator all on the same plan instances, talking to one PostgreSQL server. Improve it:
+The canvas shows SchoolDesk as it would look lifted straight onto one large App Service plan: the API, a billing worker and the PDF generator all on the same plan instances, talking to one PostgreSQL server. Improve it:
 
 1. Split the components by scaling pattern. Which ones should scale on HTTP, which on queue length, and which should run only on a schedule?
 2. Add a queue between the API and the billing worker. What scale signal does the worker now use?
@@ -569,15 +569,15 @@ The canvas shows the construction platform as it would look lifted straight onto
 4. Mark which nodes can scale to zero, and say what a cold start would cost each one.
 5. Write next to each compute node which Azure option you chose and why.
 
-:::playground type=hld title="Re-platform the construction API"
+:::playground type=hld title="Re-platform the SchoolDesk API"
 ```json
 {
   "nodes": [
-    { "id": "users", "type": "client", "label": "Site engineers and project managers", "props": { "rps": 600 } },
+    { "id": "users", "type": "client", "label": "Teachers, school staff and parents", "props": { "rps": 600 } },
     { "id": "lb", "type": "load-balancer", "label": "App Service front end (TLS)" },
     { "id": "plan", "type": "app-server", "label": "One App Service plan: API + billing worker + PDF generator", "props": { "instances": 6 } },
     { "id": "pg", "type": "database", "label": "PostgreSQL flexible server", "props": { "replicas": 0 } },
-    { "id": "blob", "type": "object-storage", "label": "Report PDFs" }
+    { "id": "blob", "type": "object-storage", "label": "Fee statement and report card PDFs" }
   ],
   "edges": [
     { "from": "users", "to": "lb", "kind": "sync" },
@@ -961,7 +961,7 @@ Add a `CompareWithPlan(instanceMonthlyRate, instances)` method that returns whic
 :::
 
 :::exercise id=m15-azure-compute-ex4 difficulty=intermediate kind=written title="Size the month-end scale-out without breaking PostgreSQL"
-The billing worker runs on Container Apps with a KEDA Service Bus scaler. On the 1st of the month 12,000 billing messages arrive within 5 minutes. Each replica processes about 8 messages per second and holds a connection pool of up to 15 PostgreSQL connections. The API uses up to 10 replicas × 20 connections. The PostgreSQL server allows about 500 connections, of which you keep 50 for admin, migrations and monitoring.
+The SchoolDesk billing worker runs on Container Apps with a KEDA Service Bus scaler. SchoolDesk has grown to 400 schools, so on the 1st of the month 400 × 30 sections = 12,000 invoice messages arrive within 5 minutes. Each replica processes about 8 messages per second and holds a connection pool of up to 15 PostgreSQL connections. The API uses up to 10 replicas × 20 connections. The PostgreSQL server allows about 500 connections, of which you keep 50 for admin, migrations and monitoring.
 
 1. What is the largest safe `maxReplicas` for the worker?
 2. With that maximum, roughly how long does the backlog take to drain? Ignore scale-out time first, then add 60 seconds for replicas to start.
@@ -984,17 +984,17 @@ Think about what each message does to the database: one transaction per message,
 1. **Connection budget.** 500 − 50 reserved − (10 × 20 = 200 for the API) = 250 for the worker. 250 ÷ 15 per replica = 16.7, so **`maxReplicas` = 16** (round down). In practice keep a margin, say 14, because pools can briefly exceed their steady size during reconnects and the API might gain replicas.
 2. **Drain time.** 16 replicas × 8 msg/s = 128 msg/s. 12,000 ÷ 128 ≈ 94 seconds of processing. With 60 seconds of scale-out first, about **2.5 minutes** in total (more if messages keep arriving during the 5-minute burst: then the backlog peaks lower but the drain finishes around 5–6 minutes after the burst starts). That's fine for monthly billing.
 3. **Desired count.** 12,000 ÷ 100 = **120 replicas** requested. `maxReplicas` caps it at 16. The cap is doing its job: it protects the database at the cost of a slightly longer drain.
-4. **Faster without more connections.** (a) Process messages in **batches** (for example 50 messages per receive, one transaction with one multi-row insert), so each connection does more work per round trip. (b) Put **PgBouncer** in transaction-pooling mode in front of PostgreSQL so many client connections share fewer server connections. (c) Lower the worker's pool size to what it actually uses concurrently (often 2–4 for a single-threaded consumer loop), which lets more replicas fit in the same budget. (d) Make the work cheaper: precompute tariffs, avoid N+1 queries.
+4. **Faster without more connections.** (a) Process messages in **batches** (for example 50 messages per receive, one transaction with one multi-row insert), so each connection does more work per round trip. (b) Put **PgBouncer** in transaction-pooling mode in front of PostgreSQL so many client connections share fewer server connections. (c) Lower the worker's pool size to what it actually uses concurrently (often 2–4 for a single-threaded consumer loop), which lets more replicas fit in the same budget. (d) Make the work cheaper: load each school's fee structure once per batch, avoid N+1 queries.
 ::mistakes
 - Setting `maxReplicas` from the queue size alone.
 - Forgetting the API's connections share the same server.
 - Rounding 16.7 up to 17.
 :::
 
-:::exercise id=m15-azure-compute-ex5 difficulty=advanced kind=hld title="Re-platform a state infrastructure-monitoring system"
-A state public-works department runs a project-monitoring platform: a citizen dashboard (read-heavy, 2,000 RPS peak during monsoon flood alerts, 50 RPS normally), an officer API (200 RPS in office hours), a geospatial tile renderer that is CPU heavy and spiky, a nightly job that recomputes project rankings for 4,000 projects, and a PostgreSQL 17 database with PostGIS. The in-house team is eight developers, two of whom have run Kubernetes before. Budget scrutiny is high, and a vendor has proposed "one AKS cluster for everything".
+:::exercise id=m15-azure-compute-ex5 difficulty=advanced kind=hld title="Re-platform a food-delivery live-map platform"
+A regional food-delivery company in Pune runs a live-map platform: a customer map that shows nearby restaurants, delivery zones and estimated times (read-heavy, 2,000 RPS peak on a cricket-final evening, 50 RPS normally), a restaurant-partner API for menus and opening hours (200 RPS during business hours), a geospatial tile renderer for delivery-zone heatmaps that is CPU heavy and spiky, a nightly job that recomputes ratings and delivery-time estimates for 4,000 restaurants, and a PostgreSQL 17 database with PostGIS. The in-house team is eight developers, two of whom have run Kubernetes before. Budget scrutiny is high, and a vendor has proposed "one AKS cluster for everything".
 
-Design the compute layer. For each component, choose the Azure option, its scaling rule and its min/max, and explain what breaks first during a flood-alert spike.
+Design the compute layer. For each component, choose the Azure option, its scaling rule and its min/max, and explain what breaks first during a match-night spike.
 ::acceptance
 - Each component has a compute choice, scale signal and min/max with a reason.
 - Read-heavy dashboard traffic uses caching or a CDN before more compute.
@@ -1014,15 +1014,15 @@ Add a database connection pooler and a read replica before raising `maxReplicas`
 ```json
 {
   "nodes": [
-    { "id": "citizens", "type": "client", "label": "Citizens (dashboard)", "props": { "rps": 2000 } },
-    { "id": "officers", "type": "client", "label": "Officers", "props": { "rps": 200 } },
+    { "id": "customers", "type": "client", "label": "Customers (live map)", "props": { "rps": 2000 } },
+    { "id": "partners", "type": "client", "label": "Restaurant partners", "props": { "rps": 200 } },
     { "id": "lb", "type": "load-balancer", "label": "Ingress" },
     { "id": "aks", "type": "app-server", "label": "Proposed: one AKS cluster running everything", "props": { "instances": 8 } },
     { "id": "pg", "type": "database", "label": "PostgreSQL 17 + PostGIS", "props": { "replicas": 0 } }
   ],
   "edges": [
-    { "from": "citizens", "to": "lb", "kind": "sync" },
-    { "from": "officers", "to": "lb", "kind": "sync" },
+    { "from": "customers", "to": "lb", "kind": "sync" },
+    { "from": "partners", "to": "lb", "kind": "sync" },
     { "from": "lb", "to": "aks", "kind": "sync" },
     { "from": "aks", "to": "pg", "kind": "sync" }
   ]
@@ -1032,30 +1032,30 @@ Add a database connection pooler and a read replica before raising `maxReplicas`
 ```json
 {
   "nodes": [
-    { "id": "citizens", "type": "client", "label": "Citizens (dashboard)", "props": { "rps": 2000 } },
-    { "id": "officers", "type": "client", "label": "Officers", "props": { "rps": 200 } },
-    { "id": "cdn", "type": "cdn", "label": "CDN: static dashboard + cached JSON (TTL 30 s) + tiles (TTL 1 h)", "props": { "ttlSeconds": 30 } },
+    { "id": "customers", "type": "client", "label": "Customers (live map)", "props": { "rps": 2000 } },
+    { "id": "partners", "type": "client", "label": "Restaurant partners", "props": { "rps": 200 } },
+    { "id": "cdn", "type": "cdn", "label": "CDN: static map app + cached JSON (TTL 30 s) + tiles (TTL 1 h)", "props": { "ttlSeconds": 30 } },
     { "id": "lb", "type": "load-balancer", "label": "Front door with WAF" },
-    { "id": "dash", "type": "app-server", "label": "Dashboard API: Container App, HTTP rule, min 2 max 8", "props": { "instances": 2 } },
-    { "id": "officer", "type": "app-server", "label": "Officer API: Container App, internal + auth, min 2 max 6", "props": { "instances": 2 } },
+    { "id": "dash", "type": "app-server", "label": "Map API: Container App, HTTP rule, min 2 max 8", "props": { "instances": 2 } },
+    { "id": "partnerapi", "type": "app-server", "label": "Partner API: Container App, authenticated, min 2 max 6", "props": { "instances": 2 } },
     { "id": "tiles", "type": "worker", "label": "Tile renderer: Container App on dedicated profile, min 0 max 6", "props": { "instances": 1 } },
-    { "id": "rank", "type": "scheduler", "label": "Ranking job: Container Apps scheduled job, 02:00 nightly" },
-    { "id": "cache", "type": "cache", "label": "Redis: dashboard aggregates", "props": { "ttlSeconds": 30 } },
-    { "id": "bouncer", "type": "app-server", "label": "PgBouncer (built into flexible server)" },
+    { "id": "rank", "type": "scheduler", "label": "Ratings job: Container Apps scheduled job, 03:00 nightly" },
+    { "id": "cache", "type": "cache", "label": "Redis: zone and restaurant aggregates", "props": { "ttlSeconds": 30 } },
+    { "id": "bouncer", "type": "app-server", "label": "PgBouncer (built into flexible server, primary and replica)" },
     { "id": "pg", "type": "database", "label": "PostgreSQL 17 + PostGIS, zone-redundant HA", "props": { "replicas": 1, "multiAz": true } },
-    { "id": "replica", "type": "read-replica", "label": "Read replica for dashboard and tiles", "props": { "replicas": 1 } },
+    { "id": "replica", "type": "read-replica", "label": "Read replica for map and tiles", "props": { "replicas": 1 } },
     { "id": "mon", "type": "monitoring", "label": "Replica count, DB connections, CDN hit ratio" }
   ],
   "edges": [
-    { "from": "citizens", "to": "cdn", "kind": "sync" },
+    { "from": "customers", "to": "cdn", "kind": "sync" },
     { "from": "cdn", "to": "lb", "kind": "sync", "label": "cache misses only" },
-    { "from": "officers", "to": "lb", "kind": "sync" },
+    { "from": "partners", "to": "lb", "kind": "sync" },
     { "from": "lb", "to": "dash", "kind": "sync" },
-    { "from": "lb", "to": "officer", "kind": "sync" },
+    { "from": "lb", "to": "partnerapi", "kind": "sync" },
     { "from": "lb", "to": "tiles", "kind": "sync", "label": "/tiles" },
     { "from": "dash", "to": "cache", "kind": "sync" },
     { "from": "dash", "to": "bouncer", "kind": "sync" },
-    { "from": "officer", "to": "bouncer", "kind": "sync" },
+    { "from": "partnerapi", "to": "bouncer", "kind": "sync" },
     { "from": "tiles", "to": "bouncer", "kind": "sync" },
     { "from": "rank", "to": "bouncer", "kind": "sync" },
     { "from": "bouncer", "to": "pg", "kind": "sync" },
@@ -1067,15 +1067,15 @@ Add a database connection pooler and a read replica before raising `maxReplicas`
 }
 ```
 
-**Caching before compute.** Flood-alert traffic is thousands of citizens reading the same district summaries. With a CDN caching JSON for 30 seconds and tiles for an hour, a 90 % hit ratio (an estimate to verify) turns 2,000 RPS into about 200 RPS reaching the dashboard API. Redis holds the aggregates the API serves, so most of those 200 requests never touch PostgreSQL.
+**Caching before compute.** Match-night traffic is thousands of customers in the same neighbourhoods reading the same restaurant lists and zone summaries. With a CDN caching JSON for 30 seconds and tiles for an hour, a 90 % hit ratio (an estimate to verify) turns 2,000 RPS into about 200 RPS reaching the map API. Redis holds the aggregates the API serves, so most of those 200 requests never touch PostgreSQL.
 
-**Compute choices.** One Container Apps environment. The dashboard API scales on HTTP concurrency between 2 and 8 replicas. The officer API is separate (different auth, different traffic, and it must stay fast during a citizen spike) with 2 to 6 replicas. The tile renderer runs on a **dedicated workload profile** so its CPU bursts can't starve the APIs, scales to zero when nobody requests uncached tiles, and is capped at 6. The ranking recomputation is a **scheduled job** that exists only while it runs.
+**Compute choices.** One Container Apps environment. The map API scales on HTTP concurrency between 2 and 8 replicas. The partner API is separate (different auth, different traffic, and restaurants must still be able to mark dishes sold out during a customer spike) with 2 to 6 replicas. The tile renderer runs on a **dedicated workload profile** so its CPU bursts can't starve the APIs, scales to zero replicas when nobody requests uncached tiles (the profile's minimum node count still bills, so set it to 0 or accept a small fixed cost), and is capped at 6. The ratings recomputation is a **scheduled job** that exists only while it runs.
 
-**Connection budget.** Assume the server allows about 400 connections, with 40 reserved. Through PgBouncer in transaction mode, app pools can be small: dashboard 8 × 10, officer 6 × 15, tiles 6 × 10, job 10 = 80 + 90 + 60 + 10 = 240 client connections, multiplexed onto far fewer server connections. Read-heavy dashboard and tile queries go to the read replica.
+**Connection budget.** Assume the server allows about 400 connections, with 40 reserved. Through PgBouncer in transaction mode, app pools can be small: map API 8 × 10, partner API 6 × 15, tiles 6 × 10, job 10 = 80 + 90 + 60 + 10 = 240 client connections, multiplexed onto far fewer server connections. Read-heavy map and tile queries go to the read replica.
 
-**What breaks first in a spike.** Not compute: the **database**, through uncached PostGIS queries for tiles nobody requested before, and through connection storms when replicas scale out. Mitigations: CDN and Redis first, the read replica for reads, PgBouncer, `maxReplicas` set from the budget, and pre-rendering popular tile zoom levels when an alert is issued.
+**What breaks first in a spike.** Not compute: the **database**, through uncached PostGIS queries for tiles nobody requested before, and through connection storms when replicas scale out. Mitigations: CDN and Redis first, the read replica for reads, PgBouncer, `maxReplicas` set from the budget, and pre-rendering popular tile zoom levels an hour before a predicted rush (match nights, festival evenings).
 
-**Verdict on the AKS proposal.** Nothing here needs the Kubernetes API, and two engineers with past experience are not a 24×7 platform team. AKS would add a system node pool, an ingress controller, upgrades and node capacity that is paid for even at 50 RPS. Container Apps meets every scaling need with less operational risk and a bill that follows the monsoon. Revisit AKS if the department later consolidates many more services or needs on-premises parity.
+**Verdict on the AKS proposal.** Nothing here needs the Kubernetes API, and two engineers with past experience are not a 24×7 platform team. AKS would add a system node pool, an ingress controller, upgrades and node capacity that is paid for even at 50 RPS. Container Apps meets every scaling need with less operational risk and a bill that follows the dinner rush. Revisit AKS if the company later consolidates many more services or needs on-premises parity.
 ::mistakes
 - Scaling compute to 2,000 RPS instead of caching identical reads.
 - Running the CPU-heavy renderer in the same app or node pool as the APIs.
@@ -1105,8 +1105,8 @@ public void Detects_container_apps_before_kubernetes()
 {
     var env = new Dictionary<string, string?>
     {
-        ["CONTAINER_APP_NAME"] = "construction-api",
-        ["CONTAINER_APP_REVISION"] = "construction-api--r12",
+        ["CONTAINER_APP_NAME"] = "schooldesk-api",
+        ["CONTAINER_APP_REVISION"] = "schooldesk-api--r12",
         ["KUBERNETES_SERVICE_HOST"] = "10.0.0.1",
     };
     var info = PlatformDetector.Detect(name => env.GetValueOrDefault(name));
@@ -1263,5 +1263,5 @@ You have finished this lesson when you can:
 - [ ] Complete exercises 1 and 3 with all tests passing.
 - [ ] Explain your choices for the four workloads in exercise 2 using the decision table.
 - [ ] Size `maxReplicas` from a connection budget, as in exercise 4.
-- [ ] Defend a compute design for the infrastructure-monitoring system in exercise 5, including a verdict on AKS.
+- [ ] Defend a compute design for the food-delivery live-map platform in exercise 5, including a verdict on AKS.
 - [ ] Run the API locally with three replicas behind a proxy and show zero dropped requests during `docker compose stop`.

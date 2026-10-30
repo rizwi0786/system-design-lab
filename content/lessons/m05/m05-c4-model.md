@@ -119,7 +119,7 @@ The last two rows show the most common debate. C4's guidance is to decide by **o
 
 **Level 1, System context diagram.** Shows your system as one box in the middle, the people who use it, and the external systems it depends on or that depend on it. No technology, no protocols, no internal parts.
 
-- *Audience*: everyone, technical or not: product owners, sponsors, auditors, new team members, the client's project director.
+- *Audience*: everyone, technical or not: product owners, sponsors, auditors, new team members, a client's business head.
 - *Answers*: What is this system? Who uses it? What does it connect to? What is in scope and what isn't?
 
 **Level 2, Container diagram.** Zooms into your system and shows its containers, their technologies, and how they communicate (protocols, sync or async). People and external systems from level 1 stay at the edges.
@@ -1360,7 +1360,7 @@ public class ArchitectureModelTests
 
 - **Onboarding.** A context and container diagram in the README cuts the "what talks to what?" questions in a new developer's first week. It's usually the first documentation worth writing.
 - **Security and compliance reviews.** Auditors ask for data-flow and trust-boundary views. A container diagram with labelled protocols is most of the answer, and a deployment diagram the rest.
-- **Tenders and client reports.** Infrastructure and government projects often require an architecture section in a detailed project report or a bid. C4 context and container diagrams fit well, because non-technical evaluators can read level 1 and technical evaluators level 2.
+- **RFP responses and client proposals.** Banks, insurers and government departments buying software often ask for an architecture section in a proposal (a request-for-proposal, or RFP, response). C4 context and container diagrams fit well, because non-technical evaluators can read level 1 and technical evaluators level 2.
 - **Design reviews and RFCs.** Proposals show the "before" and "after" container diagram, which makes the change, and its new failure points, obvious.
 - **System design interviews.** An HLD answer is essentially a container diagram drawn live: clients, services, databases, caches, queues, labelled with protocols. Thinking in C4 levels helps you stay at the right level of detail until the interviewer asks you to zoom in.
 
@@ -1432,7 +1432,7 @@ A: Context and container; component for some containers; code rarely.
 
 :::quiz pass=70
 ::q single
-A system context diagram for a ride-hailing app's driver payouts shows "Payout API (ASP.NET Core)", "Payouts DB (PostgreSQL)" and "Bank (NPCI)". What's the main problem?
+A system context diagram for a ride-hailing app's driver payouts shows "Payout API (ASP.NET Core)", "Payouts DB (PostgreSQL)" and "Partner bank (IMPS payouts)". What's the main problem?
 - [ ] Banks should never appear on context diagrams.
 - [x] It shows internal containers and technology on a context diagram, which should show the payout system as one box.
 - [ ] It should show the Kubernetes cluster too.

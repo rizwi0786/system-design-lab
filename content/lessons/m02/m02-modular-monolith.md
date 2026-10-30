@@ -643,6 +643,9 @@ CREATE SCHEMA leave;
 CREATE ROLE hr_leave LOGIN PASSWORD 'from-secret-store';
 GRANT USAGE ON SCHEMA leave TO hr_leave;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA leave TO hr_leave;
+-- ON ALL TABLES covers existing tables only; this covers tables that future migrations create
+-- (run it as the role that owns the migrations).
+ALTER DEFAULT PRIVILEGES IN SCHEMA leave GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO hr_leave;
 -- No grant on schema employees: a sneaky join from the Leave module fails with "permission denied".
 ```
 
@@ -1249,7 +1252,7 @@ Run this as a CI check against a migrated test database, and fail the build if i
 :::
 
 :::exercise id=m02-modular-monolith-ex5 difficulty=intermediate kind=design title="Add an Expense Claims module"
-Employees submit travel and site-visit expense claims (for example ₹4,800 for a site visit from Gurgaon to Jaipur). A manager approves, and approved claims are paid with the next salary. Design the new **Expenses** module inside the existing modular monolith.
+Employees submit travel and client-visit expense claims (for example ₹4,800 for a client visit from Gurgaon to Jaipur). A manager approves, and approved claims are paid with the next salary. Design the new **Expenses** module inside the existing modular monolith.
 ::acceptance
 - A list of what Expenses owns (data) and what it asks others for.
 - The public contract: interfaces, records and events, each justified.
@@ -1521,7 +1524,7 @@ Also check the database boundary (Exercise 4's query) against a migrated test da
 ## Real-world application
 
 - **Shopify** has publicly described running its core commerce application as a large Ruby on Rails modular monolith, with components and tooling (such as their open-source Packwerk) to enforce boundaries. This is a well-known example of choosing modularity over splitting into many services.
-- **Infrastructure project platforms**, such as a construction-management system for road and bridge projects, often have modules for projects, contracts, billing (running account bills), quality inspections and documents. They share one deployment and one PostgreSQL server, and the billing module asks the contracts module for rates through a contract instead of joining its tables.
+- **Hospital management systems** often have modules for patient registration, appointments, pharmacy, lab reports, billing and insurance claims. They share one deployment and one PostgreSQL server, and the billing module asks the pharmacy module for medicine prices through a contract instead of joining its tables, so a pharmacy schema change never breaks a patient's bill.
 - **HR and payroll products** commonly split into employee master, leave, attendance, payroll and statutory compliance (PF, ESI, TDS) modules. Statutory rules change on government timelines, so isolating them in a module limits the blast radius of each change.
 
 The modular monolith is also the usual first step of the [strangler fig migration](#/lesson/m16-strangler-acl): you can't cleanly extract a service until its module has clear boundaries. See [Modular monolith versus microservices](#/lesson/m16-monolith-vs-microservices) for the decision at scale.

@@ -93,7 +93,7 @@ A **non-functional requirement** describes a quality or a limit that applies to 
 | **Security** | Who can do what, and is it protected? | Officers see only their own ward; all traffic over TLS |
 | **Privacy and compliance** | What laws and policies apply? | Personal data handled per applicable law (for example India's DPDP Act, 2023); payment card data never stored by us |
 | **Usability** | Can users succeed easily? | 90 % of first-time residents complete a booking in under 3 minutes |
-| **Accessibility** | Can everyone use it? | Web app meets WCAG 2.1 level AA |
+| **Accessibility** | Can everyone use it? | Web app meets WCAG 2.2 level AA |
 | **Localisation** | Does it speak the users' languages? | Marathi, Hindi and English |
 | **Maintainability** | How easily can it change? | A new tanker size can be added by configuration, without a code release |
 | **Observability** | Can we see what is happening? | Every request has a correlation id; dashboards for latency, errors and bookings |
@@ -436,6 +436,7 @@ public sealed class BookingPolicy
     public int LastSlotEndHour { get; set; } = 20;  // last slot ends 20:00, so the last start is 19:00
     public int MaxDaysAhead { get; set; } = 3;
     public int TankersPerWardPerSlot { get; set; } = 4;
+    public string TimeZoneId { get; set; } = "Asia/Kolkata"; // slot times are IST, whatever the server's clock zone
 }
 ```
 
@@ -455,6 +456,7 @@ public sealed record BookingOutcome(bool Accepted, string? Reason, TankerBooking
 public sealed class TankerBookingService(IOptions<BookingPolicy> policy, TimeProvider clock)
 {
     private readonly BookingPolicy _policy = policy.Value;
+    private readonly TimeZoneInfo _zone = TimeZoneInfo.FindSystemTimeZoneById(policy.Value.TimeZoneId);
     private readonly List<TankerBooking> _bookings = new();
     private readonly object _gate = new();
     private int _nextId = 77_000;
@@ -470,7 +472,8 @@ public sealed class TankerBookingService(IOptions<BookingPolicy> policy, TimePro
         if (slotStart.Hour < _policy.FirstSlotHour || slotStart.Hour >= _policy.LastSlotEndHour)
             return BookingOutcome.Rejected($"Slots run from {_policy.FirstSlotHour:00}:00 to {_policy.LastSlotEndHour:00}:00.");
 
-        DateTime now = clock.GetLocalNow().DateTime;
+        // Cloud servers usually run in UTC, so convert explicitly instead of trusting the machine's local zone.
+        DateTime now = TimeZoneInfo.ConvertTime(clock.GetUtcNow(), _zone).DateTime;
         if (slotStart <= now) return BookingOutcome.Rejected("The slot must be in the future.");
         if ((slotStart.Date - now.Date).TotalDays > _policy.MaxDaysAhead)
             return BookingOutcome.Rejected($"Bookings open {_policy.MaxDaysAhead} days ahead.");
@@ -532,7 +535,8 @@ How the code traces to the requirements:
 1. **Acceptance criteria are visible in one method.** Each `Rejected(...)` line in `Book` corresponds to a Given/When/Then criterion, and the messages are the ones the stories promised to users.
 2. **Numbers live in configuration.** `BookingPolicy` holds 2 tankers per day, 06:00–20:00, 3 days ahead and 4 per ward per slot. The water board can change them in a drought without a code release, which is itself a maintainability requirement.
 3. **NFRs are measured, not assumed.** `LatencyRecorder` times every request; `/nfr/report` shows whether p95 meets the 400 ms target. A real deployment exports the same data as metrics to dashboards and alerts.
-4. **Time is injected.** `TimeProvider` lets tests fix "now" at 08:30, so the "slot in the past" criterion is testable.
+4. **Time is injected, and the time zone is explicit.** `TimeProvider` lets tests fix "now" at 08:30, so the "slot in the past" criterion is testable. The service converts UTC to IST itself, because a cloud server's local zone is usually UTC and "08:30" would otherwise be wrong by five and a half hours.
+5. **The `lock` is a single-server shortcut.** It stops two requests on one server from both taking the last slot. With two app servers behind a load balancer it protects nothing, so in production the limits are enforced in PostgreSQL: lock the ward-slot row (`SELECT ... FOR UPDATE`) inside the booking transaction, or keep a capacity counter and update it with `UPDATE ... SET booked = booked + 1 WHERE booked < capacity`. A requirement such as "maximum 4 per slot" is only met if it holds under concurrent load.
 
 ## Bad design vs good design
 
@@ -1255,7 +1259,7 @@ public async Task Criterion_2_third_booking_same_day_is_refused()
 
 ## Real-world application
 
-- **Government tenders and RFPs** in India and elsewhere typically list functional requirements and "technical requirements" (uptime, response time, security certifications, hosting location) separately; the second list usually decides the architecture and the cost.
+- **Government and enterprise RFPs** (requests for proposal) in India and elsewhere typically list functional requirements and "technical requirements" (uptime, response time, security certifications, hosting location) separately; the second list usually decides the architecture and the cost.
 - **Service-level agreements (SLAs)** between a vendor and a client are non-functional requirements with penalties attached, such as "99.5 % monthly availability, with a service credit below that".
 - **Agile teams** write user stories with acceptance criteria in their backlog tool; behaviour-driven development (BDD) tools can run Given/When/Then text directly as tests.
 - **Site reliability engineering (SRE)** practice expresses NFRs as service-level objectives (SLOs) with error budgets, and treats them as product decisions made with the business.
@@ -1342,7 +1346,7 @@ A team reports "average response time 240 ms" and says the "fast" requirement is
 - [ ] 240 ms is too slow for any system.
 > Averages mask the tail. Latency NFRs should be written as percentiles at a stated load.
 ::q single
-A tender says "the system must be hosted in a government data centre". What is this?
+A government RFP says "the system must be hosted in a government data centre". What is this?
 - [ ] A functional requirement
 - [ ] A non-functional requirement about performance
 - [x] A constraint

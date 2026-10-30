@@ -190,7 +190,7 @@ or the shorthand: `+` on the message that starts the activation and `-` on the o
         W-)Mail: Send()
     end
     critical reserve slot atomically
-        S->>DB: INSERT ... WHERE NOT EXISTS
+        S->>DB: lock customer row, then INSERT booking
     option conflict
         S-->>API: Rejected
     end
@@ -291,7 +291,7 @@ sequenceDiagram
         E->>E: bind and validate JSON body
         E->>+S: BookAsync(consumerNo, date, ct)
         S->>+Repo: TryAddAsync(booking, notBefore)
-        Repo->>+DB: INSERT ... WHERE NOT EXISTS (recent booking)
+        Repo->>+DB: lock customer row, INSERT if no booking in 15 days
         DB-->>-Repo: 1 row inserted
         Repo-->>-S: true
         S-->>-E: BookingConfirmed
@@ -367,16 +367,18 @@ sequenceDiagram
         opt preferred date supplied
             S->>S: check date is 1 to 7 days ahead
         end
-        critical no booking in the last 15 days
+        critical check and insert as one step
             S->>+Repo: TryAddAsync(booking, notBefore)
-            Repo-->>-S: true
-        option recent booking exists
+            Repo-->>-S: true or false
+        end
+        alt booking added
+            S-)Q: BookingConfirmed
+            S-->>-E: Confirmed
+            E-->>-C: 201 Created
+        else recent booking exists
             S-->>E: Rejected
             E-->>C: 409 Conflict
         end
-        S-)Q: BookingConfirmed
-        S-->>-E: Confirmed
-        E-->>-C: 201 Created
     end
     Q-)W: next event (later)
     par SMS
@@ -390,7 +392,7 @@ sequenceDiagram
     end
 ```
 
-Look at what the diagram makes obvious before any code exists: the customer's response does not wait for SMS or email; the 15-day check is protected against races; and a failing SMS gateway is retried but can never block a booking. Those are exactly the questions a reviewer should ask.
+Look at what the diagram makes obvious before any code exists: the customer's response does not wait for SMS or email; the 15-day check and the insert happen as one protected step, so two taps on "Book" can't both succeed; the event is published only when a booking was actually added; and a failing SMS gateway is retried but can never block a booking. Those are exactly the questions a reviewer should ask.
 
 ## Production-style C# implementation
 
@@ -499,9 +501,11 @@ public interface IBookingRepository
     Task<bool> TryAddAsync(RefillBooking booking, DateTimeOffset notBefore, CancellationToken ct);
 }
 
-/// <summary>In memory, a lock makes the check-and-insert atomic. In PostgreSQL you would use
-/// a single INSERT ... WHERE NOT EXISTS inside a transaction, or a constraint, so the
-/// rule also holds across several API servers.</summary>
+/// <summary>In memory, a lock makes the check-and-insert atomic. In PostgreSQL, a plain
+/// INSERT ... WHERE NOT EXISTS is NOT enough under the default READ COMMITTED isolation:
+/// two transactions can both see "no recent booking" and both insert. Lock the customer's row
+/// first (SELECT ... FOR UPDATE) in the same transaction, or run at SERIALIZABLE and retry on
+/// error 40001, so the rule also holds across several API servers.</summary>
 public sealed class InMemoryBookingRepository : IBookingRepository
 {
     private readonly Lock _gate = new();
@@ -687,7 +691,7 @@ Compare code and diagram:
 - **The async arrow is a channel write.** `BookAsync` returns as soon as the event is queued. If the SMS provider takes 3 seconds, the customer doesn't feel it. The trade-off: if the process crashes after the 201 but before the worker sends the SMS, the event is lost, because a `Channel` lives in memory. A production system that must not lose notifications writes the event to the database in the same transaction as the booking (the [transactional outbox](#/lesson/m12-outbox)) or uses a durable broker.
 - **`par` is `Task.WhenAll`.** SMS and email run at the same time, so the worker's total time is the slower of the two, not their sum.
 - **`loop` is the retry `for`.** It is bounded (3 attempts) and has growing delays, so a broken SMS gateway can't spin forever.
-- **`critical` is the repository's atomic check-and-insert.** The in-memory lock works for one server only. With two API servers, the rule must be enforced by PostgreSQL.
+- **`critical` is the repository's atomic check-and-insert.** The in-memory lock works for one server only. With two API servers, the rule must be enforced by PostgreSQL, and a transaction alone doesn't do it: under the default READ COMMITTED isolation, two concurrent `INSERT ... WHERE NOT EXISTS` statements can both succeed. Take a row lock on the customer (`SELECT ... FOR UPDATE`), use SERIALIZABLE with a retry, or turn the rule into a constraint.
 
 ## Bad design vs good design
 
@@ -1302,7 +1306,7 @@ The arrow most likely to fail is the email send (the provider may be slow or dow
 :::
 
 :::exercise id=m05-sequence-diagrams-ex5 difficulty=advanced kind=code title="par: load dashboard widgets in parallel with timeouts"
-A project dashboard shows several widgets (progress, budget, safety alerts). Each widget comes from a different source. Implement this diagram:
+A banking app's home screen shows several widgets (account balance, today's UPI payments, reward points). Each widget comes from a different backend service. Implement this diagram:
 
 ```mermaid
 sequenceDiagram
@@ -1414,9 +1418,9 @@ public class DashboardLoaderTests
     [Fact]
     public async Task Healthy_sources_in_order()
     {
-        var loader = new DashboardLoader(new IWidgetSource[] { new Fixed("Progress", "62%"), new Fixed("Budget", "Rs 4.1 cr"), new Fixed("Safety", "0 alerts") }, Short);
+        var loader = new DashboardLoader(new IWidgetSource[] { new Fixed("Balance", "Rs 48,250"), new Fixed("Payments", "12 UPI payments today"), new Fixed("Rewards", "350 points") }, Short);
         var d = await loader.LoadAsync(CancellationToken.None);
-        Assert.Equal(new List<string> { "62%", "Rs 4.1 cr", "0 alerts" }, new List<string> { d.Widgets[0].Content, d.Widgets[1].Content, d.Widgets[2].Content });
+        Assert.Equal(new List<string> { "Rs 48,250", "12 UPI payments today", "350 points" }, new List<string> { d.Widgets[0].Content, d.Widgets[1].Content, d.Widgets[2].Content });
         Assert.All(d.Widgets, w => Assert.False(w.IsFallback));
     }
 
@@ -1435,13 +1439,13 @@ public class DashboardLoaderTests
     [Fact]
     public async Task Failures_and_timeouts_use_fallbacks()
     {
-        var loader = new DashboardLoader(new IWidgetSource[] { new Fixed("Progress", "62%"), new Throwing("Budget"), new Hanging("Safety") }, Short);
+        var loader = new DashboardLoader(new IWidgetSource[] { new Fixed("Balance", "Rs 48,250"), new Throwing("Payments"), new Hanging("Rewards") }, Short);
         var d = await loader.LoadAsync(CancellationToken.None);
         Assert.False(d.Widgets[0].IsFallback);
         Assert.True(d.Widgets[1].IsFallback);
         Assert.True(d.Widgets[2].IsFallback);
         Assert.Equal("unavailable", d.Widgets[2].Content);
-        Assert.Equal("Safety", d.Widgets[2].Name);
+        Assert.Equal("Rewards", d.Widgets[2].Name);
     }
 
     [Fact]
@@ -1449,7 +1453,7 @@ public class DashboardLoaderTests
     {
         using var cts = new CancellationTokenSource();
         cts.Cancel();
-        var loader = new DashboardLoader(new IWidgetSource[] { new Hanging("Safety") }, TimeSpan.FromSeconds(5));
+        var loader = new DashboardLoader(new IWidgetSource[] { new Hanging("Rewards") }, TimeSpan.FromSeconds(5));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => loader.LoadAsync(cts.Token));
     }
 }
@@ -1556,7 +1560,7 @@ public class BookingServiceTests
 - **System design interviews.** After the architecture diagram, interviewers often ask "walk me through what happens when a user does X". A sequence diagram is the clearest answer, especially for async parts (queues, webhooks, retries).
 - **Incident reviews.** After an outage, a sequence diagram of the actual timeline ("the retry storm started at step 6") explains the failure better than paragraphs of text. See [Retry storms](#/lesson/m13-retry-storms).
 - **API integration docs.** Payment gateways, identity providers (OAuth 2.0 and OpenID Connect flows) and webhook providers document their flows as sequence diagrams. Being able to read them is essential. See [OAuth 2.0 and OpenID Connect](#/lesson/m14-oauth-oidc).
-- **Construction and infrastructure platforms.** Approval workflows (site engineer submits a measurement, the consultant verifies, the client approves, the bill is generated, the contractor is notified) are naturally sequence diagrams, with `alt` for rejection and async notifications.
+- **Approval workflows in business tools.** Expense claims and leave requests (an employee submits a claim, the manager approves, finance pays it, the employee is notified) are naturally sequence diagrams, with `alt` for rejection and async notifications.
 
 ## Interview questions
 
@@ -1663,7 +1667,7 @@ Three independent API calls take about 300 ms, 500 ms and 400 ms (estimates). Dr
 ::q multi
 A design shows `SELECT last booking` then `INSERT booking` as two separate arrows to the database, with no fragment. Which concerns are valid? (Select all that apply.)
 - [x] Two simultaneous requests can both see "no recent booking" and both insert.
-- [x] The check and insert should be shown (and implemented) as one atomic step, e.g. a `critical` region backed by a transaction or constraint.
+- [x] The check and insert should be shown (and implemented) as one atomic step, e.g. a `critical` region backed by a row lock, a serializable transaction or a constraint.
 - [ ] Sequence diagrams can't show database calls.
 - [x] There is no branch showing what the API returns when a recent booking exists.
 > The diagram reveals a race condition and a missing failure path, which are exactly the kinds of issue sequence diagrams are good at exposing.

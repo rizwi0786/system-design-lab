@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 70
 prerequisites: [m11-hld-framework, m02-requirements]
-related: [m11-nfrs, m11-capacity-estimation, m02-constraints, m02-hexagonal, m11-trade-offs]
+related: [m11-nfrs, m11-capacity-estimation, m02-constraints, m02-hexagonal, m11-trade-offs, m17-scaling-journey]
 tags: [hld, requirements, scope, actors, use-cases, interview]
 patterns: [Ports and Adapters]
 summary: How to turn a one-line prompt into a clear problem — who the users and actors are, what the system must do, where its boundary lies, what is out of scope — with a reusable question bank and a hospital appointment example.
@@ -418,6 +418,7 @@ public sealed class BookingService(
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             // Clarified requirement: if the health ID service is slow, fall back to OTP-verified phone.
+            // Real code marks the booking "OTP required" and confirms it only after the patient enters the OTP.
             return $"otp-fallback:{healthId}";
         }
     }
@@ -668,7 +669,7 @@ Add a time cost per question (in seconds) and pick under a time budget instead o
 :::
 
 :::exercise id=m11-clarifying-requirements-ex2 difficulty=beginner kind=written title="Actors and boundary for water-tanker booking"
-A city water utility wants residents of areas without piped supply to book water tankers online. Tankers are run by private contractors. The utility's billing system already exists. Payment is by UPI.
+A city water utility wants residents of areas without piped supply to book water tankers online. Tankers are run by private tanker operators under contract with the utility. The utility's billing system already exists. Payment is by UPI.
 
 Write: (a) the actors in the four groups, (b) 4–6 use cases with MoSCoW priorities, (c) one abuse case, (d) the system boundary: what you own and what is external, with what crosses each boundary.
 ::acceptance
@@ -679,19 +680,19 @@ Write: (a) the actors in the four groups, (b) 4–6 use cases with MoSCoW priori
 ::hint
 Think beyond residents: who drives the tanker? Who assigns tankers? Who audits?
 ::hint
-Contractors' tankers may already have GPS devices. Is their tracking system yours?
+The operators' tankers may already have GPS devices. Is their tracking system yours?
 ::hint
-Abuse: what if a contractor marks a delivery "done" without delivering?
+Abuse: what if an operator marks a delivery "done" without delivering?
 ::hint
 Use "what crosses the arrow" labels: booking reference, payment status, GPS points, invoice.
 ::solution
-**(a) Actors.** Primary: residents. Secondary: tanker drivers (mobile app), contractor dispatchers, utility zone officers. Operators: utility admins and auditors. External systems: UPI payment gateway, SMS provider, contractors' GPS tracking platforms, the utility's billing system. Non-human: a scheduler that escalates bookings not assigned within 2 hours.
+**(a) Actors.** Primary: residents. Secondary: tanker drivers (mobile app), operator dispatchers, utility zone officers. Operators: utility admins and auditors. External systems: UPI payment gateway, SMS provider, the operators' GPS tracking platforms, the utility's billing system. Non-human: a scheduler that escalates bookings not assigned within 2 hours.
 
 **(b) Use cases.** Must: resident books a tanker for a date and slot and pays; dispatcher assigns a tanker and driver; driver confirms delivery with photo and OTP from the resident; resident tracks the tanker on the day. Should: zone officer views pending bookings and escalations. Could: monthly consumption report per area. Won't: dynamic pricing.
 
-**(c) Abuse case.** A contractor marks deliveries complete without delivering, to claim payment. Consequence: delivery requires the resident's OTP *and* a GPS point within 100 m of the address; disputed deliveries hold contractor payout.
+**(c) Abuse case.** A tanker operator marks deliveries complete without delivering, to claim payment. Consequence: delivery requires the resident's OTP *and* a GPS point within 100 m of the address; disputed deliveries hold the operator's payout.
 
-**(d) Boundary.** We own bookings, assignments, delivery proofs and the notification log. External: payment gateway (we store payment reference and status), billing system (we send a daily file of completed deliveries; billing owns invoices), contractor GPS platforms (we pull location points through their API during an active delivery and keep them 30 days; they own the device data), SMS provider (we send messages asynchronously).
+**(d) Boundary.** We own bookings, assignments, delivery proofs and the notification log. External: payment gateway (we store payment reference and status), billing system (we send a daily file of completed deliveries; billing owns invoices), operator GPS platforms (we pull location points through their API during an active delivery and keep them 30 days; they own the device data), SMS provider (we send messages asynchronously).
 ::mistakes
 - Listing only "resident" and "admin" as actors.
 - Making the GPS platform part of your system and promising to run tanker hardware.
@@ -1133,7 +1134,8 @@ In the production design the notifier writes to an outbox, so a broken provider 
 ## Real-world application
 
 - **Government digital services** (appointments, certificates, grievance portals) almost always integrate with existing state systems for identity, payments and records. Clarifying data ownership early prevents the common failure of a new portal silently becoming a second, inconsistent registry.
-- **Infrastructure project platforms** that track highways or metro construction have many actors: contractors, independent engineers, the client authority, site supervisors, and external systems such as GIS servers and document management. A context diagram is usually the first deliverable of the design phase.
+- **SaaS collaboration tools** (a Jira- or Slack-style workspace) have many actors: workspace admins, members, guests, bots and third-party integrations, plus external systems such as the customer's single sign-on (SSO) identity provider, a billing provider and email delivery. A context diagram is usually the first deliverable of the design phase, because "who owns the user record: us or the customer's identity provider?" decides half the security design.
+- **A system that grows.** [Scaling a real system from 100 to 10 million users](#/lesson/m17-scaling-journey) starts exactly here: functional requirements, NFRs and an explicit out-of-scope list for a grocery-delivery app, and the later growth stages keep referring back to them.
 - **E-commerce and food delivery** systems like the large consumer apps treat payment, maps and messaging as external systems behind clear interfaces, so they can switch or add providers per region.
 - **Product requirement documents** in most companies include goals, non-goals (out of scope) and open questions. The "non-goals" section is the out-of-scope list from this lesson.
 - **Interviews.** Interviewers often hide one important requirement (offline mode, a regulatory constraint, a huge peak) and wait to see whether you ask. A short, well-chosen set of questions finds it.

@@ -10,7 +10,7 @@ prerequisites: [m12-sagas, m11-background-processing, m15-deployment-strategies]
 related: [m16-saga-orchestration-choreography, m12-idempotent-consumers, m07-extensible-workflows, m14-alerting-incidents, m16-event-sourcing]
 tags: [workflow, durable-execution, temporal, durable-functions, elsa, feature-flags, rollout, kill-switch]
 patterns: [Durable Execution, Process Manager, Feature Toggle, Kill Switch, Percentage Rollout]
-summary: Long-running business processes must survive crashes, deploys and week-long waits. Learn how durable execution engines (Temporal, Azure Durable Functions, Elsa) persist and replay workflow state, when a hand-rolled state table is enough, and how feature flags with deterministic percentage rollouts and kill switches let you release that code safely.
+summary: Long-running business processes must survive crashes, deploys and week-long waits. Learn how durable execution engines (Temporal, Azure Durable Functions, Dapr Workflow, Elsa) persist and replay workflow state, when a hand-rolled state table is enough, and how feature flags with deterministic percentage rollouts and kill switches let you release that code safely.
 references:
   - title: "Microsoft Learn — Durable Functions overview and orchestrator code constraints"
     url: https://learn.microsoft.com/azure/azure-functions/durable/durable-functions-code-constraints
@@ -22,14 +22,14 @@ references:
     url: https://openfeature.dev/specification/sections/flag-evaluation
 ---
 
-Some work finishes in 50 milliseconds. Some takes three weeks: a contractor's bill waits for an engineer's verification, gets escalated, is approved, and is paid. Code that "just waits three weeks" cannot live in a web request or in a `Task.Delay`. This lesson covers two tools for change and time: **workflow engines**, which make long processes durable, and **feature flags**, which let you switch new behaviour on gradually, and off instantly.
+Some work finishes in 50 milliseconds. Some takes three weeks: an employee's travel-expense claim waits for a manager's approval, gets escalated, is approved, and is reimbursed. Code that "just waits three weeks" cannot live in a web request or in a `Task.Delay`. This lesson covers two tools for change and time: **workflow engines**, which make long processes durable, and **feature flags**, which let you switch new behaviour on gradually, and off instantly.
 
 ## Learning objectives
 
 By the end of this lesson you will be able to:
 
 1. Explain what "durable execution" means and why long-running processes need it.
-2. Describe how Temporal, Azure Durable Functions and Elsa Workflows persist state, and why replay-based engines require deterministic workflow code.
+2. Describe how Temporal, Azure Durable Functions, Dapr Workflow and Elsa Workflows persist state, and why replay-based engines require deterministic workflow code.
 3. Build a small, durable, step-based workflow runner in ASP.NET Core with persisted state, timers, signals, retries and optimistic concurrency.
 4. Decide when a hand-rolled state table is enough and when an engine is worth its cost.
 5. Describe the feature flag lifecycle and the four flag types (release, experiment, ops, permission).
@@ -61,22 +61,22 @@ A **workflow** (also called a process manager or orchestration) is a sequence of
 - **waits** for timers and human decisions, and
 - must **finish correctly** despite crashes, retries and deploys.
 
-Examples: an RA (running account) bill on a highway project from submission to payment; an e-commerce order from payment to delivery; employee onboarding; a loan from application to disbursal.
+Examples: an expense claim from submission to reimbursement; an e-commerce order from payment to delivery; employee onboarding; a loan from application to disbursal.
 
 ### The naive approach and why it fails
 
 ```csharp
 // Anti-example: a "workflow" living in memory
-public async Task ProcessBillAsync(Bill bill)
+public async Task ProcessClaimAsync(ExpenseClaim claim)
 {
-    await notifier.NotifyEngineerAsync(bill);
+    await notifier.NotifyManagerAsync(claim);
     await Task.Delay(TimeSpan.FromDays(3));          // lost on the next deploy
-    if (!bill.IsVerified) await notifier.EscalateAsync(bill);
-    await payments.PayAsync(bill);                   // retried after a crash? paid twice?
+    if (!claim.IsApproved) await notifier.EscalateAsync(claim);
+    await payments.PayAsync(claim);                  // retried after a crash? paid twice?
 }
 ```
 
-Every deploy kills the in-memory delay. A crash between "pay" and "mark paid" leaves you unsure whether the contractor was paid. Two pods could both run the same bill. There is no way to answer "where is bill 4417 right now?"
+Every deploy kills the in-memory delay. A crash between "pay" and "mark paid" leaves you unsure whether the employee was reimbursed. Two pods could both run the same claim. There is no way to answer "where is claim 4417 right now?"
 
 ### Durable execution: two ways to remember progress
 
@@ -88,43 +88,43 @@ The replay model lets you write workflows as ordinary-looking code with loops, `
 
 ```csharp
 // Durable Functions (isolated worker) style orchestrator — illustrative
-[Function(nameof(BillApproval))]
-public static async Task<string> BillApproval([OrchestrationTrigger] TaskOrchestrationContext ctx)
+[Function(nameof(ClaimApproval))]
+public static async Task<string> ClaimApproval([OrchestrationTrigger] TaskOrchestrationContext ctx)
 {
-    var bill = ctx.GetInput<BillInput>()!;
-    await ctx.CallActivityAsync(nameof(NotifyEngineer), bill);
+    var claim = ctx.GetInput<ClaimInput>()!;
+    await ctx.CallActivityAsync(nameof(NotifyManager), claim);
 
     using var cts = new CancellationTokenSource();
     var deadline = ctx.CurrentUtcDateTime.AddDays(3);            // NOT DateTime.UtcNow
     var timeout = ctx.CreateTimer(deadline, cts.Token);           // durable timer
-    var verified = ctx.WaitForExternalEvent<string>("Verified");  // human decision
-    if (await Task.WhenAny(verified, timeout) == timeout)
-        await ctx.CallActivityAsync(nameof(Escalate), bill);
+    var decision = ctx.WaitForExternalEvent<string>("ManagerDecision");  // human decision
+    if (await Task.WhenAny(decision, timeout) == timeout)
+        await ctx.CallActivityAsync(nameof(Escalate), claim);
     else cts.Cancel();
 
-    return await ctx.CallActivityAsync<string>(nameof(ReleasePayment), bill);
+    return await ctx.CallActivityAsync<string>(nameof(ReleasePayment), claim);
 }
 ```
 
 ```csharp
 // Temporal .NET SDK style workflow — illustrative
 [Workflow]
-public class BillApprovalWorkflow
+public class ClaimApprovalWorkflow
 {
     private string? _decision;
 
     [WorkflowSignal]
-    public Task VerifiedAsync(string decision) { _decision = decision; return Task.CompletedTask; }
+    public Task ManagerDecisionAsync(string decision) { _decision = decision; return Task.CompletedTask; }
 
     [WorkflowRun]
-    public async Task<string> RunAsync(BillInput bill)
+    public async Task<string> RunAsync(ClaimInput claim)
     {
-        await Workflow.ExecuteActivityAsync((BillActivities a) => a.NotifyEngineerAsync(bill),
+        await Workflow.ExecuteActivityAsync((ClaimActivities a) => a.NotifyManagerAsync(claim),
             new() { StartToCloseTimeout = TimeSpan.FromMinutes(1) });
         if (!await Workflow.WaitConditionAsync(() => _decision != null, TimeSpan.FromDays(3)))
-            await Workflow.ExecuteActivityAsync((BillActivities a) => a.EscalateAsync(bill),
+            await Workflow.ExecuteActivityAsync((ClaimActivities a) => a.EscalateAsync(claim),
                 new() { StartToCloseTimeout = TimeSpan.FromMinutes(1) });
-        return await Workflow.ExecuteActivityAsync((BillActivities a) => a.ReleasePaymentAsync(bill),
+        return await Workflow.ExecuteActivityAsync((ClaimActivities a) => a.ReleasePaymentAsync(claim),
             new() { StartToCloseTimeout = TimeSpan.FromMinutes(5) });
     }
 }
@@ -143,7 +143,7 @@ Because the workflow function re-runs many times, it must make **the same decisi
 | Reading config or feature flags directly | May change between replays | Read once in an activity, or pass as input |
 | Reordering steps in a new deploy | History no longer matches the code | Versioning/patching APIs, or new workflow type |
 
-**Activities** are where real work happens. They run at least once (they may be retried after a timeout), so **activities must be idempotent**: "release payment for bill 4417" must pass an idempotency key so a retry does not pay twice.
+**Activities** are where real work happens. They run at least once (they may be retried after a timeout), so **activities must be idempotent**: "reimburse claim 4417" must pass an idempotency key so a retry does not pay twice.
 
 **Versioning** is the hardest operational problem. Workflows started last month are still running when you deploy new code. Engines give you tools for it: Temporal has patching APIs (`Workflow.Patched`) and worker versioning; Durable Functions guidance includes deploying changed orchestrators side by side under a new name or task hub. The safe habit is: never change the order of activity calls in a running workflow type without a versioning mechanism.
 
@@ -151,6 +151,7 @@ Because the workflow function re-runs many times, it must make **the same decisi
 
 - **Temporal** (open source, also a managed cloud service): a cluster (frontend, history, matching services) persists workflow histories in a database (Cassandra, PostgreSQL or MySQL) and dispatches tasks to **workers** you run, through named **task queues**. Your workers host workflow and activity code. Strengths: language SDKs including .NET, very long workflows, strong visibility into every history event. Cost: another stateful platform to operate (or pay for).
 - **Azure Durable Functions**: an extension of Azure Functions built on the Durable Task Framework. Orchestrator, activity and entity functions; state stored by a storage provider (Azure Storage by default, with alternatives such as MSSQL and the managed Durable Task Scheduler). Strengths: serverless scaling, familiar to Azure teams. Cost: tied to the Functions hosting model and its constraints.
+- **Dapr Workflow**: part of the Dapr runtime (stable since Dapr 1.15), built on the same Durable Task model as Durable Functions. You write replay-based workflows and activities in C# with the `Dapr.Workflow` SDK; the Dapr sidecar persists history in a state store you configure (for example PostgreSQL or Redis). Strengths: runs anywhere Dapr runs (Kubernetes, any cloud, local), no vendor lock-in. Cost: the same determinism rules, plus the Dapr sidecar and control plane to operate.
 - **Elsa Workflows**: an open-source .NET library you embed in your own ASP.NET Core app. Workflows can be defined in C# or in a visual designer, persisted through pluggable providers, and resumed through bookmarks. Strengths: in-process, designer for business users, no separate cluster. Cost: you own scaling, persistence and upgrades.
 
 Others you will meet: AWS Step Functions (state machines as JSON, managed), Camunda (BPMN diagrams, common in banking and government), and Netflix Conductor-style orchestrators.
@@ -181,17 +182,17 @@ LIMIT 50
 FOR UPDATE SKIP LOCKED;
 ```
 
-Choose hand-rolled when: steps are few and mostly linear, volume is modest, the team already runs PostgreSQL well, and you need full control over data (data residency rules for government projects, for example). Choose an engine when: you have many workflow types with branching, loops, parallel fan-out and long timers; you need visibility and history out of the box; or volume is high enough that you would end up rebuilding an engine anyway.
+Choose hand-rolled when: steps are few and mostly linear, volume is modest, the team already runs PostgreSQL well, and you need full control over data (data residency rules for regulated customers, for example). Choose an engine when: you have many workflow types with branching, loops, parallel fan-out and long timers; you need visibility and history out of the box; or volume is high enough that you would end up rebuilding an engine anyway.
 
 **Back-of-the-envelope (estimates).**
 
-- RA bills: 5,000 projects × 4 bills a month = 20,000 workflows a month, about 10 steps each = 200,000 step executions a month ≈ **0.08 steps/s**. A table and one worker are plenty.
+- Expense claims: 2,000 customer companies × 10 claims a month = 20,000 workflows a month, about 10 steps each = 200,000 step executions a month ≈ **0.08 steps/s**. A table and one worker are plenty.
 - Order fulfilment: 2 M orders a day × 8 activities = 16 M activity executions a day ÷ 86,400 ≈ **185/s** average, ×3 peak ≈ **560/s**. If each activity writes 3 history events, the persistence store absorbs about **1,700 writes/s** at peak. This is where an engine designed for sharded history (Temporal's history shards, for example) earns its keep, or where your hand-rolled table needs partitioning and careful indexing.
 
 ### What breaks first in workflow systems
 
 1. **The persistence store.** Every step is a write. Hot rows (a single "counter" workflow updated by thousands of events) cause contention.
-2. **Stuck workflows.** A workflow waits for a signal that never comes (the approving engineer left the company). Always pair waits with timeouts and escalation.
+2. **Stuck workflows.** A workflow waits for a signal that never comes (the approving manager left the company). Always pair waits with timeouts and escalation.
 3. **Non-determinism after a deploy.** Replays fail for in-flight workflows. Run replay tests against recorded histories in CI.
 4. **Poison steps.** An activity that always fails is retried forever. Cap retries, then move the workflow to a "needs attention" state with an alert.
 5. **Timer storms.** One million workflows all scheduled to wake at 00:00 on the 1st of the month. Add jitter to wake-up times.
@@ -204,10 +205,10 @@ Pete Hodgson's classification (published on martinfowler.com) is the most useful
 
 | Type | Purpose | Lifetime | Example |
 |---|---|---|---|
-| **Release toggle** | Ship unfinished or risky code dark, release gradually | Days to weeks, then **delete** | New bill-upload screen |
-| **Experiment toggle** | A/B test variants | Weeks | Two layouts for the tender list |
+| **Release toggle** | Ship unfinished or risky code dark, release gradually | Days to weeks, then **delete** | New receipt-upload screen |
+| **Experiment toggle** | A/B test variants | Weeks | Two layouts for the claims list |
 | **Ops toggle / kill switch** | Turn off an expensive or risky path under load or failure | Long-lived | Disable AI anomaly checks if the model endpoint is slow |
-| **Permission toggle** | Enable features for specific tenants or plans | Long-lived | Premium analytics for one state agency |
+| **Permission toggle** | Enable features for specific tenants or plans | Long-lived | Premium analytics for one enterprise customer |
 
 ### The flag lifecycle
 
@@ -232,13 +233,13 @@ The standard technique: **hash `flagKey + ":" + userId`** with a stable hash, ta
 
 Never use `string.GetHashCode()` for this. In .NET it is **randomised per process**, so the same user lands in different buckets on different servers and after every restart.
 
-Choose the **rollout unit** deliberately: user id for UI features, tenant id when a whole organisation must see the same behaviour (for example, a new bill format that a state department audits), device id for anonymous traffic.
+Choose the **rollout unit** deliberately: user id for UI features, tenant id when a whole organisation must see the same behaviour (for example, a new claim format that a customer's finance team audits), device id for anonymous traffic.
 
 ### Evaluation architecture
 
 At 3,000 requests per second with 5 flag checks per request, you make 15,000 flag evaluations per second. A remote call per check (say 2 ms each) would add 10 ms per request and make the flag service a critical dependency of everything. So:
 
-- **Evaluate locally.** Each app instance holds an in-memory snapshot of all flag rules and evaluates in microseconds. Vendor SDKs (LaunchDarkly, Unleash, Flagsmith, Azure App Configuration with Microsoft.FeatureManagement) and the OpenFeature standard API all follow this model.
+- **Evaluate locally.** Each app instance holds an in-memory snapshot of all flag rules and evaluates in microseconds. Vendor SDKs (LaunchDarkly, Unleash, Flagsmith, Azure App Configuration with Microsoft.FeatureManagement) and the OpenFeature standard API all follow this model. In a real .NET app, prefer a library over the hand-written evaluator in this lesson: `Microsoft.FeatureManagement` reads flags from configuration or Azure App Configuration, and its targeting filter gives sticky, per-feature percentage rollouts by user and group (map tenants to groups); OpenFeature (a CNCF project) gives a vendor-neutral `IFeatureClient` with an evaluation context, so you can change flag providers without touching call sites. The evaluator below shows what those libraries do inside.
 - **Refresh the snapshot** by polling every few seconds or by a streaming connection (server-sent events). The kill-switch latency equals this refresh delay; for ops toggles, aim for seconds.
 - **Survive the flag service being down.** Keep the last-known snapshot. On a cold start with no snapshot, use **safe code defaults**: new features off, kill switches in their "normal" position.
 - **Audit every change.** Who turned the flag on for 50 % at 18:02? Flags change production behaviour exactly like a deploy does.
@@ -253,7 +254,7 @@ Flags and durable workflows interact in one dangerous way: a workflow that reads
 
 ```mermaid
 flowchart LR
-    C["Contractor and engineer apps"] --> API["Bills API (ASP.NET Core)"]
+    C["Employee and manager apps"] --> API["Claims API (ASP.NET Core)"]
     API -->|"start workflow, send signal"| WS[("Workflow store: PostgreSQL")]
     W["Workflow worker (BackgroundService x3)"] -->|"claim due instances, save step, optimistic version"| WS
     W -->|"activities with idempotency keys"| PAY["Payment gateway"]
@@ -264,29 +265,29 @@ flowchart LR
     W -.->|"stuck, failed, retry metrics"| MON["Monitoring"]
 ```
 
-Read it left to right. The API never runs long work; it only starts workflows and records signals ("engineer verified the bill"). Three identical worker instances claim instances that are due from the workflow store, run one step, and save the new state with a version check, so two workers can never both advance the same instance. Activities call external systems with idempotency keys so retries are safe. Every API and worker instance holds a flag snapshot refreshed from the flag store; flag checks never leave the process. The dotted line is the operational lifeline: alerts for stuck and failed workflows.
+Read it left to right. The API never runs long work; it only starts workflows and records signals ("manager approved the claim"). Three identical worker instances claim instances that are due from the workflow store, run one step, and save the new state with a version check, so two workers can never both advance the same instance. Activities call external systems with idempotency keys so retries are safe. Every API and worker instance holds a flag snapshot refreshed from the flag store; flag checks never leave the process. The dotted line is the operational lifeline: alerts for stuck and failed workflows.
 
-### Sequence: a bill waits, escalates and gets paid
+### Sequence: a claim waits, escalates and gets reimbursed
 
 ```mermaid
 sequenceDiagram
-    participant Con as Contractor
-    participant API as Bills API
+    participant Con as Employee
+    participant API as Claims API
     participant St as Workflow store
     participant Wk as Worker
-    participant Eng as Engineer
+    participant Eng as Manager
     participant Pay as Payment gateway
-    Con->>API: POST /bills/4417/approval
+    Con->>API: POST /claims/4417/approval
     API->>St: insert instance (step 0, runnable)
     Wk->>St: claim due, run step 0 validate, step 1 notify
-    Wk->>St: save (step 2, waiting for "verified", wake in 3 days)
+    Wk->>St: save (step 2, waiting for "manager-decision", wake in 3 days)
     Note over St: 3 days pass, worker restarts twice, nothing is lost
     Wk->>St: wake_at reached, run step 2, no signal yet
     Wk->>St: escalate, save (waiting, wake in 2 days)
-    Eng->>API: POST /workflows/4417/signals/verified (approved)
+    Eng->>API: POST /workflows/4417/signals/manager-decision (approved)
     API->>St: record signal, make runnable
     Wk->>St: run step 2, signal found, advance
-    Wk->>Pay: pay(bill 4417, key "4417:pay")
+    Wk->>Pay: pay(claim 4417, key "4417:pay")
     Pay-->>Wk: paid (or "already paid" on retry)
     Wk->>St: save (completed)
 ```
@@ -314,27 +315,27 @@ Evaluation goes from the most decisive rule to the least. The kill switch is che
 
 ## Step-by-step example
 
-We will move one feature through its life: an **AI anomaly check** that flags suspicious line items in RA bills before an engineer sees them.
+We will move one feature through its life: an **AI anomaly check** that flags suspicious line items in expense claims (a duplicate receipt, a hotel bill on a weekend at home) before a manager sees them.
 
 ### Step 1 — deploy dark
 
-The code ships with flag `bills.ai-anomaly-check`, type *release*, owner "Digital team", expiry in 45 days. Rule: `Enabled = true` (no kill), allow list empty, 0 %. Nobody sees it.
+The code ships with flag `claims.ai-anomaly-check`, type *release*, owner "Digital team", expiry in 45 days. Rule: `Enabled = true` (no kill), allow list empty, 0 %. Nobody sees it.
 
 ### Step 2 — internal tenants
 
-Add the internal QA tenant to the allow list. Engineers test with real bills. The workflow step that runs the check **records the decision** (`ai_check = on/off`) into the instance data, so a bill started while the flag was on keeps its behaviour, even if the flag changes mid-workflow.
+Add the internal QA tenant to the allow list. Testers use real, masked claims. The workflow step that runs the check **records the decision** (`ai_check = on/off`) into the instance data, so a claim started while the flag was on keeps its behaviour, even if the flag changes mid-workflow.
 
 ### Step 3 — 5 % rollout by tenant
 
-Unit = tenant id, because a project office should not see the check on some bills and not others. 5 % of 400 tenants ≈ 20 tenants. Bucket for tenant `pwd-bihar` = hash("bills.ai-anomaly-check:pwd-bihar") mod 10,000 = say 312; 312 < 500, so it is in.
+Unit = tenant id, because a customer's finance team should not see the check on some claims and not others. 5 % of 2,000 tenant companies ≈ 100 tenants. Bucket for tenant `acme-retail` = hash("claims.ai-anomaly-check:acme-retail") mod 10,000 = say 312; 312 < 500, so it is in.
 
 ### Step 4 — an incident
 
-The model endpoint slows to 8 seconds per call. Bill workflows pile up behind the activity. The on-call engineer flips the **kill switch** (`Enabled = false`). Within one snapshot refresh (5 seconds) every worker skips the check. Workflows that already recorded `ai_check = on` will still call the activity in their next step; that activity also checks a separate ops toggle, `ops.ai-model-calls`, and returns "skipped" when it is off. Two flags, two purposes: the release toggle decides *who gets the feature*; the ops toggle protects *the system*.
+The model endpoint slows to 8 seconds per call. Claim workflows pile up behind the activity. The on-call engineer flips the **kill switch** (`Enabled = false`). Within one snapshot refresh (5 seconds) every worker skips the check. Workflows that already recorded `ai_check = on` will still call the activity in their next step; that activity also checks a separate ops toggle, `ops.ai-model-calls`, and returns "skipped" when it is off. Two flags, two purposes: the release toggle decides *who gets the feature*; the ops toggle protects *the system*.
 
 ### Step 5 — 25 %, 50 %, 100 %
 
-Raising to 25 % keeps every tenant from the 5 % group (monotonic) and adds about 80 more. Error rate and p95 latency are compared between flagged and unflagged tenants at each stage.
+Raising to 25 % keeps every tenant from the 5 % group (monotonic) and adds about 400 more. Error rate and p95 latency are compared between flagged and unflagged tenants at each stage.
 
 ### Step 6 — clean up
 
@@ -342,23 +343,23 @@ At 100 % for two weeks with no incidents, delete the `if (flag)` branch, delete 
 
 ## Production-style C# implementation
 
-The sample is a bills service with a durable step-based workflow runner and an in-process flag evaluator. It runs offline: in-memory stores stand in for PostgreSQL and the flag service, behind interfaces.
+The sample is an expense-claims service with a durable step-based workflow runner and an in-process flag evaluator. It runs offline: in-memory stores stand in for PostgreSQL and the flag service, behind interfaces.
 
 ```text
-Bills.Api/
+Claims.Api/
   Program.cs
   Flags/FlagModel.cs            flag definitions, context, evaluation result
   Flags/FlagEvaluator.cs        stable bucketing + rule evaluation
   Flags/FlagSnapshotCache.cs    last-known-good snapshot refreshed in the background
   Workflows/WorkflowModel.cs    instance, step results, store contract + in-memory store
   Workflows/WorkflowEngine.cs   start, signal, run due steps with retries and versions
-  Workflows/RaBillApprovalWorkflow.cs   the business process
+  Workflows/ExpenseClaimWorkflow.cs   the business process
 ```
 
 ### Flags
 
 ```csharp file=Flags/FlagModel.cs
-namespace Bills.Flags;
+namespace Claims.Flags;
 
 /// <summary>Who is asking. UnitId is what percentage rollouts hash: a user id, or a tenant id
 /// when a whole organisation must see the same behaviour.</summary>
@@ -387,7 +388,7 @@ using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Bills.Flags;
+namespace Claims.Flags;
 
 public static class StableBucket
 {
@@ -430,12 +431,12 @@ public sealed class FlagEvaluator(IFlagSnapshotSource source) : IFeatureFlags
 }
 ```
 
-The evaluator returns a **reason** along with the value. Log it with the request's trace, and support questions ("why does PWD Bihar see the new screen?") answer themselves.
+The evaluator returns a **reason** along with the value. Log it with the request's trace, and support questions ("why does Acme Retail see the new screen?") answer themselves.
 
 ```csharp file=Flags/FlagSnapshotCache.cs
 using System.Collections.Frozen;
 
-namespace Bills.Flags;
+namespace Claims.Flags;
 
 public interface IFlagRepository
 {
@@ -491,7 +492,7 @@ public sealed class FlagSnapshotCache(IFlagRepository repository, TimeProvider t
 ### The workflow model and store
 
 ```csharp file=Workflows/WorkflowModel.cs
-namespace Bills.Workflows;
+namespace Claims.Workflows;
 
 public enum WorkflowStatus { Runnable, Waiting, Completed, Failed }
 
@@ -591,7 +592,7 @@ In PostgreSQL, `TrySaveAsync` is `UPDATE workflow_instance SET ..., version = ve
 ### The engine
 
 ```csharp file=Workflows/WorkflowEngine.cs
-namespace Bills.Workflows;
+namespace Claims.Workflows;
 
 public sealed class WorkflowEngine(
     IWorkflowStore store,
@@ -735,70 +736,70 @@ Note what the engine does **not** do: replay. It checkpoints after each step. Th
 
 ### The business process
 
-```csharp file=Workflows/RaBillApprovalWorkflow.cs
+```csharp file=Workflows/ExpenseClaimWorkflow.cs
 using System.Globalization;
-using Bills.Flags;
+using Claims.Flags;
 
-namespace Bills.Workflows;
+namespace Claims.Workflows;
 
-public interface IBillActivities
+public interface IClaimActivities
 {
-    Task NotifyAsync(string billId, string role, string idempotencyKey, CancellationToken ct);
-    Task<bool> RunAnomalyCheckAsync(string billId, CancellationToken ct);
-    Task PayAsync(string billId, decimal amountInr, string idempotencyKey, CancellationToken ct);
+    Task NotifyAsync(string claimId, string role, string idempotencyKey, CancellationToken ct);
+    Task<bool> RunAnomalyCheckAsync(string claimId, CancellationToken ct);
+    Task PayAsync(string claimId, decimal amountInr, string idempotencyKey, CancellationToken ct);
 }
 
 /// <summary>Logs instead of calling real systems. A real implementation passes the idempotency key to the
 /// notification and payment providers so retries do not duplicate effects.</summary>
-public sealed class LoggingBillActivities(ILogger<LoggingBillActivities> log) : IBillActivities
+public sealed class LoggingClaimActivities(ILogger<LoggingClaimActivities> log) : IClaimActivities
 {
-    public Task NotifyAsync(string billId, string role, string key, CancellationToken ct)
-    { log.LogInformation("Notify {Role} about bill {BillId} (key {Key})", role, billId, key); return Task.CompletedTask; }
+    public Task NotifyAsync(string claimId, string role, string key, CancellationToken ct)
+    { log.LogInformation("Notify {Role} about claim {ClaimId} (key {Key})", role, claimId, key); return Task.CompletedTask; }
 
-    public Task<bool> RunAnomalyCheckAsync(string billId, CancellationToken ct) => Task.FromResult(false);
+    public Task<bool> RunAnomalyCheckAsync(string claimId, CancellationToken ct) => Task.FromResult(false);
 
-    public Task PayAsync(string billId, decimal amountInr, string key, CancellationToken ct)
-    { log.LogInformation("Pay ₹{Amount} for bill {BillId} (key {Key})", amountInr, billId, key); return Task.CompletedTask; }
+    public Task PayAsync(string claimId, decimal amountInr, string key, CancellationToken ct)
+    { log.LogInformation("Reimburse ₹{Amount} for claim {ClaimId} (key {Key})", amountInr, claimId, key); return Task.CompletedTask; }
 }
 
-public sealed class RaBillApprovalWorkflow(IBillActivities activities, IFeatureFlags flags) : IWorkflowDefinition
+public sealed class ExpenseClaimWorkflow(IClaimActivities activities, IFeatureFlags flags) : IWorkflowDefinition
 {
-    public const string TypeName = "ra-bill-approval";
-    public const string AnomalyFlag = "bills.ai-anomaly-check";
-    public static readonly TimeSpan VerificationTimeout = TimeSpan.FromDays(3);
+    public const string TypeName = "expense-claim-approval";
+    public const string AnomalyFlag = "claims.ai-anomaly-check";
+    public static readonly TimeSpan ApprovalTimeout = TimeSpan.FromDays(3);
     public static readonly TimeSpan EscalationTimeout = TimeSpan.FromDays(2);
     public string Type => TypeName;
 
     public async Task<StepResult> ExecuteStepAsync(WorkflowInstance wf, WorkflowStepContext ctx, CancellationToken ct)
     {
-        var billId = wf.Id;
+        var claimId = wf.Id;
         switch (wf.Step)
         {
             case 0: // validate, and decide the flag ONCE; the decision is stored with the instance
                 if (!decimal.TryParse(wf.Data.GetValueOrDefault("amountInr"), NumberStyles.Number, CultureInfo.InvariantCulture, out var amount) || amount <= 0)
-                    return StepResult.Fail("Bill amount must be positive.");
+                    return StepResult.Fail("Claim amount must be positive.");
                 var tenant = wf.Data.GetValueOrDefault("tenantId") ?? "unknown";
                 wf.Data["aiCheck"] = flags.IsEnabled(AnomalyFlag, new EvaluationContext(tenant, tenant)) ? "on" : "off";
                 return StepResult.Next();
 
             case 1:
-                if (wf.Data["aiCheck"] == "on" && await activities.RunAnomalyCheckAsync(billId, ct))
+                if (wf.Data["aiCheck"] == "on" && await activities.RunAnomalyCheckAsync(claimId, ct))
                     wf.Data["anomaly"] = "true";
-                await activities.NotifyAsync(billId, "engineer", $"{billId}:notify-engineer", ct);
-                return StepResult.WaitFor("verified", VerificationTimeout, resumeAt: 2);
+                await activities.NotifyAsync(claimId, "manager", $"{claimId}:notify-manager", ct);
+                return StepResult.WaitFor("manager-decision", ApprovalTimeout, resumeAt: 2);
 
             case 2:
-                if (wf.Data.TryGetValue("signal:verified", out var decision))
-                    return decision == "approved" ? StepResult.Next() : StepResult.Fail("Rejected by engineer.");
+                if (wf.Data.TryGetValue("signal:manager-decision", out var decision))
+                    return decision == "approved" ? StepResult.Next() : StepResult.Fail("Rejected by manager.");
                 var escalations = int.Parse(wf.Data.GetValueOrDefault("escalations") ?? "0", CultureInfo.InvariantCulture);
-                if (escalations >= 2) return StepResult.Fail("Verification overdue after two escalations.");
+                if (escalations >= 2) return StepResult.Fail("Approval overdue after two escalations.");
                 wf.Data["escalations"] = (escalations + 1).ToString(CultureInfo.InvariantCulture);
-                await activities.NotifyAsync(billId, "superintending-engineer", $"{billId}:escalate-{escalations + 1}", ct);
-                return StepResult.WaitFor("verified", EscalationTimeout, resumeAt: 2);
+                await activities.NotifyAsync(claimId, "skip-level-manager", $"{claimId}:escalate-{escalations + 1}", ct);
+                return StepResult.WaitFor("manager-decision", EscalationTimeout, resumeAt: 2);
 
             case 3:
                 var amountInr = decimal.Parse(wf.Data["amountInr"], CultureInfo.InvariantCulture);
-                await activities.PayAsync(billId, amountInr, $"{billId}:pay", ct);
+                await activities.PayAsync(claimId, amountInr, $"{claimId}:pay", ct);
                 return StepResult.Complete();
 
             default:
@@ -813,8 +814,8 @@ Every external call carries a key derived from the workflow id and step (`4417:p
 ### Wiring it up
 
 ```csharp file=Program.cs
-using Bills.Flags;
-using Bills.Workflows;
+using Claims.Flags;
+using Claims.Workflows;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -830,22 +831,22 @@ builder.Services.AddSingleton<IFeatureFlags, FlagEvaluator>();
 
 // Workflows
 builder.Services.AddSingleton<IWorkflowStore, InMemoryWorkflowStore>();
-builder.Services.AddSingleton<IBillActivities, LoggingBillActivities>();
-builder.Services.AddSingleton<IWorkflowDefinition, RaBillApprovalWorkflow>();
+builder.Services.AddSingleton<IClaimActivities, LoggingClaimActivities>();
+builder.Services.AddSingleton<IWorkflowDefinition, ExpenseClaimWorkflow>();
 builder.Services.AddSingleton<WorkflowEngine>();
 builder.Services.AddHostedService<WorkflowWorker>();
 
 var app = builder.Build();
 
-app.MapPost("/bills/{billId}/approval", async (string billId, string tenantId, decimal amountInr, WorkflowEngine engine, CancellationToken ct) =>
+app.MapPost("/claims/{claimId}/approval", async (string claimId, string tenantId, decimal amountInr, WorkflowEngine engine, CancellationToken ct) =>
 {
     var input = new Dictionary<string, string>
     {
         ["tenantId"] = tenantId,
         ["amountInr"] = amountInr.ToString(System.Globalization.CultureInfo.InvariantCulture)
     };
-    var started = await engine.StartAsync(RaBillApprovalWorkflow.TypeName, billId, input, ct);
-    return started ? Results.Accepted($"/workflows/{billId}") : Results.Conflict("Approval already started.");
+    var started = await engine.StartAsync(ExpenseClaimWorkflow.TypeName, claimId, input, ct);
+    return started ? Results.Accepted($"/workflows/{claimId}") : Results.Conflict("Approval already started.");
 });
 
 app.MapPost("/workflows/{id}/signals/{signal}", async (string id, string signal, string payload, WorkflowEngine engine, CancellationToken ct) =>
@@ -868,22 +869,22 @@ app.Run();
 
 ```csharp
 // Anti-example
-app.MapPost("/bills/{id}/approve", async (string id, Db db, Pay pay) =>
+app.MapPost("/claims/{id}/approve", async (string id, Db db, Pay pay) =>
 {
     if (new Random().Next(100) < 10) await RunNewAiCheck(id);     // "10 % rollout"
-    var bill = await db.GetAsync(id);
-    while (!bill.Verified) { await Task.Delay(60_000); bill = await db.GetAsync(id); }   // hold a request for days
-    await pay.PayAsync(bill.Amount);                              // no idempotency key
+    var claim = await db.GetAsync(id);
+    while (!claim.Approved) { await Task.Delay(60_000); claim = await db.GetAsync(id); }   // hold a request for days
+    await pay.PayAsync(claim.Amount);                              // no idempotency key
     return Results.Ok();
 });
 ```
 
 What goes wrong:
 
-- The "rollout" flickers: the same bill sees the AI check on one request and not the next, and there is no way to turn it off without a deploy.
+- The "rollout" flickers: the same claim sees the AI check on one request and not the next, and there is no way to turn it off without a deploy.
 - A request held for days ties up a connection and dies on the next deploy or load-balancer timeout.
-- A retry after a timeout pays the contractor twice.
-- Nobody can answer "where is bill 4417?"
+- A retry after a timeout reimburses the employee twice.
+- Nobody can answer "where is claim 4417?"
 
 **Good:** the implementation above. The workflow state is persisted after each step with optimistic concurrency, waits have timeouts and escalation, signals are stored, external calls carry idempotency keys, and the flag decision is deterministic, recorded once, and has a kill switch with a reason.
 
@@ -899,7 +900,7 @@ The playground has a hand-rolled workflow table and a flag table in PostgreSQL. 
 
 1. Write the "find due instances" query: runnable, or waiting with `wake_at <= '2026-10-19 12:00+00'`, oldest first.
 2. Add `FOR UPDATE SKIP LOCKED` and explain what it would do with two workers.
-3. Write the optimistic save: `UPDATE ... SET step = 3, version = version + 1 WHERE id = 'B-4417' AND version = 6` and check how many rows changed.
+3. Write the optimistic save: `UPDATE ... SET step = 3, version = version + 1 WHERE id = 'EC-4417' AND version = 6` and check how many rows changed.
 4. Find workflows stuck in `waiting` for more than 5 days, which is your "stuck workflow" alert query.
 5. List release flags older than 60 days that are at 100 % (flag debt).
 
@@ -916,12 +917,12 @@ CREATE TABLE workflow_instance (
   created  timestamptz NOT NULL
 );
 INSERT INTO workflow_instance VALUES
-  ('B-4417', 'ra-bill-approval', 2, 'waiting',  '2026-10-19 09:00+00', 'verified', 6, '2026-10-12 10:00+00'),
-  ('B-4418', 'ra-bill-approval', 0, 'runnable', NULL,                  NULL,       0, '2026-10-19 11:55+00'),
-  ('B-4419', 'ra-bill-approval', 2, 'waiting',  '2026-10-21 09:00+00', 'verified', 3, '2026-10-18 09:00+00'),
-  ('B-4420', 'ra-bill-approval', 4, 'completed', NULL,                 NULL,       9, '2026-10-01 08:00+00'),
-  ('B-4421', 'ra-bill-approval', 3, 'failed',   NULL,                  NULL,       7, '2026-10-05 08:00+00'),
-  ('B-4422', 'ra-bill-approval', 2, 'waiting',  '2026-10-19 11:30+00', 'verified', 4, '2026-10-10 08:00+00');
+  ('EC-4417', 'expense-claim-approval', 2, 'waiting',  '2026-10-19 09:00+00', 'manager-decision', 6, '2026-10-12 10:00+00'),
+  ('EC-4418', 'expense-claim-approval', 0, 'runnable', NULL,                  NULL,       0, '2026-10-19 11:55+00'),
+  ('EC-4419', 'expense-claim-approval', 2, 'waiting',  '2026-10-21 09:00+00', 'manager-decision', 3, '2026-10-18 09:00+00'),
+  ('EC-4420', 'expense-claim-approval', 4, 'completed', NULL,                 NULL,       9, '2026-10-01 08:00+00'),
+  ('EC-4421', 'expense-claim-approval', 3, 'failed',   NULL,                  NULL,       7, '2026-10-05 08:00+00'),
+  ('EC-4422', 'expense-claim-approval', 2, 'waiting',  '2026-10-19 11:30+00', 'manager-decision', 4, '2026-10-10 08:00+00');
 
 CREATE TABLE feature_flag (
   key        text PRIMARY KEY,
@@ -932,10 +933,10 @@ CREATE TABLE feature_flag (
   created_at date NOT NULL
 );
 INSERT INTO feature_flag VALUES
-  ('bills.ai-anomaly-check', 'release', true, 25, 'digital', '2026-09-30'),
-  ('bills.new-upload-ui',    'release', true, 100, 'digital', '2026-06-01'),
+  ('claims.ai-anomaly-check', 'release', true, 25, 'digital', '2026-09-30'),
+  ('claims.new-upload-ui',    'release', true, 100, 'digital', '2026-06-01'),
   ('ops.ai-model-calls',     'ops',     true, 100, 'platform', '2025-11-15'),
-  ('tender.list-layout-b',   'experiment', true, 50, 'product', '2026-10-01'),
+  ('claims.list-layout-b',   'experiment', true, 50, 'product', '2026-10-01'),
   ('mpr.legacy-export',      'release', true, 100, 'digital', '2026-03-10');
 ```
 :::
@@ -993,20 +994,20 @@ public class RolloutTests
     [Fact]
     public void Bucket_is_deterministic_and_in_range()
     {
-        var a = Rollout.Bucket("bills.new-ui", "user-42");
-        Assert.Equal(a, Rollout.Bucket("bills.new-ui", "user-42"));
+        var a = Rollout.Bucket("claims.new-ui", "user-42");
+        Assert.Equal(a, Rollout.Bucket("claims.new-ui", "user-42"));
         Assert.InRange(a, 0, 9_999);
     }
 
     [Fact]
     public void Ten_percent_is_roughly_ten_percent() =>
-        Assert.InRange(Users.Count(u => Rollout.IsInRollout("bills.new-ui", u, 10)), 850, 1_150);
+        Assert.InRange(Users.Count(u => Rollout.IsInRollout("claims.new-ui", u, 10)), 850, 1_150);
 
     [Fact]
     public void Rollout_is_monotonic()
     {
-        var at10 = Users.Where(u => Rollout.IsInRollout("bills.new-ui", u, 10));
-        Assert.All(at10, u => Assert.True(Rollout.IsInRollout("bills.new-ui", u, 30)));
+        var at10 = Users.Where(u => Rollout.IsInRollout("claims.new-ui", u, 10));
+        Assert.All(at10, u => Assert.True(Rollout.IsInRollout("claims.new-ui", u, 30)));
     }
 
     [Fact]
@@ -1183,19 +1184,19 @@ public class EvaluatorTests
 
     [Fact]
     public void Kill_switch_beats_allow_list() =>
-        Assert.Equal(new Result(false, "killed"), E(F(enabled: false, pct: 100, allow: new[] { "pwd-bihar" })).Evaluate("f", new Ctx("u1", "pwd-bihar")));
+        Assert.Equal(new Result(false, "killed"), E(F(enabled: false, pct: 100, allow: new[] { "acme-retail" })).Evaluate("f", new Ctx("u1", "acme-retail")));
 
     [Fact]
     public void Deny_beats_allow() =>
-        Assert.Equal(new Result(false, "denied"), E(F(allow: new[] { "pwd-bihar" }, deny: new[] { "u7" })).Evaluate("f", new Ctx("t1", "pwd-bihar", "u7")));
+        Assert.Equal(new Result(false, "denied"), E(F(allow: new[] { "acme-retail" }, deny: new[] { "u7" })).Evaluate("f", new Ctx("t1", "acme-retail", "u7")));
 
     [Fact]
     public void Allow_list_turns_on_at_zero_percent() =>
-        Assert.Equal(new Result(true, "allowed"), E(F(allow: new[] { "pwd-bihar" })).Evaluate("f", new Ctx("u1", "pwd-bihar")));
+        Assert.Equal(new Result(true, "allowed"), E(F(allow: new[] { "acme-retail" })).Evaluate("f", new Ctx("u1", "acme-retail")));
 
     [Fact]
     public void Zero_percent_is_off_for_others() =>
-        Assert.Equal(new Result(false, "rollout"), E(F(pct: 0)).Evaluate("f", new Ctx("u1", "nhai")));
+        Assert.Equal(new Result(false, "rollout"), E(F(pct: 0)).Evaluate("f", new Ctx("u1", "globex")));
 
     [Fact]
     public void Hundred_percent_is_on_unless_denied()
@@ -1272,8 +1273,8 @@ A rules list (`IReadOnlyList<IRule>` evaluated in order, first match wins) gener
 - Evaluating the percentage on the tenant id for some calls and the user id for others, giving inconsistent results.
 :::
 
-:::exercise id=m16-workflow-engines-ex4 difficulty=intermediate kind=hld title="National RA bill workflow with a safe rollout"
-A state road agency is moving bill processing for 5,000 projects onto one platform: 20,000 bills a month, each passing validation, AI anomaly check (new), engineer verification (up to 3 days, then escalation), finance approval, and payment through a bank API. Peak: 40 % of bills arrive in the last 3 days of the month. The bank API allows 20 requests per second. The AI check must roll out to 5 % of project offices first and be stoppable within 10 seconds.
+:::exercise id=m16-workflow-engines-ex4 difficulty=intermediate kind=hld title="Expense-claim workflow with a safe rollout"
+An expense-management SaaS serves 2,000 customer companies: 20,000 claims a month, each passing validation, AI anomaly check (new), manager approval (up to 3 days, then escalation), finance approval, and reimbursement through a bank payout API. Peak: 40 % of claims arrive in the last 3 days of the month, before the payroll cut-off. The bank API allows 20 requests per second. The AI check must roll out to 5 % of customer companies first and be stoppable within 10 seconds.
 
 Design the system. Choose between a workflow engine and a hand-rolled state table, and justify it with numbers. Show the flag evaluation path and how payment is protected against duplicates.
 ::acceptance
@@ -1283,19 +1284,19 @@ Design the system. Choose between a workflow engine and a hand-rolled state tabl
 - Kill-switch latency ≤ 10 s is shown by the refresh design.
 - Payment idempotency and the bank's 20 RPS limit are handled.
 ::hint
-20,000 × 40 % over 3 days: how many bills per second at peak, and how many steps per bill?
+20,000 × 40 % over 3 days: how many claims per second at peak, and how many steps per claim?
 ::hint
 Is the bottleneck your workflow store or the bank API?
 ::hint
-Rollout unit: user, bill or project office? Which one keeps an office's experience consistent?
+Rollout unit: user, claim or customer company? Which one keeps a company's experience consistent?
 ::hint
 To keep payments under 20 RPS, put a queue or a concurrency limit in front of the payment activity.
 ::starter
 ```json
 {
   "nodes": [
-    { "id": "apps", "type": "client", "label": "Contractors, engineers, finance", "props": { "rps": 50 } },
-    { "id": "api", "type": "app-server", "label": "Bills API", "props": { "instances": 2 } },
+    { "id": "apps", "type": "client", "label": "Employees, managers, finance", "props": { "rps": 50 } },
+    { "id": "api", "type": "app-server", "label": "Claims API", "props": { "instances": 2 } },
     { "id": "db", "type": "database", "label": "PostgreSQL" },
     { "id": "bank", "type": "external", "label": "Bank payment API (20 RPS)" }
   ],
@@ -1307,25 +1308,25 @@ To keep payments under 20 RPS, put a queue or a concurrency limit in front of th
 }
 ```
 ::solution
-**Numbers (estimates).** Peak: 20,000 × 0.4 = 8,000 bills in 3 days ≈ 2,700 per day ≈ 0.03 per second averaged, perhaps 10× in office hours ≈ 0.3 bills/s. About 8 steps per bill ≈ **2.5 step executions/s** at peak. Bank calls: at most 0.3/s, far under 20 RPS, but a backlog after a bank outage (say 3,000 queued payments) must drain at ≤ 20 RPS: 150 s. A PostgreSQL table handles this trivially.
+**Numbers (estimates).** Peak: 20,000 × 0.4 = 8,000 claims in 3 days ≈ 2,700 per day ≈ 0.03 per second averaged, perhaps 10× in office hours ≈ 0.3 claims/s. About 8 steps per claim ≈ **2.5 step executions/s** at peak. Bank calls: at most 0.3/s, far under 20 RPS, but a backlog after a bank outage (say 3,000 queued payments) must drain at ≤ 20 RPS: 150 s. A PostgreSQL table handles this trivially.
 
-**Decision: hand-rolled state table** (or Elsa embedded in the app), not a separate Temporal cluster. Reasons: low volume; a linear process with one wait-and-escalate loop; data must stay in the state's own PostgreSQL for audit; the team already runs PostgreSQL. Revisit if many more workflow types with parallel branches appear.
+**Decision: hand-rolled state table** (or Elsa embedded in the app), not a separate Temporal cluster. Reasons: low volume; a linear process with one wait-and-escalate loop; customers' finance data must stay in the platform's own PostgreSQL in India for audit and contracts; the team already runs PostgreSQL. Revisit if many more workflow types with parallel branches appear.
 
 **Design.**
 - `workflow_instance` table, as in the lesson, with `FOR UPDATE SKIP LOCKED` claiming and `version` optimistic saves. Two worker instances for availability.
-- Verification wait: step returns `WaitFor("verified", 3 days)`; the engineer's app calls the signal endpoint; a timeout escalates to the superintending engineer, twice at most, then marks "needs attention" and alerts.
-- Payment: the payment step does not call the bank directly. It enqueues a `PayBill` command with key `billId:pay`. A payment worker consumes with a concurrency limit and a token bucket of 15 RPS (headroom under 20), passes the key to the bank, and signals the workflow `paid` or `payment-failed`. The bank's idempotency (or a local `payment` table with a unique key) prevents duplicates.
-- Flags: each API and worker instance loads the flag snapshot from the flag table every 5 s (kill latency ≤ 5 s, plus evaluation time). Rollout unit = project office id; 5 % first. The validation step records `aiCheck=on/off` in the instance. The AI activity also checks the ops flag `ops.ai-model-calls`, so a kill takes effect for in-flight bills too.
+- Approval wait: step returns `WaitFor("manager-decision", 3 days)`; the manager's app calls the signal endpoint; a timeout escalates to the skip-level manager, twice at most, then marks "needs attention" and alerts.
+- Payment: the payment step does not call the bank directly. It enqueues a `PayClaim` command with key `claimId:pay`. A payment worker consumes with a concurrency limit and a token bucket of 15 RPS (headroom under 20), passes the key to the bank, and signals the workflow `paid` or `payment-failed`. The bank's idempotency (or a local `payment` table with a unique key) prevents duplicates.
+- Flags: each API and worker instance loads the flag snapshot from the flag table every 5 s (kill latency ≤ 5 s, plus evaluation time). Rollout unit = customer company (tenant) id; 5 % first. The validation step records `aiCheck=on/off` in the instance. The AI activity also checks the ops flag `ops.ai-model-calls`, so a kill takes effect for in-flight claims too.
 
 ```json
 {
   "nodes": [
-    { "id": "apps", "type": "client", "label": "Contractors, engineers, finance", "props": { "rps": 50 } },
-    { "id": "api", "type": "app-server", "label": "Bills API (start, signal, flag snapshot)", "props": { "instances": 2 } },
+    { "id": "apps", "type": "client", "label": "Employees, managers, finance", "props": { "rps": 50 } },
+    { "id": "api", "type": "app-server", "label": "Claims API (start, signal, flag snapshot)", "props": { "instances": 2 } },
     { "id": "db", "type": "database", "label": "PostgreSQL: workflow_instance, payment, feature_flag", "props": { "replicas": 1 } },
     { "id": "wk", "type": "worker", "label": "Workflow workers (SKIP LOCKED, versioned saves)", "props": { "instances": 2 } },
     { "id": "ai", "type": "external", "label": "AI anomaly model" },
-    { "id": "q", "type": "queue", "label": "PayBill commands" },
+    { "id": "q", "type": "queue", "label": "PayClaim commands" },
     { "id": "payw", "type": "worker", "label": "Payment worker (15 RPS token bucket)" },
     { "id": "bank", "type": "external", "label": "Bank payment API (20 RPS)" },
     { "id": "mon", "type": "monitoring", "label": "Stuck > 5 days, failed, queue depth" }
@@ -1335,7 +1336,7 @@ To keep payments under 20 RPS, put a queue or a concurrency limit in front of th
     { "from": "api", "to": "db", "kind": "sync", "label": "insert instance, record signals, read flags every 5 s" },
     { "from": "wk", "to": "db", "kind": "sync", "label": "claim due, save step" },
     { "from": "wk", "to": "ai", "kind": "sync", "label": "only if aiCheck=on and ops flag on" },
-    { "from": "wk", "to": "q", "kind": "async", "label": "PayBill key billId:pay" },
+    { "from": "wk", "to": "q", "kind": "async", "label": "PayClaim key claimId:pay" },
     { "from": "q", "to": "payw", "kind": "async" },
     { "from": "payw", "to": "bank", "kind": "sync", "label": "idempotency key" },
     { "from": "payw", "to": "db", "kind": "sync", "label": "unique payment row, signal workflow" },
@@ -1346,7 +1347,7 @@ To keep payments under 20 RPS, put a queue or a concurrency limit in front of th
 ::mistakes
 - Calling the bank inside the HTTP request or straight from every workflow step with no rate control.
 - A separate workflow cluster for 2.5 steps per second.
-- Rolling out by user id, so two engineers in the same office see different bill screens.
+- Rolling out by user id, so two finance staff in the same company see different claim screens.
 - Kill switch that needs a deploy or a config restart.
 :::
 
@@ -1588,21 +1589,21 @@ public async Task Escalates_after_three_days_then_pays_on_approval()
     var store = new InMemoryWorkflowStore();
     var acts = new RecordingActivities();                  // hand-rolled fake that records calls
     var engine = new WorkflowEngine(store,
-        new IWorkflowDefinition[] { new RaBillApprovalWorkflow(acts, new AlwaysOffFlags()) },
+        new IWorkflowDefinition[] { new ExpenseClaimWorkflow(acts, new AlwaysOffFlags()) },
         time, NullLogger<WorkflowEngine>.Instance);
 
-    await engine.StartAsync(RaBillApprovalWorkflow.TypeName, "B-1",
-        new Dictionary<string, string> { ["amountInr"] = "250000", ["tenantId"] = "pwd" }, default);
+    await engine.StartAsync(ExpenseClaimWorkflow.TypeName, "EC-1",
+        new Dictionary<string, string> { ["amountInr"] = "250000", ["tenantId"] = "acme" }, default);
     await engine.RunDueAsync(10, default);   // step 0
     await engine.RunDueAsync(10, default);   // step 1: notify, wait
     time.Advance(TimeSpan.FromDays(3));
     await engine.RunDueAsync(10, default);   // step 2: timeout -> escalate
-    Assert.Contains("superintending-engineer", acts.Notified);
+    Assert.Contains("skip-level-manager", acts.Notified);
 
-    await engine.SignalAsync("B-1", "verified", "approved", default);
+    await engine.SignalAsync("EC-1", "manager-decision", "approved", default);
     await engine.RunDueAsync(10, default);   // step 2: approved
     await engine.RunDueAsync(10, default);   // step 3: pay
-    Assert.Equal(WorkflowStatus.Completed, (await store.GetAsync("B-1", default))!.Status);
+    Assert.Equal(WorkflowStatus.Completed, (await store.GetAsync("EC-1", default))!.Status);
     Assert.Single(acts.Payments);
 }
 ```
@@ -1616,7 +1617,7 @@ For replay engines, the vendors provide **replay testers**: load real histories 
 ## Real-world application
 
 - **Order fulfilment and payments** at large e-commerce and fintech companies commonly run on durable workflow engines; Temporal grew out of Uber's Cadence project, and its public case studies describe payment and onboarding workflows.
-- **Government and infrastructure approvals** (bill verification, land acquisition, permits) map naturally to workflows with human tasks, deadlines and escalations; BPMN engines such as Camunda are common there because non-developers can read the diagrams.
+- **Government, insurance and HR approvals** (permits, licence renewals, insurance claims, leave and expense approvals) map naturally to workflows with human tasks, deadlines and escalations; BPMN engines such as Camunda are common there because non-developers can read the diagrams.
 - **Azure Durable Functions** is a frequent choice for fan-out/fan-in batch jobs (process 10,000 survey images, then aggregate) and human-approval flows in Azure-centric teams.
 - **Feature flags at scale**: companies that deploy many times a day release behind flags with percentage rollouts and automatic rollback when SLOs degrade. Kill switches for expensive dependencies (recommendations, AI calls, third-party enrichment) are a standard part of graceful degradation.
 - **Mobile apps** rely on flags heavily, because a new app version takes days to reach users; server-side flags let you disable a broken feature immediately.
@@ -1729,7 +1730,7 @@ You need a 4-step approval process for about 300 requests a month, data must sta
 - [ ] A cron job that emails everyone daily.
 > The volume and complexity are small; a persisted state machine is simpler to run and keeps data where it must stay.
 ::q single
-A workflow waits for an engineer's signal with no timeout. The engineer leaves the company. What happens?
+A workflow waits for a manager's signal with no timeout. The manager leaves the company. What happens?
 - [ ] The engine automatically reassigns the task.
 - [x] The instance waits forever; the design needs a timeout with escalation and a stuck-workflow alert.
 - [ ] The workflow fails after 24 hours by default.

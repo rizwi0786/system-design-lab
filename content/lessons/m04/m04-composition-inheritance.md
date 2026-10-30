@@ -43,13 +43,13 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Think about how a construction company rents equipment. A customer can rent an excavator. They can also add an operator, fuel, insurance, or a night shift. Any combination is possible.
+Think about renting a self-drive car on an app for a weekend trip from Bengaluru to Coorg. You can rent an SUV. You can also add a driver (chauffeur), prepaid fuel, damage protection, or a child seat. Any combination is possible.
 
-**Inheritance thinking** says: "An excavator with an operator is a *kind of* excavator." So you create `ExcavatorWithOperator`. Then `ExcavatorWithOperatorAndFuel`. Then `ExcavatorWithFuelAndInsurance`. With four optional add-ons, that's 2⁴ = 16 classes — for one machine. Add cranes, rollers and dumpers, and you have 64 classes, most of them nearly identical.
+**Inheritance thinking** says: "An SUV with a driver is a *kind of* SUV." So you create `SuvWithDriver`. Then `SuvWithDriverAndFuel`. Then `SuvWithFuelAndInsurance`. With four optional add-ons, that's 2⁴ = 16 classes — for one vehicle type. Add hatchbacks, sedans and motorbikes, and you have 64 classes, most of them nearly identical.
 
-**Composition thinking** says: "A rental quote *has* a list of charges." The excavator's daily hire is one charge. The operator is another. Fuel is another. You build a quote by putting together the charges the customer picked, like filling a thali with the dishes you want instead of ordering a separate fixed thali for every combination. Four add-ons means four small classes, and any combination works.
+**Composition thinking** says: "A rental quote *has* a list of charges." The SUV's daily rent is one charge. The driver is another. Fuel is another. You build a quote by putting together the charges the customer picked, like filling a thali with the dishes you want instead of ordering a separate fixed thali for every combination. Four add-ons means four small classes, and any combination works.
 
-- **Inheritance** ("is-a"): a class gets the fields and methods of a parent class and can override some of them. `class Crane : Equipment`.
+- **Inheritance** ("is-a"): a class gets the fields and methods of a parent class and can override some of them. `class Suv : Vehicle`.
 - **Composition** ("has-a"): a class holds references to other objects and uses them to do its work. `class RentalQuote { List<IChargeComponent> charges; }`.
 - **Delegation**: a class passes ("delegates") a job to an object it holds, instead of inheriting the method.
 
@@ -59,8 +59,8 @@ Think about how a construction company rents equipment. A customer can rent an e
 
 Inheritance bundles two different things:
 
-1. **A type relationship (subtyping).** A `Crane` can be used wherever an `Equipment` is expected.
-2. **Code reuse (implementation inheritance).** `Crane` gets `Equipment`'s fields and method bodies for free.
+1. **A type relationship (subtyping).** A `Suv` can be used wherever a `Vehicle` is expected.
+2. **Code reuse (implementation inheritance).** `Suv` gets `Vehicle`'s fields and method bodies for free.
 
 Interfaces give you (1) without (2). Composition gives you (2) without (1). Most inheritance problems come from wanting one of these and getting both.
 
@@ -68,15 +68,15 @@ Interfaces give you (1) without (2). Composition gives you (2) without (1). Most
 
 **1. Tight coupling to the parent's internals.** A subclass depends not just on the parent's public methods, but on *how* they're implemented: which methods call which, in what order. That's called *white-box reuse*, because the subclass can see inside. Composition is *black-box reuse*: you only use the other object's public contract.
 
-**2. The fragile base class problem.** A harmless-looking change in a base class breaks subclasses that nobody changed. The classic example:
+**2. The fragile base class problem.** A harmless-looking change in a base class breaks subclasses that nobody changed. The classic example (Joshua Bloch's `InstrumentedHashSet` in *Effective Java*, retold here with a trip log that stores distances in km):
 
-- `MeasurementLog.AddRange` loops and calls the virtual `Add` for each item.
-- `CountingLog : MeasurementLog` overrides both `Add` and `AddRange` to count entries. `AddRange` adds the range length, then calls `base.AddRange`... which calls `Add` for each item, which counts again. Adding 3 entries counts 6.
+- `TripLog.AddRange` loops and calls the virtual `Add` for each item.
+- `CountingLog : TripLog` overrides both `Add` and `AddRange` to count entries. `AddRange` adds the range length, then calls `base.AddRange`... which calls `Add` for each item, which counts again. Adding 3 entries counts 6.
 - The subclass author "fixes" it by not counting in `AddRange`. Six months later, the base class author optimises `AddRange` to insert directly without calling `Add`. Now the subclass counts 0. Nobody touched `CountingLog`, but it's broken again.
 
 The subclass relied on a self-call inside the base class, which was never part of any contract.
 
-**3. Class explosion.** Each independent dimension of variation (machine type × operator × fuel × insurance) multiplies the number of subclasses. Inheritance lets you vary along only one axis cleanly.
+**3. Class explosion.** Each independent dimension of variation (vehicle type × driver × fuel × insurance) multiplies the number of subclasses. Inheritance lets you vary along only one axis cleanly.
 
 **4. Inheritance is fixed at compile time.** An object can't change its parent class at runtime. A composed object can swap a part: replace the `FuelCharge` with a `CustomerSuppliedFuel` charge for one quote.
 
@@ -102,17 +102,17 @@ Two composition techniques are especially common:
 
 ### C# features that matter here
 
-- **Single class inheritance.** A C# class has one base class but can implement many interfaces, so inheritance can't express "has an operator *and* fuel". Composition can.
+- **Single class inheritance.** A C# class has one base class but can implement many interfaces, so inheritance can't express "has a driver *and* fuel". Composition can.
 - **`virtual` is opt-in.** Methods aren't overridable unless marked `virtual`, which limits (but doesn't remove) fragility.
 - **`sealed`.** Marking classes `sealed` by default states "not designed for inheritance". It also lets the JIT devirtualise calls in some cases. Unseal deliberately, when you design for extension.
 - **`new` hides; it doesn't override.** `public new void Add(...)` on a `List<T>` subclass is silently bypassed when the object is used as `IList<T>` or `List<T>`. A common trap (see the playground).
-- **Primary constructors** (C# 12+) make delegation cheap: `sealed class CountingLog(IMeasurementLog inner) : IMeasurementLog`.
+- **Primary constructors** (C# 12+) make delegation cheap: `sealed class CountingLog(ITripLog inner) : ITripLog`.
 - **Default interface methods** let interfaces carry a little shared behaviour without a base class. Use sparingly.
 
 ### When inheritance is the right tool
 
 - **Framework extension points designed for it.** `ControllerBase`, `BackgroundService`, `DbContext`, `Collection<T>` (with its `protected virtual InsertItem`), `JsonConverter<T>`, `DelegatingHandler`. Their authors documented which members to override and promised to keep that contract.
-- **True subtypes that pass LSP.** Every `ExcavatorBooking` really can be used anywhere a `Booking` is, with no surprises.
+- **True subtypes that pass LSP.** Every `CorporateBooking` really can be used anywhere a `Booking` is, with no surprises.
 - **Closed sets of data variants.** `abstract record QuoteOutcome` with `Quoted` and `Unavailable` subtypes, matched with `switch` expressions. The hierarchy is shallow, and the variants are data, not behaviour bundles.
 - **Template Method** with a small, stable skeleton and one or two clearly documented hooks ([Template Method](#/lesson/m06-template-method)).
 
@@ -139,15 +139,15 @@ Two composition techniques are especially common:
 
 ```mermaid
 classDiagram
-    class Excavator
-    class ExcavatorWithOperator
-    class ExcavatorWithOperatorAndFuel
-    class ExcavatorWithOperatorFuelAndInsurance
-    class ExcavatorWithFuel
-    Excavator <|-- ExcavatorWithOperator
-    ExcavatorWithOperator <|-- ExcavatorWithOperatorAndFuel
-    ExcavatorWithOperatorAndFuel <|-- ExcavatorWithOperatorFuelAndInsurance
-    Excavator <|-- ExcavatorWithFuel
+    class Suv
+    class SuvWithDriver
+    class SuvWithDriverAndFuel
+    class SuvWithDriverFuelAndInsurance
+    class SuvWithFuel
+    Suv <|-- SuvWithDriver
+    SuvWithDriver <|-- SuvWithDriverAndFuel
+    SuvWithDriverAndFuel <|-- SuvWithDriverFuelAndInsurance
+    Suv <|-- SuvWithFuel
     class RentalQuoteCalculator {
         +Calculate(RentalRequest r) RentalQuote
     }
@@ -157,17 +157,17 @@ classDiagram
         +Charge(RentalRequest r) decimal
     }
     class BaseHireCharge
-    class OperatorCharge
+    class DriverCharge
     class FuelCharge
     class InsuranceCharge
     RentalQuoteCalculator o-- IChargeComponent : 1..*
     IChargeComponent <|.. BaseHireCharge
-    IChargeComponent <|.. OperatorCharge
+    IChargeComponent <|.. DriverCharge
     IChargeComponent <|.. FuelCharge
     IChargeComponent <|.. InsuranceCharge
 ```
 
-The left half shows the inheritance approach after a few months: a chain of subclasses, one per combination, and it's already missing "fuel and insurance without operator". The right half shows composition: one calculator holding any number of charge components, each implementing one interface. Four add-on classes cover all 16 combinations. A new add-on (night shift) is one new class.
+The left half shows the inheritance approach after a few months: a chain of subclasses, one per combination, and it's already missing "fuel and insurance without a driver". The right half shows composition: one calculator holding any number of charge components, each implementing one interface. Four add-on classes cover all 16 combinations. A new add-on (child seat) is one new class.
 
 ### The fragile base class, step by step
 
@@ -175,8 +175,8 @@ The left half shows the inheritance approach after a few months: a chain of subc
 sequenceDiagram
     participant C as Caller
     participant S as CountingLog (subclass)
-    participant B as MeasurementLog (base)
-    C->>S: AddRange([12.5, 8.0, 3.2])
+    participant B as TripLog (base)
+    C->>S: AddRange([12.5, 8.0, 3.2] km)
     S->>S: count += 3
     S->>B: base.AddRange(items)
     loop each item
@@ -187,7 +187,7 @@ sequenceDiagram
     S-->>C: count is 6, expected 3
 ```
 
-This is why the problem is so hard to see. The base class's `AddRange` calls `Add` virtually, so the call jumps *back down* into the subclass's override, which counts again. The subclass author didn't know about that self-call, because it's an implementation detail of the base class. A decorator that wraps an `IMeasurementLog` can't be fooled this way: when it forwards `AddRange` to the inner object, the inner object's internal calls never come back to the decorator.
+This is why the problem is so hard to see. The base class's `AddRange` calls `Add` virtually, so the call jumps *back down* into the subclass's override, which counts again. The subclass author didn't know about that self-call, because it's an implementation detail of the base class. A decorator that wraps an `ITripLog` can't be fooled this way: when it forwards `AddRange` to the inner object, the inner object's internal calls never come back to the decorator.
 
 ### Choosing: a quick decision path
 
@@ -206,43 +206,43 @@ Three questions, and a "no" to any of them points to composition. The second que
 
 ## Step-by-step example
 
-The system: a construction-equipment rental desk that quotes excavators, cranes and rollers to site teams, with optional operator, fuel and insurance.
+The system: a self-drive car rental app that quotes hatchbacks, sedans and SUVs to travellers, with an optional driver, prepaid fuel and damage protection (insurance).
 
 ### Step 1 — the inheritance version and its symptoms
 
 ```csharp
-public class EquipmentRental
+public class SuvRental
 {
-    public virtual decimal DailyRate => 12_000m;
+    public virtual decimal DailyRate => 3_000m;
     public virtual decimal Quote(int days) => DailyRate * days;
 }
-public class RentalWithOperator : EquipmentRental
+public class SuvRentalWithDriver : SuvRental
 {
-    public override decimal Quote(int days) => base.Quote(days) + 1_500m * days;
+    public override decimal Quote(int days) => base.Quote(days) + 1_000m * days;
 }
-public class RentalWithOperatorAndFuel : RentalWithOperator
+public class SuvRentalWithDriverAndFuel : SuvRentalWithDriver
 {
-    public override decimal Quote(int days) => base.Quote(days) + days * 8 * 14 * 92m;
+    public override decimal Quote(int days) => base.Quote(days) + days * 150 / 15 * 104m;   // 150 km/day, 15 km/L, ₹104/L
 }
 ```
 
-Symptoms: every combination is a class; rates for a crane need a parallel hierarchy (`CraneRental`, `CraneRentalWithOperator`, ...); fuel price is hard-coded in a subclass; and the quote can't show a line-by-line breakdown because the parts are fused by `base.Quote` calls.
+Symptoms: every combination is a class; rates for a hatchback need a parallel hierarchy (`HatchbackRental`, `HatchbackRentalWithDriver`, ...); the petrol price and the 150 km/day guess are hard-coded in a subclass; and the quote can't show a line-by-line breakdown because the parts are fused by `base.Quote` calls.
 
 ### Step 2 — find the independent dimensions
 
-List what varies independently: **machine** (rate, fuel burn, insured value), **operator** (yes/no, shifts), **fuel** (supplied by us or by the customer), **insurance** (yes/no). Four dimensions. Inheritance can model one; the rest must be composed.
+List what varies independently: **vehicle** (daily rate, mileage, insured value), **driver** (yes/no, how many), **fuel** (prepaid with us or filled by the customer), **insurance** (yes/no). Four dimensions. Inheritance can model one; the rest must be composed.
 
 ### Step 3 — make each dimension a part
 
-Each add-on becomes an `IChargeComponent` with a `Code` (for the breakdown) and `Charge(RentalRequest)`. The machine becomes *data* (`EquipmentSpec` record), not a class per type — cranes and excavators differ in numbers, not in behaviour.
+Each add-on becomes an `IChargeComponent` with a `Code` (for the breakdown) and `Charge(RentalRequest)`. The vehicle becomes *data* (`VehicleSpec` record), not a class per type — hatchbacks and SUVs differ in numbers, not in behaviour.
 
 ### Step 4 — compose per request
 
-A quote for "excavator, 5 days, with operator and fuel" is built by choosing the matching components. The calculator just sums them and returns line items.
+A quote for "SUV, 5 days, 150 km a day, with driver and fuel" is built by choosing the matching components. The calculator just sums them and returns line items.
 
 ### Step 5 — keep inheritance where it fits
 
-The rental desk also has a nightly job that flags overdue returns. That inherits from `BackgroundService`, a framework class designed for it. And quote results are a small closed set: `Quoted` or `Unavailable`. A sealed record hierarchy with pattern matching is the clearest model for that.
+The rental app also has an hourly job that flags overdue returns. That inherits from `BackgroundService`, a framework class designed for it. And quote results are a small closed set: `Quoted` or `Unavailable`. A sealed record hierarchy with pattern matching is the clearest model for that.
 
 ## Production-style C# implementation
 
@@ -258,13 +258,13 @@ Rentals.Api/
 ```csharp file=Rentals/RentalModels.cs
 namespace Rentals;
 
-/// <summary>Machines differ in numbers, not behaviour, so they are data — not a subclass per machine type.</summary>
-public sealed record EquipmentSpec(string Code, string Name, decimal DailyRate, decimal FuelLitresPerHour, decimal InsuredValue);
+/// <summary>Vehicles differ in numbers, not behaviour, so they are data — not a subclass per vehicle type.</summary>
+public sealed record VehicleSpec(string Code, string Name, decimal DailyRate, decimal KmPerLitre, decimal InsuredValue);
 
-public sealed record RentalRequest(EquipmentSpec Equipment, int Days, int HoursPerDay, bool WithOperator, bool WithFuel, bool WithInsurance)
+public sealed record RentalRequest(VehicleSpec Vehicle, int Days, int KmPerDay, bool WithDriver, bool WithFuel, bool WithInsurance)
 {
-    public int Days { get; } = Days > 0 ? Days : throw new ArgumentOutOfRangeException(nameof(Days));
-    public int HoursPerDay { get; } = HoursPerDay is > 0 and <= 24 ? HoursPerDay : throw new ArgumentOutOfRangeException(nameof(HoursPerDay));
+    public int Days { get; } = Days is > 0 and <= 90 ? Days : throw new ArgumentOutOfRangeException(nameof(Days));
+    public int KmPerDay { get; } = KmPerDay is > 0 and <= 1_000 ? KmPerDay : throw new ArgumentOutOfRangeException(nameof(KmPerDay));
 }
 
 public sealed record QuoteLine(string Code, decimal Amount);
@@ -273,18 +273,20 @@ public sealed record QuoteLine(string Code, decimal Amount);
 public abstract record QuoteOutcome
 {
     private QuoteOutcome() { }
-    public sealed record Quoted(string EquipmentCode, IReadOnlyList<QuoteLine> Lines) : QuoteOutcome
+    public sealed record Quoted(string VehicleCode, IReadOnlyList<QuoteLine> Lines) : QuoteOutcome
     {
         public decimal Total => Lines.Sum(l => l.Amount);
     }
-    public sealed record Unavailable(string EquipmentCode, string Reason) : QuoteOutcome;
+    public sealed record Unavailable(string VehicleCode, string Reason) : QuoteOutcome;
 }
 
 public sealed record RentalPricingOptions
 {
-    public decimal OperatorDailyWage { get; init; } = 1_500m;
-    public decimal DieselPricePerLitre { get; init; } = 92m;
-    public decimal InsurancePercentOfHire { get; init; } = 1.5m;
+    public decimal DriverDailyFee { get; init; } = 1_000m;
+    public decimal PetrolPricePerLitre { get; init; } = 104m;
+    public decimal InsurancePercentOfHire { get; init; } = 10m;
+    /// <summary>Driver duty limit: plans longer than this per day need a second driver.</summary>
+    public int MaxKmPerDriverPerDay { get; init; } = 300;
 }
 ```
 
@@ -310,18 +312,18 @@ public sealed class BaseHireCharge : IChargeComponent
 {
     public string Code => "HIRE";
     public bool AppliesTo(RentalRequest r) => true;
-    public decimal Charge(RentalRequest r) => Rupees.Round(r.Equipment.DailyRate * r.Days);
+    public decimal Charge(RentalRequest r) => Rupees.Round(r.Vehicle.DailyRate * r.Days);
 }
 
-public sealed class OperatorCharge(IOptions<RentalPricingOptions> options) : IChargeComponent
+public sealed class DriverCharge(IOptions<RentalPricingOptions> options) : IChargeComponent
 {
-    public string Code => "OPERATOR";
-    public bool AppliesTo(RentalRequest r) => r.WithOperator;
+    public string Code => "DRIVER";
+    public bool AppliesTo(RentalRequest r) => r.WithDriver;
     public decimal Charge(RentalRequest r)
     {
-        // A second operator is needed when the machine runs more than one 10-hour shift a day.
-        var operators = r.HoursPerDay > 10 ? 2 : 1;
-        return Rupees.Round(options.Value.OperatorDailyWage * operators * r.Days);
+        // Driver duty limits: a plan longer than one driver's daily limit needs a second driver.
+        var drivers = r.KmPerDay > options.Value.MaxKmPerDriverPerDay ? 2 : 1;
+        return Rupees.Round(options.Value.DriverDailyFee * drivers * r.Days);
     }
 }
 
@@ -330,7 +332,7 @@ public sealed class FuelCharge(IOptions<RentalPricingOptions> options) : ICharge
     public string Code => "FUEL";
     public bool AppliesTo(RentalRequest r) => r.WithFuel;
     public decimal Charge(RentalRequest r) =>
-        Rupees.Round(r.Equipment.FuelLitresPerHour * r.HoursPerDay * r.Days * options.Value.DieselPricePerLitre);
+        Rupees.Round((decimal)r.KmPerDay * r.Days / r.Vehicle.KmPerLitre * options.Value.PetrolPricePerLitre);
 }
 
 /// <summary>Insurance is priced on the hire charge; it composes another component rather than inheriting from it.</summary>
@@ -345,31 +347,31 @@ public sealed class InsuranceCharge(BaseHireCharge hire, IOptions<RentalPricingO
 ```csharp file=Rentals/RentalQuoteCalculator.cs
 namespace Rentals;
 
-public interface IEquipmentAvailability
+public interface IVehicleAvailability
 {
-    bool IsAvailable(string equipmentCode, int days);
+    bool IsAvailable(string vehicleCode, int days);
 }
 
-/// <summary>Composes charge components. Adding a "night shift" surcharge is one new IChargeComponent and one registration.</summary>
-public sealed class RentalQuoteCalculator(IEnumerable<IChargeComponent> components, IEquipmentAvailability availability)
+/// <summary>Composes charge components. Adding a "child seat" charge is one new IChargeComponent and one registration.</summary>
+public sealed class RentalQuoteCalculator(IEnumerable<IChargeComponent> components, IVehicleAvailability availability)
 {
     private readonly IReadOnlyList<IChargeComponent> _components = components.ToList();
 
     public QuoteOutcome Quote(RentalRequest request)
     {
-        if (!availability.IsAvailable(request.Equipment.Code, request.Days))
-            return new QuoteOutcome.Unavailable(request.Equipment.Code, "No unit free for the requested period.");
+        if (!availability.IsAvailable(request.Vehicle.Code, request.Days))
+            return new QuoteOutcome.Unavailable(request.Vehicle.Code, "No car of this type is free for the requested dates.");
 
         var lines = _components.Where(c => c.AppliesTo(request))
                                .Select(c => new QuoteLine(c.Code, c.Charge(request)))
                                .ToList();
-        return new QuoteOutcome.Quoted(request.Equipment.Code, lines);
+        return new QuoteOutcome.Quoted(request.Vehicle.Code, lines);
     }
 }
 
-public sealed class AlwaysAvailable : IEquipmentAvailability
+public sealed class AlwaysAvailable : IVehicleAvailability
 {
-    public bool IsAvailable(string equipmentCode, int days) => true;
+    public bool IsAvailable(string vehicleCode, int days) => true;
 }
 ```
 
@@ -388,8 +390,8 @@ public sealed class OverdueReturnMonitor(TimeProvider clock, ILogger<OverdueRetu
         using var timer = new PeriodicTimer(TimeSpan.FromHours(1), clock);
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
-            logger.LogInformation("Checking for overdue equipment returns at {Now}", clock.GetUtcNow());
-            // Query rentals past their end date and notify the site in-charge (omitted).
+            logger.LogInformation("Checking for overdue car returns at {Now}", clock.GetUtcNow());
+            // Query rentals past their return time and notify the customer and the branch (omitted).
         }
     }
 }
@@ -402,12 +404,12 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.Configure<RentalPricingOptions>(builder.Configuration.GetSection("Rentals:Pricing"));
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<IEquipmentAvailability, AlwaysAvailable>();
+builder.Services.AddSingleton<IVehicleAvailability, AlwaysAvailable>();
 
 // Composition: each charge is a part. Order of registration = order of quote lines.
 builder.Services.AddSingleton<BaseHireCharge>();
 builder.Services.AddSingleton<IChargeComponent>(sp => sp.GetRequiredService<BaseHireCharge>());
-builder.Services.AddSingleton<IChargeComponent, OperatorCharge>();
+builder.Services.AddSingleton<IChargeComponent, DriverCharge>();
 builder.Services.AddSingleton<IChargeComponent, FuelCharge>();
 builder.Services.AddSingleton<IChargeComponent, InsuranceCharge>();
 builder.Services.AddSingleton<RentalQuoteCalculator>();
@@ -416,18 +418,19 @@ builder.Services.AddHostedService<OverdueReturnMonitor>();
 
 var app = builder.Build();
 
-var catalogue = new Dictionary<string, EquipmentSpec>(StringComparer.OrdinalIgnoreCase)
+var catalogue = new Dictionary<string, VehicleSpec>(StringComparer.OrdinalIgnoreCase)
 {
-    ["EX-20T"] = new("EX-20T", "20 t hydraulic excavator", 12_000m, 14m, 85_00_000m),
-    ["CR-50T"] = new("CR-50T", "50 t mobile crane", 38_000m, 18m, 2_40_00_000m),
+    ["HB-AUTO"] = new("HB-AUTO", "Hatchback, automatic", 1_800m, 20m, 6_50_000m),
+    ["SUV-7S"] = new("SUV-7S", "7-seater SUV", 3_000m, 15m, 18_00_000m),
 };
 
-app.MapGet("/quotes/{code}", (string code, int days, int hoursPerDay, bool op, bool fuel, bool insurance, RentalQuoteCalculator calc) =>
+app.MapGet("/quotes/{code}", (string code, int days, int kmPerDay, bool driver, bool fuel, bool insurance, RentalQuoteCalculator calc) =>
 {
     if (!catalogue.TryGetValue(code, out var spec)) return Results.NotFound();
-    return calc.Quote(new RentalRequest(spec, days, hoursPerDay, op, fuel, insurance)) switch
+    if (days is < 1 or > 90 || kmPerDay is < 1 or > 1_000) return Results.BadRequest("days must be 1-90 and kmPerDay 1-1000.");
+    return calc.Quote(new RentalRequest(spec, days, kmPerDay, driver, fuel, insurance)) switch
     {
-        QuoteOutcome.Quoted q => Results.Ok(new { q.EquipmentCode, q.Lines, q.Total }),
+        QuoteOutcome.Quoted q => Results.Ok(new { q.VehicleCode, q.Lines, q.Total }),
         QuoteOutcome.Unavailable u => Results.Conflict(u.Reason),
         _ => Results.Problem("Unexpected quote outcome"),
     };
@@ -438,59 +441,64 @@ app.Run();
 
 What to notice:
 
-- **Machines are data.** `EquipmentSpec` records replace a subclass per machine type. Behaviour differs only by numbers.
-- **Each dimension is a component.** Operator, fuel and insurance each know one rule. Any combination is a choice of components.
+- **Vehicles are data.** `VehicleSpec` records replace a subclass per vehicle type. Behaviour differs only by numbers.
+- **Each dimension is a component.** Driver, fuel and insurance each know one rule. Any combination is a choice of components.
 - **`InsuranceCharge` composes `BaseHireCharge`** to reuse its calculation. That's reuse through a held object, not through a parent class.
 - **Inheritance appears twice, deliberately.** `OverdueReturnMonitor : BackgroundService` uses a framework extension point. `QuoteOutcome` is a closed, shallow data hierarchy; the private constructor stops anyone adding a third outcome outside the type.
 - **Everything is `sealed`** unless designed for extension.
+- **Bad input is rejected at the edge.** The endpoint returns 400 for out-of-range days or distance before the record constructor would throw, so a typo in a query string never becomes a 500.
+
+:::callout type=note title="What a senior reviewer would add"
+A quote is a promise about money. In production, save each quote with an id, the prices used and an expiry (say 15 minutes), and charge the saved quote at checkout instead of recomputing it — otherwise a petrol-price change between quote and payment silently changes what the customer pays. Composition makes this easy: the saved line items *are* the breakdown.
+:::
 
 ## Bad design vs good design
 
 ### The bad version: inheriting to reuse code
 
 ```csharp
-public class MeasurementLog
+public class TripLog
 {
     protected readonly List<decimal> Items = new();
-    public virtual void Add(decimal quantity) => Items.Add(quantity);
-    public virtual void AddRange(IEnumerable<decimal> quantities) { foreach (var q in quantities) Add(q); }
+    public virtual void Add(decimal distanceKm) => Items.Add(distanceKm);
+    public virtual void AddRange(IEnumerable<decimal> distances) { foreach (var q in distances) Add(q); }
     public int Count => Items.Count;
 }
 
-public class CountingLog : MeasurementLog
+public class CountingLog : TripLog
 {
     public int AddedCount { get; private set; }
-    public override void Add(decimal quantity) { AddedCount++; base.Add(quantity); }
-    public override void AddRange(IEnumerable<decimal> quantities)
+    public override void Add(decimal distanceKm) { AddedCount++; base.Add(distanceKm); }
+    public override void AddRange(IEnumerable<decimal> distances)
     {
-        var list = quantities.ToList();
+        var list = distances.ToList();
         AddedCount += list.Count;
         base.AddRange(list);   // calls Add for each item -> counted twice
     }
 }
 
-public class ReadOnlyLog : MeasurementLog
+public class ReadOnlyLog : TripLog
 {
-    public override void Add(decimal quantity) => throw new NotSupportedException();   // refused bequest
+    public override void Add(decimal distanceKm) => throw new NotSupportedException();   // refused bequest
 }
 ```
 
 ### What's wrong, in detail
 
-1. **Fragile base class.** `CountingLog` depends on whether `MeasurementLog.AddRange` calls `Add`. That's an implementation detail, so any base-class optimisation silently breaks the count in one direction or the other.
-2. **Exposed internals.** `protected Items` lets every subclass bypass the base class's rules. If the base later adds validation ("quantity must be positive") in `Add`, a subclass writing to `Items` directly skips it.
-3. **Refused bequest.** `ReadOnlyLog` "is a" log that can't be added to. Code that takes a `MeasurementLog` and calls `Add` blows up. This is an LSP violation, and the ISP fix is a read-only role interface ([ISP](#/lesson/m04-isp)).
+1. **Fragile base class.** `CountingLog` depends on whether `TripLog.AddRange` calls `Add`. That's an implementation detail, so any base-class optimisation silently breaks the count in one direction or the other.
+2. **Exposed internals.** `protected Items` lets every subclass bypass the base class's rules. If the base later adds validation ("distance must be positive") in `Add`, a subclass writing to `Items` directly skips it.
+3. **Refused bequest.** `ReadOnlyLog` "is a" log that can't be added to. Code that takes a `TripLog` and calls `Add` blows up. This is an LSP violation, and the ISP fix is a read-only role interface ([ISP](#/lesson/m04-isp)).
 4. **One axis only.** Want a counting *and* read-only *and* audited log? Inheritance offers `CountingAuditedReadOnlyLog`. Composition offers three wrappers stacked in any order.
 
 ### The good version: role interfaces plus decorators
 
 ```csharp
-public interface IMeasurementReader { int Count { get; } IReadOnlyList<decimal> Items { get; } }
-public interface IMeasurementLog : IMeasurementReader { void Add(decimal q); void AddRange(IEnumerable<decimal> q); }
+public interface ITripReader { int Count { get; } IReadOnlyList<decimal> Items { get; } }
+public interface ITripLog : ITripReader { void Add(decimal q); void AddRange(IEnumerable<decimal> q); }
 
-public sealed class MeasurementLog : IMeasurementLog { /* private list, validation in one place */ }
+public sealed class TripLog : ITripLog { /* private list, validation in one place */ }
 
-public sealed class CountingLog(IMeasurementLog inner) : IMeasurementLog
+public sealed class CountingLog(ITripLog inner) : ITripLog
 {
     public int AddedCount { get; private set; }
     public int Count => inner.Count;
@@ -500,7 +508,7 @@ public sealed class CountingLog(IMeasurementLog inner) : IMeasurementLog
 }
 ```
 
-The decorator counts what *it* forwarded, so it's right whatever `MeasurementLog.AddRange` does internally. A read-only consumer takes `IMeasurementReader`, so there's no `Add` to refuse. `MeasurementLog` is `sealed` and keeps its list private, so its rules can't be bypassed.
+The decorator counts what *it* forwarded, so it's right whatever `TripLog.AddRange` does internally. A read-only consumer takes `ITripReader`, so there's no `Add` to refuse. `TripLog` is `sealed` and keeps its list private, so its rules can't be bypassed.
 
 ### When applying "composition over inheritance" blindly is harmful
 
@@ -519,7 +527,7 @@ Inheriting from your *own* abstract base class is safest when the base class is 
 
 ## Practical playground
 
-`AuditedList` inherits from `List<string>` and uses `new` to "override" `Add`. Run it: when the same object is used through `IList<string>`, the audit count is bypassed. Then fix it two ways: (1) inherit from `Collection<string>` and override `InsertItem`, which *is* designed for extension; (2) wrap a `List<string>` and implement only the methods you need. Both should report 3 additions.
+`AuditedList` keeps booking ids. It inherits from `List<string>` and uses `new` to "override" `Add`. Run it: when the same object is used through `IList<string>`, the audit count is bypassed. Then fix it two ways: (1) inherit from `Collection<string>` and override `InsertItem`, which *is* designed for extension; (2) wrap a `List<string>` and implement only the methods you need. Both should report 3 additions.
 
 :::playground type=csharp title="When inheritance from List<T> lies"
 ```csharp file=Program.cs
@@ -537,11 +545,11 @@ public static class Program
     public static void Main()
     {
         var list = new AuditedList();
-        list.Add("RFI-101");                    // counted
+        list.Add("BK-101");                     // counted
         IList<string> asInterface = list;
-        asInterface.Add("RFI-102");             // NOT counted: calls List<T>.Add
+        asInterface.Add("BK-102");              // NOT counted: calls List<T>.Add
         List<string> asBase = list;
-        asBase.Add("RFI-103");                  // NOT counted either
+        asBase.Add("BK-103");                   // NOT counted either
 
         Console.WriteLine($"Items: {list.Count}, audited additions: {list.Additions}");
         // TODO: fix with Collection<string> + override InsertItem, or with a wrapper class.
@@ -553,18 +561,18 @@ public static class Program
 ## Exercises
 
 :::exercise id=m04-composition-inheritance-ex1 difficulty=beginner kind=code title="Fix the double count with a decorator"
-`CountingLog` inherits from `MeasurementLog` and counts twice when `AddRange` is used. Implement `CountingLogDecorator`, which wraps any `IMeasurementLog` and counts every quantity it forwards — correctly, whatever the inner log does internally.
+`CountingLog` inherits from `TripLog` and counts twice when `AddRange` is used. Implement `CountingLogDecorator`, which wraps any `ITripLog` and counts every trip distance it forwards — correctly, whatever the inner log does internally.
 ::requirements
-- `CountingLogDecorator(IMeasurementLog inner)` implements `IMeasurementLog`.
+- `CountingLogDecorator(ITripLog inner)` implements `ITripLog`.
 - `Add` and `AddRange` forward to `inner` and update `AddedCount`.
 - `Count` returns the inner log's count.
-- Don't change `MeasurementLog` or `IMeasurementLog`.
+- Don't change `TripLog` or `ITripLog`.
 ::acceptance
-- `AddRange` of 3 items gives `AddedCount == 3`, both over `MeasurementLog` (which calls `Add` internally) and over a log whose `AddRange` doesn't.
+- `AddRange` of 3 items gives `AddedCount == 3`, both over `TripLog` (which calls `Add` internally) and over a log whose `AddRange` doesn't.
 - `Add` once more gives `AddedCount == 4`.
 - `Count` matches the inner log.
 ::hint
-The decorator *is* an `IMeasurementLog` and *has* an `IMeasurementLog`.
+The decorator *is* an `ITripLog` and *has* an `ITripLog`.
 ::hint
 Count in the decorator, based on what *you* forwarded — never on what the inner object does internally.
 ::hint
@@ -579,45 +587,45 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public interface IMeasurementLog
+public interface ITripLog
 {
-    void Add(decimal quantity);
-    void AddRange(IEnumerable<decimal> quantities);
+    void Add(decimal distanceKm);
+    void AddRange(IEnumerable<decimal> distances);
     int Count { get; }
 }
 
-public class MeasurementLog : IMeasurementLog
+public class TripLog : ITripLog
 {
     private readonly List<decimal> _items = new();
-    public virtual void Add(decimal quantity)
+    public virtual void Add(decimal distanceKm)
     {
-        if (quantity <= 0) throw new ArgumentOutOfRangeException(nameof(quantity));
-        _items.Add(quantity);
+        if (distanceKm <= 0) throw new ArgumentOutOfRangeException(nameof(distanceKm));
+        _items.Add(distanceKm);
     }
-    public virtual void AddRange(IEnumerable<decimal> quantities) { foreach (var q in quantities) Add(q); }
+    public virtual void AddRange(IEnumerable<decimal> distances) { foreach (var q in distances) Add(q); }
     public int Count => _items.Count;
 }
 
 /// <summary>The inheritance version: double-counts on AddRange.</summary>
-public class CountingLog : MeasurementLog
+public class CountingLog : TripLog
 {
     public int AddedCount { get; private set; }
-    public override void Add(decimal quantity) { AddedCount++; base.Add(quantity); }
-    public override void AddRange(IEnumerable<decimal> quantities)
+    public override void Add(decimal distanceKm) { AddedCount++; base.Add(distanceKm); }
+    public override void AddRange(IEnumerable<decimal> distances)
     {
-        var list = quantities.ToList();
+        var list = distances.ToList();
         AddedCount += list.Count;
         base.AddRange(list);
     }
 }
 
-public sealed class CountingLogDecorator : IMeasurementLog
+public sealed class CountingLogDecorator : ITripLog
 {
-    public CountingLogDecorator(IMeasurementLog inner) => throw new NotImplementedException();
+    public CountingLogDecorator(ITripLog inner) => throw new NotImplementedException();
     public int AddedCount => throw new NotImplementedException();
     public int Count => throw new NotImplementedException();
-    public void Add(decimal quantity) => throw new NotImplementedException();
-    public void AddRange(IEnumerable<decimal> quantities) => throw new NotImplementedException();
+    public void Add(decimal distanceKm) => throw new NotImplementedException();
+    public void AddRange(IEnumerable<decimal> distances) => throw new NotImplementedException();
 }
 ```
 ::tests
@@ -628,11 +636,11 @@ using Xunit;
 public class CountingLogTests
 {
     /// <summary>A different inner implementation whose AddRange does NOT call Add.</summary>
-    private sealed class BulkLog : IMeasurementLog
+    private sealed class BulkLog : ITripLog
     {
         private readonly List<decimal> _items = new();
-        public void Add(decimal quantity) => _items.Add(quantity);
-        public void AddRange(IEnumerable<decimal> quantities) => _items.AddRange(quantities);
+        public void Add(decimal distanceKm) => _items.Add(distanceKm);
+        public void AddRange(IEnumerable<decimal> distances) => _items.AddRange(distances);
         public int Count => _items.Count;
     }
 
@@ -644,9 +652,9 @@ public class CountingLogTests
     private static int Run(CountingLog log) { log.AddRange(Three); return log.AddedCount; }
 
     [Fact]
-    public void Decorator_counts_correctly_over_MeasurementLog()
+    public void Decorator_counts_correctly_over_TripLog()
     {
-        var log = new CountingLogDecorator(new MeasurementLog());
+        var log = new CountingLogDecorator(new TripLog());
         log.AddRange(Three);
         Assert.Equal(3, log.AddedCount);
         log.Add(1m);
@@ -666,7 +674,7 @@ public class CountingLogTests
     [Fact]
     public void Decorator_works_with_lazy_sequences()
     {
-        var log = new CountingLogDecorator(new MeasurementLog());
+        var log = new CountingLogDecorator(new TripLog());
         log.AddRange(Generate());
         Assert.Equal(2, log.AddedCount);
         Assert.Equal(2, log.Count);
@@ -681,73 +689,73 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public interface IMeasurementLog
+public interface ITripLog
 {
-    void Add(decimal quantity);
-    void AddRange(IEnumerable<decimal> quantities);
+    void Add(decimal distanceKm);
+    void AddRange(IEnumerable<decimal> distances);
     int Count { get; }
 }
 
-public class MeasurementLog : IMeasurementLog
+public class TripLog : ITripLog
 {
     private readonly List<decimal> _items = new();
-    public virtual void Add(decimal quantity)
+    public virtual void Add(decimal distanceKm)
     {
-        if (quantity <= 0) throw new ArgumentOutOfRangeException(nameof(quantity));
-        _items.Add(quantity);
+        if (distanceKm <= 0) throw new ArgumentOutOfRangeException(nameof(distanceKm));
+        _items.Add(distanceKm);
     }
-    public virtual void AddRange(IEnumerable<decimal> quantities) { foreach (var q in quantities) Add(q); }
+    public virtual void AddRange(IEnumerable<decimal> distances) { foreach (var q in distances) Add(q); }
     public int Count => _items.Count;
 }
 
 /// <summary>The inheritance version: double-counts on AddRange.</summary>
-public class CountingLog : MeasurementLog
+public class CountingLog : TripLog
 {
     public int AddedCount { get; private set; }
-    public override void Add(decimal quantity) { AddedCount++; base.Add(quantity); }
-    public override void AddRange(IEnumerable<decimal> quantities)
+    public override void Add(decimal distanceKm) { AddedCount++; base.Add(distanceKm); }
+    public override void AddRange(IEnumerable<decimal> distances)
     {
-        var list = quantities.ToList();
+        var list = distances.ToList();
         AddedCount += list.Count;
         base.AddRange(list);
     }
 }
 
-public sealed class CountingLogDecorator(IMeasurementLog inner) : IMeasurementLog
+public sealed class CountingLogDecorator(ITripLog inner) : ITripLog
 {
     public int AddedCount { get; private set; }
     public int Count => inner.Count;
 
-    public void Add(decimal quantity)
+    public void Add(decimal distanceKm)
     {
-        inner.Add(quantity);
+        inner.Add(distanceKm);
         AddedCount++;
     }
 
-    public void AddRange(IEnumerable<decimal> quantities)
+    public void AddRange(IEnumerable<decimal> distances)
     {
-        var list = quantities.ToList();
+        var list = distances.ToList();
         inner.AddRange(list);
         AddedCount += list.Count;
     }
 }
 ```
 
-The decorator only counts what it forwarded. The inner log's internal calls (`AddRange` calling `Add`) stay inside the inner object and never come back up, because there's no virtual dispatch between them. Counting *after* forwarding also means a rejected quantity (the inner log throws) isn't counted.
+The decorator only counts what it forwarded. The inner log's internal calls (`AddRange` calling `Add`) stay inside the inner object and never come back up, because there's no virtual dispatch between them. Counting *after* forwarding also means a rejected distance (the inner log throws) isn't counted.
 ::mistakes
-- Counting before forwarding, so a rejected quantity is still counted.
-- Enumerating the input twice (`quantities.Count()` then forwarding), which breaks for one-shot sequences.
-- Making the decorator inherit from `MeasurementLog` "to save typing" — that brings the fragile self-call back.
+- Counting before forwarding, so a rejected distance is still counted.
+- Enumerating the input twice (`distances.Count()` then forwarding), which breaks for one-shot sequences.
+- Making the decorator inherit from `TripLog` "to save typing" — that brings the fragile self-call back.
 :::
 
 :::exercise id=m04-composition-inheritance-ex2 difficulty=beginner kind=written title="Is-a or has-a?"
 For each pair, say whether inheritance ("is-a") or composition ("has-a") is the better model, and why. Check LSP for every "is-a".
 
-1. `Crane` and `Equipment` in an asset register where all equipment has a code, a purchase date and a depreciation schedule.
-2. `SiteEngineer` and `Employee`, where a person can move from site engineer to project manager.
+1. `Suv` and `Vehicle` in a fleet register where every vehicle has a registration number, a purchase date and a depreciation schedule.
+2. `BranchAgent` and `Employee`, where a person can move from front-desk agent to branch manager.
 3. `ReadOnlyRepository` and `Repository`.
 4. `InvoiceController` and ASP.NET Core's `ControllerBase`.
-5. `GpsTrackedExcavator` and `Excavator`, where GPS trackers can be fitted and removed.
+5. `GpsTrackedCar` and `Car`, where GPS trackers can be fitted and removed.
 6. `PaymentResult` with `Succeeded` and `Failed` variants.
 ::acceptance
 - Each answer names the relationship and gives a reason.
@@ -760,11 +768,11 @@ Would every subclass honour every parent method without surprises?
 ::hint
 Is the parent class designed and documented for inheritance?
 ::solution
-1. **Inheritance is reasonable**, or even better, **data**: if cranes differ only by numbers, a single `Equipment` with a type field works. Subclass only if cranes have genuinely different behaviour (load charts), and keep it shallow.
+1. **Inheritance is reasonable**, or even better, **data**: if SUVs differ only by numbers, a single `Vehicle` with a type field works. Subclass only if SUVs have genuinely different behaviour (a different depreciation method), and keep it shallow.
 2. **Composition.** A role can change; an object can't change its class. `Employee` *has* a `Role` (or a list of role assignments with dates).
-3. **Composition / role interfaces.** A read-only repository can't honour `Save`, so it fails LSP. Use `IProjectReader` and `IProjectWriter`.
+3. **Composition / role interfaces.** A read-only repository can't honour `Save`, so it fails LSP. Use `IBookingReader` and `IBookingWriter`.
 4. **Inheritance.** `ControllerBase` is a framework extension point designed for it.
-5. **Composition.** Trackers are fitted and removed; `Excavator` *has* an optional `ITelemetryDevice`.
+5. **Composition.** Trackers are fitted and removed; `Car` *has* an optional `ITelemetryDevice`.
 6. **Inheritance of a closed set**: `abstract record PaymentResult` with sealed `Succeeded` and `Failed` records, matched with `switch`. Shallow, closed, data-like.
 ::mistakes
 - Modelling roles or temporary capabilities as subclasses.
@@ -772,16 +780,16 @@ Is the parent class designed and documented for inheritance?
 :::
 
 :::exercise id=m04-composition-inheritance-ex3 difficulty=intermediate kind=code title="Compose a rental quote"
-Replace the `RentalWithOperatorAndFuel`-style hierarchy with composed charge components. Implement the four components and `QuoteCalculator`.
+Replace the `SuvRentalWithDriverAndFuel`-style hierarchy with composed charge components. Implement the four components and `QuoteCalculator`.
 ::requirements
 - `BaseHireCharge`: daily rate × days. Always applies.
-- `OperatorCharge(dailyWage)`: wage × days; two operators when `HoursPerDay > 10`. Applies when `WithOperator`.
-- `FuelCharge(pricePerLitre)`: litres/hour × hours/day × days × price. Applies when `WithFuel`.
+- `DriverCharge(dailyFee)`: fee × days; two drivers when `KmPerDay > 300`. Applies when `WithDriver`.
+- `FuelCharge(pricePerLitre)`: km/day × days ÷ km per litre × price. Applies when `WithFuel`.
 - `InsuranceCharge(percent)`: percent of the **base hire** charge. Applies when `WithInsurance`. It must reuse `BaseHireCharge` by holding one, not by inheriting.
 - `QuoteCalculator.Lines` returns `(Code, Amount)` for applicable components in the order given; `Total` sums them. Round each amount to 2 decimals, half away from zero.
 ::acceptance
-- Excavator at ₹12,000/day, 14 L/h, 5 days × 8 h, with operator (₹1,500/day), fuel (₹92/L) and insurance (1.5 %) → HIRE 60,000; OPERATOR 7,500; FUEL 51,520; INSURANCE 900; total 1,19,920.
-- 12 hours/day doubles the operator charge.
+- SUV at ₹3,000/day, 15 km/L, 5 days × 150 km, with driver (₹1,000/day), fuel (₹104/L) and insurance (10 %) → HIRE 15,000; DRIVER 5,000; FUEL 5,200 (750 km ÷ 15 = 50 L); INSURANCE 1,500; total 26,700.
+- 350 km/day doubles the driver charge.
 - Without add-ons, only HIRE appears.
 - `InsuranceCharge` does not inherit from `BaseHireCharge`.
 ::hint
@@ -801,8 +809,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public sealed record EquipmentSpec(string Code, decimal DailyRate, decimal FuelLitresPerHour);
-public sealed record RentalRequest(EquipmentSpec Equipment, int Days, int HoursPerDay, bool WithOperator, bool WithFuel, bool WithInsurance);
+public sealed record VehicleSpec(string Code, decimal DailyRate, decimal KmPerLitre);
+public sealed record RentalRequest(VehicleSpec Vehicle, int Days, int KmPerDay, bool WithDriver, bool WithFuel, bool WithInsurance);
 
 public interface IChargeComponent
 {
@@ -818,9 +826,9 @@ public sealed class BaseHireCharge : IChargeComponent
     public decimal Amount(RentalRequest request) => throw new NotImplementedException();
 }
 
-public sealed class OperatorCharge(decimal dailyWage) : IChargeComponent
+public sealed class DriverCharge(decimal dailyFee) : IChargeComponent
 {
-    public string Code => "OPERATOR";
+    public string Code => "DRIVER";
     public bool AppliesTo(RentalRequest request) => throw new NotImplementedException();
     public decimal Amount(RentalRequest request) => throw new NotImplementedException();
 }
@@ -852,34 +860,42 @@ using Xunit;
 
 public class RentalQuoteTests
 {
-    private static readonly EquipmentSpec Excavator = new("EX-20T", 12_000m, 14m);
+    private static readonly VehicleSpec Suv = new("SUV-7S", 3_000m, 15m);
 
     private static QuoteCalculator Calculator()
     {
         var hire = new BaseHireCharge();
-        IChargeComponent[] parts = { hire, new OperatorCharge(1_500m), new FuelCharge(92m), new InsuranceCharge(hire, 1.5m) };
+        IChargeComponent[] parts = { hire, new DriverCharge(1_000m), new FuelCharge(104m), new InsuranceCharge(hire, 10m) };
         return new QuoteCalculator(parts);
     }
 
     [Fact]
     public void Full_quote_breakdown()
     {
-        var lines = Calculator().Lines(new RentalRequest(Excavator, 5, 8, true, true, true));
-        Assert.Equal(new[] { "HIRE", "OPERATOR", "FUEL", "INSURANCE" }, lines.Select(l => l.Code).ToArray());
-        Assert.Equal(new[] { 60_000m, 7_500m, 51_520m, 900m }, lines.Select(l => l.Amount).ToArray());
+        var lines = Calculator().Lines(new RentalRequest(Suv, 5, 150, true, true, true));
+        Assert.Equal(new[] { "HIRE", "DRIVER", "FUEL", "INSURANCE" }, lines.Select(l => l.Code).ToArray());
+        Assert.Equal(new[] { 15_000m, 5_000m, 5_200m, 1_500m }, lines.Select(l => l.Amount).ToArray());
     }
 
     [Fact]
     public void Full_quote_total() =>
-        Assert.Equal(1_19_920m, Calculator().Total(new RentalRequest(Excavator, 5, 8, true, true, true)));
+        Assert.Equal(26_700m, Calculator().Total(new RentalRequest(Suv, 5, 150, true, true, true)));
 
     [Fact]
-    public void Long_shifts_need_two_operators() =>
-        Assert.Equal(15_000m, Calculator().Lines(new RentalRequest(Excavator, 5, 12, true, false, false)).Single(l => l.Code == "OPERATOR").Amount);
+    public void Long_drives_need_two_drivers() =>
+        Assert.Equal(10_000m, Calculator().Lines(new RentalRequest(Suv, 5, 350, true, false, false)).Single(l => l.Code == "DRIVER").Amount);
+
+    [Fact]
+    public void Exactly_300_km_needs_one_driver() =>
+        Assert.Equal(5_000m, Calculator().Lines(new RentalRequest(Suv, 5, 300, true, false, false)).Single(l => l.Code == "DRIVER").Amount);
+
+    [Fact]
+    public void Fuel_rounds_to_paise() =>
+        Assert.Equal(1_386.67m, Calculator().Lines(new RentalRequest(Suv, 1, 200, false, true, false)).Single(l => l.Code == "FUEL").Amount);
 
     [Fact]
     public void No_add_ons_only_hire() =>
-        Assert.Equal("HIRE", Calculator().Lines(new RentalRequest(Excavator, 3, 8, false, false, false)).Single().Code);
+        Assert.Equal("HIRE", Calculator().Lines(new RentalRequest(Suv, 3, 150, false, false, false)).Single().Code);
 
     [Fact]
     public void Insurance_composes_rather_than_inherits() =>
@@ -892,8 +908,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public sealed record EquipmentSpec(string Code, decimal DailyRate, decimal FuelLitresPerHour);
-public sealed record RentalRequest(EquipmentSpec Equipment, int Days, int HoursPerDay, bool WithOperator, bool WithFuel, bool WithInsurance);
+public sealed record VehicleSpec(string Code, decimal DailyRate, decimal KmPerLitre);
+public sealed record RentalRequest(VehicleSpec Vehicle, int Days, int KmPerDay, bool WithDriver, bool WithFuel, bool WithInsurance);
 
 public interface IChargeComponent
 {
@@ -911,21 +927,21 @@ public sealed class BaseHireCharge : IChargeComponent
 {
     public string Code => "HIRE";
     public bool AppliesTo(RentalRequest request) => true;
-    public decimal Amount(RentalRequest r) => Rupees.Round(r.Equipment.DailyRate * r.Days);
+    public decimal Amount(RentalRequest r) => Rupees.Round(r.Vehicle.DailyRate * r.Days);
 }
 
-public sealed class OperatorCharge(decimal dailyWage) : IChargeComponent
+public sealed class DriverCharge(decimal dailyFee) : IChargeComponent
 {
-    public string Code => "OPERATOR";
-    public bool AppliesTo(RentalRequest request) => request.WithOperator;
-    public decimal Amount(RentalRequest r) => Rupees.Round(dailyWage * (r.HoursPerDay > 10 ? 2 : 1) * r.Days);
+    public string Code => "DRIVER";
+    public bool AppliesTo(RentalRequest request) => request.WithDriver;
+    public decimal Amount(RentalRequest r) => Rupees.Round(dailyFee * (r.KmPerDay > 300 ? 2 : 1) * r.Days);
 }
 
 public sealed class FuelCharge(decimal pricePerLitre) : IChargeComponent
 {
     public string Code => "FUEL";
     public bool AppliesTo(RentalRequest request) => request.WithFuel;
-    public decimal Amount(RentalRequest r) => Rupees.Round(r.Equipment.FuelLitresPerHour * r.HoursPerDay * r.Days * pricePerLitre);
+    public decimal Amount(RentalRequest r) => Rupees.Round((decimal)r.KmPerDay * r.Days / r.Vehicle.KmPerLitre * pricePerLitre);
 }
 
 public sealed class InsuranceCharge(BaseHireCharge hire, decimal percent) : IChargeComponent
@@ -946,25 +962,25 @@ public sealed class QuoteCalculator(IEnumerable<IChargeComponent> components)
 }
 ```
 
-Four small classes cover all 16 add-on combinations, for every machine. A night-shift surcharge is one more component; nothing else changes.
+Four small classes cover all 16 add-on combinations, for every vehicle type. A child-seat charge is one more component; nothing else changes. Note the fuel formula multiplies before rounding: 200 km ÷ 15 km/L × ₹104 = ₹1,386.666…, rounded once to ₹1,386.67. Rounding the litres first (13.33 L × 104 = ₹1,386.32) gives a different bill — decide where rounding happens and test it.
 ::alternatives
-If every add-on is "rate × days" with no special rules, a single `PerDayCharge(code, rate, Func<RentalRequest, bool> applies)` configured from data is even simpler. Use separate classes only where rules differ (two operators for long shifts, insurance on hire).
+If every add-on is "rate × days" with no special rules, a single `PerDayCharge(code, rate, Func<RentalRequest, bool> applies)` configured from data is even simpler. Use separate classes only where rules differ (two drivers for long drives, insurance on hire).
 ::mistakes
 - `InsuranceCharge : BaseHireCharge` to reuse `Amount` — now insurance "is a" hire charge and inherits `Code` and `AppliesTo` semantics it shouldn't have.
 - Computing insurance on the running total, which makes the result depend on component order.
 :::
 
 :::exercise id=m04-composition-inheritance-ex4 difficulty=intermediate kind=code title="Replace a refused bequest with delegation"
-`ReadOnlyProjectRepository` inherits from `ProjectRepository` and throws on `Save` and `Delete`. The site dashboard only needs to read. Implement `ProjectDirectory`, which **holds** a `ProjectRepository` and exposes only `Find` and `ActiveInState`.
+`ReadOnlyBranchRepository` inherits from `BranchRepository` and throws on `Save` and `Delete`. The customer-facing "find a pickup branch" page only needs to read. Implement `BranchDirectory`, which **holds** a `BranchRepository` and exposes only `Find` and `ActiveInState`.
 ::requirements
-- `ProjectDirectory(ProjectRepository repository)` — delegation, not inheritance.
-- `Find(code)` returns the project or `null`.
-- `ActiveInState(stateCode)` returns active projects in that state, ordered by code.
-- `ProjectDirectory` has no `Save` or `Delete` methods at all.
+- `BranchDirectory(BranchRepository repository)` — delegation, not inheritance.
+- `Find(code)` returns the branch or `null`.
+- `ActiveInState(stateCode)` returns active branches in that state, ordered by code.
+- `BranchDirectory` has no `Save` or `Delete` methods at all.
 ::acceptance
 - Reads delegate to the repository.
-- Reflection finds no `Save` or `Delete` on `ProjectDirectory`.
-- `ProjectDirectory` doesn't inherit from `ProjectRepository`.
+- Reflection finds no `Save` or `Delete` on `BranchDirectory`.
+- `BranchDirectory` doesn't inherit from `BranchRepository`.
 ::hint
 This is Fowler's "Replace Superclass with Delegate".
 ::hint
@@ -972,137 +988,137 @@ Store the repository in a field (or a primary-constructor parameter) and forward
 ::hint
 `ActiveInState` can filter `repository.All()` — the logic is new, the data access is delegated.
 ::starter
-```csharp file=ProjectDirectory.cs
+```csharp file=BranchDirectory.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public sealed record Project(string Code, string Name, string StateCode, bool IsActive);
+public sealed record Branch(string Code, string Name, string StateCode, bool IsActive);
 
-public class ProjectRepository
+public class BranchRepository
 {
-    private readonly Dictionary<string, Project> _projects = new(StringComparer.OrdinalIgnoreCase);
-    public virtual Project? Find(string code) => _projects.GetValueOrDefault(code);
-    public virtual IReadOnlyList<Project> All() => _projects.Values.ToList();
-    public virtual void Save(Project project) => _projects[project.Code] = project;
-    public virtual void Delete(string code) => _projects.Remove(code);
+    private readonly Dictionary<string, Branch> _branches = new(StringComparer.OrdinalIgnoreCase);
+    public virtual Branch? Find(string code) => _branches.GetValueOrDefault(code);
+    public virtual IReadOnlyList<Branch> All() => _branches.Values.ToList();
+    public virtual void Save(Branch branch) => _branches[branch.Code] = branch;
+    public virtual void Delete(string code) => _branches.Remove(code);
 }
 
 /// <summary>The refused-bequest version.</summary>
-public class ReadOnlyProjectRepository : ProjectRepository
+public class ReadOnlyBranchRepository : BranchRepository
 {
-    public override void Save(Project project) => throw new NotSupportedException();
+    public override void Save(Branch branch) => throw new NotSupportedException();
     public override void Delete(string code) => throw new NotSupportedException();
 }
 
-public sealed class ProjectDirectory
+public sealed class BranchDirectory
 {
-    public ProjectDirectory(ProjectRepository repository) => throw new NotImplementedException();
-    public Project? Find(string code) => throw new NotImplementedException();
-    public IReadOnlyList<Project> ActiveInState(string stateCode) => throw new NotImplementedException();
+    public BranchDirectory(BranchRepository repository) => throw new NotImplementedException();
+    public Branch? Find(string code) => throw new NotImplementedException();
+    public IReadOnlyList<Branch> ActiveInState(string stateCode) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=ProjectDirectoryTests.cs
+```csharp file=BranchDirectoryTests.cs
 using System.Linq;
 using Xunit;
 
-public class ProjectDirectoryTests
+public class BranchDirectoryTests
 {
-    private static ProjectDirectory Create()
+    private static BranchDirectory Create()
     {
-        var repo = new ProjectRepository();
-        repo.Save(new Project("UK-HW-07", "Rishikesh bypass", "05", true));
-        repo.Save(new Project("UK-HW-02", "Dehradun ring road", "05", true));
-        repo.Save(new Project("UK-BR-01", "Old Ganga bridge", "05", false));
-        repo.Save(new Project("MH-RR-01", "Pune ring road", "27", true));
-        return new ProjectDirectory(repo);
+        var repo = new BranchRepository();
+        repo.Save(new Branch("UK-RSH-01", "Rishikesh Tapovan", "05", true));
+        repo.Save(new Branch("UK-DDN-01", "Dehradun ISBT", "05", true));
+        repo.Save(new Branch("UK-HDW-01", "Haridwar railway station", "05", false));
+        repo.Save(new Branch("MH-PNQ-01", "Pune airport", "27", true));
+        return new BranchDirectory(repo);
     }
 
-    [Fact] public void Finds_by_code() => Assert.Equal("Pune ring road", Create().Find("mh-rr-01")!.Name);
+    [Fact] public void Finds_by_code() => Assert.Equal("Pune airport", Create().Find("mh-pnq-01")!.Name);
 
     [Fact] public void Missing_is_null() => Assert.Null(Create().Find("XX"));
 
     [Fact]
     public void Active_in_state_sorted() =>
-        Assert.Equal(new[] { "UK-HW-02", "UK-HW-07" }, Create().ActiveInState("05").Select(p => p.Code).ToArray());
+        Assert.Equal(new[] { "UK-DDN-01", "UK-RSH-01" }, Create().ActiveInState("05").Select(b => b.Code).ToArray());
 
     [Fact]
     public void Has_no_write_methods()
     {
-        Assert.Null(typeof(ProjectDirectory).GetMethod("Save"));
-        Assert.Null(typeof(ProjectDirectory).GetMethod("Delete"));
+        Assert.Null(typeof(BranchDirectory).GetMethod("Save"));
+        Assert.Null(typeof(BranchDirectory).GetMethod("Delete"));
     }
 
     [Fact]
-    public void Does_not_inherit_repository() => Assert.False(typeof(ProjectRepository).IsAssignableFrom(typeof(ProjectDirectory)));
+    public void Does_not_inherit_repository() => Assert.False(typeof(BranchRepository).IsAssignableFrom(typeof(BranchDirectory)));
 }
 ```
 ::solution
-```csharp file=ProjectDirectory.cs
+```csharp file=BranchDirectory.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public sealed record Project(string Code, string Name, string StateCode, bool IsActive);
+public sealed record Branch(string Code, string Name, string StateCode, bool IsActive);
 
-public class ProjectRepository
+public class BranchRepository
 {
-    private readonly Dictionary<string, Project> _projects = new(StringComparer.OrdinalIgnoreCase);
-    public virtual Project? Find(string code) => _projects.GetValueOrDefault(code);
-    public virtual IReadOnlyList<Project> All() => _projects.Values.ToList();
-    public virtual void Save(Project project) => _projects[project.Code] = project;
-    public virtual void Delete(string code) => _projects.Remove(code);
+    private readonly Dictionary<string, Branch> _branches = new(StringComparer.OrdinalIgnoreCase);
+    public virtual Branch? Find(string code) => _branches.GetValueOrDefault(code);
+    public virtual IReadOnlyList<Branch> All() => _branches.Values.ToList();
+    public virtual void Save(Branch branch) => _branches[branch.Code] = branch;
+    public virtual void Delete(string code) => _branches.Remove(code);
 }
 
 /// <summary>The refused-bequest version.</summary>
-public class ReadOnlyProjectRepository : ProjectRepository
+public class ReadOnlyBranchRepository : BranchRepository
 {
-    public override void Save(Project project) => throw new NotSupportedException();
+    public override void Save(Branch branch) => throw new NotSupportedException();
     public override void Delete(string code) => throw new NotSupportedException();
 }
 
-public sealed class ProjectDirectory(ProjectRepository repository)
+public sealed class BranchDirectory(BranchRepository repository)
 {
-    public Project? Find(string code) => repository.Find(code);
+    public Branch? Find(string code) => repository.Find(code);
 
-    public IReadOnlyList<Project> ActiveInState(string stateCode) =>
+    public IReadOnlyList<Branch> ActiveInState(string stateCode) =>
         repository.All()
-                  .Where(p => p.IsActive && p.StateCode == stateCode)
-                  .OrderBy(p => p.Code, StringComparer.Ordinal)
+                  .Where(b => b.IsActive && b.StateCode == stateCode)
+                  .OrderBy(b => b.Code, StringComparer.Ordinal)
                   .ToList();
 }
 ```
 
-The dashboard now *can't* call `Save`, because the method doesn't exist, rather than failing at runtime. Once nothing uses `ReadOnlyProjectRepository`, delete it. A further step is to depend on a read-only role interface (`IProjectReader`) instead of the concrete repository ([ISP](#/lesson/m04-isp)).
+The branch-finder page now *can't* call `Save`, because the method doesn't exist, rather than failing at runtime. Once nothing uses `ReadOnlyBranchRepository`, delete it. A further step is to depend on a read-only role interface (`IBranchReader`) instead of the concrete repository ([ISP](#/lesson/m04-isp)).
 ::mistakes
-- Keeping `ProjectDirectory : ProjectRepository` and hiding `Save` with `new` — callers using the base type still reach it.
+- Keeping `BranchDirectory : BranchRepository` and hiding `Save` with `new` — callers using the base type still reach it.
 - Exposing the inner repository as a public property, which re-opens the write path.
 :::
 
 :::exercise id=m04-composition-inheritance-ex5 difficulty=advanced kind=design title="Flatten a four-level report hierarchy"
-The monitoring platform generates monthly reports through this hierarchy:
+The rental company sends each corporate client a monthly travel report through this hierarchy:
 
-`ReportBase` → `PdfReport` → `MonthlyPdfReport` → `MonthlyPdfReportWithCharts` → `NhaiMonthlyPdfReportWithCharts`
+`ReportBase` → `PdfReport` → `MonthlyPdfReport` → `MonthlyPdfReportWithCharts` → `GlobexMonthlyPdfReportWithCharts`
 
-Each level overrides some of `LoadData()`, `BuildSections()`, `RenderHeader()`, `Render()` and calls `base.X()` at different points. A new client wants the same monthly report as **Excel**, without charts but with a photo annex. Nobody can say which overrides run in which order.
+Each level overrides some of `LoadData()`, `BuildSections()`, `RenderHeader()`, `Render()` and calls `base.X()` at different points. A new corporate client wants the same monthly report as **Excel**, without charts but with an annex of damage photos taken at car return. Nobody can say which overrides run in which order.
 
 Propose a composition-based design: name the parts, draw the class diagram, show how the new Excel report is assembled, and say what (if anything) should stay as inheritance.
 ::acceptance
 - Independent dimensions identified (data, period, sections, output format, client branding).
 - A class diagram with interfaces for the parts and one assembling class.
-- The new Excel + photo-annex report built without a new subclass.
+- The new Excel + damage-photo-annex report built without a new subclass.
 - A justified decision about any remaining inheritance.
 ::hint
 List what varies: where data comes from, which period, which sections, which format, which branding. Each is a candidate part.
 ::hint
 A report is a pipeline: load → build sections → render. Each stage can be a part.
 ::hint
-`IReportSection` with many implementations (physical progress, financial progress, charts, photo annex) and `IReportRenderer` (PDF, Excel) cover most of it.
+`IReportSection` with many implementations (trip summary, spend summary, charts, damage-photo annex) and `IReportRenderer` (PDF, Excel) cover most of it.
 ::hint
 A small, sealed Template Method may still fit inside one renderer, where the skeleton is fixed.
 ::solution
-**Dimensions:** data source (`IProgressDataSource`), period (`ReportingPeriod` value object), sections (`IReportSection`), format (`IReportRenderer`), branding (`ClientBranding` record: logo, colours, header text).
+**Dimensions:** data source (`ITripDataSource`), period (`ReportingPeriod` value object), sections (`IReportSection`), format (`IReportRenderer`), branding (`ClientBranding` record: logo, colours, header text).
 
 ```mermaid
 classDiagram
@@ -1114,31 +1130,31 @@ classDiagram
     +IReadOnlyList~IReportSection~ Sections
     +IReportRenderer Renderer
   }
-  class IReportSection { <<interface>> +Build(ProgressData d) SectionModel }
+  class IReportSection { <<interface>> +Build(TripData d) SectionModel }
   class IReportRenderer { <<interface>> +Render(ReportModel m) byte[] }
-  class PhysicalProgressSection
-  class FinancialProgressSection
+  class TripSummarySection
+  class SpendSummarySection
   class ChartsSection
-  class PhotoAnnexSection
+  class DamagePhotoAnnexSection
   class PdfRenderer
   class ExcelRenderer
   ReportComposer --> ReportDefinition
-  ReportComposer --> IProgressDataSource
+  ReportComposer --> ITripDataSource
   ReportDefinition o-- IReportSection
   ReportDefinition --> IReportRenderer
-  IReportSection <|.. PhysicalProgressSection
-  IReportSection <|.. FinancialProgressSection
+  IReportSection <|.. TripSummarySection
+  IReportSection <|.. SpendSummarySection
   IReportSection <|.. ChartsSection
-  IReportSection <|.. PhotoAnnexSection
+  IReportSection <|.. DamagePhotoAnnexSection
   IReportRenderer <|.. PdfRenderer
   IReportRenderer <|.. ExcelRenderer
 ```
 
 The composer loads data once, asks each section in the definition to build a format-neutral `SectionModel`, and hands the assembled `ReportModel` to the renderer. Sections never know the output format; renderers never know the business rules.
 
-**The new report** is configuration: `new ReportDefinition(clientBranding, [physical, financial, photoAnnex], excelRenderer)`. No new class unless the photo annex is new, and then it's one `IReportSection`.
+**The new report** is configuration: `new ReportDefinition(clientBranding, [tripSummary, spendSummary, damagePhotos], excelRenderer)`. No new class unless the photo annex is new, and then it's one `IReportSection`.
 
-**Inheritance kept:** none in the pipeline. Inside `PdfRenderer`, a small sealed template (header → body → footer) is fine, because the skeleton is fixed and private to that class. The existing NHAI-specific behaviour becomes a `ClientBranding` plus a section list, not a subclass.
+**Inheritance kept:** none in the pipeline. Inside `PdfRenderer`, a small sealed template (header → body → footer) is fine, because the skeleton is fixed and private to that class. The existing Globex-specific behaviour becomes a `ClientBranding` plus a section list, not a subclass.
 
 **Migration:** write golden-file tests for each existing report, build the composer, re-express each old subclass as a `ReportDefinition`, compare outputs, then delete the hierarchy level by level from the bottom.
 ::mistakes
@@ -1156,16 +1172,16 @@ Composition makes each part testable alone, and decorators testable against any 
 ```csharp
 public class ChargeComponentTests
 {
-    private static readonly EquipmentSpec Crane = new("CR-50T", "50 t mobile crane", 38_000m, 18m, 2_40_00_000m);
+    private static readonly VehicleSpec Hatchback = new("HB-AUTO", "Hatchback, automatic", 1_800m, 20m, 6_50_000m);
     private static readonly IOptions<RentalPricingOptions> Pricing = Options.Create(new RentalPricingOptions());
 
     [Fact]
-    public void Fuel_for_crane() =>
-        Assert.Equal(66_240m, new FuelCharge(Pricing).Charge(new RentalRequest(Crane, 5, 8, false, true, false))); // 18 x 8 x 5 x 92
+    public void Fuel_for_hatchback() =>
+        Assert.Equal(6_240m, new FuelCharge(Pricing).Charge(new RentalRequest(Hatchback, 5, 240, false, true, false))); // 1,200 km / 20 km/L = 60 L x 104
 
     [Fact]
     public void Insurance_is_on_hire_only() =>
-        Assert.Equal(2_850m, new InsuranceCharge(new BaseHireCharge(), Pricing).Charge(new RentalRequest(Crane, 5, 8, true, true, true))); // 1.5% of 1,90,000
+        Assert.Equal(900m, new InsuranceCharge(new BaseHireCharge(), Pricing).Charge(new RentalRequest(Hatchback, 5, 240, true, true, true))); // 10% of 9,000
 }
 ```
 
@@ -1181,9 +1197,9 @@ public class RentalQuoteCalculatorTests
         public decimal Charge(RentalRequest r) => amount;
     }
 
-    private sealed class NoneAvailable : IEquipmentAvailability { public bool IsAvailable(string c, int d) => false; }
+    private sealed class NoneAvailable : IVehicleAvailability { public bool IsAvailable(string c, int d) => false; }
 
-    private static readonly RentalRequest Request = new(new EquipmentSpec("EX-20T", "Excavator", 12_000m, 14m, 85_00_000m), 2, 8, false, false, false);
+    private static readonly RentalRequest Request = new(new VehicleSpec("SUV-7S", "7-seater SUV", 3_000m, 15m, 18_00_000m), 2, 150, false, false, false);
 
     [Fact]
     public void Skips_components_that_do_not_apply()
@@ -1194,7 +1210,7 @@ public class RentalQuoteCalculatorTests
     }
 
     [Fact]
-    public void Unavailable_equipment_is_an_outcome_not_an_exception() =>
+    public void Unavailable_vehicle_is_an_outcome_not_an_exception() =>
         Assert.IsType<QuoteOutcome.Unavailable>(new RentalQuoteCalculator(new IChargeComponent[] { new Fixed("A", 1m) }, new NoneAvailable()).Quote(Request));
 }
 ```
@@ -1208,7 +1224,7 @@ public class RentalQuoteCalculatorTests
 - **ASP.NET Core middleware and `DelegatingHandler`** are composition: each piece wraps the next and adds behaviour, so logging, retries and authentication stack in any order.
 - **`Stream` wrappers** (`GZipStream`, `BufferedStream`, `CryptoStream`) wrap another `Stream` and are themselves `Stream`s — composition through the decorator shape, using an abstract base class designed for it.
 - **`Collection<T>` vs `List<T>`**: .NET guidance says to derive from `Collection<T>` (designed for extension, with `protected virtual InsertItem`) rather than `List<T>` (not designed for it). That's the "designed for inheritance?" question built into the framework.
-- **Pricing and rating engines** — insurance premiums, freight rates, equipment rentals — are usually built from composed rate components so that new riders or surcharges don't need new product classes.
+- **Pricing and rating engines** — insurance premiums, parcel shipping rates, car and bike rentals — are usually built from composed rate components so that new riders or surcharges don't need new product classes.
 - **Game engines and UI frameworks** commonly use entity–component designs, where an object is a bag of components rather than a node in a deep class tree.
 - **Domain models** often use shallow sealed record hierarchies for closed variants (payment outcomes, approval decisions) and composition for everything else.
 
@@ -1218,7 +1234,7 @@ public class RentalQuoteCalculatorTests
 ::q beginner
 What's the difference between inheritance and composition?
 ::a
-Inheritance ("is-a") makes a class a subtype of a parent and reuses the parent's implementation; it's fixed at compile time. Composition ("has-a") makes a class hold other objects and delegate work to them; parts can be swapped and combined. Example: `Crane : Equipment` is inheritance; `RentalQuote` holding a list of `IChargeComponent`s is composition.
+Inheritance ("is-a") makes a class a subtype of a parent and reuses the parent's implementation; it's fixed at compile time. Composition ("has-a") makes a class hold other objects and delegate work to them; parts can be swapped and combined. Example: `Suv : Vehicle` is inheritance; `RentalQuote` holding a list of `IChargeComponent`s is composition.
 ::q beginner
 Why do people say "favour composition over inheritance"?
 ::a
@@ -1226,7 +1242,7 @@ Because inheritance couples a subclass to the parent's internal implementation, 
 ::q intermediate
 Explain the fragile base class problem with an example.
 ::a
-A subclass depends on how the base class implements its methods, not just on what they do. Example: `MeasurementLog.AddRange` calls the virtual `Add`. `CountingLog` overrides both and counts in each, so `AddRange` of 3 items counts 6. If the subclass is "fixed" by not counting in `AddRange`, a later base-class optimisation that stops calling `Add` makes it count 0. The subclass broke without being changed. A decorator avoids this: it counts what it forwards, and the inner object's self-calls never come back to it.
+A subclass depends on how the base class implements its methods, not just on what they do. Example: `TripLog.AddRange` calls the virtual `Add`. `CountingLog` overrides both and counts in each, so `AddRange` of 3 items counts 6. If the subclass is "fixed" by not counting in `AddRange`, a later base-class optimisation that stops calling `Add` makes it count 0. The subclass broke without being changed. A decorator avoids this: it counts what it forwards, and the inner object's self-calls never come back to it.
 ::q intermediate
 When is inheritance the better choice in C#?
 ::a
@@ -1265,7 +1281,7 @@ A: A subclass breaks when the base class's internal implementation changes (e.g.
 Q: Why does a decorator avoid the double-count bug?
 A: It counts what it forwards; the inner object's internal self-calls never dispatch back to the decorator.
 Q: How many subclasses for 4 optional add-ons via inheritance? Via composition?
-A: Up to 2^4 = 16 subclasses per machine, versus 4 component classes.
+A: Up to 2^4 = 16 subclasses per vehicle type, versus 4 component classes.
 Q: Why not inherit from List<T>?
 A: It isn't designed for extension; its methods aren't virtual, so `new` methods are bypassed through base types and interfaces. Use Collection<T> or wrap.
 Q: Name three good uses of inheritance in .NET.
@@ -1278,24 +1294,24 @@ A: "Not designed for inheritance" — and it can let the JIT devirtualise calls.
 
 :::quiz pass=70
 ::q single
-You need excavators, cranes and rollers, each optionally with operator, fuel and insurance. What's the best model?
-- [ ] A subclass for each machine-and-add-on combination.
-- [x] Machines as data (specs), add-ons as composed charge components.
+A car-rental app offers hatchbacks, sedans and SUVs, each optionally with a driver, prepaid fuel and damage protection. What's the best model?
+- [ ] A subclass for each vehicle-and-add-on combination.
+- [x] Vehicles as data (specs), add-ons as composed charge components.
 - [ ] One class with a boolean flag per add-on and a big `if` chain.
-- [ ] Multiple inheritance from `Operator`, `Fuel` and `Insurance` classes.
+- [ ] Multiple inheritance from `Driver`, `Fuel` and `Insurance` classes.
 > Independent dimensions multiply subclasses. Composition handles any combination with one class per dimension, and C# has no multiple class inheritance anyway.
 ::q single
-`CountingLog : MeasurementLog` counts 6 after `AddRange` of 3 items. What's the root cause?
+`CountingLog : TripLog` counts 6 after `AddRange` of 3 items. What's the root cause?
 - [ ] A bug in `List<T>`.
 - [x] The base class's `AddRange` calls the virtual `Add`, which dispatches back into the subclass's counting override.
 - [ ] The subclass should use `new` instead of `override`.
 - [ ] Integer overflow.
 > The subclass depended on an internal self-call in the base class. That's the fragile base class problem.
 ::q single
-A class derives from `List<RfiItem>` and declares `public new void Add(RfiItem item)` with auditing. Which call is audited?
+A class derives from `List<Booking>` and declares `public new void Add(Booking item)` with auditing. Which call is audited?
 - [x] `auditedList.Add(item)` where the variable's static type is the derived class.
-- [ ] `((IList<RfiItem>)auditedList).Add(item)`
-- [ ] `((List<RfiItem>)auditedList).Add(item)`
+- [ ] `((IList<Booking>)auditedList).Add(item)`
+- [ ] `((List<Booking>)auditedList).Add(item)`
 - [ ] All of the above.
 > `new` hides rather than overrides. Calls through the base class or interfaces go to `List<T>.Add`.
 ::q multi
@@ -1306,10 +1322,10 @@ Which are good uses of inheritance? (Select all that apply.)
 - [x] `NightlySyncWorker : BackgroundService`
 > The read-only repository refuses its bequest and breaks LSP; the others are extension points or closed data variants.
 ::q single
-An employee can change from site engineer to project manager. How should roles be modelled?
-- [ ] `SiteEngineer : Employee` and `ProjectManager : Employee`.
+An employee can move from front-desk agent to branch manager. How should roles be modelled?
+- [ ] `BranchAgent : Employee` and `BranchManager : Employee`.
 - [x] `Employee` has a role (or a dated list of role assignments).
-- [ ] `Employee : SiteEngineer, ProjectManager`.
+- [ ] `Employee : BranchAgent, BranchManager`.
 - [ ] Copy the employee into a new object of the other subclass on promotion.
 > An object can't change its class at runtime. Roles that change are composition.
 ::q single
@@ -1320,7 +1336,7 @@ A teammate wraps `DbContext` in a composed class that hand-forwards 30 members "
 - [ ] Use `new` to hide the members you don't want.
 > "Favour composition" doesn't mean "never inherit". Framework extension points are the clearest case for inheritance.
 ::q single
-Insurance is priced as 1.5 % of the hire charge. How should `InsuranceCharge` reuse the hire calculation?
+Damage protection is priced as 10 % of the hire charge. How should `InsuranceCharge` reuse the hire calculation?
 - [ ] Inherit from `BaseHireCharge` and call `base.Charge`.
 - [x] Hold a `BaseHireCharge` and call its `Charge` method.
 - [ ] Copy the hire formula into `InsuranceCharge`.

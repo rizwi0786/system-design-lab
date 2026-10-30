@@ -532,9 +532,9 @@ public static class NotificationServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<INotificationChannel, SmsChannel>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<INotificationChannel, WhatsAppChannel>());
 
-        // Keyed registrations for consumers that need one specific channel.
-        services.AddKeyedSingleton<INotificationChannel, SmsChannel>("sms");
-        services.AddKeyedSingleton<INotificationChannel, WhatsAppChannel>("whatsapp");
+        // Keyed registrations for consumers that need one specific channel (TryAdd: idempotent too).
+        services.TryAddKeyedSingleton<INotificationChannel, SmsChannel>("sms");
+        services.TryAddKeyedSingleton<INotificationChannel, WhatsAppChannel>("whatsapp");
 
         services.TryAddScoped<OtpService>();
         return services;

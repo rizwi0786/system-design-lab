@@ -22,7 +22,7 @@ references:
     url: https://microservices.io/patterns/data/transactional-outbox.html
 ---
 
-When a contract for a ₹42 crore road package is signed, a surprising amount has to happen. The project's committed budget goes up. The vendor needs the signed copy. The contract dashboard should show it as "live". The finance system must open a payment ledger. If the `Contract.Sign()` method did all of that, it would need a budget service, an email client, a cache and an HTTP client to finance. The aggregate would stop being a small, testable guardian of its own rules.
+On a freelance marketplace (think of a platform like Upwork or Fiverr), when a client and a freelancer sign a ₹4,20,000 contract to build a mobile app, a surprising amount has to happen. The client's project budget is committed. The freelancer needs the signed copy. The contract dashboard should show it as "live". The payments system must open an escrow ledger so milestone money can be held and released. If the `Contract.Sign()` method did all of that, it would need a budget service, an email client, a cache and an HTTP client to finance. The aggregate would stop being a small, testable guardian of its own rules.
 
 **Domain events** solve this. The aggregate does its one job (check the rules, change its state) and then records a fact: `ContractSigned`. Other parts of the system react to that fact. This lesson shows how to raise events inside aggregates, collect them when you save, dispatch them after the commit, write handlers, and decide which events become **integration events** that leave your process.
 
@@ -49,11 +49,11 @@ By the end of this lesson you will be able to:
 
 Think of a hospital ward. When a nurse gives a patient medicine, she does not personally phone the pharmacy, the billing office and the doctor. She writes one line in the patient's chart: "10:15 — 500 mg paracetamol given". That line is a **fact about the past**. The pharmacy reads the chart and reorders stock. Billing reads it and adds a charge. The doctor reads it on the next round. The nurse does not even need to know who reads the chart.
 
-A domain event is that line in the chart. When something important happens inside your business objects (a contract is signed, a milestone is certified, an order is cancelled), the object writes a small, unchangeable note: `ContractSigned { contract C-2291, vendor V-77, ₹42,00,00,000, 14 Oct 2026 }`. Other code "reads the chart" and reacts.
+A domain event is that line in the chart. When something important happens inside your business objects (a contract is signed, a milestone is approved, an order is cancelled), the object writes a small, unchangeable note: `ContractSigned { contract C-2291, freelancer V-77, ₹4,20,000, 14 Oct 2026 }`. Other code "reads the chart" and reacts.
 
 Two details matter, and the analogy covers both:
 
-1. **The note is written only if the action really happened.** If the medicine was not given, nothing goes in the chart. In code: we only tell others about the event **after the database has saved** the change. Announcing "contract signed" and then failing to save would send the vendor a contract that does not exist.
+1. **The note is written only if the action really happened.** If the medicine was not given, nothing goes in the chart. In code: we only tell others about the event **after the database has saved** the change. Announcing "contract signed" and then failing to save would send the freelancer a contract that does not exist.
 2. **Some notes stay inside the ward, others are sent to other hospitals.** Internal notes can use ward shorthand and change whenever the ward likes. A discharge summary sent to another hospital uses an agreed, stable format. In code, internal notes are **domain events**; messages sent to other systems are **integration events**.
 
 ## First-principles explanation
@@ -62,9 +62,9 @@ Two details matter, and the analogy covers both:
 
 A domain event is **an immutable record of something that happened in the domain that domain experts care about**. Three properties follow:
 
-- **Past tense, business language.** `ContractSigned`, `MilestoneCertified`, `PurchaseOrderApproved`. Not `ContractUpdated` (too vague) or `SendEmailToVendor` (a command, not a fact).
+- **Past tense, business language.** `ContractSigned`, `MilestoneApproved`, `PurchaseOrderApproved`. Not `ContractUpdated` (too vague) or `SendEmailToFreelancer` (a command, not a fact).
 - **Immutable.** A fact about the past cannot change. In C#, a `record` with init-only properties.
-- **Self-contained enough.** It carries the ids and the key values handlers usually need (contract id, vendor id, value, date), so most handlers do not have to reload the aggregate. It should not carry the whole aggregate object, which would leak internals and tempt handlers to modify it.
+- **Self-contained enough.** It carries the ids and the key values handlers usually need (contract id, freelancer id, value, date), so most handlers do not have to reload the aggregate. It should not carry the whole aggregate object, which would leak internals and tempt handlers to modify it.
 
 ### Why it exists: decoupling side effects from rules
 
@@ -92,7 +92,7 @@ public void Sign(DateOnly signedOn)
     if (Status != ContractStatus.Draft) throw new DomainException("Only a draft contract can be signed.");
     Status = ContractStatus.Signed;
     SignedOn = signedOn;
-    Raise(new ContractSigned(Id, Number, VendorId, Value, signedOn));
+    Raise(new ContractSigned(Id, Number, FreelancerId, Value, signedOn));
 }
 ```
 
@@ -129,7 +129,7 @@ Never publish domain events directly to a broker. The moment another team consum
 
 ### What happens without it
 
-You see three symptoms. Application services become long scripts of side effects. Aggregates sprout service dependencies (`contract.Sign(mailer, budgets)`). Or, worst, side effects happen before the commit: the vendor receives a signed contract, the save fails on a concurrency conflict, and now the email is out and the database says "draft".
+You see three symptoms. Application services become long scripts of side effects. Aggregates sprout service dependencies (`contract.Sign(mailer, budgets)`). Or, worst, side effects happen before the commit: the freelancer receives a signed contract, the save fails on a concurrency conflict, and now the email is out and the database says "draft".
 
 ### When it is useful
 
@@ -173,13 +173,13 @@ classDiagram
     }
     class Contract {
         +Sign(DateOnly on) void
-        +CertifyMilestone(string code, DateOnly on) void
+        +ApproveMilestone(string code, DateOnly on) void
         +Terminate(string reason, DateOnly on) void
     }
     class ContractSigned {
         <<record>>
     }
-    class MilestoneCertified {
+    class MilestoneApproved {
         <<record>>
     }
     class ContractsUnitOfWork {
@@ -201,9 +201,9 @@ classDiagram
     class RefreshContractSummaryCache
     AggregateRoot <|-- Contract
     IDomainEvent <|.. ContractSigned
-    IDomainEvent <|.. MilestoneCertified
+    IDomainEvent <|.. MilestoneApproved
     Contract ..> ContractSigned : raises
-    Contract ..> MilestoneCertified : raises
+    Contract ..> MilestoneApproved : raises
     ContractsUnitOfWork --> IIntegrationEventMapper : before commit
     ContractsUnitOfWork --> IDomainEventDispatcher : after commit
     IDomainEventDispatcher --> IDomainEventHandler~T~ : resolves all
@@ -254,13 +254,13 @@ public async Task SignAsync(Guid id, DateOnly on)
 {
     var c = await repo.GetAsync(id);
     c.Sign(on);
-    await mailer.SendAsync(c.VendorId, "Contract signed");   // happens before save
+    await mailer.SendAsync(c.FreelancerId, "Contract signed");   // happens before save
     cache.Remove($"contract-summary:{id}");
     await uow.SaveChangesAsync();                            // may throw a concurrency conflict
 }
 ```
 
-If `SaveChangesAsync` throws, the vendor already has an email about a contract that is still a draft in the database.
+If `SaveChangesAsync` throws, the freelancer already has an email about a contract that is still a draft in the database.
 
 ### Step 2: raise an event instead
 
@@ -272,7 +272,7 @@ The unit of work gathers events from tracked aggregates, commits, clears, then d
 
 ### Step 4: separate what must not be lost
 
-Ask of every reaction: "If this silently did not happen, would anyone be harmed?" Cache invalidation: no (the cache expires in 5 minutes). Telling finance to open a ledger: yes. The second one becomes an integration event written to the outbox inside the transaction.
+Ask of every reaction: "If this silently did not happen, would anyone be harmed?" Cache invalidation: no (the cache expires in 5 minutes). Telling payments to open an escrow ledger: yes. The second one becomes an integration event written to the outbox inside the transaction.
 
 ### Step 5: version the public contract
 
@@ -335,9 +335,9 @@ public abstract class AggregateRoot
 ```csharp file=Domain/ContractEvents.cs
 namespace Contracts.Domain;
 
-public sealed record ContractSigned(Guid ContractId, string ContractNumber, Guid VendorId, decimal Value, DateOnly SignedOn) : DomainEvent;
+public sealed record ContractSigned(Guid ContractId, string ContractNumber, Guid FreelancerId, decimal Value, DateOnly SignedOn) : DomainEvent;
 
-public sealed record MilestoneCertified(Guid ContractId, string MilestoneCode, decimal Amount, DateOnly CertifiedOn) : DomainEvent;
+public sealed record MilestoneApproved(Guid ContractId, string MilestoneCode, decimal Amount, DateOnly ApprovedOn) : DomainEvent;
 
 public sealed record ContractCompleted(Guid ContractId, DateOnly CompletedOn) : DomainEvent;
 
@@ -354,8 +354,8 @@ public sealed class Milestone
     internal Milestone(string code, decimal value) { Code = code; Value = value; }
     public string Code { get; }
     public decimal Value { get; }
-    public bool Certified { get; private set; }
-    internal void Certify() => Certified = true;
+    public bool Approved { get; private set; }
+    internal void Approve() => Approved = true;
 }
 
 public sealed class Contract : AggregateRoot
@@ -364,12 +364,12 @@ public sealed class Contract : AggregateRoot
 
     private Contract() { }
 
-    public Contract(Guid id, string number, Guid vendorId, IEnumerable<(string Code, decimal Value)> milestones)
+    public Contract(Guid id, string number, Guid freelancerId, IEnumerable<(string Code, decimal Value)> milestones)
     {
         if (string.IsNullOrWhiteSpace(number)) throw new DomainException("Contract number is required.");
         Id = id;
         Number = number;
-        VendorId = vendorId;
+        FreelancerId = freelancerId;
         foreach (var (code, value) in milestones)
         {
             if (value <= 0) throw new DomainException($"Milestone {code} must have a positive value.");
@@ -381,7 +381,7 @@ public sealed class Contract : AggregateRoot
     }
 
     public string Number { get; private set; } = "";
-    public Guid VendorId { get; private set; }
+    public Guid FreelancerId { get; private set; }
     public ContractStatus Status { get; private set; }
     public DateOnly? SignedOn { get; private set; }
     public IReadOnlyList<Milestone> Milestones => _milestones;
@@ -392,24 +392,24 @@ public sealed class Contract : AggregateRoot
         if (Status != ContractStatus.Draft) throw new DomainException("Only a draft contract can be signed.");
         Status = ContractStatus.Signed;
         SignedOn = signedOn;
-        Raise(new ContractSigned(Id, Number, VendorId, Value, signedOn));
+        Raise(new ContractSigned(Id, Number, FreelancerId, Value, signedOn));
     }
 
-    public void CertifyMilestone(string code, DateOnly certifiedOn)
+    public void ApproveMilestone(string code, DateOnly approvedOn)
     {
-        if (Status != ContractStatus.Signed) throw new DomainException("Milestones can only be certified on a signed contract.");
+        if (Status != ContractStatus.Signed) throw new DomainException("Milestones can only be approved on a signed contract.");
         var milestone = _milestones.SingleOrDefault(m => m.Code == code)
                         ?? throw new DomainException($"Unknown milestone {code}.");
-        if (milestone.Certified) throw new DomainException($"Milestone {code} is already certified.");
-        if (SignedOn is { } s && certifiedOn < s) throw new DomainException("Cannot certify before the signing date.");
+        if (milestone.Approved) throw new DomainException($"Milestone {code} is already approved.");
+        if (SignedOn is { } s && approvedOn < s) throw new DomainException("Cannot approve before the signing date.");
 
-        milestone.Certify();
-        Raise(new MilestoneCertified(Id, code, milestone.Value, certifiedOn));
+        milestone.Approve();
+        Raise(new MilestoneApproved(Id, code, milestone.Value, approvedOn));
 
-        if (_milestones.All(m => m.Certified))
+        if (_milestones.All(m => m.Approved))
         {
             Status = ContractStatus.Completed;
-            Raise(new ContractCompleted(Id, certifiedOn));
+            Raise(new ContractCompleted(Id, approvedOn));
         }
     }
 
@@ -481,11 +481,11 @@ public sealed class ContractAppService(IContractRepository contracts, IUnitOfWor
         return ToDto(contract);
     }
 
-    public async Task<ContractDto?> CertifyAsync(Guid contractId, string milestoneCode, DateOnly on, CancellationToken ct = default)
+    public async Task<ContractDto?> ApproveAsync(Guid contractId, string milestoneCode, DateOnly on, CancellationToken ct = default)
     {
         var contract = await contracts.GetAsync(contractId, ct);
         if (contract is null) return null;
-        contract.CertifyMilestone(milestoneCode, on);
+        contract.ApproveMilestone(milestoneCode, on);
         await unitOfWork.SaveChangesAsync(ct);
         return ToDto(contract);
     }
@@ -510,13 +510,13 @@ public interface IContractTimeline
 /// <summary>Updates a read model. Idempotent per event id, so a redelivery does not duplicate entries.</summary>
 public sealed class RecordContractTimeline(IContractTimeline timeline) :
     IDomainEventHandler<ContractSigned>,
-    IDomainEventHandler<MilestoneCertified>
+    IDomainEventHandler<MilestoneApproved>
 {
     public Task HandleAsync(ContractSigned e, CancellationToken ct) =>
         timeline.AppendAsync(new TimelineEntry(e.ContractId, $"Signed on {e.SignedOn:dd MMM yyyy} for {e.Value:N0}", e.OccurredAt), ct);
 
-    public Task HandleAsync(MilestoneCertified e, CancellationToken ct) =>
-        timeline.AppendAsync(new TimelineEntry(e.ContractId, $"Milestone {e.MilestoneCode} certified ({e.Amount:N0})", e.OccurredAt), ct);
+    public Task HandleAsync(MilestoneApproved e, CancellationToken ct) =>
+        timeline.AppendAsync(new TimelineEntry(e.ContractId, $"Milestone {e.MilestoneCode} approved ({e.Amount:N0})", e.OccurredAt), ct);
 }
 
 /// <summary>Best effort: if this is lost, the cache entry simply expires.</summary>
@@ -535,25 +535,25 @@ using Contracts.Domain;
 
 namespace Contracts.Infrastructure;
 
-// Public contracts for the finance and vendor-portal teams. Change only by adding fields or a V2.
+// Public contracts for the payments and freelancer-app teams. Change only by adding fields or a V2.
 public sealed record ContractSignedV1(Guid EventId, DateTimeOffset OccurredAt, Guid ContractId, string ContractNumber,
-    Guid VendorId, decimal Value, string Currency, DateOnly SignedOn) : IntegrationEvent(EventId, OccurredAt)
+    Guid FreelancerId, decimal Value, string Currency, DateOnly SignedOn) : IntegrationEvent(EventId, OccurredAt)
 {
     public override string Type => "contracts.contract-signed.v1";
 }
 
-public sealed record MilestoneCertifiedV1(Guid EventId, DateTimeOffset OccurredAt, Guid ContractId, string MilestoneCode,
-    decimal Amount, string Currency, DateOnly CertifiedOn) : IntegrationEvent(EventId, OccurredAt)
+public sealed record MilestoneApprovedV1(Guid EventId, DateTimeOffset OccurredAt, Guid ContractId, string MilestoneCode,
+    decimal Amount, string Currency, DateOnly ApprovedOn) : IntegrationEvent(EventId, OccurredAt)
 {
-    public override string Type => "contracts.milestone-certified.v1";
+    public override string Type => "contracts.milestone-approved.v1";
 }
 
 public sealed class ContractIntegrationEventMapper : IIntegrationEventMapper
 {
     public IntegrationEvent? Map(IDomainEvent domainEvent) => domainEvent switch
     {
-        ContractSigned e => new ContractSignedV1(e.EventId, e.OccurredAt, e.ContractId, e.ContractNumber, e.VendorId, e.Value, "INR", e.SignedOn),
-        MilestoneCertified e => new MilestoneCertifiedV1(e.EventId, e.OccurredAt, e.ContractId, e.MilestoneCode, e.Amount, "INR", e.CertifiedOn),
+        ContractSigned e => new ContractSignedV1(e.EventId, e.OccurredAt, e.ContractId, e.ContractNumber, e.FreelancerId, e.Value, "INR", e.SignedOn),
+        MilestoneApproved e => new MilestoneApprovedV1(e.EventId, e.OccurredAt, e.ContractId, e.MilestoneCode, e.Amount, "INR", e.ApprovedOn),
         _ => null,   // ContractCompleted and ContractTerminated stay inside this context for now
     };
 }
@@ -729,7 +729,7 @@ builder.Services.AddScoped<ContractAppService>();
 
 // One registration per (handler, event) pair. A class handling two events is registered twice.
 builder.Services.AddScoped<IDomainEventHandler<ContractSigned>, RecordContractTimeline>();
-builder.Services.AddScoped<IDomainEventHandler<MilestoneCertified>, RecordContractTimeline>();
+builder.Services.AddScoped<IDomainEventHandler<MilestoneApproved>, RecordContractTimeline>();
 builder.Services.AddScoped<IDomainEventHandler<ContractSigned>, RefreshContractSummaryCache>();
 builder.Services.AddScoped<IDomainEventHandler<ContractCompleted>, RefreshContractSummaryCache>();
 
@@ -787,7 +787,7 @@ A static `DomainEvents.Raise(e)` that immediately calls handlers (popular around
 public void Sign(DateOnly on, IMailer mailer, IBudgetService budgets)
 {
     Status = ContractStatus.Signed;
-    mailer.Send(VendorId, "Signed!");            // I/O inside the domain, before commit
+    mailer.Send(FreelancerId, "Signed!");            // I/O inside the domain, before commit
     budgets.Commit(ProjectId, Value).Wait();     // blocking call, cross-aggregate change
 }
 ```
@@ -808,7 +808,7 @@ The aggregate raises facts. The unit of work writes mapped integration events to
 
 ### Is the improvement worth it?
 
-For signing a contract with five reactions owned by three teams: clearly. For "update a vendor's phone number" with no reactions: no. Do not add events speculatively. Add the first event when the first genuine second reaction appears.
+For signing a contract with five reactions owned by three teams: clearly. For "update a freelancer's phone number" with no reactions: no. Do not add events speculatively. Add the first event when the first genuine second reaction appears.
 
 ## Practical playground
 
@@ -822,7 +822,7 @@ using System.Linq;
 
 public interface IDomainEvent { }
 public sealed record ContractSigned(Guid ContractId, decimal Value) : IDomainEvent;
-public sealed record MilestoneCertified(Guid ContractId, string Code) : IDomainEvent;
+public sealed record MilestoneApproved(Guid ContractId, string Code) : IDomainEvent;
 
 public abstract class AggregateRoot
 {
@@ -846,10 +846,10 @@ public sealed class Contract : AggregateRoot
         Raise(new ContractSigned(Id, Value));
     }
 
-    public void Certify(string code)
+    public void Approve(string code)
     {
         if (!Signed) throw new InvalidOperationException("Sign first.");
-        Raise(new MilestoneCertified(Id, code));
+        Raise(new MilestoneApproved(Id, code));
     }
 }
 
@@ -888,16 +888,16 @@ public static class Program
     public static void Main()
     {
         var dispatcher = new Dispatcher();
-        dispatcher.On<ContractSigned>(e => Console.WriteLine($"handle: email vendor about contract worth {e.Value:N0}"));
+        dispatcher.On<ContractSigned>(e => Console.WriteLine($"handle: email freelancer about contract worth {e.Value:N0}"));
         dispatcher.On<ContractSigned>(e => Console.WriteLine("handle: invalidate dashboard cache"));
-        dispatcher.On<MilestoneCertified>(e => Console.WriteLine($"handle: timeline entry for milestone {e.Code}"));
+        dispatcher.On<MilestoneApproved>(e => Console.WriteLine($"handle: timeline entry for milestone {e.Code}"));
 
-        var contract = new Contract(Guid.NewGuid(), 420_000_000m);
+        var contract = new Contract(Guid.NewGuid(), 420_000m);
         var uow = new UnitOfWork(dispatcher);
         uow.Track(contract);
 
         contract.Sign();
-        contract.Certify("M1-EARTHWORK");
+        contract.Approve("M1-DESIGN");
         Console.WriteLine("before save: nothing handled yet");
         uow.SaveChanges();
     }
@@ -1487,7 +1487,7 @@ using System.Threading.Tasks;
 
 public interface IDomainEvent { }
 public sealed record ContractSigned(Guid ContractId) : IDomainEvent;
-public sealed record MilestoneCertified(Guid ContractId, string Code) : IDomainEvent;
+public sealed record MilestoneApproved(Guid ContractId, string Code) : IDomainEvent;
 
 public abstract class AggregateRoot
 {
@@ -1502,7 +1502,7 @@ public sealed class Contract : AggregateRoot
     public Contract(Guid id) { Id = id; }
     public Guid Id { get; }
     public void Sign() => Raise(new ContractSigned(Id));
-    public void Certify(string code) => Raise(new MilestoneCertified(Id, code));
+    public void Approve(string code) => Raise(new MilestoneApproved(Id, code));
 }
 
 public interface IDataStore
@@ -1602,9 +1602,9 @@ public class UnitOfWorkTests
         var c = new Contract(Guid.NewGuid());
         uow.Track(c);
         c.Sign();
-        c.Certify("M1");
+        c.Approve("M1");
         await uow.SaveChangesAsync();
-        Assert.Equal(new[] { "commit1", "dispatch:ContractSigned", "dispatch:MilestoneCertified" }, log.Lines);
+        Assert.Equal(new[] { "commit1", "dispatch:ContractSigned", "dispatch:MilestoneApproved" }, log.Lines);
         Assert.Empty(c.DomainEvents);
     }
 
@@ -1615,7 +1615,7 @@ public class UnitOfWorkTests
         var c = new Contract(Guid.NewGuid());
         uow.Track(c);
         c.Sign();
-        c.Certify("M1");
+        c.Approve("M1");
         await uow.SaveChangesAsync();
         Assert.Equal($"ContractSignedV1:{c.Id}", Assert.Single(store.Outboxes[0]));
     }
@@ -1639,10 +1639,10 @@ public class UnitOfWorkTests
         var (uow, store, disp, log) = Create();
         var c = new Contract(Guid.NewGuid());
         uow.Track(c);
-        disp.OnDispatch = e => { if (e is ContractSigned) c.Certify("MOBILISATION"); return Task.CompletedTask; };
+        disp.OnDispatch = e => { if (e is ContractSigned) c.Approve("KICKOFF"); return Task.CompletedTask; };
         c.Sign();
         await uow.SaveChangesAsync();
-        Assert.Equal(new[] { "commit1", "dispatch:ContractSigned", "commit2", "dispatch:MilestoneCertified" }, log.Lines);
+        Assert.Equal(new[] { "commit1", "dispatch:ContractSigned", "commit2", "dispatch:MilestoneApproved" }, log.Lines);
         Assert.Equal(2, store.Commits);
     }
 
@@ -1652,7 +1652,7 @@ public class UnitOfWorkTests
         var (uow, store, disp, _) = Create();
         var c = new Contract(Guid.NewGuid());
         uow.Track(c);
-        disp.OnDispatch = e => { c.Certify("again"); return Task.CompletedTask; };
+        disp.OnDispatch = e => { c.Approve("again"); return Task.CompletedTask; };
         c.Sign();
         await Assert.ThrowsAsync<InvalidOperationException>(() => uow.SaveChangesAsync());
         Assert.Equal(UnitOfWork.MaxRounds, store.Commits);
@@ -1678,10 +1678,10 @@ public class UnitOfWorkTests
         var b = new Contract(Guid.NewGuid());
         uow.Track(a);
         uow.Track(b);
-        b.Certify("B1");
+        b.Approve("B1");
         a.Sign();
         await uow.SaveChangesAsync();
-        Assert.Equal(new[] { "commit1", "dispatch:ContractSigned", "dispatch:MilestoneCertified" }, log.Lines);
+        Assert.Equal(new[] { "commit1", "dispatch:ContractSigned", "dispatch:MilestoneApproved" }, log.Lines);
     }
 }
 ```
@@ -1697,7 +1697,7 @@ using System.Threading.Tasks;
 
 public interface IDomainEvent { }
 public sealed record ContractSigned(Guid ContractId) : IDomainEvent;
-public sealed record MilestoneCertified(Guid ContractId, string Code) : IDomainEvent;
+public sealed record MilestoneApproved(Guid ContractId, string Code) : IDomainEvent;
 
 public abstract class AggregateRoot
 {
@@ -1712,7 +1712,7 @@ public sealed class Contract : AggregateRoot
     public Contract(Guid id) { Id = id; }
     public Guid Id { get; }
     public void Sign() => Raise(new ContractSigned(Id));
-    public void Certify(string code) => Raise(new MilestoneCertified(Id, code));
+    public void Approve(string code) => Raise(new MilestoneApproved(Id, code));
 }
 
 public interface IDataStore
@@ -1770,7 +1770,7 @@ public sealed class UnitOfWork
 }
 ```
 
-Why a round limit? A handler that reacts to `MilestoneCertified` by certifying another milestone, whose handler certifies another, is a real bug pattern. Without a limit it becomes an infinite loop holding a request thread. Three rounds covers legitimate follow-ups (sign, then auto-certify mobilisation) while failing fast on loops.
+Why a round limit? A handler that reacts to `MilestoneApproved` by approving another milestone, whose handler approves another, is a real bug pattern. Without a limit it becomes an infinite loop holding a request thread. Three rounds covers legitimate follow-ups (sign, then auto-approve mobilisation) while failing fast on loops.
 ::alternatives
 Many teams forbid handlers from changing tracked aggregates at all: post-commit handlers that need to change an aggregate must do it in a **new** scope with its own unit of work, or through the outbox. That removes the loop entirely and makes "one aggregate per transaction" explicit. The trade-off is more plumbing per handler.
 ::mistakes
@@ -1785,17 +1785,17 @@ Many teams forbid handlers from changing tracked aggregates at all: post-commit 
 
 ```csharp
 [Fact]
-public void Certifying_last_milestone_completes_contract()
+public void Approving_last_milestone_completes_contract()
 {
     var c = new Contract(Guid.NewGuid(), "C-2291", Guid.NewGuid(), new[] { ("M1", 100m), ("M2", 200m) });
     c.Sign(new DateOnly(2026, 10, 14));
-    c.CertifyMilestone("M1", new DateOnly(2026, 11, 30));
+    c.ApproveMilestone("M1", new DateOnly(2026, 11, 30));
     c.ClearDomainEvents();
 
-    c.CertifyMilestone("M2", new DateOnly(2027, 1, 31));
+    c.ApproveMilestone("M2", new DateOnly(2027, 1, 31));
 
     Assert.Collection(c.DomainEvents,
-        e => Assert.Equal("M2", Assert.IsType<MilestoneCertified>(e).MilestoneCode),
+        e => Assert.Equal("M2", Assert.IsType<MilestoneApproved>(e).MilestoneCode),
         e => Assert.IsType<ContractCompleted>(e));
 }
 ```
@@ -1810,7 +1810,7 @@ public void Certifying_last_milestone_completes_contract()
 
 ## Real-world application
 
-- **Contract and project management platforms** use `ContractSigned`, `VariationApproved` and `MilestoneCertified` to drive budget commitments, payment ledgers and dashboards without coupling those modules.
+- **Freelance marketplaces and agency project tools** use `ContractSigned`, `ContractExtended` and `MilestoneApproved` to drive budget commitments, escrow ledgers and dashboards without coupling those modules.
 - **E-commerce order management** uses `OrderPlaced` as the hub of fulfilment: payment, reservation, notifications and analytics all react.
 - **Microsoft's eShop reference application** (ordering service) raises domain events inside aggregates and dispatches them from the `DbContext`, and separately publishes integration events through an outbox-style event log. It is a good public example of the domain/integration split.
 - **Banking and UPI systems** publish integration events such as "payment settled" to many consumers; consumers deduplicate by event id because delivery is at-least-once.
@@ -1861,7 +1861,7 @@ Limit depth (for example, the unit of work refuses more than three rounds), forb
 
 :::flashcards
 Q: What tense and language should a domain event name use?
-A: Past tense, business language: ContractSigned, MilestoneCertified, OrderCancelled.
+A: Past tense, business language: ContractSigned, MilestoneApproved, OrderCancelled.
 Q: Who dispatches domain events?
 A: The unit of work (or DbContext/interceptor) after collecting them from tracked aggregates. Never the aggregate itself.
 Q: Why clear events only after a successful commit?
@@ -1882,9 +1882,9 @@ A: When there is one mandatory reaction that is part of the same use case; call 
 
 :::quiz pass=70
 ::q single
-`Contract.Sign()` raises `ContractSigned`, and a handler emails the vendor. The handler runs before `SaveChangesAsync`, and the save fails with a concurrency conflict. What is the result?
+`Contract.Sign()` raises `ContractSigned`, and a handler emails the freelancer. The handler runs before `SaveChangesAsync`, and the save fails with a concurrency conflict. What is the result?
 - [ ] Nothing bad, the email is rolled back.
-- [x] The vendor received an email about a contract that the database still shows as draft.
+- [x] The freelancer received an email about a contract that the database still shows as draft.
 - [ ] The save is retried automatically.
 - [ ] The aggregate prevents the email.
 > External side effects cannot be rolled back. That is why handlers with I/O run after commit, or via the outbox.
@@ -1892,11 +1892,11 @@ A: When there is one mandatory reaction that is part of the same use case; call 
 Which is the best name for a domain event?
 - [ ] `UpdateMilestone`
 - [ ] `MilestoneEvent`
-- [x] `MilestoneCertified`
-- [ ] `CertifyMilestoneCommand`
+- [x] `MilestoneApproved`
+- [ ] `ApproveMilestoneCommand`
 > Past tense, specific, business language.
 ::q single
-Finance (a separate service) must open a payment ledger whenever a contract is signed, and must never miss one. What is the right mechanism?
+Payments (a separate service) must open an escrow ledger whenever a contract is signed, and must never miss one. What is the right mechanism?
 - [ ] An in-process post-commit handler calling the finance API.
 - [ ] Publish the internal `ContractSigned` record to the broker directly after commit.
 - [x] Map to a versioned `ContractSignedV1`, write it to the outbox in the same transaction, and let a relay publish it.
@@ -1924,7 +1924,7 @@ Your team wants to rename `ContractSigned.Value` to `ContractValue`. Ten other s
 - [ ] Every service should share the same domain assembly.
 > The mapper is the seam that lets internal models evolve while the public contract stays stable.
 ::q single
-A handler for `MilestoneCertified` certifies the next milestone, whose event triggers the same handler again. The unit of work loops forever. What is the best structural fix?
+A handler for `MilestoneApproved` approves the next milestone, whose event triggers the same handler again. The unit of work loops forever. What is the best structural fix?
 - [ ] Increase the thread pool size.
 - [ ] Catch the exception and ignore it.
 - [x] Cap the number of dispatch rounds and move multi-step workflows into an explicit process manager or separate transactions.

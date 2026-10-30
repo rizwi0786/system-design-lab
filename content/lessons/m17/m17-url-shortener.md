@@ -7,7 +7,7 @@ status: reviewed
 template: hld-case
 minutes: 90
 prerequisites: [m11-hld-framework, m11-capacity-estimation, m12-cache-patterns]
-related: [m17-pastebin, m17-rate-limiter, m11-cdn, m13-sharding, m12-cache-failures, m10-rate-limiting]
+related: [m17-unique-id-generator, m17-pastebin, m17-rate-limiter, m11-cdn, m13-sharding, m12-cache-failures, m10-rate-limiting]
 tags: [hld, case-study, ids, base62, redirects, caching, analytics]
 patterns: []
 summary: Design a service that turns long links into short ones and redirects billions of clicks quickly, covering ID generation with base62, redirect semantics, read-heavy caching, click analytics and abuse control.
@@ -330,12 +330,14 @@ There are four common approaches. Knowing why three of them lose is most of the 
 
 - No collisions, ever. The code is as short as possible.
 - Needs a source of unique numbers. A single database sequence works up to thousands of writes per second. Leasing **blocks** of 1,000 numbers per server removes the bottleneck entirely.
-- Consecutive numbers give consecutive codes (`q7Xk2Pa`, `q7Xk2Pb`…), so anyone can enumerate links. Fix this by scrambling the number with a reversible permutation (for example a small Feistel network or multiplying by a large odd constant modulo 62⁷) before encoding. The scrambled codes are still unique, because the permutation is one-to-one.
+- Consecutive numbers give consecutive codes (`q7Xk2Pa`, `q7Xk2Pb`…), so anyone can enumerate links. Fix this by scrambling the number with a reversible permutation (for example a small keyed Feistel network, or multiplying by a large constant that shares no factor with 62⁷, that is, odd and not a multiple of 31, modulo 62⁷) before encoding. The scrambled codes are still unique, because the permutation is one-to-one. Multiplication alone hides the order from casual visitors but is easy to undo once someone sees a few pairs; a keyed Feistel network is the stronger choice when links are semi-private.
 
 **D. Pre-generated key pool** (a key-generation service fills a table with unused random codes; servers take batches).
 
 - Fast at creation time and unguessable.
 - More moving parts: a separate service, a table of unused keys, and care to never hand the same key to two servers.
+
+The [unique ID generator case study](#/lesson/m17-unique-id-generator) compares these and Snowflake-style ids in depth; here the deciding constraint is that the code must be **short**, which rules out 64-bit time-based ids (11 base62 characters).
 
 **Our choice: C, counter with block leasing, plus a permutation if enumeration matters.** It needs no collision handling, the maths is simple to test, and block leasing turns the shared counter into one write every few seconds. Custom aliases live in the same table and are checked with insert-if-absent. If a generated code ever lands on an existing alias, we skip that number and take the next one.
 
@@ -361,7 +363,7 @@ With a combined hit ratio of 95 % (an estimate), the database sees 12,000 × 0.0
 
 **Cache penetration**: an attacker requests millions of random codes that don't exist. Each one misses every cache and hits the database. Defences: cache negative results ("not found") for 60 seconds, reject codes that fail the format check before any lookup, and rate-limit per IP at the edge. A Bloom filter of existing codes (see [cache failures](#/lesson/m12-cache-failures)) is a further option at very large scale.
 
-**Read-your-writes for new links**: replicas lag the primary by milliseconds to seconds. The create path writes the new mapping into Redis, so the first click is a cache hit. If Redis is down, the redirect service falls back to the primary for codes it can't find on a replica.
+**Read-your-writes for new links**: replicas lag the primary by milliseconds to seconds. The create path writes the new mapping into Redis with a plain `SET` (which also overwrites any "not found" entry left by an earlier miss), so the first click is a cache hit. Negative caching has a trap here: if a redirect pod misses Redis, reads a lagging replica and caches "not found" for 60 seconds, a brand-new link is broken for a minute. So confirm a replica miss on the primary before caching a negative result (rate-limited, so a scan can't push all its misses to the primary), and if Redis is down, fall back to the primary in the same way.
 
 ### Deep dive 4: analytics without slowing redirects
 
@@ -558,7 +560,7 @@ public sealed class ShortenService(ILinkStore store, BlockIdGenerator ids, IMemo
 
     // Read-your-writes for the creator: the first click is a cache hit even if replicas lag.
     private void Warm(Link link, DateTimeOffset now) =>
-        cache.Set(RedirectResolver.Key(link.Code), link, RedirectResolver.TtlFor(link, now));
+        cache.Set(RedirectResolver.Key(link.Code), link, RedirectResolver.Entry(RedirectResolver.TtlFor(link, now)));
 }
 ```
 
@@ -576,6 +578,11 @@ public sealed class RedirectResolver(ILinkStore store, IMemoryCache cache, TimeP
 
     public static string Key(string code) => "link:" + code;
 
+    /// <summary>Every entry has Size 1, so the cache's SizeLimit caps the entry count: a scan of random codes
+    /// fills the cache with negative entries up to the limit and then evicts, instead of exhausting memory.</summary>
+    public static MemoryCacheEntryOptions Entry(TimeSpan ttl) =>
+        new() { AbsoluteExpirationRelativeToNow = ttl, Size = 1 };
+
     public static TimeSpan TtlFor(Link link, DateTimeOffset now)
     {
         if (link.ExpiresAt is not { } exp) return PositiveTtl;
@@ -590,7 +597,8 @@ public sealed class RedirectResolver(ILinkStore store, IMemoryCache cache, TimeP
         {
             var link = await store.FindAsync(code, ct);
             entry = (object?)link ?? NotFound.Instance;
-            cache.Set(Key(code), entry, link is null ? NegativeTtl : TtlFor(link, now));
+            // Production: confirm a replica miss on the primary before caching "not found" (see deep dive 3).
+            cache.Set(Key(code), entry, Entry(link is null ? NegativeTtl : TtlFor(link, now)));
         }
         return entry is Link l && l.IsLive(now) ? l.LongUrl : null;
     }
@@ -615,14 +623,15 @@ public sealed record ClickEvent(string Code, DateTimeOffset At, string? Referrer
 public sealed class ClickQueue
 {
     private readonly Channel<ClickEvent> _channel = Channel.CreateBounded<ClickEvent>(
-        new BoundedChannelOptions(100_000) { FullMode = BoundedChannelFullMode.DropWrite, SingleReader = true });
+        new BoundedChannelOptions(100_000) { FullMode = BoundedChannelFullMode.Wait, SingleReader = true });
     private long _dropped;
 
     public void Enqueue(ClickEvent e)
     {
-        // With DropWrite, TryWrite reports success even when the item is dropped, so count capacity ourselves.
-        if (_channel.Reader.Count >= 100_000) { Interlocked.Increment(ref _dropped); return; }
-        _channel.Writer.TryWrite(e);
+        // In Wait mode, TryWrite never waits: it returns false when the buffer is full, so the drop count is exact.
+        // (DropWrite would report success while silently dropping, and a separate "is it full?" check before
+        // writing is a check-then-act race between concurrent redirects.)
+        if (!_channel.Writer.TryWrite(e)) Interlocked.Increment(ref _dropped);
     }
 
     public long Dropped => Interlocked.Read(ref _dropped);
@@ -686,7 +695,7 @@ using Shortener.Links;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddMemoryCache(o => o.SizeLimit = null);
+builder.Services.AddMemoryCache(o => o.SizeLimit = 1_000_000); // entries, not bytes: every Set uses Size = 1
 builder.Services.AddSingleton(TimeProvider.System);
 // Swap for a PostgreSQL-backed IIdRangeStore and ILinkStore in production.
 builder.Services.AddSingleton<IIdRangeStore>(_ => new InMemoryIdRangeStore(firstId: 1));
@@ -720,7 +729,9 @@ app.MapPost("/api/v1/links", async (ShortenRequest req, HttpContext http, Shorte
 app.MapGet("/{code}", async (string code, HttpContext http, RedirectResolver resolver, ClickQueue clicks,
                              TimeProvider clock, CancellationToken ct) =>
 {
-    if (code.Length is < 4 or > 32) return Results.NotFound(); // cheap format check before any lookup
+    // Cheap format check before any lookup: the same shape rules as generated codes and custom aliases.
+    if (code.Length is < 4 or > 32 || !code.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_'))
+        return Results.NotFound();
     var url = await resolver.ResolveAsync(code, ct);
     if (url is null) return Results.NotFound();
 
@@ -732,7 +743,7 @@ app.MapGet("/{code}", async (string code, HttpContext http, RedirectResolver res
 app.Run();
 ```
 
-The resolver caps each cache entry's TTL at the link's own expiry, and `ClickQueue` drops and counts events when full: the "best-effort analytics" requirement written in code.
+The resolver caps each cache entry's TTL at the link's own expiry, the cache is bounded by entry count so negative entries from scanners can't exhaust memory, and `ClickQueue` drops and counts events when full: the "best-effort analytics" requirement written in code.
 
 ## Caching, queues and scaling
 
@@ -984,7 +995,7 @@ Why `do ... while`? A plain `while (value > 0)` loop produces an empty string fo
 - Building the string with `string +=` in a loop and then reversing it. Correct, but it allocates on every digit.
 - Treating codes as case-insensitive. `a` and `A` are different digits; a case-insensitive database collation on the `code` column would merge distinct links.
 ::extensions
-Add a reversible scramble: multiply the id by a large odd constant modulo 62⁷ and encode the result, and write `Unscramble` using the modular inverse. Prove with a test that 10,000 consecutive ids produce 10,000 distinct, non-sequential codes.
+Add a reversible scramble: multiply the id by a large constant coprime to 62⁷ (odd and not a multiple of 31) modulo 62⁷ and encode the result, and write `Unscramble` using the modular inverse. Prove with a test that 10,000 consecutive ids produce 10,000 distinct, non-sequential codes.
 :::
 
 :::exercise id=m17-url-shortener-ex2 difficulty=beginner kind=sql ordered=true title="Top links for an owner's weekly report"

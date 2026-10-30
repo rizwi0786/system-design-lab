@@ -52,15 +52,15 @@ So airports have a control tower. Every pilot talks only to the tower. The tower
 
 That control tower is a **Mediator**. The planes are called **colleagues**. The rule is simple: colleagues never talk to each other directly. They tell the mediator "something happened", and the mediator decides who else needs to react.
 
-You see the same thing in software. Picture a material requisition form on a construction site app:
+You see the same thing in software. Picture the order form in a pharmacy chain's app:
 
-- When the engineer picks a **project**, the **material** list must reload with that project's approved materials.
-- When they pick a **material**, the **quantity** box unlocks and its limit changes (say, a maximum of 500 bags of cement per request).
+- When the customer picks a **store**, the **medicine** list must reload with what that store has in stock.
+- When they pick a **medicine**, the **quantity** box unlocks and its limit changes (say, a maximum of 10 strips of a prescription medicine per order).
 - The **Submit** button should only light up when all three are valid.
 
-If each control talks to the others directly, the project picker must know about the material list, the quantity box *and* the button. The material list must know about the quantity box and the button. Add a "delivery date" field and you edit four classes. With a mediator, each control only says "I changed", and one class, the form's mediator, holds all the "when X changes, update Y" rules.
+If each control talks to the others directly, the store picker must know about the medicine list, the quantity box *and* the button. The medicine list must know about the quantity box and the button. Add a "delivery slot" field and you edit four classes. With a mediator, each control only says "I changed", and one class, the form's mediator, holds all the "when X changes, update Y" rules.
 
-The second, modern meaning is like the **front desk of a government office**. You don't walk around looking for the right clerk. You hand your form (a request) to the front desk, and the desk routes it to the one clerk who handles that form type (the handler). On the way, the desk may stamp it, check it is filled in, and log the time (pipeline behaviours). You don't need to know which clerk did the work.
+The second, modern meaning is like the **reception desk of a hospital**. You don't walk around looking for the right department. You hand your form (a request) to reception, and the desk routes it to the one department that handles that form type (the handler). On the way, the desk may stamp it, check it is filled in, and log the time (pipeline behaviours). You don't need to know which department did the work.
 
 ## First-principles explanation
 
@@ -68,8 +68,8 @@ The second, modern meaning is like the **front desk of a government office**. Yo
 
 Say you have *n* objects that all need to react to each other. If each one holds references to the others, you can have up to n × (n − 1) dependencies. With 4 controls that is 12; with 8 controls it is 56. Three costs follow:
 
-1. **Reuse dies.** The project picker can't be used on another screen, because it is hard-wired to this screen's material list.
-2. **Rules are scattered.** "Submit is enabled when project, material and quantity are valid" is spread over three classes. Nobody can read it in one place.
+1. **Reuse dies.** The store picker can't be used on another screen, because it is hard-wired to this screen's medicine list.
+2. **Rules are scattered.** "Submit is enabled when store, medicine and quantity are valid" is spread over three classes. Nobody can read it in one place.
 3. **Change ripples.** Adding one control means editing several existing ones (shotgun surgery, see [Code smells](#/lesson/m04-code-smells)).
 
 The GoF solution is to define an object that *encapsulates how a set of objects interact*. Colleagues hold a reference to the mediator only. The dependency count drops from n × (n − 1) to about 2n: each colleague knows the mediator, and the mediator knows each colleague.
@@ -79,9 +79,9 @@ The GoF solution is to define an object that *encapsulates how a set of objects 
 | Participant | Job | In our form example |
 |---|---|---|
 | **Mediator** (interface) | The channel colleagues use to report events | `IFormMediator.Changed(FormControl sender)` |
-| **Concrete mediator** | Knows the colleagues and holds the coordination rules | `RequisitionFormMediator` |
+| **Concrete mediator** | Knows the colleagues and holds the coordination rules | `MedicineOrderFormMediator` |
 | **Colleague** (base) | Holds a reference to the mediator and notifies it | `FormControl` |
-| **Concrete colleagues** | Do their own job; report changes; never reference each other | `ProjectPicker`, `MaterialList`, `QuantityBox`, `SubmitButton` |
+| **Concrete colleagues** | Do their own job; report changes; never reference each other | `StorePicker`, `MedicineList`, `QuantityBox`, `SubmitButton` |
 
 The simplest implementation is just that: an interface with one method, a base class that stores the mediator, and a concrete mediator with a `switch` over "who changed".
 
@@ -90,13 +90,13 @@ The simplest implementation is just that: an interface with one method, a base c
 There is no framework magic in the classic version:
 
 1. The concrete mediator creates (or is given) the colleagues and passes itself to each one.
-2. A colleague changes its own state, for example `ProjectPicker.Select("NH-48")`, then calls `mediator.Changed(this)`.
-3. The mediator looks at who changed and updates the others: it loads the material list, disables the quantity box and recomputes whether Submit is enabled.
-4. Updates made *by the mediator* do not call back into the mediator. Otherwise you get loops: the mediator clears the quantity, the quantity reports "changed", the mediator clears the material list, and so on (re-entrancy).
+2. A colleague changes its own state, for example `StorePicker.Select("BLR-KORAMANGALA")`, then calls `mediator.Changed(this)`.
+3. The mediator looks at who changed and updates the others: it loads the medicine list, disables the quantity box and recomputes whether Submit is enabled.
+4. Updates made *by the mediator* do not call back into the mediator. Otherwise you get loops: the mediator clears the quantity, the quantity reports "changed", the mediator clears the medicine list, and so on (re-entrancy).
 
 ### The modern meaning: in-process request dispatch
 
-In ASP.NET Core, "mediator" usually means something else. A controller or endpoint creates a message object, for example `SubmitDailyProgress`, and calls `sender.Send(message)`. The dispatcher finds the single class that implements `IRequestHandler<SubmitDailyProgress, ...>` and runs it. This is the idea popularised by the MediatR library.
+In ASP.NET Core, "mediator" usually means something else. A controller or endpoint creates a message object, for example `RecordSale`, and calls `sender.Send(message)`. The dispatcher finds the single class that implements `IRequestHandler<RecordSale, ...>` and runs it. This is the idea popularised by the MediatR library.
 
 What it gives you:
 
@@ -106,7 +106,7 @@ What it gives you:
 
 How the dispatcher works internally:
 
-1. `Send<TResponse>(IRequest<TResponse> request)` only knows `TResponse` at compile time. The concrete request type (`SubmitDailyProgress`) is only known at runtime, from `request.GetType()`.
+1. `Send<TResponse>(IRequest<TResponse> request)` only knows `TResponse` at compile time. The concrete request type (`RecordSale`) is only known at runtime, from `request.GetType()`.
 2. So the dispatcher builds a small generic helper for each (request type, response type) pair using reflection *once* (`MakeGenericType`), caches it in a `ConcurrentDictionary`, and reuses it. After the first call there is no more reflection, just a dictionary lookup and normal generic code.
 3. The helper resolves `IRequestHandler<TRequest, TResponse>` and every `IPipelineBehavior<TRequest, TResponse>` from the current DI scope.
 4. It wraps the handler in the behaviours like layers of an onion, so the first registered behaviour runs first and finishes last.
@@ -115,7 +115,7 @@ Is it still the GoF Mediator? Partly. It does remove direct dependencies: the en
 
 ### What happens without a mediator
 
-Without the classic mediator, coordination logic spreads across the colleagues, and every new rule touches several classes. Without a request dispatcher, you have ordinary services: `ProgressService.SubmitAsync(...)` injected into the endpoint. That is often perfectly fine. The dispatcher earns its place only when the pipeline (cross-cutting behaviours applied uniformly) or the one-handler-per-use-case structure is genuinely useful.
+Without the classic mediator, coordination logic spreads across the colleagues, and every new rule touches several classes. Without a request dispatcher, you have ordinary services: `SalesService.RecordAsync(...)` injected into the endpoint. That is often perfectly fine. The dispatcher earns its place only when the pipeline (cross-cutting behaviours applied uniformly) or the one-handler-per-use-case structure is genuinely useful.
 
 ### When it is useful
 
@@ -156,9 +156,9 @@ classDiagram
         <<interface>>
         +Changed(FormControl sender) void
     }
-    class RequisitionFormMediator {
-        +ProjectPicker Project
-        +MaterialList Material
+    class MedicineOrderFormMediator {
+        +StorePicker Store
+        +MedicineList Medicine
         +QuantityBox Quantity
         +SubmitButton Submit
         +Changed(FormControl sender) void
@@ -169,14 +169,14 @@ classDiagram
         +bool Enabled
         #NotifyChanged() void
     }
-    class ProjectPicker {
-        +string SelectedProject
+    class StorePicker {
+        +string SelectedStore
         +Select(string code) void
     }
-    class MaterialList {
+    class MedicineList {
         +string Selected
         +LoadOptions(list) void
-        +Select(string material) void
+        +Select(string medicine) void
     }
     class QuantityBox {
         +decimal Value
@@ -184,31 +184,31 @@ classDiagram
         +Enter(decimal value) void
     }
     class SubmitButton
-    IFormMediator <|.. RequisitionFormMediator
+    IFormMediator <|.. MedicineOrderFormMediator
     FormControl --> IFormMediator : notifies
-    FormControl <|-- ProjectPicker
-    FormControl <|-- MaterialList
+    FormControl <|-- StorePicker
+    FormControl <|-- MedicineList
     FormControl <|-- QuantityBox
     FormControl <|-- SubmitButton
-    RequisitionFormMediator --> ProjectPicker
-    RequisitionFormMediator --> MaterialList
-    RequisitionFormMediator --> QuantityBox
-    RequisitionFormMediator --> SubmitButton
+    MedicineOrderFormMediator --> StorePicker
+    MedicineOrderFormMediator --> MedicineList
+    MedicineOrderFormMediator --> QuantityBox
+    MedicineOrderFormMediator --> SubmitButton
 ```
 
-How to read it: every control (colleague) inherits from `FormControl`, which points only at the `IFormMediator` interface. No control has an arrow to another control. The concrete mediator is the only class that knows all four controls. To add a "delivery date" control you add one class and edit one class, the mediator, instead of editing every control.
+How to read it: every control (colleague) inherits from `FormControl`, which points only at the `IFormMediator` interface. No control has an arrow to another control. The concrete mediator is the only class that knows all four controls. To add a "delivery slot" control you add one class and edit one class, the mediator, instead of editing every control.
 
 ### Sequence diagram — a request through the in-process dispatcher
 
 ```mermaid
 sequenceDiagram
-    participant E as POST /daily-progress
+    participant E as POST /sales
     participant M as Mediator (ISender)
     participant L as LoggingBehavior
     participant V as ValidationBehavior
-    participant H as SubmitDailyProgressHandler
+    participant H as RecordSaleHandler
     participant N as Notification handlers
-    E->>M: Send(SubmitDailyProgress)
+    E->>M: Send(RecordSale)
     M->>M: find cached invoker for request type
     M->>L: Handle(request, next)
     L->>V: next()
@@ -218,13 +218,13 @@ sequenceDiagram
         L-->>E: exception (logged)
     else valid
         V->>H: next()
-        H->>H: save entry
-        H->>N: Publish(DailyProgressSubmitted)
+        H->>H: save sale
+        H->>N: Publish(SaleRecorded)
         N-->>H: done
         H-->>V: result
         V-->>L: result
         L-->>M: result (elapsed ms logged)
-        M-->>E: SubmitDailyProgressResult
+        M-->>E: RecordSaleResult
     end
 ```
 
@@ -238,16 +238,16 @@ We'll build the classic version first, then the dispatcher.
 
 ```csharp
 // Every control knows every other control. 4 controls, up to 12 references.
-public sealed class ProjectPicker
+public sealed class StorePicker
 {
-    public MaterialList Materials { get; set; } = null!;
+    public MedicineList Medicines { get; set; } = null!;
     public QuantityBox Quantity { get; set; } = null!;
     public SubmitButton Submit { get; set; } = null!;
 
     public void Select(string code)
     {
         Selected = code;
-        Materials.LoadOptions(MaterialCatalogue.For(code));
+        Medicines.LoadOptions(StockCatalogue.For(code));
         Quantity.Clear();
         Submit.Enabled = false;   // the "can submit?" rule, copy 1 of 3
     }
@@ -255,7 +255,7 @@ public sealed class ProjectPicker
 }
 ```
 
-The "can submit?" rule is copied into three classes. When the business adds "quantity must not exceed the approved BOQ balance", someone updates two copies and forgets the third.
+The "can submit?" rule is copied into three classes. When the business adds "quantity must not exceed the refills left on the prescription", someone updates two copies and forgets the third.
 
 ### Step 2 — introduce the mediator interface
 
@@ -275,28 +275,28 @@ The concrete mediator has a `switch` on the sender and one `RecomputeSubmit()` m
 
 ### Step 5 — from screens to requests
 
-Now look at the API side. Your endpoints call `ProgressService`, `RfiService`, `BoqService`. Every service method starts with the same five lines: validate, log, start a timer, open a transaction. That repetition is what pipeline behaviours remove. We'll build `ISender`, `IRequestHandler<,>` and `IPipelineBehavior<,>` ourselves in about 80 lines, so there is no magic left.
+Now look at the API side. Your endpoints call `SalesService`, `ReturnsService`, `StockService`. Every service method starts with the same five lines: validate, log, start a timer, open a transaction. That repetition is what pipeline behaviours remove. We'll build `ISender`, `IRequestHandler<,>` and `IPipelineBehavior<,>` ourselves in about 80 lines, so there is no magic left.
 
 ## Production-style C# implementation
 
 Project structure:
 
 ```text
-SiteOps.Api/
+PharmaOps.Api/
   Program.cs
-  ClassicUi/RequisitionForm.cs          # GoF mediator (e.g. behind a Blazor or desktop form)
+  ClassicUi/MedicineOrderForm.cs        # GoF mediator (e.g. behind a Blazor or desktop form)
   Mediation/Abstractions.cs             # IRequest, IRequestHandler, IPipelineBehavior, notifications
   Mediation/Mediator.cs                 # the dispatcher
   Mediation/MediationRegistration.cs    # assembly scanning for handlers
   Behaviors/LoggingBehavior.cs
   Behaviors/ValidationBehavior.cs
-  Features/DailyProgress/SubmitDailyProgress.cs
+  Features/Sales/RecordSale.cs
 ```
 
 ### The classic mediator
 
-```csharp file=ClassicUi/RequisitionForm.cs
-namespace SiteOps.ClassicUi;
+```csharp file=ClassicUi/MedicineOrderForm.cs
+namespace PharmaOps.ClassicUi;
 
 public interface IFormMediator
 {
@@ -310,13 +310,13 @@ public abstract class FormControl(IFormMediator mediator)
     protected void NotifyChanged() => mediator.Changed(this);
 }
 
-public sealed class ProjectPicker(IFormMediator mediator) : FormControl(mediator)
+public sealed class StorePicker(IFormMediator mediator) : FormControl(mediator)
 {
-    public string? SelectedProject { get; private set; }
-    public void Select(string projectCode) { SelectedProject = projectCode; NotifyChanged(); }
+    public string? SelectedStore { get; private set; }
+    public void Select(string storeCode) { SelectedStore = storeCode; NotifyChanged(); }
 }
 
-public sealed class MaterialList(IFormMediator mediator) : FormControl(mediator)
+public sealed class MedicineList(IFormMediator mediator) : FormControl(mediator)
 {
     public IReadOnlyList<string> Options { get; private set; } = [];
     public string? Selected { get; private set; }
@@ -324,10 +324,10 @@ public sealed class MaterialList(IFormMediator mediator) : FormControl(mediator)
     /// <summary>Called by the mediator. Does not notify, to avoid feedback loops.</summary>
     public void LoadOptions(IReadOnlyList<string> options) { Options = options; Selected = null; }
 
-    public void Select(string material)
+    public void Select(string medicine)
     {
-        if (!Options.Contains(material)) throw new ArgumentException($"'{material}' is not approved for this project.", nameof(material));
-        Selected = material;
+        if (!Options.Contains(medicine)) throw new ArgumentException($"'{medicine}' is not in stock at this store.", nameof(medicine));
+        Selected = medicine;
         NotifyChanged();
     }
 }
@@ -343,26 +343,26 @@ public sealed class QuantityBox(IFormMediator mediator) : FormControl(mediator)
 
 public sealed class SubmitButton(IFormMediator mediator) : FormControl(mediator);
 
-/// <summary>Concrete mediator: owns every "when X changes, update Y" rule of the requisition form.</summary>
-public sealed class RequisitionFormMediator : IFormMediator
+/// <summary>Concrete mediator: owns every "when X changes, update Y" rule of the medicine order form.</summary>
+public sealed class MedicineOrderFormMediator : IFormMediator
 {
-    private readonly IReadOnlyDictionary<string, IReadOnlyList<string>> _materialsByProject;
+    private readonly IReadOnlyDictionary<string, IReadOnlyList<string>> _medicinesByStore;
     private readonly IReadOnlyDictionary<string, decimal> _maxPerRequest;
 
-    public RequisitionFormMediator(
-        IReadOnlyDictionary<string, IReadOnlyList<string>> materialsByProject,
+    public MedicineOrderFormMediator(
+        IReadOnlyDictionary<string, IReadOnlyList<string>> medicinesByStore,
         IReadOnlyDictionary<string, decimal> maxPerRequest)
     {
-        _materialsByProject = materialsByProject;
+        _medicinesByStore = medicinesByStore;
         _maxPerRequest = maxPerRequest;
-        Project = new ProjectPicker(this);
-        Material = new MaterialList(this) { Enabled = false };
+        Store = new StorePicker(this);
+        Medicine = new MedicineList(this) { Enabled = false };
         Quantity = new QuantityBox(this) { Enabled = false };
         Submit = new SubmitButton(this) { Enabled = false };
     }
 
-    public ProjectPicker Project { get; }
-    public MaterialList Material { get; }
+    public StorePicker Store { get; }
+    public MedicineList Medicine { get; }
     public QuantityBox Quantity { get; }
     public SubmitButton Submit { get; }
 
@@ -370,13 +370,13 @@ public sealed class RequisitionFormMediator : IFormMediator
     {
         switch (sender)
         {
-            case ProjectPicker p:
-                Material.LoadOptions(_materialsByProject.TryGetValue(p.SelectedProject!, out var list) ? list : []);
-                Material.Enabled = Material.Options.Count > 0;
+            case StorePicker p:
+                Medicine.LoadOptions(_medicinesByStore.TryGetValue(p.SelectedStore!, out var list) ? list : []);
+                Medicine.Enabled = Medicine.Options.Count > 0;
                 Quantity.Clear();
                 Quantity.Enabled = false;
                 break;
-            case MaterialList m:
+            case MedicineList m:
                 Quantity.Clear();
                 Quantity.Max = _maxPerRequest.GetValueOrDefault(m.Selected!, 0m);
                 Quantity.Enabled = true;
@@ -390,8 +390,8 @@ public sealed class RequisitionFormMediator : IFormMediator
                 };
                 break;
         }
-        Submit.Enabled = Project.SelectedProject is not null
-                         && Material.Selected is not null
+        Submit.Enabled = Store.SelectedStore is not null
+                         && Medicine.Selected is not null
                          && Quantity.Value is > 0
                          && Quantity.Error is null;
     }
@@ -403,7 +403,7 @@ Notice three design decisions. First, `LoadOptions` and `Clear` are called by th
 ### The in-process dispatcher
 
 ```csharp file=Mediation/Abstractions.cs
-namespace SiteOps.Mediation;
+namespace PharmaOps.Mediation;
 
 /// <summary>A message with exactly one handler that returns <typeparamref name="TResponse"/>.</summary>
 public interface IRequest<TResponse>;
@@ -444,7 +444,7 @@ public interface IPublisher
 using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace SiteOps.Mediation;
+namespace PharmaOps.Mediation;
 
 /// <summary>Registered as scoped, so handlers can depend on scoped services such as a DbContext.</summary>
 public sealed class Mediator(IServiceProvider services) : ISender, IPublisher
@@ -502,7 +502,7 @@ internal sealed class RequestInvoker<TRequest, TResponse> : RequestInvoker<TResp
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace SiteOps.Mediation;
+namespace PharmaOps.Mediation;
 
 public static class MediationRegistration
 {
@@ -533,9 +533,9 @@ public static class MediationRegistration
 ```csharp file=Behaviors/LoggingBehavior.cs
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
-using SiteOps.Mediation;
+using PharmaOps.Mediation;
 
-namespace SiteOps.Behaviors;
+namespace PharmaOps.Behaviors;
 
 public sealed class LoggingBehavior<TRequest, TResponse>(ILogger<LoggingBehavior<TRequest, TResponse>> logger)
     : IPipelineBehavior<TRequest, TResponse> where TRequest : IRequest<TResponse>
@@ -564,9 +564,9 @@ public sealed class LoggingBehavior<TRequest, TResponse>(ILogger<LoggingBehavior
 ```
 
 ```csharp file=Behaviors/ValidationBehavior.cs
-using SiteOps.Mediation;
+using PharmaOps.Mediation;
 
-namespace SiteOps.Behaviors;
+namespace PharmaOps.Behaviors;
 
 public interface IValidator<in T>
 {
@@ -592,109 +592,109 @@ public sealed class ValidationBehavior<TRequest, TResponse>(IEnumerable<IValidat
 
 ### A feature slice
 
-```csharp file=Features/DailyProgress/SubmitDailyProgress.cs
+```csharp file=Features/Sales/RecordSale.cs
 using Microsoft.Extensions.Logging;
-using SiteOps.Behaviors;
-using SiteOps.Mediation;
+using PharmaOps.Behaviors;
+using PharmaOps.Mediation;
 
-namespace SiteOps.Features.DailyProgress;
+namespace PharmaOps.Features.Sales;
 
 // ---- Messages ----
-public sealed record SubmitDailyProgress(int ProjectId, DateOnly Date, string Activity, decimal Quantity, string Unit)
-    : IRequest<SubmitDailyProgressResult>;
+public sealed record RecordSale(int StoreId, DateOnly Date, string Medicine, decimal Quantity, string Unit)
+    : IRequest<RecordSaleResult>;
 
-public sealed record SubmitDailyProgressResult(Guid EntryId, decimal CumulativeQuantity);
+public sealed record RecordSaleResult(Guid EntryId, decimal CumulativeQuantity);
 
-public sealed record DailyProgressSubmitted(Guid EntryId, int ProjectId, string Activity, decimal Quantity) : INotification;
+public sealed record SaleRecorded(Guid EntryId, int StoreId, string Medicine, decimal Quantity) : INotification;
 
 // ---- Persistence port (swap for PostgreSQL in production) ----
-public sealed record ProgressEntry(Guid Id, int ProjectId, DateOnly Date, string Activity, decimal Quantity, string Unit);
+public sealed record SaleEntry(Guid Id, int StoreId, DateOnly Date, string Medicine, decimal Quantity, string Unit);
 
-public interface IProgressStore
+public interface ISalesStore
 {
-    /// <summary>Saves the entry and returns the cumulative quantity for that project and activity.</summary>
-    Task<decimal> AddAsync(ProgressEntry entry, CancellationToken ct);
+    /// <summary>Saves the sale and returns the quantity of that medicine sold so far at that store.</summary>
+    Task<decimal> AddAsync(SaleEntry entry, CancellationToken ct);
 }
 
-public sealed class InMemoryProgressStore : IProgressStore
+public sealed class InMemorySalesStore : ISalesStore
 {
-    private readonly List<ProgressEntry> _entries = [];
+    private readonly List<SaleEntry> _entries = [];
     private readonly Lock _gate = new();
 
-    public Task<decimal> AddAsync(ProgressEntry entry, CancellationToken ct)
+    public Task<decimal> AddAsync(SaleEntry entry, CancellationToken ct)
     {
         lock (_gate)
         {
             _entries.Add(entry);
             return Task.FromResult(_entries
-                .Where(e => e.ProjectId == entry.ProjectId && e.Activity == entry.Activity)
+                .Where(e => e.StoreId == entry.StoreId && e.Medicine == entry.Medicine)
                 .Sum(e => e.Quantity));
         }
     }
 }
 
 // ---- Validation ----
-public sealed class SubmitDailyProgressValidator(TimeProvider clock) : IValidator<SubmitDailyProgress>
+public sealed class RecordSaleValidator(TimeProvider clock) : IValidator<RecordSale>
 {
-    public IEnumerable<string> Validate(SubmitDailyProgress r)
+    public IEnumerable<string> Validate(RecordSale r)
     {
-        if (r.ProjectId <= 0) yield return "ProjectId must be positive.";
-        if (string.IsNullOrWhiteSpace(r.Activity)) yield return "Activity is required.";
+        if (r.StoreId <= 0) yield return "StoreId must be positive.";
+        if (string.IsNullOrWhiteSpace(r.Medicine)) yield return "Medicine is required.";
         if (r.Quantity <= 0) yield return "Quantity must be greater than zero.";
-        if (r.Date > DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime)) yield return "Progress cannot be reported for a future date.";
+        if (r.Date > DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime)) yield return "A sale cannot be recorded for a future date.";
     }
 }
 
 // ---- Handler: the use case ----
-public sealed class SubmitDailyProgressHandler(IProgressStore store, IPublisher publisher)
-    : IRequestHandler<SubmitDailyProgress, SubmitDailyProgressResult>
+public sealed class RecordSaleHandler(ISalesStore store, IPublisher publisher)
+    : IRequestHandler<RecordSale, RecordSaleResult>
 {
-    public async Task<SubmitDailyProgressResult> Handle(SubmitDailyProgress r, CancellationToken ct)
+    public async Task<RecordSaleResult> Handle(RecordSale r, CancellationToken ct)
     {
-        var entry = new ProgressEntry(Guid.NewGuid(), r.ProjectId, r.Date, r.Activity.Trim(), r.Quantity, r.Unit);
+        var entry = new SaleEntry(Guid.NewGuid(), r.StoreId, r.Date, r.Medicine.Trim(), r.Quantity, r.Unit);
         var cumulative = await store.AddAsync(entry, ct);
         // In production, write this to an outbox in the same transaction instead (see the callout below).
-        await publisher.Publish(new DailyProgressSubmitted(entry.Id, r.ProjectId, entry.Activity, r.Quantity), ct);
-        return new SubmitDailyProgressResult(entry.Id, cumulative);
+        await publisher.Publish(new SaleRecorded(entry.Id, r.StoreId, entry.Medicine, r.Quantity), ct);
+        return new RecordSaleResult(entry.Id, cumulative);
     }
 }
 
 // ---- Side effects that react to the event ----
-public sealed class NotifyPlanningEngineer(ILogger<NotifyPlanningEngineer> logger) : INotificationHandler<DailyProgressSubmitted>
+public sealed class NotifyStockPlanner(ILogger<NotifyStockPlanner> logger) : INotificationHandler<SaleRecorded>
 {
-    public Task Handle(DailyProgressSubmitted n, CancellationToken ct)
+    public Task Handle(SaleRecorded n, CancellationToken ct)
     {
-        logger.LogInformation("Planning engineer notified: project {ProjectId} {Activity} +{Quantity}", n.ProjectId, n.Activity, n.Quantity);
+        logger.LogInformation("Stock planner notified: store {StoreId} {Medicine} -{Quantity}", n.StoreId, n.Medicine, n.Quantity);
         return Task.CompletedTask;
     }
 }
 ```
 
 ```csharp file=Program.cs
-using SiteOps.Behaviors;
-using SiteOps.Features.DailyProgress;
-using SiteOps.Mediation;
+using PharmaOps.Behaviors;
+using PharmaOps.Features.Sales;
+using PharmaOps.Mediation;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<IProgressStore, InMemoryProgressStore>();
-builder.Services.AddMediation(typeof(SubmitDailyProgressHandler).Assembly);
+builder.Services.AddSingleton<ISalesStore, InMemorySalesStore>();
+builder.Services.AddMediation(typeof(RecordSaleHandler).Assembly);
 
 // Order matters: the first registered behaviour is the outermost layer.
 builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(LoggingBehavior<,>));
 builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>));
-builder.Services.AddTransient<IValidator<SubmitDailyProgress>, SubmitDailyProgressValidator>();
+builder.Services.AddTransient<IValidator<RecordSale>, RecordSaleValidator>();
 
 var app = builder.Build();
 
-app.MapPost("/projects/{projectId:int}/daily-progress",
-    async (int projectId, DailyProgressBody body, ISender sender, CancellationToken ct) =>
+app.MapPost("/stores/{storeId:int}/sales",
+    async (int storeId, SaleBody body, ISender sender, CancellationToken ct) =>
     {
         try
         {
-            var result = await sender.Send(new SubmitDailyProgress(projectId, body.Date, body.Activity, body.Quantity, body.Unit), ct);
-            return Results.Created($"/projects/{projectId}/daily-progress/{result.EntryId}", result);
+            var result = await sender.Send(new RecordSale(storeId, body.Date, body.Medicine, body.Quantity, body.Unit), ct);
+            return Results.Created($"/stores/{storeId}/sales/{result.EntryId}", result);
         }
         catch (RequestValidationException ex)
         {
@@ -704,7 +704,7 @@ app.MapPost("/projects/{projectId:int}/daily-progress",
 
 app.Run();
 
-public sealed record DailyProgressBody(DateOnly Date, string Activity, decimal Quantity, string Unit);
+public sealed record SaleBody(DateOnly Date, string Medicine, decimal Quantity, string Unit);
 ```
 
 **Why is the mediator scoped?** It resolves handlers from the `IServiceProvider` it was given. If it were a singleton, it would hold the *root* provider, and a handler that needs a scoped `DbContext` would either fail scope validation or, worse, share one context across all requests. Scoped means "resolve from this request's scope".
@@ -725,13 +725,13 @@ You don't have to write your own dispatcher. MediatR is the best-known library, 
 
 ```csharp
 // Endpoint → Send → handler → Send → handler → Publish → handler → Send ...
-public sealed class ApproveRfiHandler(ISender sender) : IRequestHandler<ApproveRfi, Unit>
+public sealed class ApproveReturnHandler(ISender sender) : IRequestHandler<ApproveReturn, Unit>
 {
-    public async Task<Unit> Handle(ApproveRfi r, CancellationToken ct)
+    public async Task<Unit> Handle(ApproveReturn r, CancellationToken ct)
     {
-        var rfi = await sender.Send(new GetRfiById(r.RfiId), ct);           // a query via the mediator
-        await sender.Send(new UpdateRfiStatus(r.RfiId, "Approved"), ct);   // another command
-        await sender.Send(new RecalculateProjectProgress(rfi.ProjectId), ct);
+        var ret = await sender.Send(new GetReturnById(r.ReturnId), ct);           // a query via the mediator
+        await sender.Send(new UpdateReturnStatus(r.ReturnId, "Approved"), ct);   // another command
+        await sender.Send(new RestockMedicine(ret.StoreId, ret.Medicine, ret.Quantity), ct);
         return Unit.Value;
     }
 }
@@ -739,22 +739,22 @@ public sealed class ApproveRfiHandler(ISender sender) : IRequestHandler<ApproveR
 
 What goes wrong:
 
-- **Hidden control flow.** Reading `ApproveRfiHandler`, you can't press F12 on `Send` to see what runs. You must search for `IRequestHandler<GetRfiById`.
-- **Pipeline runs three extra times.** Logging, validation and perhaps a transaction behaviour wrap every nested call. A transaction behaviour that opens a new transaction per `Send` means approving an RFI is now three separate transactions. A failure halfway leaves the RFI approved but progress not recalculated.
+- **Hidden control flow.** Reading `ApproveReturnHandler`, you can't press F12 on `Send` to see what runs. You must search for `IRequestHandler<GetReturnById`.
+- **Pipeline runs three extra times.** Logging, validation and perhaps a transaction behaviour wrap every nested call. A transaction behaviour that opens a new transaction per `Send` means approving a customer's medicine return is now three separate transactions. A failure halfway leaves the return approved but the stock never put back on the shelf.
 - **Coupling by message.** The handlers are no longer coupled by type, but they are still coupled, by message shape and by behaviour you can't see.
 - **The mediator is a service locator.** Any handler can reach any other use case without declaring it in its constructor.
 
 ### Good: handlers orchestrate with plain dependencies
 
 ```csharp
-public sealed class ApproveRfiHandler(IRfiRepository rfis, IProgressCalculator progress, IUnitOfWork uow)
-    : IRequestHandler<ApproveRfi, Unit>
+public sealed class ApproveReturnHandler(IReturnRepository returns, IStockService stock, IUnitOfWork uow)
+    : IRequestHandler<ApproveReturn, Unit>
 {
-    public async Task<Unit> Handle(ApproveRfi r, CancellationToken ct)
+    public async Task<Unit> Handle(ApproveReturn r, CancellationToken ct)
     {
-        var rfi = await rfis.GetAsync(r.RfiId, ct) ?? throw new KeyNotFoundException($"RFI {r.RfiId}");
-        rfi.Approve();                                   // domain rule lives on the entity
-        await progress.RecalculateAsync(rfi.ProjectId, ct);
+        var ret = await returns.GetAsync(r.ReturnId, ct) ?? throw new KeyNotFoundException($"Return {r.ReturnId}");
+        ret.Approve();                                   // domain rule lives on the entity
+        await stock.RestockAsync(ret.StoreId, ret.Medicine, ret.Quantity, ct);
         await uow.SaveChangesAsync(ct);                  // one transaction
         return Unit.Value;
     }
@@ -773,8 +773,8 @@ Rules that keep a dispatcher healthy:
 For a 15-endpoint internal API, honestly, often not. This is just as clean and keeps "go to definition":
 
 ```csharp
-app.MapPost("/projects/{id:int}/daily-progress", (int id, DailyProgressBody b, DailyProgressService svc, CancellationToken ct)
-    => svc.SubmitAsync(id, b, ct));
+app.MapPost("/stores/{id:int}/sales", (int id, SaleBody b, SalesService svc, CancellationToken ct)
+    => svc.RecordAsync(id, b, ct));
 ```
 
 Cross-cutting concerns can live in ASP.NET Core endpoint filters (`AddEndpointFilter`), middleware, or a [Decorator](#/lesson/m06-decorator) around the service. Reach for a dispatcher when you have many use cases, want the vertical-slice structure, and want one uniform pipeline enforced for all of them.
@@ -790,7 +790,7 @@ using System.Collections.Generic;
 using System.Linq;
 
 public interface IRequest<TResponse> { }
-public sealed record ReportProgress(string Activity, decimal Quantity) : IRequest<string>;
+public sealed record RecordSale(string Medicine, decimal Quantity) : IRequest<string>;
 
 public delegate object? Next();
 public interface IBehavior { object? Handle(object request, Next next); }
@@ -810,7 +810,7 @@ public sealed class ValidateBehavior : IBehavior
 {
     public object? Handle(object request, Next next)
     {
-        if (request is ReportProgress { Quantity: < 0 }) return "rejected: negative quantity";
+        if (request is RecordSale { Quantity: < 0 }) return "rejected: negative quantity";
         return next();
     }
 }
@@ -847,10 +847,10 @@ public static class Program
         var m = new TinyMediator();
         m.Use(new LogBehavior());
         m.Use(new ValidateBehavior());
-        m.Handle<ReportProgress, string>(r => $"saved {r.Quantity} of {r.Activity}");
+        m.Handle<RecordSale, string>(r => $"recorded {r.Quantity} x {r.Medicine}");
 
-        Console.WriteLine(m.Send(new ReportProgress("Kerb casting", 120m)));
-        Console.WriteLine(m.Send(new ReportProgress("Kerb casting", -5m)));
+        Console.WriteLine(m.Send(new RecordSale("Paracetamol 650 mg", 3m)));
+        Console.WriteLine(m.Send(new RecordSale("Paracetamol 650 mg", -5m)));
     }
 }
 ```
@@ -858,73 +858,73 @@ public static class Program
 
 ## Exercises
 
-:::exercise id=m06-mediator-ex1 difficulty=beginner kind=code title="Site radio channel (classic mediator)"
-Site crews (formwork, steel, concrete) coordinate over one radio channel. Crews must never hold references to each other. Implement `SiteRadioChannel`, the concrete mediator.
+:::exercise id=m06-mediator-ex1 difficulty=beginner kind=code title="Hospital paging channel (classic mediator)"
+Hospital teams (emergency, radiology, pharmacy) coordinate over one paging channel. Teams must never hold references to each other. Implement `PagingChannel`, the concrete mediator.
 ::requirements
-- `Join(crew)` registers the crew and sets `crew.Radio` to the channel. Joining twice with the same name throws `InvalidOperationException`.
-- `Broadcast(from, message)` delivers `"<from>: <message>"` to every joined crew **except** the sender.
-- `SendTo(from, toName, message)` delivers to exactly one crew. An unknown name throws `ArgumentException`.
-- A crew that has not joined calls `Say(...)` and gets `InvalidOperationException` (already implemented in `Crew`).
+- `Join(team)` registers the team and sets `team.Channel` to the channel. Joining twice with the same name throws `InvalidOperationException`.
+- `Broadcast(from, message)` delivers `"<from>: <message>"` to every joined team **except** the sender.
+- `SendTo(from, toName, message)` delivers to exactly one team. An unknown name throws `ArgumentException`.
+- A team that has not joined calls `Say(...)` and gets `InvalidOperationException` (already implemented in `Team`).
 ::acceptance
-- Three crews joined; Formwork broadcasts "Shuttering done at grid C4"; Steel and Concrete each have exactly one inbox message, Formwork has none.
-- `SendTo(steel, "Concrete", "Pour at 3pm")` reaches only Concrete.
+- Three teams joined; Emergency broadcasts "Trauma patient arriving in 5 minutes"; Radiology and Pharmacy each have exactly one inbox message, Emergency has none.
+- `SendTo(radiology, "Pharmacy", "Contrast needed in CT room 2")` reaches only Pharmacy.
 - Duplicate names and unknown recipients throw the specified exceptions.
 ::hint
-The mediator is the only class that knows all crews. What collection lets you find a crew by name quickly?
+The mediator is the only class that knows all teams. What collection lets you find a team by name quickly?
 ::hint
-Use a `Dictionary<string, Crew>` with `StringComparer.OrdinalIgnoreCase`. Insertion order is enough for broadcast.
+Use a `Dictionary<string, Team>` with `StringComparer.OrdinalIgnoreCase`. Insertion order is enough for broadcast.
 ::hint
-For broadcast, loop over the dictionary values and skip the one where `ReferenceEquals(crew, from)`.
+For broadcast, loop over the dictionary values and skip the one where `ReferenceEquals(team, from)`.
 ::hint
 ```csharp
-public void Join(Crew crew)
+public void Join(Team team)
 {
-    if (!_crews.TryAdd(crew.Name, crew)) throw new InvalidOperationException($"{crew.Name} already joined");
-    crew.Radio = this;
+    if (!_teams.TryAdd(team.Name, team)) throw new InvalidOperationException($"{team.Name} already joined");
+    team.Channel = this;
 }
 ```
 ::starter
-```csharp file=SiteRadio.cs
+```csharp file=PagingChannel.cs
 using System;
 using System.Collections.Generic;
 
-public interface ISiteRadio
+public interface IPagingChannel
 {
-    void Join(Crew crew);
-    void Broadcast(Crew from, string message);
-    void SendTo(Crew from, string toName, string message);
+    void Join(Team team);
+    void Broadcast(Team from, string message);
+    void SendTo(Team from, string toName, string message);
 }
 
-public sealed class Crew(string name)
+public sealed class Team(string name)
 {
     public string Name { get; } = name;
     public List<string> Inbox { get; } = new();
-    public ISiteRadio? Radio { get; set; }
+    public IPagingChannel? Channel { get; set; }
 
     public void Receive(string from, string message) => Inbox.Add($"{from}: {message}");
 
     public void Say(string message) =>
-        (Radio ?? throw new InvalidOperationException($"{Name} has not joined a channel")).Broadcast(this, message);
+        (Channel ?? throw new InvalidOperationException($"{Name} has not joined a channel")).Broadcast(this, message);
 }
 
-public sealed class SiteRadioChannel : ISiteRadio
+public sealed class PagingChannel : IPagingChannel
 {
-    public void Join(Crew crew) => throw new NotImplementedException();
-    public void Broadcast(Crew from, string message) => throw new NotImplementedException();
-    public void SendTo(Crew from, string toName, string message) => throw new NotImplementedException();
+    public void Join(Team team) => throw new NotImplementedException();
+    public void Broadcast(Team from, string message) => throw new NotImplementedException();
+    public void SendTo(Team from, string toName, string message) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=SiteRadioTests.cs
+```csharp file=PagingChannelTests.cs
 using System;
 using Xunit;
 
-public class SiteRadioTests
+public class PagingChannelTests
 {
-    private static (SiteRadioChannel ch, Crew f, Crew s, Crew c) Setup()
+    private static (PagingChannel ch, Team f, Team s, Team c) Setup()
     {
-        var ch = new SiteRadioChannel();
-        var f = new Crew("Formwork"); var s = new Crew("Steel"); var c = new Crew("Concrete");
+        var ch = new PagingChannel();
+        var f = new Team("Emergency"); var s = new Team("Radiology"); var c = new Team("Pharmacy");
         ch.Join(f); ch.Join(s); ch.Join(c);
         return (ch, f, s, c);
     }
@@ -933,9 +933,9 @@ public class SiteRadioTests
     public void Broadcast_reaches_everyone_except_sender()
     {
         var (_, f, s, c) = Setup();
-        f.Say("Shuttering done at grid C4");
+        f.Say("Trauma patient arriving in 5 minutes");
         Assert.Empty(f.Inbox);
-        Assert.Equal("Formwork: Shuttering done at grid C4", Assert.Single(s.Inbox));
+        Assert.Equal("Emergency: Trauma patient arriving in 5 minutes", Assert.Single(s.Inbox));
         Assert.Single(c.Inbox);
     }
 
@@ -943,92 +943,92 @@ public class SiteRadioTests
     public void Direct_message_reaches_only_target()
     {
         var (ch, f, s, c) = Setup();
-        ch.SendTo(s, "Concrete", "Pour at 3pm");
-        Assert.Equal("Steel: Pour at 3pm", Assert.Single(c.Inbox));
+        ch.SendTo(s, "Pharmacy", "Contrast needed in CT room 2");
+        Assert.Equal("Radiology: Contrast needed in CT room 2", Assert.Single(c.Inbox));
         Assert.Empty(f.Inbox);
         Assert.Empty(s.Inbox);
     }
 
     [Fact]
-    public void Join_sets_radio() { var (ch, f, _, _) = Setup(); Assert.Same(ch, f.Radio); }
+    public void Join_sets_channel() { var (ch, f, _, _) = Setup(); Assert.Same(ch, f.Channel); }
 
     [Fact]
     public void Duplicate_name_throws()
     {
         var (ch, _, _, _) = Setup();
-        Assert.Throws<InvalidOperationException>(() => ch.Join(new Crew("steel")));
+        Assert.Throws<InvalidOperationException>(() => ch.Join(new Team("radiology")));
     }
 
     [Fact]
     public void Unknown_recipient_throws()
     {
         var (ch, f, _, _) = Setup();
-        Assert.Throws<ArgumentException>(() => ch.SendTo(f, "Electrical", "hello"));
+        Assert.Throws<ArgumentException>(() => ch.SendTo(f, "Dermatology", "hello"));
     }
 
     [Fact]
     public void Not_joined_cannot_speak() =>
-        Assert.Throws<InvalidOperationException>(() => new Crew("Survey").Say("hi"));
+        Assert.Throws<InvalidOperationException>(() => new Team("Cardiology").Say("hi"));
 }
 ```
 ::solution
-The channel keeps a case-insensitive dictionary of crews. It is the only place that knows who is listening.
+The channel keeps a case-insensitive dictionary of teams. It is the only place that knows who is listening.
 
-```csharp file=SiteRadio.cs
+```csharp file=PagingChannel.cs
 using System;
 using System.Collections.Generic;
 
-public interface ISiteRadio
+public interface IPagingChannel
 {
-    void Join(Crew crew);
-    void Broadcast(Crew from, string message);
-    void SendTo(Crew from, string toName, string message);
+    void Join(Team team);
+    void Broadcast(Team from, string message);
+    void SendTo(Team from, string toName, string message);
 }
 
-public sealed class Crew(string name)
+public sealed class Team(string name)
 {
     public string Name { get; } = name;
     public List<string> Inbox { get; } = new();
-    public ISiteRadio? Radio { get; set; }
+    public IPagingChannel? Channel { get; set; }
 
     public void Receive(string from, string message) => Inbox.Add($"{from}: {message}");
 
     public void Say(string message) =>
-        (Radio ?? throw new InvalidOperationException($"{Name} has not joined a channel")).Broadcast(this, message);
+        (Channel ?? throw new InvalidOperationException($"{Name} has not joined a channel")).Broadcast(this, message);
 }
 
-public sealed class SiteRadioChannel : ISiteRadio
+public sealed class PagingChannel : IPagingChannel
 {
-    private readonly Dictionary<string, Crew> _crews = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Team> _teams = new(StringComparer.OrdinalIgnoreCase);
 
-    public void Join(Crew crew)
+    public void Join(Team team)
     {
-        ArgumentNullException.ThrowIfNull(crew);
-        if (!_crews.TryAdd(crew.Name, crew)) throw new InvalidOperationException($"{crew.Name} has already joined.");
-        crew.Radio = this;
+        ArgumentNullException.ThrowIfNull(team);
+        if (!_teams.TryAdd(team.Name, team)) throw new InvalidOperationException($"{team.Name} has already joined.");
+        team.Channel = this;
     }
 
-    public void Broadcast(Crew from, string message)
+    public void Broadcast(Team from, string message)
     {
-        foreach (var crew in _crews.Values)
-            if (!ReferenceEquals(crew, from)) crew.Receive(from.Name, message);
+        foreach (var team in _teams.Values)
+            if (!ReferenceEquals(team, from)) team.Receive(from.Name, message);
     }
 
-    public void SendTo(Crew from, string toName, string message)
+    public void SendTo(Team from, string toName, string message)
     {
-        if (!_crews.TryGetValue(toName, out var to)) throw new ArgumentException($"No crew named '{toName}' on this channel.", nameof(toName));
+        if (!_teams.TryGetValue(toName, out var to)) throw new ArgumentException($"No team named '{toName}' on this channel.", nameof(toName));
         to.Receive(from.Name, message);
     }
 }
 ```
 
-Adding a "quiet hours" rule (no broadcasts after 10 pm) now means editing one class, the channel. No crew changes.
+Adding a "night mode" rule (only urgent broadcasts after 10 pm) now means editing one class, the channel. No team changes.
 ::mistakes
-- Letting `Crew` hold a list of other crews "for convenience", which brings back the mesh.
-- Comparing crews by name in broadcast instead of by reference, which breaks if two crews ever share a display name.
+- Letting `Team` hold a list of other teams "for convenience", which brings back the mesh.
+- Comparing teams by name in broadcast instead of by reference, which breaks if two teams ever share a display name.
 - Throwing `KeyNotFoundException` from the dictionary indexer instead of the documented `ArgumentException`.
 ::extensions
-Add `Leave(crew)` and make the channel log every message with a timestamp from an injected `TimeProvider`.
+Add `Leave(team)` and make the channel log every message with a timestamp from an injected `TimeProvider`.
 :::
 
 :::exercise id=m06-mediator-ex2 difficulty=beginner kind=code title="Route a request to its one handler"
@@ -1038,7 +1038,7 @@ Build the core of a request dispatcher without DI: register handlers by request 
 - `Send(request)` calls the handler for `request.GetType()` and returns its result.
 - `Send(null)` throws `ArgumentNullException`. A request with no handler throws `InvalidOperationException` whose message contains the request type name.
 ::acceptance
-- `Send(new GetBoqTotal(7))` returns the value computed by the registered `GetBoqTotalHandler`.
+- `Send(new GetStockLevel(7))` returns the value computed by the registered `GetStockLevelHandler`.
 - Two different request types route to two different handlers.
 - Error cases throw the exact exception types listed.
 ::hint
@@ -1079,16 +1079,16 @@ public sealed class SimpleMediator
 using System;
 using Xunit;
 
-public sealed record GetBoqTotal(int ProjectId) : IRequest<decimal>;
-public sealed record GetProjectName(int ProjectId) : IRequest<string>;
+public sealed record GetStockLevel(int StoreId) : IRequest<decimal>;
+public sealed record GetStoreName(int StoreId) : IRequest<string>;
 
-public sealed class GetBoqTotalHandler : IRequestHandler<GetBoqTotal, decimal>
+public sealed class GetStockLevelHandler : IRequestHandler<GetStockLevel, decimal>
 {
-    public decimal Handle(GetBoqTotal r) => r.ProjectId * 1000m;
+    public decimal Handle(GetStockLevel r) => r.StoreId * 1000m;
 }
-public sealed class GetProjectNameHandler : IRequestHandler<GetProjectName, string>
+public sealed class GetStoreNameHandler : IRequestHandler<GetStoreName, string>
 {
-    public string Handle(GetProjectName r) => $"Project-{r.ProjectId}";
+    public string Handle(GetStoreName r) => $"Store-{r.StoreId}";
 }
 
 public class SimpleMediatorTests
@@ -1096,24 +1096,24 @@ public class SimpleMediatorTests
     private static SimpleMediator Create()
     {
         var m = new SimpleMediator();
-        m.Register(new GetBoqTotalHandler());
-        m.Register(new GetProjectNameHandler());
+        m.Register(new GetStockLevelHandler());
+        m.Register(new GetStoreNameHandler());
         return m;
     }
 
-    [Fact] public void Routes_to_correct_handler() => Assert.Equal(7000m, Create().Send(new GetBoqTotal(7)));
-    [Fact] public void Routes_second_type() => Assert.Equal("Project-3", Create().Send(new GetProjectName(3)));
+    [Fact] public void Routes_to_correct_handler() => Assert.Equal(7000m, Create().Send(new GetStockLevel(7)));
+    [Fact] public void Routes_second_type() => Assert.Equal("Store-3", Create().Send(new GetStoreName(3)));
 
     [Fact]
     public void Duplicate_registration_throws() =>
-        Assert.Throws<InvalidOperationException>(() => Create().Register(new GetBoqTotalHandler()));
+        Assert.Throws<InvalidOperationException>(() => Create().Register(new GetStockLevelHandler()));
 
     [Fact]
     public void Missing_handler_throws_with_type_name()
     {
         var m = new SimpleMediator();
-        var ex = Assert.Throws<InvalidOperationException>(() => m.Send(new GetBoqTotal(1)));
-        Assert.Contains("GetBoqTotal", ex.Message);
+        var ex = Assert.Throws<InvalidOperationException>(() => m.Send(new GetStockLevel(1)));
+        Assert.Contains("GetStockLevel", ex.Message);
     }
 
     [Fact]
@@ -1266,7 +1266,7 @@ public class PipelineTests
         var h = new CountingHandler<SaveRate>(log);
         var behaviors = new List<IPipelineBehavior<SaveRate, decimal>> { new Tagging<SaveRate>("A", log), new Tagging<SaveRate>("B", log) };
         var run = Pipeline.Build(h, behaviors);
-        Assert.Equal(42m, await run(new SaveRate("Cement", 410m), CancellationToken.None));
+        Assert.Equal(42m, await run(new SaveRate("Paracetamol", 410m), CancellationToken.None));
         Assert.Equal(new List<string> { "A:before", "B:before", "handler", "B:after", "A:after" }, log);
     }
 
@@ -1275,7 +1275,7 @@ public class PipelineTests
     {
         var h = new CountingHandler<SaveRate>(new List<string>());
         var run = Pipeline.Build(h, new List<IPipelineBehavior<SaveRate, decimal>>());
-        await run(new SaveRate("Sand", 60m), CancellationToken.None);
+        await run(new SaveRate("Cetirizine", 60m), CancellationToken.None);
         Assert.Equal(1, h.Calls);
     }
 
@@ -1284,8 +1284,8 @@ public class PipelineTests
     {
         var h = new CountingHandler<GetRate>(new List<string>());
         var run = Pipeline.Build(h, new List<IPipelineBehavior<GetRate, decimal>> { new CachingBehavior<GetRate, decimal>() });
-        await run(new GetRate("Steel"), CancellationToken.None);
-        var second = await run(new GetRate("Steel"), CancellationToken.None);
+        await run(new GetRate("Amoxicillin"), CancellationToken.None);
+        var second = await run(new GetRate("Amoxicillin"), CancellationToken.None);
         Assert.Equal(42m, second);
         Assert.Equal(1, h.Calls);
     }
@@ -1295,8 +1295,8 @@ public class PipelineTests
     {
         var h = new CountingHandler<SaveRate>(new List<string>());
         var run = Pipeline.Build(h, new List<IPipelineBehavior<SaveRate, decimal>> { new CachingBehavior<SaveRate, decimal>() });
-        await run(new SaveRate("Steel", 1m), CancellationToken.None);
-        await run(new SaveRate("Steel", 1m), CancellationToken.None);
+        await run(new SaveRate("Amoxicillin", 1m), CancellationToken.None);
+        await run(new SaveRate("Amoxicillin", 1m), CancellationToken.None);
         Assert.Equal(2, h.Calls);
     }
 }
@@ -1369,7 +1369,7 @@ Add a `RetryBehavior` that calls `next()` up to 3 times on a `TimeoutException`,
 :::
 
 :::exercise id=m06-mediator-ex4 difficulty=intermediate kind=design title="Refactor the tangled dispatch screen"
-A site logistics screen has five components. Each one holds direct references to the others:
+A courier hub's dispatch screen has five components. Each one holds direct references to the others:
 
 ```csharp
 class VehiclePicker { DriverPicker drivers; RouteMap map; LoadPlanner load; DispatchButton button; ... }
@@ -1379,7 +1379,7 @@ class LoadPlanner   { VehiclePicker vehicles; RouteMap map; DispatchButton butto
 class DispatchButton { /* enabled when vehicle, driver, route and load are valid */ }
 ```
 
-Rules: choosing a vehicle filters drivers by licence class and sets the load capacity (for example 9 t for a tipper, 25 t for a trailer). Choosing a route checks bridge weight limits against the planned load. Dispatch is enabled only when all four are valid. Refactor to a Mediator. Draw the class diagram and list which class owns each rule.
+Rules: choosing a vehicle filters drivers by licence class and sets the load capacity (for example 1.5 t for a van, 9 t for a truck). Choosing a route checks the route's weight limits (many city roads ban heavy trucks during the day) against the planned load. Dispatch is enabled only when all four are valid. Refactor to a Mediator. Draw the class diagram and list which class owns each rule.
 ::acceptance
 - No component references another component.
 - Every cross-component rule lives in one class, and each rule is listed with its owner.
@@ -1392,7 +1392,7 @@ Each component only needs to say "I changed". What is the smallest interface for
 ::hint
 Split methods into *user actions*, which notify the mediator, and *mediator commands*, which do not notify.
 ::hint
-If the mediator grows past a few hundred lines, consider splitting it by concern (a capacity sub-mediator and a route-check helper). The mediator can delegate to plain helper classes.
+If the mediator grows past a few hundred lines, consider splitting it by concern (a capacity sub-mediator and a route-limit helper). The mediator can delegate to plain helper classes.
 ::solution
 Before: 4 + 2 + 2 + 3 = 11 direct references. After: 5 references to `IDispatchMediator` plus 5 from the mediator, all pointing in one direction per role.
 
@@ -1406,7 +1406,7 @@ classDiagram
   class RouteMap { +Select(routeId) +ShowWarning(text) }
   class LoadPlanner { +SetCapacity(tonnes) +Plan(tonnes) }
   class DispatchButton
-  class BridgeLimitChecker { +Check(route, tonnes) Result }
+  class RouteLimitChecker { +Check(route, tonnes) Result }
   IDispatchMediator <|.. DispatchScreenMediator
   DispatchComponent --> IDispatchMediator
   DispatchComponent <|-- VehiclePicker
@@ -1414,7 +1414,7 @@ classDiagram
   DispatchComponent <|-- RouteMap
   DispatchComponent <|-- LoadPlanner
   DispatchComponent <|-- DispatchButton
-  DispatchScreenMediator --> BridgeLimitChecker
+  DispatchScreenMediator --> RouteLimitChecker
 ```
 
 Rule ownership:
@@ -1424,17 +1424,17 @@ Rule ownership:
 | Vehicle → filter drivers by licence | `DispatchScreenMediator` (case `VehiclePicker`) |
 | Vehicle → set load capacity | `DispatchScreenMediator` |
 | Load > capacity → error | `LoadPlanner` itself (single-component rule) |
-| Route or load changed → check bridge limits | Mediator calls `BridgeLimitChecker` (pure, separately tested) |
+| Route or load changed → check route weight limits | Mediator calls `RouteLimitChecker` (pure, separately tested) |
 | Dispatch enabled | `DispatchScreenMediator.RecomputeDispatch()`, the only copy |
 
-Loop prevention: `Filter`, `SetCapacity` and `ShowWarning` are mediator commands and never call `NotifyChanged`. Only `Select` and `Plan` (user actions) notify. Testing: construct the mediator with fake catalogue data, call `Vehicle.Select("TRL-01")`, and assert `Load.Capacity == 25` and `Button.Enabled == false`. No UI needed.
+Loop prevention: `Filter`, `SetCapacity` and `ShowWarning` are mediator commands and never call `NotifyChanged`. Only `Select` and `Plan` (user actions) notify. Testing: construct the mediator with fake catalogue data, call `Vehicle.Select("TRK-01")`, and assert `Load.Capacity == 9` and `Button.Enabled == false`. No UI needed.
 ::mistakes
 - Moving single-component validation (load ≤ capacity) into the mediator. Keep rules that involve one component in that component.
 - Making the mediator an event bus where components subscribe to each other's events. That is Observer, and it brings the hidden mesh back.
 :::
 
 :::exercise id=m06-mediator-ex5 difficulty=advanced kind=written title="Review a codebase drowning in mediator"
-You join a team of 12 maintaining an infrastructure-monitoring platform. It has 340 request handlers. Investigation shows:
+You join a team of 12 maintaining a hospital-management platform (admissions, beds, pharmacy, billing). It has 340 request handlers. Investigation shows:
 - 90 handlers call `sender.Send(...)` to other handlers, up to 4 levels deep.
 - A `TransactionBehavior` opens a database transaction for every `Send`, including nested ones.
 - 30 notification handlers write to the database; two of them send SMS alerts.
@@ -1458,7 +1458,7 @@ Measure: count of handlers injecting `ISender`, number of transactions per reque
 ::solution
 **Model answer (abridged).**
 
-*Diagnosis.* (1) **Atomicity is broken.** `ApproveInspection → Send(UpdateAssetStatus) → Send(RaiseMaintenanceTicket)` runs three transactions. If the third fails, the asset is marked inspected but no ticket exists. (2) **Side effects escape before commit.** Notification handlers run inside `Publish`, often before the outer transaction commits. An SMS can go out for a change that is then rolled back. (3) **Hidden control flow.** With 4-level nesting, the real call graph exists only at runtime. That explains the 40-minute search. (4) **The mediator is acting as a service locator.** Handlers can call any use case without declaring it.
+*Diagnosis.* (1) **Atomicity is broken.** `ApproveDischarge → Send(UpdateBedStatus) → Send(RaiseFinalBill)` runs three transactions. If the third fails, the patient is discharged and the bed freed, but no final bill exists. (2) **Side effects escape before commit.** Notification handlers run inside `Publish`, often before the outer transaction commits. An SMS can go out for a change that is then rolled back. (3) **Hidden control flow.** With 4-level nesting, the real call graph exists only at runtime. That explains the 40-minute search. (4) **The mediator is acting as a service locator.** Handlers can call any use case without declaring it.
 
 *What to keep.* One-handler-per-use-case at the edge, and validation/logging behaviours. They help.
 
@@ -1467,7 +1467,7 @@ Measure: count of handlers injecting `ISender`, number of transactions per reque
 2. Shared logic called by several handlers becomes a plain injected service (domain service or repository).
 3. `TransactionBehavior` opens a transaction only at depth 0, tracked with an `AsyncLocal<int>`, until nesting is gone. Then nesting throws in development.
 4. Notification handlers must not perform external side effects. SMS and email go through an outbox written in the same transaction and are delivered by a background worker.
-5. Request names describe use cases (`ApproveInspection`), never CRUD fragments (`UpdateAssetStatus`).
+5. Request names describe use cases (`ApproveDischarge`), never CRUD fragments (`UpdateBedStatus`).
 
 *Migration plan.* Week 1: add the depth-0 transaction guard and the outbox for the two SMS handlers, since these are correctness fixes. Weeks 2–6: each team converts nested sends in the modules they touch (the boy-scout rule), tracked on a dashboard of the number of handlers injecting `ISender` (90 → 0). Add the architecture test in "warn" mode, then "fail" mode once the count reaches 0. Re-run the onboarding time-to-locate survey after a quarter.
 ::mistakes
@@ -1483,7 +1483,7 @@ Test four things separately.
 **1. Handlers directly.** A handler is a plain class. Construct it with fakes and call `Handle`. No mediator needed.
 
 ```csharp
-public class SubmitDailyProgressHandlerTests
+public class RecordSaleHandlerTests
 {
     private sealed class FakePublisher : IPublisher
     {
@@ -1494,14 +1494,14 @@ public class SubmitDailyProgressHandlerTests
     [Fact]
     public async Task Saves_and_publishes_once()
     {
-        var store = new InMemoryProgressStore();
+        var store = new InMemorySalesStore();
         var publisher = new FakePublisher();
-        var handler = new SubmitDailyProgressHandler(store, publisher);
+        var handler = new RecordSaleHandler(store, publisher);
 
-        var result = await handler.Handle(new SubmitDailyProgress(12, new DateOnly(2026, 10, 1), "Kerb casting", 120m, "m"), CancellationToken.None);
+        var result = await handler.Handle(new RecordSale(12, new DateOnly(2026, 10, 1), "Paracetamol 650 mg", 3m, "strip"), CancellationToken.None);
 
-        Assert.Equal(120m, result.CumulativeQuantity);
-        Assert.IsType<DailyProgressSubmitted>(Assert.Single(publisher.Published));
+        Assert.Equal(3m, result.CumulativeQuantity);
+        Assert.IsType<SaleRecorded>(Assert.Single(publisher.Published));
     }
 }
 ```
@@ -1513,18 +1513,18 @@ public class SubmitDailyProgressHandlerTests
 public async Task Validation_short_circuits_before_handler()
 {
     var called = false;
-    var behavior = new ValidationBehavior<SubmitDailyProgress, SubmitDailyProgressResult>(
-        new IValidator<SubmitDailyProgress>[] { new SubmitDailyProgressValidator(TimeProvider.System) });
+    var behavior = new ValidationBehavior<RecordSale, RecordSaleResult>(
+        new IValidator<RecordSale>[] { new RecordSaleValidator(TimeProvider.System) });
 
     await Assert.ThrowsAsync<RequestValidationException>(() => behavior.Handle(
-        new SubmitDailyProgress(12, new DateOnly(2026, 10, 1), "", 0m, "m"),
-        () => { called = true; return Task.FromResult(new SubmitDailyProgressResult(Guid.Empty, 0)); },
+        new RecordSale(12, new DateOnly(2026, 10, 1), "", 0m, "strip"),
+        () => { called = true; return Task.FromResult(new RecordSaleResult(Guid.Empty, 0)); },
         CancellationToken.None));
     Assert.False(called);
 }
 ```
 
-**3. The classic mediator's rules.** Drive the colleagues and assert the others' state, for example selecting a project enables the material list and keeps Submit disabled. These are fast, UI-free tests.
+**3. The classic mediator's rules.** Drive the colleagues and assert the others' state, for example selecting a store enables the medicine list and keeps Submit disabled. These are fast, UI-free tests.
 
 **4. Wiring.** Build a real `ServiceCollection`, call `AddMediation`, build the provider with `ValidateOnBuild = true` and `ValidateScopes = true`, and for every request type in the assembly assert that exactly one handler resolves. This turns "no handler registered" from a production 500 error into a failed build. Also add the architecture rule from exercise 5: no handler constructor takes `ISender`.
 
@@ -1534,7 +1534,7 @@ Edge cases: a request type with two handlers (the scanner registers both and the
 
 - **UI frameworks.** Dialogs and forms with dependent fields are the textbook case. A Blazor page component that coordinates its child components through parameters and callbacks is acting as a mediator.
 - **Chat rooms and multiplayer lobbies.** A SignalR hub coordinating messages between connected clients behaves like a mediator: clients talk to the hub, never to each other.
-- **Air-traffic control, railway signalling, crane coordination on a site.** Physical systems where peers must not negotiate directly.
+- **Air-traffic control, railway signalling, lift (elevator) group controllers.** Physical systems where peers must not negotiate directly.
 - **ASP.NET Core vertical-slice applications.** Request/handler dispatch with validation, logging and transaction behaviours, often combined with [CQRS](#/lesson/m08-cqrs-fundamentals) to separate commands from queries.
 - **ASP.NET Core itself** does *not* use a request mediator. It uses middleware and endpoint filters, which are pipelines (see [Pipeline](#/lesson/m06-pipeline)). That is a useful reminder that a pipeline doesn't require a mediator.
 
@@ -1604,7 +1604,7 @@ A: Observer broadcasts events to unknown subscribers; Mediator centrally coordin
 
 :::quiz pass=70
 ::q single
-A permit form has 7 fields. Changing the work type changes which safety checklist appears, the approver list and the maximum duration. Today each field updates the others directly. What does a classic Mediator give you?
+A clinic appointment form has 7 fields. Changing the department changes which doctors appear, the available slots and the maximum visit length. Today each field updates the others directly. What does a classic Mediator give you?
 - [ ] Faster rendering of the form.
 - [x] One class that owns all cross-field rules, with fields that no longer reference each other.
 - [ ] Automatic persistence of the form.
@@ -1618,9 +1618,9 @@ Your behaviours are registered in the order Logging, Validation, Transaction. A 
 - [ ] The handler runs, then validation rejects the result.
 > The first registered behaviour is outermost. Validation short-circuits before reaching the transaction layer, and logging, which wraps everything, sees the exception.
 ::q single
-A handler `ApproveRfiHandler` calls `sender.Send(new UpdateRfiStatus(...))` and `sender.Send(new RecalculateProgress(...))`. A `TransactionBehavior` wraps every `Send`. What is the main risk?
+A handler `ApproveReturnHandler` calls `sender.Send(new UpdateReturnStatus(...))` and `sender.Send(new RestockMedicine(...))`. A `TransactionBehavior` wraps every `Send`. What is the main risk?
 - [ ] The code won't compile.
-- [x] The approval spans multiple transactions, so a failure can leave data partly updated.
+- [x] The approval spans multiple transactions, so a failure can leave data partly updated (return approved, stock not restored).
 - [ ] Notifications will be sent twice.
 - [ ] The mediator will deadlock.
 > Each nested `Send` gets its own transaction, which breaks atomicity. Call plain services inside one transaction instead.
@@ -1632,7 +1632,7 @@ Which are good reasons to adopt a request dispatcher? (Select all that apply.)
 - [ ] A 10-endpoint internal API that wants to look "clean".
 > Dispatchers make navigation harder, not easier, and they are rarely worth it in small APIs.
 ::q single
-Your notification handler sends an SMS when progress is submitted. The database commit sometimes fails after `Publish` returns. What is the best fix?
+Your notification handler sends an SMS when a sale is recorded. The database commit sometimes fails after `Publish` returns. What is the best fix?
 - [ ] Publish the notification twice to be safe.
 - [ ] Catch the exception and ignore it.
 - [x] Save an outbox row in the same transaction and send the SMS from a background worker.

@@ -46,13 +46,13 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Imagine a toll plaza on the Delhi–Jaipur highway. A car with a FASTag-style tag passes. Three things must happen in the system:
+Imagine you scan a shop's QR code and pay ₹120 for lunch from your QuickPay wallet. Three things must happen in the system:
 
-1. Deduct ₹120 from the vehicle's prepaid account.
-2. Record a line in the account's statement ("Toll, Manesar plaza, ₹120").
-3. Record the passage itself so the barrier opens and the operator gets paid.
+1. Deduct ₹120 from your wallet balance.
+2. Record a line in your wallet statement ("Sharma Tea Stall, Koramangala, ₹120").
+3. Record the merchant payment itself, so the shop's speaker announces "₹120 received" and the shop gets settled tonight.
 
-Now imagine the server crashes right after step 1. The driver has lost ₹120 and nothing else was written. Multiply that by one crash during a 70-passages-per-second peak and you have dozens of angry customers and a reconciliation nightmare.
+Now imagine the server crashes right after step 1. You have lost ₹120, the shopkeeper saw nothing, and nothing else was written. Multiply that by one crash during a 70-payments-per-second lunch peak and you have dozens of angry customers and a reconciliation nightmare.
 
 A **transaction** is an envelope you put around the three steps. You say "begin", do the three writes, then say "commit". The database promises that an observer will see *either* the world before the envelope *or* the world after it. Never the half-way state. If anything goes wrong before "commit", or if you say "rollback", every change inside the envelope vanishes as if it never happened.
 
@@ -88,7 +88,7 @@ Consistency in ACID means: if the database was in a valid state before the trans
 
 Two things follow:
 
-1. If a rule only exists in C# ("a vehicle can't have two active tags"), the database cannot protect it. Two requests arriving 2 ms apart can both pass your C# check and both insert. The fix is a `UNIQUE` partial index: `CREATE UNIQUE INDEX ON tag (vehicle_id) WHERE status = 'active'`. Push every rule you can express into the schema.
+1. If a rule only exists in C# ("a phone number can't have two active wallets"), the database cannot protect it. Two requests arriving 2 ms apart can both pass your C# check and both insert. The fix is a `UNIQUE` partial index: `CREATE UNIQUE INDEX ON wallet (phone) WHERE status = 'active'`. Push every rule you can express into the schema.
 2. Constraints are normally checked **per statement**. Sometimes you need a rule to hold only at commit. A double-entry ledger is the classic case: a transfer inserts a −₹120 entry and a +₹120 entry; between the two inserts the books are unbalanced. PostgreSQL supports `DEFERRABLE INITIALLY DEFERRED` on unique, primary key, foreign key and exclusion constraints, and a `CONSTRAINT TRIGGER` for arbitrary rules. Deferred checks run at `COMMIT` instead.
 
 ### Isolation: concurrent transactions don't see each other's half-done work
@@ -97,7 +97,7 @@ PostgreSQL uses **multi-version concurrency control (MVCC)**. An `UPDATE` does n
 
 Consequences you will notice:
 
-- Readers never block writers, and writers never block readers. A long report does not stop toll passages from committing.
+- Readers never block writers, and writers never block readers. A long report does not stop wallet payments from committing.
 - Writers *do* block writers on the same row. The second `UPDATE` to the same row waits until the first transaction commits or rolls back.
 - Old row versions pile up until `VACUUM` cleans them. A transaction that stays open for an hour pins its snapshot, so vacuum cannot remove anything newer than that snapshot. This is the hidden cost of "idle in transaction" connections: table bloat for everyone.
 
@@ -123,7 +123,7 @@ With streaming replication, `synchronous_commit` can go further the other way: `
 
 Every open transaction holds a connection. Think in connection-seconds:
 
-- 70 toll passages per second, each transaction open for 8 ms → 70 × 0.008 ≈ 0.56 connections busy on average. A pool of 10 is plenty.
+- 70 merchant payments per second, each transaction open for 8 ms → 70 × 0.008 ≈ 0.56 connections busy on average. A pool of 10 is plenty.
 - Same traffic, but the transaction wraps a 400 ms call to a payment gateway → 70 × 0.4 = 28 connections busy on average, and 100+ at peak. Your pool of 20 is exhausted and requests queue for a connection while the database sits mostly idle.
 
 Same database, same traffic, 50× the connection pressure, purely from what sits *inside* the transaction. The rule: **open the transaction as late as possible, do only database work inside it, commit as early as possible**. HTTP calls, file uploads and "wait for user input" never belong inside one.
@@ -144,33 +144,33 @@ flowchart LR
 
 Read the arrows in order. The API sends statements over one pooled connection; each connection is served by one PostgreSQL backend process. The backend first appends a description of each change to the WAL (arrow 1), then changes the page in shared memory (arrow 2). The data files on disk (arrow 3) are updated lazily by checkpoints, often seconds later. Because the WAL is written sequentially and the data files randomly, this ordering turns many random writes into one sequential stream, which is both faster and safe: after a crash, the WAL is replayed onto the data files. The same WAL stream is what a standby replica consumes.
 
-### One toll passage, end to end
+### One merchant payment, end to end
 
 ```mermaid
 sequenceDiagram
-    participant API as PassageEndpoint
-    participant S as TollTransferService
+    participant API as PaymentEndpoint
+    participant S as MerchantPaymentService
     participant DB as PostgreSQL
     participant WAL as WAL (disk)
-    API->>S: RecordPassageAsync(tag, plaza, 120)
+    API->>S: RecordPaymentAsync(wallet, merchant, 120)
     S->>DB: BEGIN
     S->>DB: UPDATE account SET balance = balance - 120 WHERE id = ? AND balance >= 120
     DB-->>S: 1 row affected
-    S->>DB: INSERT ledger_entry (debit), INSERT ledger_entry (credit to plaza)
-    S->>DB: INSERT passage (tag, plaza, amount, at)
+    S->>DB: INSERT ledger_entry (debit), INSERT ledger_entry (credit to merchant settlement)
+    S->>DB: INSERT merchant_payment (wallet, merchant, amount, at)
     S->>DB: COMMIT
     DB->>WAL: write commit record, fsync
     WAL-->>DB: flushed
     DB-->>S: COMMIT OK
-    S-->>API: PassageRecorded
+    S-->>API: PaymentRecorded
     Note over S,DB: If "0 rows affected" after the UPDATE, the service issues ROLLBACK and returns InsufficientFunds
 ```
 
-Three details matter. First, the debit is a *conditional* update: the `WHERE balance >= 120` clause makes "check then act" one atomic statement, so two simultaneous passages cannot both succeed on a ₹150 balance. Second, the service checks the affected-row count; zero rows means insufficient funds and triggers a rollback. Third, `COMMIT` only returns after the WAL flush. If the service process dies between `BEGIN` and `COMMIT`, PostgreSQL notices the broken connection and rolls back automatically; nothing half-written survives.
+Three details matter. First, the debit is a *conditional* update: the `WHERE balance >= 120` clause makes "check then act" one atomic statement, so two simultaneous payments cannot both succeed on a ₹150 balance. Second, the service checks the affected-row count; zero rows means insufficient funds and triggers a rollback. Third, `COMMIT` only returns after the WAL flush. If the service process dies between `BEGIN` and `COMMIT`, PostgreSQL notices the broken connection and rolls back automatically; nothing half-written survives.
 
 ## Step-by-step example
 
-We will build the toll ledger in SQL, then move the same logic to C#.
+We will build the wallet ledger in SQL, then move the same logic to C#.
 
 ### Step 1 — the schema with the rules in it
 
@@ -201,9 +201,9 @@ The `CHECK (balance >= 0)` is the last line of defence against a negative balanc
 
 ```sql
 BEGIN;
-INSERT INTO transfer (id, kind) VALUES (9001, 'toll');
+INSERT INTO transfer (id, kind) VALUES (9001, 'merchant_payment');
 UPDATE account SET balance = balance - 120 WHERE id = 1;
-UPDATE account SET balance = balance + 120 WHERE id = 900;   -- plaza settlement account
+UPDATE account SET balance = balance + 120 WHERE id = 900;   -- merchant settlement account
 INSERT INTO ledger_entry VALUES (1, 9001, 1, -120), (2, 9001, 900, 120);
 COMMIT;
 ```
@@ -216,7 +216,7 @@ Suppose account 1 has ₹100. The `UPDATE` setting it to −20 violates the `CHE
 
 ### Step 4 — savepoints for partial retry
 
-A batch job posts 500 toll passages in one transaction to amortise the commit cost. One bad row should not throw away the other 499:
+A batch job posts 500 offline-queued payments in one transaction to amortise the commit cost. One bad row should not throw away the other 499:
 
 ```sql
 BEGIN;
@@ -235,9 +235,11 @@ We want to enforce "every transfer's entries sum to zero". Statement-level check
 
 ```sql
 CREATE OR REPLACE FUNCTION check_transfer_balanced() RETURNS trigger AS $$
+DECLARE
+  t bigint := CASE WHEN TG_OP = 'DELETE' THEN OLD.transfer_id ELSE NEW.transfer_id END;
 BEGIN
-  IF (SELECT COALESCE(SUM(amount), 0) FROM ledger_entry WHERE transfer_id = NEW.transfer_id) <> 0 THEN
-    RAISE EXCEPTION 'transfer % is not balanced', NEW.transfer_id;
+  IF (SELECT COALESCE(SUM(amount), 0) FROM ledger_entry WHERE transfer_id = t) <> 0 THEN
+    RAISE EXCEPTION 'transfer % is not balanced', t;
   END IF;
   RETURN NULL;
 END $$ LANGUAGE plpgsql;
@@ -248,37 +250,37 @@ CREATE CONSTRAINT TRIGGER transfer_balanced
   FOR EACH ROW EXECUTE FUNCTION check_transfer_balanced();
 ```
 
-Now an unbalanced transfer fails at `COMMIT`, and the whole transaction rolls back.
+Now an unbalanced transfer fails at `COMMIT`, and the whole transaction rolls back. The trigger looks at `OLD` for deletes, because `NEW` is `NULL` there. Two limits to know: the check runs once per changed row (fine for two-entry transfers, costly for bulk loads), and under Read Committed two concurrent transactions that each add entries to the *same* transfer cannot see each other's rows, so give each transfer exactly one writing transaction (normally true: the transfer is created and posted in one go).
 
 ## Production-style C# implementation
 
 In real code the store is PostgreSQL through Npgsql or EF Core. The checker for this course cannot reference those packages, so the compilable code below models the same concepts in memory: a unit of work (`IUnitOfWork`) with begin, commit and rollback; a store that only exposes committed state to other readers; and a service that uses them exactly as it would use a real transaction. The Npgsql and EF Core versions follow as snippets.
 
 ```text
-Toll.Api/
+QuickPay.Api/
   Program.cs
   Ledger/Models.cs
   Ledger/IUnitOfWork.cs
   Ledger/InMemoryLedgerDb.cs
-  Ledger/TollTransferService.cs
+  Ledger/MerchantPaymentService.cs
 ```
 
 ```csharp file=Ledger/Models.cs
-namespace Toll.Ledger;
+namespace QuickPay.Ledger;
 
 public sealed record Account(long Id, string Owner, decimal Balance);
 
 public sealed record LedgerEntry(long Id, long TransferId, long AccountId, decimal Amount);
 
-public sealed record Passage(long Id, long TransferId, string Tag, string Plaza, decimal Amount, DateTimeOffset At);
+public sealed record MerchantPayment(long Id, long TransferId, string WalletId, string Merchant, decimal Amount, DateTimeOffset At);
 
-public enum PassageOutcome { Recorded, InsufficientFunds, UnknownTag }
+public enum PaymentOutcome { Recorded, InsufficientFunds, UnknownWallet }
 
-public sealed record PassageResult(PassageOutcome Outcome, long? TransferId);
+public sealed record PaymentResult(PaymentOutcome Outcome, long? TransferId);
 ```
 
 ```csharp file=Ledger/IUnitOfWork.cs
-namespace Toll.Ledger;
+namespace QuickPay.Ledger;
 
 /// <summary>A transaction boundary. Open it late, commit it early, and never do I/O to other systems inside it.</summary>
 public interface IUnitOfWork : IAsyncDisposable
@@ -291,13 +293,13 @@ public interface IUnitOfWork : IAsyncDisposable
 /// <summary>The statements available inside one transaction.</summary>
 public interface ILedgerSession
 {
-    Task<Account?> FindAccountByTagAsync(string tag, CancellationToken ct = default);
+    Task<Account?> FindAccountByWalletAsync(string walletId, CancellationToken ct = default);
     /// <summary>Conditional debit. Returns the number of rows changed: 1 on success, 0 when the balance was too low.</summary>
     Task<int> TryDebitAsync(long accountId, decimal amount, CancellationToken ct = default);
     Task CreditAsync(long accountId, decimal amount, CancellationToken ct = default);
     Task<long> InsertTransferAsync(string kind, CancellationToken ct = default);
     Task InsertEntryAsync(long transferId, long accountId, decimal amount, CancellationToken ct = default);
-    Task InsertPassageAsync(long transferId, string tag, string plaza, decimal amount, DateTimeOffset at, CancellationToken ct = default);
+    Task InsertMerchantPaymentAsync(long transferId, string walletId, string merchant, decimal amount, DateTimeOffset at, CancellationToken ct = default);
 }
 
 public interface ILedgerDb
@@ -312,7 +314,7 @@ public interface ILedgerDb
 ```csharp file=Ledger/InMemoryLedgerDb.cs
 using System.Collections.Concurrent;
 
-namespace Toll.Ledger;
+namespace QuickPay.Ledger;
 
 /// <summary>
 /// An in-memory stand-in for PostgreSQL that models atomicity and read-committed visibility:
@@ -323,18 +325,18 @@ public sealed class InMemoryLedgerDb : ILedgerDb
 {
     private readonly object _gate = new();
     private readonly Dictionary<long, Account> _accounts = new();
-    private readonly Dictionary<string, long> _tagToAccount = new();
+    private readonly Dictionary<string, long> _walletToAccount = new();
     private readonly List<LedgerEntry> _entries = new();
-    private readonly List<Passage> _passages = new();
+    private readonly List<MerchantPayment> _payments = new();
     private long _nextTransferId = 9000;
     private long _nextEntryId = 1;
 
-    public InMemoryLedgerDb Seed(long id, string owner, decimal balance, string? tag = null)
+    public InMemoryLedgerDb Seed(long id, string owner, decimal balance, string? walletId = null)
     {
         lock (_gate)
         {
             _accounts[id] = new Account(id, owner, balance);
-            if (tag is not null) _tagToAccount[tag] = id;
+            if (walletId is not null) _walletToAccount[walletId] = id;
         }
         return this;
     }
@@ -351,9 +353,9 @@ public sealed class InMemoryLedgerDb : ILedgerDb
         lock (_gate) return _entries.Where(e => e.TransferId == transferId).ToList();
     }
 
-    public IReadOnlyList<Passage> CommittedPassages()
+    public IReadOnlyList<MerchantPayment> CommittedPayments()
     {
-        lock (_gate) return _passages.ToList();
+        lock (_gate) return _payments.ToList();
     }
 
     private sealed class Tx(InMemoryLedgerDb db) : IUnitOfWork, ILedgerSession
@@ -361,7 +363,7 @@ public sealed class InMemoryLedgerDb : ILedgerDb
         // Buffered writes: nothing here is visible to ReadCommitted* until Commit.
         private readonly Dictionary<long, decimal> _pendingBalances = new();
         private readonly List<LedgerEntry> _pendingEntries = new();
-        private readonly List<Passage> _pendingPassages = new();
+        private readonly List<MerchantPayment> _pendingPayments = new();
         private readonly List<long> _pendingTransfers = new();
         private bool _finished;
 
@@ -373,11 +375,11 @@ public sealed class InMemoryLedgerDb : ILedgerDb
             lock (db._gate) return db._accounts[accountId].Balance;
         }
 
-        public Task<Account?> FindAccountByTagAsync(string tag, CancellationToken ct = default)
+        public Task<Account?> FindAccountByWalletAsync(string walletId, CancellationToken ct = default)
         {
             lock (db._gate)
             {
-                if (!db._tagToAccount.TryGetValue(tag, out var id)) return Task.FromResult<Account?>(null);
+                if (!db._walletToAccount.TryGetValue(walletId, out var id)) return Task.FromResult<Account?>(null);
                 var a = db._accounts[id];
                 return Task.FromResult<Account?>(a with { Balance = CurrentBalance(id) });
             }
@@ -415,10 +417,10 @@ public sealed class InMemoryLedgerDb : ILedgerDb
             return Task.CompletedTask;
         }
 
-        public Task InsertPassageAsync(long transferId, string tag, string plaza, decimal amount, DateTimeOffset at, CancellationToken ct = default)
+        public Task InsertMerchantPaymentAsync(long transferId, string walletId, string merchant, decimal amount, DateTimeOffset at, CancellationToken ct = default)
         {
             EnsureOpen();
-            _pendingPassages.Add(new Passage(_pendingPassages.Count + 1, transferId, tag, plaza, amount, at));
+            _pendingPayments.Add(new MerchantPayment(_pendingPayments.Count + 1, transferId, walletId, merchant, amount, at));
             return Task.CompletedTask;
         }
 
@@ -437,7 +439,7 @@ public sealed class InMemoryLedgerDb : ILedgerDb
                     db._accounts[id] = db._accounts[id] with { Balance = bal };
                 }
                 db._entries.AddRange(_pendingEntries);
-                db._passages.AddRange(_pendingPassages);
+                db._payments.AddRange(_pendingPayments);
             }
             _finished = true;
             return Task.CompletedTask;
@@ -445,7 +447,7 @@ public sealed class InMemoryLedgerDb : ILedgerDb
 
         public Task RollbackAsync(CancellationToken ct = default)
         {
-            _pendingBalances.Clear(); _pendingEntries.Clear(); _pendingPassages.Clear(); _pendingTransfers.Clear();
+            _pendingBalances.Clear(); _pendingEntries.Clear(); _pendingPayments.Clear(); _pendingTransfers.Clear();
             _finished = true;
             return Task.CompletedTask;
         }
@@ -461,16 +463,16 @@ public sealed class InMemoryLedgerDb : ILedgerDb
 }
 ```
 
-```csharp file=Ledger/TollTransferService.cs
+```csharp file=Ledger/MerchantPaymentService.cs
 using Microsoft.Extensions.Logging;
 
-namespace Toll.Ledger;
+namespace QuickPay.Ledger;
 
-public sealed class TollTransferService(ILedgerDb db, TimeProvider clock, ILogger<TollTransferService> log)
+public sealed class MerchantPaymentService(ILedgerDb db, TimeProvider clock, ILogger<MerchantPaymentService> log)
 {
-    public const long PlazaSettlementAccount = 900;
+    public const long MerchantSettlementAccount = 900;
 
-    public async Task<PassageResult> RecordPassageAsync(string tag, string plaza, decimal amount, CancellationToken ct = default)
+    public async Task<PaymentResult> RecordPaymentAsync(string walletId, string merchant, decimal amount, CancellationToken ct = default)
     {
         if (amount <= 0) throw new ArgumentOutOfRangeException(nameof(amount));
 
@@ -481,58 +483,58 @@ public sealed class TollTransferService(ILedgerDb db, TimeProvider clock, ILogge
         await using var uow = await db.BeginAsync(ct);
         var s = uow.Session;
 
-        var account = await s.FindAccountByTagAsync(tag, ct);
-        if (account is null) return new PassageResult(PassageOutcome.UnknownTag, null);
+        var account = await s.FindAccountByWalletAsync(walletId, ct);
+        if (account is null) return new PaymentResult(PaymentOutcome.UnknownWallet, null);
 
         // 3. Check-then-act as ONE conditional statement, not SELECT then UPDATE.
         if (await s.TryDebitAsync(account.Id, amount, ct) == 0)
         {
             await uow.RollbackAsync(ct);
-            log.LogInformation("Insufficient funds for tag {Tag} at {Plaza}", tag, plaza);
-            return new PassageResult(PassageOutcome.InsufficientFunds, null);
+            log.LogInformation("Insufficient funds in wallet {WalletId} paying {Merchant}", walletId, merchant);
+            return new PaymentResult(PaymentOutcome.InsufficientFunds, null);
         }
 
-        var transferId = await s.InsertTransferAsync("toll", ct);
-        await s.CreditAsync(PlazaSettlementAccount, amount, ct);
+        var transferId = await s.InsertTransferAsync("merchant_payment", ct);
+        await s.CreditAsync(MerchantSettlementAccount, amount, ct);
         await s.InsertEntryAsync(transferId, account.Id, -amount, ct);
-        await s.InsertEntryAsync(transferId, PlazaSettlementAccount, amount, ct);
-        await s.InsertPassageAsync(transferId, tag, plaza, amount, at, ct);
+        await s.InsertEntryAsync(transferId, MerchantSettlementAccount, amount, ct);
+        await s.InsertMerchantPaymentAsync(transferId, walletId, merchant, amount, at, ct);
 
         // 4. Commit early. Nothing after this line touches the database.
         await uow.CommitAsync(ct);
-        return new PassageResult(PassageOutcome.Recorded, transferId);
+        return new PaymentResult(PaymentOutcome.Recorded, transferId);
     }
 }
 ```
 
 ```csharp file=Program.cs
-using Toll.Ledger;
+using QuickPay.Ledger;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<ILedgerDb>(_ => new InMemoryLedgerDb()
-    .Seed(1, "Priya Nair", 1500m, tag: "TAG-1001")
-    .Seed(2, "Rohan Mehta", 90m, tag: "TAG-1002")
-    .Seed(TollTransferService.PlazaSettlementAccount, "Manesar plaza settlement", 0m));
-builder.Services.AddScoped<TollTransferService>();
+    .Seed(1, "Priya Nair", 1500m, walletId: "WAL-1001")
+    .Seed(2, "Rohan Mehta", 90m, walletId: "WAL-1002")
+    .Seed(MerchantPaymentService.MerchantSettlementAccount, "Merchant settlement (pooled)", 0m));
+builder.Services.AddScoped<MerchantPaymentService>();
 
 var app = builder.Build();
 
-app.MapPost("/passages", async (PassageRequest req, TollTransferService svc, CancellationToken ct) =>
+app.MapPost("/payments", async (PaymentRequest req, MerchantPaymentService svc, CancellationToken ct) =>
 {
-    var result = await svc.RecordPassageAsync(req.Tag, req.Plaza, req.Amount, ct);
+    var result = await svc.RecordPaymentAsync(req.WalletId, req.Merchant, req.Amount, ct);
     return result.Outcome switch
     {
-        PassageOutcome.Recorded => Results.Ok(result),
-        PassageOutcome.InsufficientFunds => Results.Problem("Insufficient balance", statusCode: StatusCodes.Status402PaymentRequired),
+        PaymentOutcome.Recorded => Results.Ok(result),
+        PaymentOutcome.InsufficientFunds => Results.Problem("Insufficient balance", statusCode: StatusCodes.Status402PaymentRequired),
         _ => Results.NotFound(),
     };
 });
 
 app.Run();
 
-public sealed record PassageRequest(string Tag, string Plaza, decimal Amount);
+public sealed record PaymentRequest(string WalletId, string Merchant, decimal Amount);
 ```
 
 ### The same service on real PostgreSQL with Npgsql
@@ -551,9 +553,9 @@ debit.Parameters.AddWithValue("id", accountId);
 if (await debit.ExecuteNonQueryAsync(ct) == 0)
 {
     await tx.RollbackAsync(ct);
-    return PassageOutcome.InsufficientFunds;
+    return PaymentOutcome.InsufficientFunds;
 }
-// ... INSERT transfer, ledger entries, passage, all with `conn, tx` ...
+// ... INSERT transfer, ledger entries, merchant_payment, all with `conn, tx` ...
 await tx.CommitAsync(ct);                                             // returns after the WAL fsync
 ```
 
@@ -568,7 +570,7 @@ If the method throws before `CommitAsync`, `await using` disposes the transactio
 await using var tx = await dbContext.Database.BeginTransactionAsync(ct);
 var rows = await dbContext.Database.ExecuteSqlAsync(
     $"UPDATE account SET balance = balance - {amount} WHERE id = {accountId} AND balance >= {amount}", ct);
-if (rows == 0) { await tx.RollbackAsync(ct); return PassageOutcome.InsufficientFunds; }
+if (rows == 0) { await tx.RollbackAsync(ct); return PaymentOutcome.InsufficientFunds; }
 dbContext.LedgerEntries.AddRange(/* ... */);
 await dbContext.SaveChangesAsync(ct);
 await tx.CommitAsync(ct);
@@ -590,25 +592,25 @@ await using var tx = await conn.BeginTransactionAsync();
 await DebitAsync(conn, tx, accountId, amount);
 var receipt = await paymentGateway.NotifyAsync(accountId, amount);   // 150–900 ms over the internet
 await InsertReceiptAsync(conn, tx, receipt);
-await bus.PublishAsync(new PassageRecorded(accountId, amount));      // second system: not covered by tx
+await bus.PublishAsync(new PaymentRecorded(accountId, amount));      // second system: not covered by tx
 await tx.CommitAsync();
 ```
 
 What goes wrong, in order of how soon you will see it:
 
-1. Pool exhaustion. At 70 passages/s with ~500 ms inside the transaction, you need ~35 busy connections just for this endpoint.
-2. Lock contention. The account row stays locked for 500 ms. A second passage by the same vehicle (or a top-up) waits behind it.
-3. Dual write. If `CommitAsync` fails after `PublishAsync` succeeded, downstream systems believe a passage happened that the ledger never recorded.
+1. Pool exhaustion. At 70 payments/s with ~500 ms inside the transaction, you need ~35 busy connections just for this endpoint.
+2. Lock contention. The account row stays locked for 500 ms. A second payment from the same wallet (or a top-up) waits behind it.
+3. Dual write. If `CommitAsync` fails after `PublishAsync` succeeded, downstream systems (the merchant's soundbox, the SMS service) believe a payment happened that the ledger never recorded.
 4. Vacuum cannot clean row versions newer than the oldest open snapshot, so a few slow gateway calls per minute steadily bloat the table.
 
 **Good: database work only, then everything else.**
 
 ```csharp
 // 1. Database work in one short transaction (8–15 ms).
-var result = await transferService.RecordPassageAsync(tag, plaza, amount, ct);
+var result = await paymentService.RecordPaymentAsync(walletId, merchant, amount, ct);
 // 2. Side effects after commit, each made idempotent by the transfer id.
-if (result.Outcome == PassageOutcome.Recorded)
-    await notifications.EnqueueAsync(new PassageRecorded(result.TransferId!.Value), ct);
+if (result.Outcome == PaymentOutcome.Recorded)
+    await notifications.EnqueueAsync(new PaymentRecorded(result.TransferId!.Value), ct);
 ```
 
 If the notification must be guaranteed, write it to an `outbox` table *inside* the same transaction and let a background relay publish it ([Transactional outbox](#/lesson/m12-outbox)). Then the only thing inside the transaction is still database work.
@@ -621,7 +623,7 @@ Committing 500 ledger entries in one transaction costs one fsync instead of 500,
 
 ## Practical playground
 
-The playground seeds the toll ledger. Try these in order:
+The playground seeds the wallet ledger. Try these in order:
 
 1. Run the happy-path transfer from Step 2 with new ids (`transfer 9002`, entries `3` and `4`), then check both balances.
 2. Try to debit account 2 by ₹120. Watch the `CHECK` constraint fire, then run `SELECT 1;` to see "current transaction is aborted". Issue `ROLLBACK`.
@@ -629,7 +631,7 @@ The playground seeds the toll ledger. Try these in order:
 4. Use `SAVEPOINT` to recover from a bad insert without losing the rest of the transaction.
 5. Run `SELECT pg_current_xact_id();` twice inside one transaction and once outside; notice how the id is assigned.
 
-:::playground type=sql title="Toll ledger with constraints"
+:::playground type=sql title="Wallet ledger with constraints"
 ```sql
 CREATE TABLE account (
   id      bigint PRIMARY KEY,
@@ -648,22 +650,24 @@ CREATE TABLE ledger_entry (
   amount      numeric(12,2) NOT NULL CHECK (amount <> 0)
 );
 CREATE OR REPLACE FUNCTION check_transfer_balanced() RETURNS trigger AS $$
+DECLARE
+  t bigint := CASE WHEN TG_OP = 'DELETE' THEN OLD.transfer_id ELSE NEW.transfer_id END;
 BEGIN
-  IF (SELECT COALESCE(SUM(amount), 0) FROM ledger_entry WHERE transfer_id = NEW.transfer_id) <> 0 THEN
-    RAISE EXCEPTION 'transfer % is not balanced', NEW.transfer_id;
+  IF (SELECT COALESCE(SUM(amount), 0) FROM ledger_entry WHERE transfer_id = t) <> 0 THEN
+    RAISE EXCEPTION 'transfer % is not balanced', t;
   END IF;
   RETURN NULL;
 END $$ LANGUAGE plpgsql;
 CREATE CONSTRAINT TRIGGER transfer_balanced
-  AFTER INSERT OR UPDATE ON ledger_entry
+  AFTER INSERT OR UPDATE OR DELETE ON ledger_entry
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION check_transfer_balanced();
 
 INSERT INTO account VALUES (1, 'Priya Nair', 1500.00), (2, 'Rohan Mehta', 90.00), (3, 'Ananya Rao', 640.00),
-                           (900, 'Manesar plaza settlement', 0.00);
+                           (900, 'Merchant settlement (pooled)', 0.00);
 INSERT INTO transfer (id, kind, created_at) VALUES
-  (9001, 'toll',   '2026-10-18 08:02:00+05:30'),
-  (9002, 'toll',   '2026-10-18 08:05:00+05:30'),
+  (9001, 'merchant_payment',   '2026-10-18 08:02:00+05:30'),
+  (9002, 'merchant_payment',   '2026-10-18 08:05:00+05:30'),
   (9003, 'topup',  '2026-10-18 09:00:00+05:30');
 INSERT INTO ledger_entry VALUES
   (1, 9001, 1,   -120.00), (2, 9001, 900, 120.00),
@@ -704,9 +708,9 @@ CREATE TABLE opening_balance (account_id bigint PRIMARY KEY REFERENCES account(i
 CREATE TABLE transfer (id bigint PRIMARY KEY, kind text NOT NULL);
 CREATE TABLE ledger_entry (id bigint PRIMARY KEY, transfer_id bigint NOT NULL REFERENCES transfer(id),
                            account_id bigint NOT NULL REFERENCES account(id), amount numeric(12,2) NOT NULL);
-INSERT INTO account VALUES (1,'Priya Nair',1380.00),(2,'Rohan Mehta',90.00),(3,'Ananya Rao',1140.00),(900,'Plaza settlement',240.00);
+INSERT INTO account VALUES (1,'Priya Nair',1380.00),(2,'Rohan Mehta',90.00),(3,'Ananya Rao',1140.00),(900,'Merchant settlement',240.00);
 INSERT INTO opening_balance VALUES (1,1500.00),(2,90.00),(3,640.00),(900,0.00);
-INSERT INTO transfer VALUES (9001,'toll'),(9002,'toll'),(9003,'topup');
+INSERT INTO transfer VALUES (9001,'merchant_payment'),(9002,'merchant_payment'),(9003,'topup');
 INSERT INTO ledger_entry VALUES
   (1,9001,1,-120.00),(2,9001,900,120.00),
   (3,9002,3,-120.00),(4,9002,900,120.00),
@@ -808,7 +812,7 @@ public class UndoLogTests
         var db = new MiniDb();
         db.Balances["priya"] = 1500m;
         db.Balances["rohan"] = 90m;
-        db.Balances["plaza"] = 0m;
+        db.Balances["merchant"] = 0m;
         return db;
     }
 
@@ -816,18 +820,18 @@ public class UndoLogTests
     public void Successful_transfer_moves_money()
     {
         var db = Db();
-        Assert.True(new TransferService(db).Transfer("priya", "plaza", 120m));
+        Assert.True(new TransferService(db).Transfer("priya", "merchant", 120m));
         Assert.Equal(1380m, db.Balances["priya"]);
-        Assert.Equal(120m, db.Balances["plaza"]);
+        Assert.Equal(120m, db.Balances["merchant"]);
     }
 
     [Fact]
     public void Insufficient_funds_changes_nothing()
     {
         var db = Db();
-        Assert.False(new TransferService(db).Transfer("rohan", "plaza", 120m));
+        Assert.False(new TransferService(db).Transfer("rohan", "merchant", 120m));
         Assert.Equal(90m, db.Balances["rohan"]);
-        Assert.Equal(0m, db.Balances["plaza"]);
+        Assert.Equal(0m, db.Balances["merchant"]);
     }
 
     [Fact]
@@ -927,7 +931,7 @@ Filter with `HAVING COUNT(e.id) < 2 OR COALESCE(SUM(e.amount), 0) <> 0`.
 CREATE TABLE transfer (id bigint PRIMARY KEY, kind text NOT NULL);
 CREATE TABLE ledger_entry (id bigint PRIMARY KEY, transfer_id bigint NOT NULL REFERENCES transfer(id),
                            account_id bigint NOT NULL, amount numeric(12,2) NOT NULL);
-INSERT INTO transfer VALUES (9001,'toll'),(9002,'toll'),(9003,'topup'),(9004,'toll'),(9005,'refund'),(9006,'toll');
+INSERT INTO transfer VALUES (9001,'merchant_payment'),(9002,'merchant_payment'),(9003,'topup'),(9004,'merchant_payment'),(9005,'refund'),(9006,'merchant_payment');
 INSERT INTO ledger_entry VALUES
   (1,9001,1,-120.00),(2,9001,900,120.00),
   (3,9002,3,-120.00),                      -- missing credit
@@ -1138,7 +1142,7 @@ Recording every change (not just the first per key) and undoing in reverse order
 :::
 
 :::exercise id=m09-transactions-acid-ex5 difficulty=advanced kind=written title="Choose durability settings for three tables"
-A vehicle-tracking platform stores three kinds of data in one PostgreSQL 17 cluster with one synchronous standby:
+A ride-hailing platform (wallet payments plus live cab tracking) stores three kinds of data in one PostgreSQL 17 cluster with one synchronous standby:
 1. `ledger_entry`: money. ~70 writes/s.
 2. `gps_ping`: one row per vehicle every 10 s from 40,000 vehicles. Losing a few seconds of pings is acceptable.
 3. `audit_log`: regulatory record of who changed what. ~5 writes/s. Must survive loss of the primary server.
@@ -1167,7 +1171,7 @@ INSERT INTO gps_ping (...) VALUES (...), (...), ...;
 COMMIT;
 ```
 
-**`ledger_entry` → `on` (the default, equivalent to `remote_flush` with a synchronous standby).** Commit waits for the local WAL flush *and* for the synchronous standby to flush. A primary crash loses nothing; loss of the primary's disk loses nothing because the standby has the commit on its own disk. Cost: one network round trip per commit, typically 1–3 ms within a region (estimate). At 70 writes/s that is trivial.
+**`ledger_entry` → `on` (the default; with a synchronous standby configured, it waits for the standby to flush the WAL).** Commit waits for the local WAL flush *and* for the synchronous standby to flush. A primary crash loses nothing; loss of the primary's disk loses nothing because the standby has the commit on its own disk. Cost: one network round trip per commit, typically 1–3 ms within a region (estimate). At 70 writes/s that is trivial.
 
 **`audit_log` → `on` or `remote_apply`.** `on` already survives disk loss. Choose `remote_apply` only if auditors will *read from the standby* and must see every committed row immediately; it adds the standby's replay time to each commit. `remote_write` (standby received the WAL in memory but has not flushed it) is a reasonable middle ground when both servers failing within milliseconds is deemed impossible, but for a regulatory table the stronger setting is cheap at 5 writes/s.
 
@@ -1182,26 +1186,26 @@ COMMIT;
 
 Transaction behaviour is worth testing at two levels.
 
-**1. Unit tests against the in-memory model.** They run in milliseconds and pin down the service's contract: a failed debit leaves no trace, a successful passage writes exactly two balanced entries.
+**1. Unit tests against the in-memory model.** They run in milliseconds and pin down the service's contract: a failed debit leaves no trace, a successful payment writes exactly two balanced entries.
 
 ```csharp
-public class TollTransferServiceTests
+public class MerchantPaymentServiceTests
 {
-    private static (InMemoryLedgerDb Db, TollTransferService Svc) Build()
+    private static (InMemoryLedgerDb Db, MerchantPaymentService Svc) Build()
     {
         var db = new InMemoryLedgerDb()
-            .Seed(1, "Priya", 1500m, "TAG-1")
-            .Seed(2, "Rohan", 90m, "TAG-2")
-            .Seed(TollTransferService.PlazaSettlementAccount, "Plaza", 0m);
-        return (db, new TollTransferService(db, TimeProvider.System, NullLogger<TollTransferService>.Instance));
+            .Seed(1, "Priya", 1500m, "WAL-1")
+            .Seed(2, "Rohan", 90m, "WAL-2")
+            .Seed(MerchantPaymentService.MerchantSettlementAccount, "Merchants", 0m);
+        return (db, new MerchantPaymentService(db, TimeProvider.System, NullLogger<MerchantPaymentService>.Instance));
     }
 
     [Fact]
-    public async Task Recorded_passage_writes_two_balanced_entries()
+    public async Task Recorded_payment_writes_two_balanced_entries()
     {
         var (db, svc) = Build();
-        var r = await svc.RecordPassageAsync("TAG-1", "Manesar", 120m);
-        Assert.Equal(PassageOutcome.Recorded, r.Outcome);
+        var r = await svc.RecordPaymentAsync("WAL-1", "Sharma Tea Stall", 120m);
+        Assert.Equal(PaymentOutcome.Recorded, r.Outcome);
         var entries = db.ReadCommittedEntries(r.TransferId!.Value);
         Assert.Equal(2, entries.Count);
         Assert.Equal(0m, entries.Sum(e => e.Amount));
@@ -1212,10 +1216,10 @@ public class TollTransferServiceTests
     public async Task Insufficient_funds_leaves_no_trace()
     {
         var (db, svc) = Build();
-        var r = await svc.RecordPassageAsync("TAG-2", "Manesar", 120m);
-        Assert.Equal(PassageOutcome.InsufficientFunds, r.Outcome);
+        var r = await svc.RecordPaymentAsync("WAL-2", "Sharma Tea Stall", 120m);
+        Assert.Equal(PaymentOutcome.InsufficientFunds, r.Outcome);
         Assert.Equal(90m, db.ReadCommittedAccount(2)!.Balance);
-        Assert.Empty(db.CommittedPassages());
+        Assert.Empty(db.CommittedPayments());
     }
 }
 ```
@@ -1231,8 +1235,8 @@ Keep integration tests in a separate project so unit tests stay fast. Use one da
 ## Real-world application
 
 - **Payments and wallets.** Every UPI-style transfer, wallet top-up and refund is a double-entry transaction with a conditional debit. Reconciliation queries like exercise 1 run nightly to catch application bugs that atomicity cannot.
-- **Inventory and booking.** Reserving a seat, a hotel room or a bag of cement follows the same "conditional update plus child rows" shape. The `WHERE available >= requested` clause is what stops overselling.
-- **Infrastructure project platforms.** Approving a monthly progress bill updates the bill status, the cumulative work-done figures and the payment schedule together. Half of that applied is worse than none, because the next bill builds on the cumulative numbers.
+- **Inventory and booking.** Reserving a seat, a hotel room or the last pack of a product follows the same "conditional update plus child rows" shape. The `WHERE available >= requested` clause is what stops overselling.
+- **Food delivery and e-commerce checkout.** Placing an order reserves stock, applies a coupon (decrementing its remaining uses), and creates the order and its lines together. Half of that applied is worse than none: a used coupon with no order, or an order for stock that was never reserved.
 - **Event sourcing and outbox.** Appending events and the outbox row in one transaction is the only reliable way to make a message "eventually, exactly once" reach a broker ([Transactional outbox](#/lesson/m12-outbox)).
 - **Batch imports.** Loading 2 million rows commits far faster in a few large transactions than in 2 million tiny ones because each commit is an fsync. The counter-pressure is lock duration, so batches are sized by time.
 
@@ -1343,10 +1347,10 @@ A connection shows `idle in transaction` for 40 seconds in `pg_stat_activity`. W
 - [ ] The connection pool is too small.
 > The backend is waiting for the client. Fix the code, and set `idle_in_transaction_session_timeout` as a safety net.
 ::q single
-Two requests arrive 1 ms apart to activate a second tag for the same vehicle. Your C# code checks "no active tag exists" before inserting. Both inserts succeed. What is the right fix?
+Two requests arrive 1 ms apart to activate a second wallet for the same phone number. Your C# code checks "no active wallet exists" before inserting. Both inserts succeed. What is the right fix?
 - [ ] Add a `lock` statement in C#.
 - [ ] Use a longer transaction.
-- [x] Add a partial unique index: `CREATE UNIQUE INDEX ON tag (vehicle_id) WHERE status = 'active'`.
+- [x] Add a partial unique index: `CREATE UNIQUE INDEX ON wallet (phone) WHERE status = 'active'`.
 - [ ] Retry the request.
 > A C# `lock` works only within one process; the database constraint is the only guard that holds across instances. Consistency in ACID covers declared constraints, not rules that exist only in application code.
 :::

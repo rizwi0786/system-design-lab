@@ -54,13 +54,13 @@ That is a **bulkhead**: a fixed, separate share of a resource for each kind of w
 
 ### Our scenario
 
-A project-monitoring portal for highway contractors, *SiteBook*, runs as one ASP.NET Core API (6 instances). Per instance at peak:
+*DriverHub*, the driver-partner portal of a ride-hailing app, lets drivers see their trips, ratings, incentives and payouts. It runs as one ASP.NET Core API (6 instances). Per instance at the evening peak:
 
 | Workload | RPS | Normal latency | Depends on |
 |---|---|---|---|
-| Dashboard reads | 200 | 40 ms | PostgreSQL |
-| Map tiles for site locations | 30 | 200 ms | external GIS tile service |
-| PDF progress reports | 2 | 6 s | internal renderer service |
+| Dashboard reads (trips, earnings, ratings) | 200 | 40 ms | PostgreSQL |
+| Map tiles for surge zones and pickup points | 30 | 200 ms | external GIS tile service |
+| PDF weekly earnings statements | 2 | 6 s | internal renderer service |
 
 ### How one slow dependency sinks everything
 
@@ -116,10 +116,10 @@ Too few permits rejects healthy traffic; too many protects nothing. Watch two me
 
 A bulkhead rejection, an open circuit or a timeout all need a "what now?". Fallback options:
 
-| Fallback | SiteBook example | Good when |
+| Fallback | DriverHub example | Good when |
 |---|---|---|
 | Placeholder or default | Grey "map unavailable" tile | Decorative or non-critical data |
-| Cached or stale data | Yesterday's progress percentage, labelled "as of 18 Oct" | Data changes slowly, staleness is labelled |
+| Cached or stale data | Yesterday's earnings total, labelled "as of 18 Oct" | Data changes slowly, staleness is labelled |
 | Reduced functionality | Hide the map, keep the table | The feature is optional |
 | Deferred work | "Your report is being prepared; we'll email it" (202) | Work can happen later |
 | Alternative provider | Second tile provider | A real alternative exists and is tested |
@@ -185,12 +185,12 @@ Both are defensible. What matters is that you choose knowingly, and that you don
 
 ## Visual explanation
 
-### Architecture: SiteBook with compartments
+### Architecture: DriverHub with compartments
 
 ```mermaid
 flowchart LR
-    U["Contractor web app"] --> LB["Load balancer"]
-    LB --> API["SiteBook API (6 instances)"]
+    U["Driver partner app"] --> LB["Load balancer"]
+    LB --> API["DriverHub API (6 instances)"]
     API -->|"bulkhead: 20 permits, own HttpClient pool"| GIS["GIS tile service (external)"]
     API -->|"fallback"| PH["Placeholder tiles (in memory)"]
     API -->|"pool: Max Pool Size 60"| DB[("PostgreSQL primary")]
@@ -238,7 +238,7 @@ The first attempt takes the last free permit and times out after 1 s. The attemp
 
 ## Step-by-step example
 
-Let's size SiteBook's tile pipeline end to end.
+Let's size DriverHub's tile pipeline end to end.
 
 1. **Normal concurrency:** 30 RPS × 0.2 s = 6. **Bulkhead:** 20 permits, queue 10, queue wait 200 ms.
 2. **Attempt timeout:** GIS p99 is 450 ms → **1 s**.
@@ -250,10 +250,10 @@ Let's size SiteBook's tile pipeline end to end.
 
 ## Production-style C# implementation
 
-We build a small pipeline library so you can see each stage, and then wire SiteBook's dependencies. In production you would usually reach for Polly v8 / `Microsoft.Extensions.Resilience`, whose shape is very similar.
+We build a small pipeline library so you can see each stage, and then wire DriverHub's dependencies. In production you would reach for Polly v8 through `Microsoft.Extensions.Resilience` (and `Microsoft.Extensions.Http.Resilience` for `HttpClient`), whose shape is very similar; the hand-written version exists so you can see and test every decision.
 
 ```text
-SiteBook.Api/
+DriverHub.Api/
   Program.cs
   Resilience/ResilienceTypes.cs
   Resilience/Stages.cs
@@ -265,7 +265,7 @@ SiteBook.Api/
 ### Contracts and exceptions
 
 ```csharp file=Resilience/ResilienceTypes.cs
-namespace SiteBook.Resilience;
+namespace DriverHub.Resilience;
 
 /// <summary>One layer of a pipeline. It receives the rest of the pipeline as <paramref name="next"/>
 /// and decides whether, when and how often to call it.</summary>
@@ -303,7 +303,7 @@ public static class ResilienceFailures
 ### The stages
 
 ```csharp file=Resilience/Stages.cs
-namespace SiteBook.Resilience;
+namespace DriverHub.Resilience;
 
 /// <summary>Cooperative timeout: cancels the token passed down. Used twice: once as the total timeout, once per attempt.</summary>
 public sealed class TimeoutStage(string name, TimeSpan timeout, TimeProvider clock) : IResilienceStage
@@ -450,7 +450,7 @@ Things to notice:
 ### The pipeline
 
 ```csharp file=Resilience/ResiliencePipeline.cs
-namespace SiteBook.Resilience;
+namespace DriverHub.Resilience;
 
 /// <summary>Stages run outermost first. The fallback, when given, wraps everything.</summary>
 public sealed class ResiliencePipeline(string name, IReadOnlyList<IResilienceStage> stagesOuterToInner)
@@ -508,9 +508,9 @@ Composing from the inside out is the same trick ASP.NET Core uses for middleware
 ### Clients with fallbacks
 
 ```csharp file=Maps/GisTileClient.cs
-using SiteBook.Resilience;
+using DriverHub.Resilience;
 
-namespace SiteBook.Maps;
+namespace DriverHub.Maps;
 
 public sealed record Tile(byte[] Png, bool IsFallback);
 
@@ -539,11 +539,11 @@ public sealed class GisTileClient(HttpClient http, PipelineRegistry pipelines, I
 
 ```csharp file=Reports/ReportRendererClient.cs
 using System.Net.Http.Json;
-using SiteBook.Resilience;
+using DriverHub.Resilience;
 
-namespace SiteBook.Reports;
+namespace DriverHub.Reports;
 
-public sealed record ReportRequest(Guid ProjectId, DateOnly Month);
+public sealed record ReportRequest(Guid DriverId, DateOnly Month);
 
 /// <summary>Used by the report worker. No fallback: if rendering fails, the job is retried by the queue later.</summary>
 public sealed class ReportRendererClient(HttpClient http, PipelineRegistry pipelines)
@@ -563,10 +563,9 @@ public sealed class ReportRendererClient(HttpClient http, PipelineRegistry pipel
 ```csharp file=Program.cs
 using Microsoft.AspNetCore.RateLimiting;
 using System.Threading.RateLimiting;
-using System.Threading.RateLimiting;
-using SiteBook.Maps;
-using SiteBook.Reports;
-using SiteBook.Resilience;
+using DriverHub.Maps;
+using DriverHub.Reports;
+using DriverHub.Resilience;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton(TimeProvider.System);
@@ -617,9 +616,9 @@ app.MapGet("/tiles/{z:int}/{x:int}/{y:int}", async (int z, int x, int y, GisTile
     return Results.File(tile.Png, "image/png");
 });
 
-app.MapPost("/projects/{projectId:guid}/reports", (Guid projectId, DateOnly month) =>
+app.MapPost("/drivers/{driverId:guid}/earnings-statements", (Guid driverId, DateOnly month) =>
     // In the full design this enqueues a job for the report workers and returns 202.
-    Results.Accepted($"/projects/{projectId}/reports/{month:yyyy-MM}"))
+    Results.Accepted($"/drivers/{driverId}/earnings-statements/{month:yyyy-MM}"))
     .RequireRateLimiting("reports");
 
 app.MapGet("/internal/bulkheads", (PipelineRegistry registry) => Results.Ok(
@@ -634,21 +633,27 @@ app.Run();
 ```csharp
 // Dashboard: fast queries on the primary, plenty of connections.
 builder.Services.AddKeyedSingleton("dashboard", (_, _) => NpgsqlDataSource.Create(
-    "Host=pg-primary;Database=sitebook;Application Name=dashboard;Maximum Pool Size=60;Timeout=2"));
+    "Host=pg-primary;Database=driverhub;Application Name=dashboard;Maximum Pool Size=60;Timeout=2"));
 // Reports: slow queries on a replica, a small pool so they can never starve anything else.
 builder.Services.AddKeyedSingleton("reports", (_, _) => NpgsqlDataSource.Create(
-    "Host=pg-replica;Database=sitebook;Application Name=reports;Maximum Pool Size=10;Timeout=5;Command Timeout=60"));
+    "Host=pg-replica;Database=driverhub;Application Name=reports;Maximum Pool Size=10;Timeout=5;Command Timeout=60"));
 ```
 
 `Timeout` is how long a caller waits for a free connection from the pool; when it expires, the caller gets an error instead of waiting forever. That is a bulkhead with a queue timeout, built into the driver. Check that the sum of all pools across all instances stays under PostgreSQL's `max_connections` (6 instances × (60 + 10) = 420, so either raise `max_connections` deliberately or put PgBouncer in front; see [Connection pooling](#/lesson/m09-connection-pooling)).
 
 ### With the library
 
-The same tile pipeline in Polly v8 (not compiled here):
+The same tile pipeline with `Microsoft.Extensions.Resilience` and Polly v8 (not compiled here, because the packages are not available offline):
 
 ```csharp
 builder.Services.AddResiliencePipeline<string, Tile>("gis", (pipeline, ctx) => pipeline
-    .AddFallback(new FallbackStrategyOptions<Tile> { FallbackAction = _ => Outcome.FromResultAsValueTask(PlaceholderTile) })
+    .AddFallback(new FallbackStrategyOptions<Tile>
+    {
+        // Only resilience failures; a bug (NullReferenceException) must still surface.
+        ShouldHandle = new PredicateBuilder<Tile>().Handle<TimeoutRejectedException>().Handle<BrokenCircuitException>()
+            .Handle<RateLimiterRejectedException>().Handle<HttpRequestException>(),
+        FallbackAction = _ => Outcome.FromResultAsValueTask(PlaceholderTile),
+    })
     .AddTimeout(TimeSpan.FromSeconds(3))                                    // total
     .AddRetry(new RetryStrategyOptions<Tile> { MaxRetryAttempts = 1, UseJitter = true,
         ShouldHandle = new PredicateBuilder<Tile>().Handle<TimeoutRejectedException>().Handle<HttpRequestException>() })
@@ -658,7 +663,7 @@ builder.Services.AddResiliencePipeline<string, Tile>("gis", (pipeline, ctx) => p
     .AddTimeout(TimeSpan.FromSeconds(1)));                                  // attempt
 ```
 
-In Polly v8, as in our builder, the first strategy added is the outermost.
+In Polly v8, as in our builder, the first strategy added is the outermost. The client then asks for the pipeline by name, for example `ResiliencePipeline<Tile> gis = provider.GetPipeline<Tile>("gis")` from an injected `ResiliencePipelineProvider<string>`, and calls `await gis.ExecuteAsync(async token => ..., ct)`. Polly's bulkhead is the concurrency limiter, which throws `RateLimiterRejectedException`; the breaker's `ShouldHandle` above deliberately leaves it out. For calls made through `HttpClient`, the same strategies can be attached to the client itself with `AddResilienceHandler("gis", builder => ...)`, or you can start from `AddStandardResilienceHandler()` and tune its options.
 
 ## Bad design vs good design
 
@@ -668,7 +673,7 @@ In Polly v8, as in our builder, the first strategy added is the outermost.
 // The fallback swallows the failure, so the retry never sees an exception and never retries anything.
 await retry.ExecuteAsync(() => fallback.ExecuteAsync(() => gis.GetTileAsync(z, x, y)));
 // Reports run inline: 2 RPS × 6 s = 12 renders per instance holding pooled DB connections.
-app.MapGet("/projects/{id}/report", async (Guid id, NpgsqlDataSource db) => await RenderPdfInline(id, db));
+app.MapGet("/drivers/{id}/earnings-statement", async (Guid id, NpgsqlDataSource db) => await RenderPdfInline(id, db));
 ```
 
 When GIS slows, tile calls accumulate without limit on the shared client; when the renderer slows, report requests hold connections from the dashboard's pool. The ordering bug is subtle: because the fallback is inside the retry, every failure becomes a placeholder before the retry can act, so the "retry" is dead code. And if someone flips the order but puts the total timeout inside the retry, the total grows with each attempt.
@@ -685,15 +690,15 @@ Compartments leave capacity idle: 20 tile permits may sit unused while the dashb
 
 ## Practical playground
 
-The starting graph is SiteBook before this lesson: one API tier calling everything, one database pool, reports rendered inline. Redesign it with compartments. Add a queue and report workers, give the tile path its own isolation and fallback, split database access, and add monitoring for bulkhead rejections. Then compare your design with the architecture diagram above.
+The starting graph is DriverHub before this lesson: one API tier calling everything, one database pool, reports rendered inline. Redesign it with compartments. Add a queue and report workers, give the tile path its own isolation and fallback, split database access, and add monitoring for bulkhead rejections. Then compare your design with the architecture diagram above.
 
-:::playground type=hld title="Add bulkheads to SiteBook"
+:::playground type=hld title="Add bulkheads to DriverHub"
 ```json
 {
   "nodes": [
-    { "id": "web", "type": "client", "label": "Contractor web app", "props": { "rps": 1400 } },
+    { "id": "web", "type": "client", "label": "Driver partner app", "props": { "rps": 1400 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
-    { "id": "api", "type": "app-server", "label": "SiteBook API (dashboard + tiles + reports)", "props": { "instances": 6 } },
+    { "id": "api", "type": "app-server", "label": "DriverHub API (dashboard + tiles + reports)", "props": { "instances": 6 } },
     { "id": "db", "type": "database", "label": "PostgreSQL (one shared pool)" },
     { "id": "gis", "type": "external", "label": "GIS tile service", "props": { "latencyMs": 200 } },
     { "id": "render", "type": "app-server", "label": "PDF renderer", "props": { "instances": 2, "latencyMs": 6000 } }
@@ -1433,7 +1438,8 @@ Splitting a shared resource into isolated, fixed-size compartments per workload 
 ::q beginner
 Give an example of a fallback, and one that would be dangerous.
 ::a
-Safe: a placeholder map tile, cached and labelled data that changes slowly (yesterday's progress figure), hiding an optional section, or deferring work ("we'll email your report"). Dangerous: anything that hides a business decision, such as approving a payment when the fraud check is down, granting access when the authorisation service times out, or showing a stale price at checkout. Those need explicit product sign-off and usually should fail clearly.
+Safe: a placeholder map tile, cached and labelled data that changes slowly (yesterday's earnings total)
+, hiding an optional section, or deferring work ("we'll email your report"). Dangerous: anything that hides a business decision, such as approving a payment when the fraud check is down, granting access when the authorisation service times out, or showing a stale price at checkout. Those need explicit product sign-off and usually should fail clearly.
 ::q intermediate
 How would you size a bulkhead for a dependency?
 ::a

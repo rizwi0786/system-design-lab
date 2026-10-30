@@ -152,7 +152,7 @@ Modern libraries blend these. For example, the W-TinyLFU policy used by Java's C
 | `allkeys-random` / `volatile-random` | Random | Uniform access |
 | `volatile-ttl` | Keys with the shortest remaining TTL | You encode priority in TTLs |
 
-Redis's LRU and LFU are **approximations**: it samples a few keys (`maxmemory-samples`, default 5) and evicts the best candidate among them, rather than keeping a perfect global order. Its LFU uses a small logarithmic counter that decays over time. Note the trap with `volatile-*` policies: if no keys have TTLs, nothing is evictable, and writes fail just as with `noeviction`.
+Redis's LRU and LFU are **approximations**: it samples a few keys (`maxmemory-samples`, default 5) and evicts the best candidate among them, rather than keeping a perfect global order. Its LFU uses a small logarithmic counter that decays over time. Note the trap with `volatile-*` policies: if no keys have TTLs, nothing is evictable, and writes fail just as with `noeviction`. Also note that a self-managed Redis (or Valkey, the open-source fork that behaves the same way here) starts with `maxmemory 0` and `noeviction`: set both explicitly for a cache, because managed offerings choose their own defaults. Recent versions (Redis 7.4+, Valkey 9) can also expire individual **hash fields** (`HEXPIRE`), which helps when one hash holds many small cached values with different lifetimes.
 
 **`IMemoryCache` eviction.** It evicts only when you set `SizeLimit` (and give each entry a `Size`). When over the limit, it compacts: expired entries first, then by `CacheItemPriority` (low before normal before high), and least recently used within those. Entries with `Priority = NeverRemove` are never evicted by compaction.
 
@@ -230,15 +230,15 @@ The dictionary gives instant access to any node (dotted arrows). The doubly link
 
 ## Step-by-step example
 
-**Scenario.** A national highway authority's public portal shows the toll rate for each of 1,100 toll plazas, by vehicle class (7 classes). Rates are revised on 1 April each year and occasionally mid-year for a few plazas. The portal runs 6 API instances behind a load balancer and gets up to 3,000 RPS during holiday travel. Mobile apps and trip planners call it constantly.
+**Scenario.** A train-ticket booking app shows the base fare for each of 1,100 popular routes (station pairs), by travel class (7 classes: 1A, 2A, 3A, 3E, CC, SL and 2S). Fares are revised on 1 April each year and occasionally mid-year for a few routes. The fare service runs 6 API instances behind a load balancer and gets up to 3,000 RPS during the Diwali and summer-holiday booking rush. The app's search screen and partner travel sites call it constantly.
 
 ### Step 1 — Size the data
 
-1,100 plazas × 7 classes = 7,700 rates. As one object per plaza (all classes, about 600 bytes), that is 1,100 × 0.6 KB ≈ 660 KB. It fits in every instance's memory with ease.
+1,100 routes × 7 classes = 7,700 fares. As one object per route (all classes, about 600 bytes), that is 1,100 × 0.6 KB ≈ 660 KB. It fits in every instance's memory with ease.
 
 ### Step 2 — Staleness budget
 
-Ask the business. Answer: "When a rate changes at midnight, the portal must show it within a minute. Trip planners can live with a minute." So the budget is **60 seconds**.
+Ask the business. Answer: "When a fare changes at midnight, search results must show it within a minute. The booking step re-reads the fare from the database anyway, so nobody is charged a stale price." So the budget is **60 seconds**.
 
 ### Step 3 — Try TTL alone
 
@@ -246,9 +246,9 @@ L1 cache per instance, absolute TTL 60 s. Expiry misses: at most 1,100 keys ÷ 6
 
 ### Step 4 — The 1 April problem
 
-On 1 April at 00:00, every rate changes in one batch update. With TTL alone, the portal shows a mix of old and new rates for up to 66 seconds (60 s + jitter). The authority wants the switch to be clean.
+On 1 April at 00:00, every fare changes in one batch update. With TTL alone, search shows a mix of old and new fares for up to 66 seconds (60 s + jitter), and customers comparing two classes see one old and one new price. The product team wants the switch to be clean.
 
-Use a **namespace version**: the batch update increments `ver:toll-rates` in the same job. Keys are `toll:v{n}:plaza:{id}`. Each instance re-reads the version every 5 seconds (cached locally). Within 5 seconds of the bump, every instance builds new keys and loads new rates. Old entries are simply never read again and fall out by TTL or eviction.
+Use a **namespace version**: the batch update increments `ver:fares` in the same job. Keys are `fare:v{n}:route:{id}`. Each instance re-reads the version every 5 seconds (cached locally). Within 5 seconds of the bump, every instance builds new keys and loads new rates. Old entries are simply never read again and fall out by TTL or eviction.
 
 ### Step 5 — Eviction
 
@@ -1454,7 +1454,7 @@ public void Evicts_least_recently_used_and_expires_lazily()
 - **Database buffer pools** use eviction only; PostgreSQL's shared buffers use a clock-sweep algorithm, an LRU approximation that is cheap to maintain.
 - **Product catalogues and pricing** use event-based invalidation from the write path or CDC, with short L1 TTLs on each app instance.
 - **Feature flags and configuration** often use namespace versions or a periodic poll with a version number: clients re-fetch only when the version changes.
-- **Government portals with annual revisions** (tax rates, toll rates, schedule-of-rates for public works) are textbook namespace-version cases: one bump on the effective date switches everything at once.
+- **Price lists with scheduled revisions** (GST slabs, rail and bus fare charts, insurance premium tables, a SaaS tool's new pricing plans) are textbook namespace-version cases: one bump on the effective date switches everything at once.
 
 ## Interview questions
 
@@ -1535,8 +1535,8 @@ Prices are cached with a 10-minute sliding TTL and invalidated by events. The in
 - [ ] The new price within 10 minutes.
 > Sliding expiry resets on every read. A hot entry never expires, so with invalidation broken it stays stale until evicted or restarted. Use absolute expiry or an absolute cap.
 ::q single
-On 1 April, 50,000 toll rates change at once. Which invalidation approach is cheapest and cleanest?
-- [ ] Delete keys with `KEYS toll:*`.
+On 1 April, 50,000 train fares change at once. Which invalidation approach is cheapest and cleanest?
+- [ ] Delete keys with `KEYS fare:*`.
 - [ ] Publish 50,000 individual invalidation events.
 - [x] Bump a namespace version so all keys become unreachable at once.
 - [ ] Lower the TTL to 1 second for the day.

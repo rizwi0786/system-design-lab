@@ -257,11 +257,14 @@ Webhooks arrive late, twice, or out of order. A `charge.authorized` event can ar
 
 - **Create:** the client's `Idempotency-Key` maps to one intent. Same key with a different body is an error (422), because the client is misusing the key.
 - **Provider calls:** we send a stable key (`{paymentId}:charge`, `{paymentId}:refund:{key}`) so a retry to the same provider can't create a second charge.
-- **Webhooks:** each event id is processed once. And because `ApplyProviderUpdate` is itself idempotent, a race between two deliveries of the same event is harmless.
+- **Webhooks:** each event id is processed once. The "already processed?" check and the "mark processed" write are separate steps, so two simultaneous deliveries of the same event can both pass the check. That race is harmless only because the update runs under the per-payment lock and `ApplyProviderUpdate` is idempotent: the second delivery finds the status already applied and returns false. In PostgreSQL, make the de-duplication itself atomic with `INSERT ... ON CONFLICT DO NOTHING` on `(provider, event_id)` in the same transaction as the status update.
+- **Binding:** an event is applied only if it comes from the provider the payment is bound to. An event from any other provider is logged and ignored.
 
 ### 7. Facade
 
 `PaymentService` is the only class the rest of the application uses. It serialises work per payment (one confirm, capture or refund at a time for a given intent), records every attempt, and owns the failover rule.
+
+The in-memory `SemaphoreSlim` per payment only protects one process. With three API instances behind a load balancer, two refund requests for the same payment can land on different machines, and both would pass the "refundable" check. In production the lock lives in PostgreSQL. Don't hold a row lock (`SELECT ... FOR UPDATE`) open across a provider HTTP call that may take 30 seconds; that pins a connection and blocks every other operation on the row. Instead, use short transactions: (1) lock the row, check the rule, write an *in-flight* record (for a refund, a `refunds` row in status `Requested` that already counts against the refundable amount) and commit; (2) call the provider with the stable idempotency key; (3) in a new short transaction, mark the record `Completed` or `Failed`. If the process dies between (2) and (3), a reconciliation job finds the `Requested` row and asks the provider. The in-memory dictionary of semaphores also never shrinks; a real service would drop entries for finished payments or rely on the database lock alone.
 
 ## State transitions
 
@@ -566,7 +569,8 @@ public sealed record ProviderEvent(string EventId, string Provider, string Provi
 public interface IWebhookTranslator
 {
     string Provider { get; }
-    ProviderEvent Translate(string body);
+    /// <summary>Returns null for event types we don't handle, so the endpoint can acknowledge them with 200.</summary>
+    ProviderEvent? Translate(string body);
 }
 ```
 
@@ -689,21 +693,22 @@ namespace Payments
     {
         public string Provider => "acmepay";
 
-        public ProviderEvent Translate(string body)
+        public ProviderEvent? Translate(string body)
         {
             using var doc = JsonDocument.Parse(body);
             var root = doc.RootElement;
             var data = root.GetProperty("data");
-            var status = root.GetProperty("type").GetString() switch
+            PaymentStatus? status = root.GetProperty("type").GetString() switch
             {
                 "charge.authorized" => PaymentStatus.Authorized,
                 "charge.captured" => PaymentStatus.Captured,
                 "charge.failed" => PaymentStatus.Failed,
-                var other => throw new NotSupportedException($"Unhandled AcmePay event type '{other}'."),
+                _ => null,                                                   // e.g. "dispute.created": not handled here
             };
+            if (status is null) return null;
             Money? amount = data.TryGetProperty("amount", out var a) ? new Money(a.GetInt64(), data.GetProperty("currency").GetString()!) : null;
             return new ProviderEvent(root.GetProperty("id").GetString()!, Provider, data.GetProperty("charge_id").GetString()!,
-                Guid.Parse(data.GetProperty("reference").GetString()!), status, amount);
+                Guid.Parse(data.GetProperty("reference").GetString()!), status.Value, amount);
         }
     }
 }
@@ -762,8 +767,9 @@ namespace Payments
             if (result.Outcome == ProviderOutcome.Authorized && r.AutoCapture)
             {
                 var settled = MapResponse(gateway.Settle(auth.TxnRef!, FormatAmount(r.Amount)), ProviderOutcome.Captured);
-                // If settlement fails, keep the authorisation; the merchant can capture again later.
-                if (settled.Outcome == ProviderOutcome.Captured) result = settled with { ProviderPaymentId = auth.TxnRef };
+                // Captured: done. Unknown: the money may have moved, so report Unknown (Pending) and let reconciliation decide.
+                // Declined or Unavailable: settlement provably did not happen; keep the authorisation and capture later.
+                if (settled.Outcome is ProviderOutcome.Captured or ProviderOutcome.Unknown) result = settled with { ProviderPaymentId = auth.TxnRef };
             }
             return Task.FromResult(result);
         }
@@ -789,13 +795,16 @@ namespace Payments
             "05" or "57" => new ProviderChargeResult(ProviderOutcome.Declined, r.TxnRef, Error: new PaymentError(PaymentErrorCode.CardDeclined, "Do not honour.")),
             "91" or "96" => new ProviderChargeResult(ProviderOutcome.Unavailable, Error: new PaymentError(PaymentErrorCode.ProviderUnavailable, "Issuer or switch unavailable.")),
             "68" => new ProviderChargeResult(ProviderOutcome.Unknown, r.TxnRef, Error: new PaymentError(PaymentErrorCode.Timeout, "Response received too late.")),
-            _ => new ProviderChargeResult(ProviderOutcome.Declined, r.TxnRef, Error: new PaymentError(PaymentErrorCode.Unknown, $"Response code {r.ResponseCode}.")),
+            // An unrecognised code is NOT a decline: it might be a new "approved" variant. Unknown sends it to reconciliation.
+            _ => new ProviderChargeResult(ProviderOutcome.Unknown, r.TxnRef, Error: new PaymentError(PaymentErrorCode.Unknown, $"Unrecognised response code {r.ResponseCode}.")),
         };
     }
 }
 ```
 
 Notice how different the two SDKs are: one is async with JSON-ish records and HTTP exceptions; the other is synchronous with decimal strings and two-digit codes. Both adapters expose the identical `IPaymentProvider` surface.
+
+Two details a reviewer should catch. First, an **unrecognised response code maps to Unknown, never to Declined**: if the provider adds a new "approved with conditions" code, calling it a decline would tell the customer "failed" while their money was taken. Second, GlobalCards takes no idempotency key; its `MerchantRef` (our payment id) is what reconciliation uses to look the charge up, which is one more reason we never resend a charge after an Unknown outcome. A real synchronous SDK should also be called with a timeout so a hung socket can't hold a request thread forever.
 
 ### Routing and provider health
 
@@ -972,7 +981,21 @@ public sealed class PaymentService(
     public async Task<bool> HandleProviderEventAsync(ProviderEvent e, CancellationToken ct = default)
     {
         if (processedEvents.IsProcessed(e.Provider, e.EventId)) return false;
-        var applied = await Exclusive(e.PaymentId, intent => Task.FromResult(intent.ApplyProviderUpdate(e.Status, e.ProviderPaymentId, e.Amount)), ct);
+        if (payments.Get(e.PaymentId) is null)
+        {
+            logger.LogWarning("Event {EventId} from {Provider} refers to unknown payment {PaymentId}", e.EventId, e.Provider, e.PaymentId);
+            return false;                                                          // acknowledge; a 500 would make the provider retry forever
+        }
+        var applied = await Exclusive(e.PaymentId, intent =>
+        {
+            // An event from a provider this payment is not bound to must never change it.
+            if (intent.Provider is not null && intent.Provider != e.Provider)
+            {
+                logger.LogWarning("Event {EventId} from {Provider} ignored: payment {PaymentId} is bound to {Bound}", e.EventId, e.Provider, intent.Id, intent.Provider);
+                return Task.FromResult(false);
+            }
+            return Task.FromResult(intent.ApplyProviderUpdate(e.Status, e.ProviderPaymentId, e.Amount));
+        }, ct);
         processedEvents.MarkProcessed(e.Provider, e.EventId);                     // ApplyProviderUpdate is idempotent, so a race here is harmless
         return applied;
     }
@@ -1118,7 +1141,9 @@ app.MapPost("/webhooks/acmepay", async (HttpRequest http, WebhookSignatureVerifi
     if (!long.TryParse(http.Headers["Acme-Timestamp"].ToString(), out var timestamp)) return Results.BadRequest();
     if (!verifier.IsValid(config["AcmePay:WebhookSecret"] ?? "", http.Headers["Acme-Signature"].ToString(), timestamp, body))
         return Results.Unauthorized();
-    var applied = await svc.HandleProviderEventAsync(translator.Translate(body), ct);
+    var providerEvent = translator.Translate(body);
+    if (providerEvent is null) return Results.Ok(new { applied = false });        // an event type we don't handle
+    var applied = await svc.HandleProviderEventAsync(providerEvent, ct);
     return Results.Ok(new { applied });                                           // 200 even for duplicates, so the provider stops retrying
 });
 
@@ -1278,6 +1303,17 @@ public class PaymentServiceTests
         Assert.True(await svc.HandleProviderEventAsync(captured));
         Assert.False(await svc.HandleProviderEventAsync(captured));                                                   // duplicate delivery
         Assert.False(await svc.HandleProviderEventAsync(captured with { EventId = "evt_1", Status = PaymentStatus.Authorized }));   // arrives late
+    }
+
+    [Fact]
+    public async Task Events_from_another_provider_or_for_unknown_payments_are_ignored()
+    {
+        var svc = Build(new ScriptedProvider("a", ProviderOutcome.RequiresAction));
+        var id = svc.Create(Req(), "k1").Id;
+        var p = await svc.ConfirmAsync(id, new PaymentDetails(Vpa: "asha@bank"));
+        Assert.False(await svc.HandleProviderEventAsync(new ProviderEvent("evt_x", "b", "b_pay_9", id, PaymentStatus.Captured, null)));
+        Assert.Equal(PaymentStatus.Pending, p.Status);                                                                 // bound to "a"
+        Assert.False(await svc.HandleProviderEventAsync(new ProviderEvent("evt_y", "a", "a_pay_1", Guid.NewGuid(), PaymentStatus.Captured, null)));
     }
 
     [Fact]

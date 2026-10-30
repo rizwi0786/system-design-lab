@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 80
 prerequisites: [m10-gateways-proxies-lb, m10-timeouts-retries, m16-service-boundaries]
-related: [m15-apim, m10-rate-limiting, m10-graphql, m14-jwt, m10-correlation, m16-monolith-vs-microservices]
+related: [m15-apim, m10-rate-limiting, m16-multi-level-caching, m17-scaling-journey, m10-graphql, m14-jwt, m10-correlation, m16-monolith-vs-microservices]
 tags: [architecture, api-gateway, bff, aggregation, yarp, edge, mobile]
 patterns: [API Gateway, Backend for Frontend, Gateway Aggregation, Gateway Offloading, Gateway Routing]
 summary: One front door for many services (API gateway) and one tailored back end per client type (Backend for Frontend) — what each solves, what to put in each, how to aggregate calls without making failures worse, and when a plain reverse proxy is enough.
@@ -137,6 +137,8 @@ That is a saving for the company's egress bill *and* for users on prepaid data p
 - **A modular monolith**: the monolith *is* the back end for all clients; put mobile-shaped endpoints in a `Mobile` area of the same app.
 - **Many different clients needing different fields of the same data**: a GraphQL server lets clients ask for exactly what they need ([see the lesson](#/lesson/m10-graphql)). It is a kind of general-purpose BFF, with its own costs (query cost limits, N+1 resolvers, caching).
 - **Internal service-to-service calls**: do not route east-west traffic through the public gateway. That adds a hop and a single point of failure for no gain.
+
+The [scaling journey](#/lesson/m17-scaling-journey) case study shows the usual order: a load balancer with path routing first, a gateway once there are several services and public clients to protect, and BFFs only when the mobile and web experiences (and their teams) have clearly diverged.
 
 ### Products you will meet
 
@@ -568,11 +570,18 @@ For pure routing and offloading, YARP keeps the gateway declarative. A route tab
 }
 ```
 
+**YARP as the gateway, and inside a BFF.** A YARP route can name ordinary ASP.NET Core policies (`AuthorizationPolicy`, `RateLimiterPolicy`, `TimeoutPolicy`, `OutputCachePolicy`, `CorsPolicy`), so offloading is the same middleware you already know, applied per route; transforms add or strip headers (correlation id in, internal headers out) and rewrite paths. Clusters add active and passive health checks, load-balancing policies and session affinity. Because YARP is a library, one ASP.NET Core process can host both proxied routes (`app.MapReverseProxy()`) and hand-written aggregation endpoints such as `/mobile/v1/home`; that is a common shape for a BFF that forwards most calls unchanged and composes only a few screens.
+
+**The BFF for browser apps (token handling).** Current OAuth guidance for browser-based apps recommends that a single-page app should not hold access or refresh tokens in JavaScript. Instead the web BFF runs the OpenID Connect login, keeps tokens on the server and gives the browser an `HttpOnly`, `Secure`, `SameSite` session cookie; when the SPA calls `/api/...`, the BFF (often YARP routes) attaches the access token server-side and forwards the call. Add CSRF protection (an antiforgery token, or a required custom header the browser cannot send cross-site) because cookies are now the credential. Mobile apps can hold tokens in the platform keystore, so the mobile BFF usually receives a bearer token directly.
+
+**Rate limits are per instance.** The ASP.NET Core limiter (and therefore YARP's `RateLimiterPolicy`) counts in each process's memory. With 4 gateway instances, "20 requests per 10 seconds" really allows up to 80. That is fine for abuse protection; for contractual quotas (a partner's 100 requests per second), use a shared counter, as shown in [multi-level caching and distributed rate limiting](#/lesson/m16-multi-level-caching), or a managed gateway that enforces quotas globally.
+
 **Design notes**
 
 - The BFF's response contains display-ready strings (`₹1,250`, `Mon 20 Oct, 07:15`). That is deliberate: it lets the mobile team fix formatting without an app release. The domain services stay format-free.
 - The `Degraded` list lets the app decide how to show missing sections, and gives you a metric: "percentage of home screens degraded, by section".
 - Retries are absent on purpose. With 5 downstream calls and a tight deadline, a retry rarely fits. If you add one, add it only in the BFF and only for idempotent reads with remaining budget.
+- If you add `Microsoft.Extensions.Http.Resilience` (`AddStandardResilienceHandler()` on each typed client) for circuit breaking, configure it to match this design: no retries or at most one, an attempt timeout no longer than the section's cap, and a total timeout that never exceeds the request's deadline. The defaults (three retries, a 30-second total timeout) are built for background calls, not an 800 ms screen.
 
 ## Bad design vs good design
 

@@ -743,7 +743,7 @@ For each change, choose a strategy (recreate, rolling, blue-green, canary, featu
 
 1. A typo fix in an email template of an internal HR leave-approval tool used by 200 staff.
 2. A new fare-calculation engine for a metro-rail ticketing API, about 2,000 RPS at peak.
-3. Moving a state tender portal's application from .NET 8 to .NET 10, which must happen during an announced Sunday window. Traffic is 20 RPS on Sundays.
+3. Moving a city water board's bill-payment portal from .NET 8 to .NET 10 (.NET 8 support ends in November 2026), which must happen during an announced Sunday window. Traffic is 20 RPS on Sundays.
 4. A new recommendation widget on a shopping app's home page that the product team wants to A/B test.
 5. An upgrade of the PostgreSQL driver and connection pool settings in a payments API.
 ::acceptance

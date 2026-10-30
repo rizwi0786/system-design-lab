@@ -105,8 +105,8 @@ An attacker who intercepts the code doesn't have the verifier, so the code is us
 | Client credentials | Machine to machine, no user | A nightly job or one microservice calling another. The token represents the *app* |
 | Device authorization (device code) | Smart TVs, CLIs, IoT devices with no browser or keyboard | Shows a short code. The user approves on their phone |
 | Refresh token | Getting a new access token without asking the user again | Not a starting flow, used after one of the above |
-| ~~Implicit~~ | Nothing | Deprecated. Tokens in URLs |
-| ~~Resource owner password~~ | Nothing new | The client sees the password, which defeats the purpose. Deprecated in OAuth 2.1 drafts |
+| ~~Implicit~~ | Nothing | Tokens in URLs. RFC 9700 says not to use it, and OAuth 2.1 removes it |
+| ~~Resource owner password~~ | Nothing | The client sees the password, which defeats the purpose and blocks MFA. RFC 9700 says it MUST NOT be used, and OAuth 2.1 removes it |
 
 ### Tokens: access, refresh and ID
 
@@ -128,7 +128,9 @@ An OIDC provider publishes `/.well-known/openid-configuration`, a JSON document 
 
 ### Failure modes
 
-- **Open redirect / wildcard redirect URIs.** If the authorization server accepts `https://*.expense.app/callback`, an attacker who controls any subdomain receives codes. Register exact redirect URIs and compare them exactly.
+- **Open redirect / wildcard redirect URIs.** If the authorization server accepts `https://*.kharchabook.example/callback`, an attacker who controls any subdomain receives codes. Register exact redirect URIs and compare them exactly.
+- **Mix-up attacks.** A client that talks to several authorization servers can be tricked into sending a code from one to another. Use a separate redirect URI per provider, and check the `iss` parameter in the authorization response (RFC 9207) when the provider sends it.
+- **Stolen bearer tokens.** A bearer token works for whoever holds it. Short lifetimes limit the damage; sender-constrained tokens (DPoP, RFC 9449, or mutual-TLS-bound tokens) make a copied token useless without the client's private key, and RFC 9700 recommends them for refresh tokens of public clients as an alternative to rotation.
 - **Missing audience check.** An API that accepts any token from the same provider will accept tokens minted for a different app. Always validate `aud`.
 - **Tokens in browser storage.** An access token in `localStorage` is readable by any XSS payload. For SPAs, the **Backend for Frontend (BFF)** pattern keeps tokens on the server and gives the browser only an `HttpOnly` cookie.
 - **Provider outage.** If the authorization server is down, no new logins and no token refreshes. Existing access tokens keep working until they expire, and JWKS caching keeps validation working. Plan the user experience for this.
@@ -196,7 +198,7 @@ The browser carries the code from the authorization server to the client, but th
 
 ### Step 1 — register the client
 
-At LedgerLite, register KharchaBook as a **confidential** client: `client_id = kharchabook-web`, exact redirect URI `https://app.kharchabook.in/signin-oidc`, allowed scopes `openid profile email offline_access invoices.read`. Register a second client, `kharchabook-recon`, for the nightly job with only the client credentials grant and scope `recon.run`. One client per purpose means a leaked job secret can't log anyone in.
+At LedgerLite, register KharchaBook as a **confidential** client: `client_id = kharchabook-web`, exact redirect URI `https://app.kharchabook.example/signin-oidc`, allowed scopes `openid profile email offline_access invoices.read`. Register a second client, `kharchabook-recon`, for the nightly job with only the client credentials grant and scope `recon.run`. One client per purpose means a leaked job secret can't log anyone in.
 
 ### Step 2 — sign-in with the OIDC handler
 
@@ -218,7 +220,7 @@ builder.Services.AddAuthentication(o =>
 })
 .AddOpenIdConnect(o =>
 {
-    o.Authority = "https://login.ledgerlite.in";          // discovery document lives under here
+    o.Authority = "https://login.ledgerlite.example";          // discovery document lives under here
     o.ClientId = builder.Configuration["Oidc:ClientId"];
     o.ClientSecret = builder.Configuration["Oidc:ClientSecret"]; // from Key Vault, never appsettings.json
     o.ResponseType = OpenIdConnectResponseType.Code;      // authorization code flow
@@ -242,7 +244,7 @@ LedgerLite's invoice API accepts bearer tokens and checks issuer, audience and s
 // dotnet add package Microsoft.AspNetCore.Authentication.JwtBearer
 builder.Services.AddAuthentication().AddJwtBearer(o =>
 {
-    o.Authority = "https://login.ledgerlite.in";
+    o.Authority = "https://login.ledgerlite.example";
     o.Audience = "api://ledgerlite-invoices";   // tokens for other APIs are rejected
     o.MapInboundClaims = false;
 });
@@ -297,11 +299,11 @@ namespace KharchaBook.OAuth;
 
 public sealed class OAuthClientOptions
 {
-    public string AuthorizeEndpoint { get; set; } = "https://login.ledgerlite.in/connect/authorize";
-    public string TokenEndpoint { get; set; } = "https://login.ledgerlite.in/connect/token";
+    public string AuthorizeEndpoint { get; set; } = "https://login.ledgerlite.example/connect/authorize";
+    public string TokenEndpoint { get; set; } = "https://login.ledgerlite.example/connect/token";
     public string ClientId { get; set; } = "kharchabook-web";
     public string ClientSecret { get; set; } = "";          // bound from a secret store at startup
-    public string RedirectUri { get; set; } = "https://app.kharchabook.in/callback";
+    public string RedirectUri { get; set; } = "https://app.kharchabook.example/callback";
     public string Scopes { get; set; } = "openid profile email offline_access invoices.read";
 
     // Separate client for the nightly job: different id, secret and scopes.
@@ -510,7 +512,7 @@ builder.Services.AddHttpClient<TokenClient>(c => c.Timeout = TimeSpan.FromSecond
 builder.Services.AddSingleton<IAccessTokenSource, TokenClientSource>();
 builder.Services.AddSingleton<ClientCredentialsTokenProvider>();
 builder.Services.AddTransient<BearerTokenHandler>();
-builder.Services.AddHttpClient("recon-api", c => c.BaseAddress = new Uri("https://api.ledgerlite.in/recon/"))
+builder.Services.AddHttpClient("recon-api", c => c.BaseAddress = new Uri("https://api.ledgerlite.example/recon/"))
                 .AddHttpMessageHandler<BearerTokenHandler>();
 
 var app = builder.Build();
@@ -556,7 +558,7 @@ What to notice:
 
 ```javascript
 // SPA asks the user for their LedgerLite password and calls the token endpoint itself
-fetch("https://login.ledgerlite.in/connect/token", { method: "POST",
+fetch("https://login.ledgerlite.example/connect/token", { method: "POST",
   body: `grant_type=password&username=${u}&password=${p}&client_id=spa&client_secret=s3cr3t` })
   .then(r => r.json()).then(t => localStorage.setItem("token", t.access_token));
 ```
@@ -713,7 +715,7 @@ For each scenario name the OAuth/OIDC flow, whether the client is public or conf
 2. A React SPA for citizens to track property tax payments.
 3. A nightly Azure Function that pulls GST returns from a filing API. No user is involved.
 4. A smart TV app for a streaming service.
-5. An Android app for site engineers that must keep working offline for a shift and sync later.
+5. An Android app for parcel-delivery riders that must keep working offline for a shift and sync later.
 6. A command-line tool developers use to deploy to an internal platform.
 ::acceptance
 - Each answer names a flow and a client type.
@@ -752,7 +754,7 @@ Implement the authorization server side of code redemption: issue a one-time aut
 - Happy path returns `Ok` and the subject.
 - Redeeming the same code twice returns `AlreadyUsed` the second time.
 - A wrong verifier returns `PkceFailed`.
-- `https://app.kharchabook.in/callback/` (trailing slash) is a `RedirectMismatch`.
+- `https://app.kharchabook.example/callback/` (trailing slash) is a `RedirectMismatch`.
 - After 61 seconds the code is `Expired`.
 ::hint
 Store an entry per code: client id, redirect URI, challenge, subject, issued time, and a "used" flag.
@@ -808,7 +810,7 @@ public sealed class TestClock : TimeProvider
 public class AuthorizationCodeStoreTests
 {
     private const string Client = "kharchabook-web";
-    private const string Redirect = "https://app.kharchabook.in/callback";
+    private const string Redirect = "https://app.kharchabook.example/callback";
     private const string Verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
 
     private static (AuthorizationCodeStore Store, TestClock Clock, string Code) Setup()
@@ -943,7 +945,7 @@ The order of checks is the lesson. Burning the code first means each code allows
 Real authorization servers store codes in a shared store (Redis with a 60 s TTL, or a database table) so any instance can redeem them. Some encrypt the code's content into the code itself and keep only a "used" set.
 ::mistakes
 - Checking PKCE before marking the code used, which allows unlimited verifier guesses within 60 s.
-- `StartsWith` for redirect URIs, which accepts `https://app.kharchabook.in/callback.evil.com` if the registered value lacks a path.
+- `StartsWith` for redirect URIs, which accepts `https://app.kharchabook.example/callback.evil.com` if the registered value lacks a path.
 - Ordinary `==` on secrets. Use constant-time comparison for anything derived from a secret.
 :::
 

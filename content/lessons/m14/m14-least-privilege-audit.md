@@ -64,7 +64,7 @@ A good register has two more properties. Nobody can quietly tear out a page: eac
 
 Two related ideas:
 
-- **Separation of duties.** No single principal can complete a sensitive action alone. The person who creates a vendor can't approve that vendor's first payment. The pipeline that builds code can't approve its own deployment to production.
+- **Separation of duties.** No single principal can complete a sensitive action alone. The person who adds a new restaurant partner can't approve that restaurant's first payout. The pipeline that builds code can't approve its own deployment to production.
 - **Just-in-time (JIT) access.** Admin rights are not standing rights. An engineer requests production database access for 2 hours with a ticket number. It is approved, logged and expires automatically (for example with Microsoft Entra Privileged Identity Management). A sealed **break-glass** account exists for emergencies, and its use triggers an alert.
 
 ### Least privilege in PostgreSQL
@@ -75,8 +75,8 @@ PostgreSQL's permission model has a few layers. A role needs the right at *every
 |---|---|---|
 | Database | `CONNECT`, `CREATE`, `TEMP` | `GRANT CONNECT ON DATABASE kyc TO kyc_api` |
 | Schema | `USAGE` (look inside), `CREATE` (make objects) | `GRANT USAGE ON SCHEMA kyc TO kyc_api` |
-| Table / view | `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER` | `GRANT SELECT, INSERT, UPDATE ON kyc.contractors TO kyc_api` |
-| Column | `SELECT`, `INSERT`, `UPDATE` on named columns | `GRANT SELECT (id, name, city) ON kyc.contractors TO mis_reader` |
+| Table / view | `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER` | `GRANT SELECT, INSERT, UPDATE ON kyc.restaurants TO kyc_api` |
+| Column | `SELECT`, `INSERT`, `UPDATE` on named columns | `GRANT SELECT (id, name, city) ON kyc.restaurants TO mis_reader` |
 | Sequence | `USAGE`, `SELECT`, `UPDATE` | Needed for `serial` columns. Identity columns don't need a separate grant |
 | Function | `EXECUTE` | Revoke from `PUBLIC` for sensitive functions |
 | Row | Row-level security policies | See [multi-tenant security](#/lesson/m14-multi-tenant-security) |
@@ -91,10 +91,10 @@ A sensible role design for one application database:
 
 Details that catch people out:
 
-- **Ownership beats grants.** The owner of a table can do anything to it, and can't be restricted by `REVOKE`. If your app logs in as the table owner, least privilege at the database level doesn't exist. Superusers bypass everything, including row-level security.
+- **Ownership beats grants.** The owner of a table can always `ALTER`, `DROP` or `TRUNCATE` it, disable its triggers, and re-grant itself anything it revoked. Those owner rights can't be taken away with `REVOKE`. If your app logs in as the table owner, least privilege at the database level doesn't exist. Superusers and roles with `BYPASSRLS` skip row-level security, and so does the table owner unless the table uses `FORCE ROW LEVEL SECURITY`.
 - **`PUBLIC`** is every role. Since PostgreSQL 15, ordinary users can no longer create objects in the `public` schema by default, but older databases upgraded in place keep the old grant. Run `REVOKE CREATE ON SCHEMA public FROM PUBLIC`.
-- **Default privileges.** Grants apply to existing tables only. For tables created later, use `ALTER DEFAULT PRIVILEGES FOR ROLE kyc_owner IN SCHEMA kyc GRANT SELECT, INSERT, UPDATE ON TABLES TO kyc_api`. Otherwise, the first migration that adds a table breaks the app in production.
-- **`SECURITY DEFINER` functions** run with the owner's rights. They are a neat way to expose one narrow operation, such as "mark payment as released", without granting `UPDATE` on the table. Always set `search_path` on them (`SET search_path = kyc, pg_temp`) so a caller can't hijack a function name.
+- **Default privileges.** Grants apply to existing tables only. For tables created later, use `ALTER DEFAULT PRIVILEGES FOR ROLE kyc_owner IN SCHEMA kyc GRANT SELECT, INSERT, UPDATE ON TABLES TO kyc_api`. Otherwise, the first migration that adds a table breaks the app in production. Default privileges apply to objects *created by* the named role, so the migrator must run `SET ROLE kyc_owner;` at the start of each migration. If it doesn't, new tables are owned by `kyc_migrator` and the default privileges never fire.
+- **`SECURITY DEFINER` functions** run with the owner's rights. They are a neat way to expose one narrow operation, such as "mark a payout as released", without granting `UPDATE` on the table. Always set `search_path` on them (`SET search_path = kyc, pg_temp`) so a caller can't hijack a function name, and `REVOKE EXECUTE ... FROM PUBLIC` before granting it to the one role that needs it, because new functions are executable by everyone by default.
 - **Per-role limits**: `ALTER ROLE kyc_api CONNECTION LIMIT 60` and `ALTER ROLE mis_reader SET statement_timeout = '30s'` stop one consumer from exhausting the database.
 
 ### Service identities instead of shared secrets
@@ -121,7 +121,7 @@ Tokens carry permissions. Make them narrow in four dimensions:
 Examples you will build:
 
 - A background job that only needs to read invoices requests a token with the `invoices.read` scope, not the admin scope the web app uses.
-- The API gives the browser a **capability URL** for one PDF: `/files/drawings/NH27-pkg4/rev-C.pdf?exp=…&perm=read&sig=…`, valid for 10 minutes. The file server checks the signature and needs no database lookup. Leaking it exposes one file for a few minutes.
+- The API gives the browser a **capability URL** for one PDF: `/files/kyc-docs/restaurant-42/fssai-licence.pdf?exp=…&perm=read&sig=…`, valid for 10 minutes. The file server checks the signature and needs no database lookup. Leaking it exposes one file for a few minutes.
 
 ### Audit trails: what they are for
 
@@ -140,16 +140,16 @@ An **audit trail** is a chronological record of security-relevant and business-r
 
 Each audit event should answer the "five Ws and an outcome":
 
-- **Who**: the actor's stable id (`user:5f2c…`, `service:payment-job`), plus on-behalf-of when a service acts for a user, and the authentication method (password + OTP, SSO, API key).
-- **What**: a verb from a fixed vocabulary (`contractor.pan.viewed`, `payment.released`, `role.granted`), not free text.
-- **On what**: the resource type and id (`contractor:42`), and the tenant.
+- **Who**: the actor's stable id (`user:5f2c…`, `service:payout-job`), plus on-behalf-of when a service acts for a user, and the authentication method (password + OTP, SSO, API key).
+- **What**: a verb from a fixed vocabulary (`restaurant.pan.viewed`, `payout.released`, `role.granted`), not free text.
+- **On what**: the resource type and id (`restaurant:42`), and the tenant.
 - **When**: a UTC timestamp from a synchronised clock, plus a monotonically increasing sequence number.
 - **Where from**: source IP, user agent or client id, and the correlation id that links to traces.
 - **Outcome**: success, denied or failed, plus a reason code. **Denied attempts matter as much as successes**: 40 denied `pan.viewed` attempts in a minute is a signal.
-- **Why** (for sensitive actions): a reason or ticket number entered by the user ("Payment run 2026-10-B").
+- **Why** (for sensitive actions): a reason or ticket number entered by the user ("Payout run 2026-10-B").
 - **Before/after** for changes to important fields, or a hash of them.
 
-Which events: authentication (login, logout, failures, MFA changes, password resets), authorization changes (role grants, permission edits), access to sensitive data (viewing a full PAN, exporting a report), money and approvals (payment release, bid opening, contract change), administrative actions (configuration, feature flags, user impersonation), and security events (key rotation, audit-log access itself).
+Which events: authentication (login, logout, failures, MFA changes, password resets), authorization changes (role grants, permission edits), access to sensitive data (viewing a full PAN, exporting a report), money and approvals (payout release, refund approval, commission-rate change), administrative actions (configuration, feature flags, user impersonation), and security events (key rotation, audit-log access itself).
 
 ### What never to record
 
@@ -187,10 +187,10 @@ Cost: one HMAC per event is microseconds. The real constraint is that a chain ne
 How long to keep audit data is a policy decision driven by law, contracts and risk. Examples you are likely to meet (always confirm current rules with your compliance team):
 
 - India's CERT-In directions of April 2022 require service providers and organisations to keep logs of their ICT systems for a rolling 180 days, within Indian jurisdiction.
-- Financial, tax and procurement records often have multi-year retention rules (for example, 8 years for books of account under Indian company law). Audit events about those records usually follow them.
-- Contracts with government clients often specify retention and access for auditors.
+- Financial and tax records often have multi-year retention rules (for example, 8 years for books of account under Indian company law). Audit events about those records usually follow them.
+- Contracts with banks and payment partners often specify retention and access for auditors.
 
-A practical tiering, with an estimate of volume: 200 users × 400 audit events a day ≈ 80,000 events a day. At about 1 KB each, that's ≈ 80 MB a day, ≈ 29 GB a year. Keep 90 days **hot** in PostgreSQL for investigations, then move older partitions to **cold**, immutable object storage for the full retention period, then **delete on schedule**. Partitioning the audit table by month makes the move a cheap `DETACH PARTITION`.
+A practical tiering, with an estimate of volume: 220 internal users × 400 audit events a day ≈ 88,000 events a day. At about 1 KB each, that's ≈ 88 MB a day, ≈ 32 GB a year (an estimate; partner-facing events would add more). Keep 90 days **hot** in PostgreSQL for investigations, then move older partitions to **cold**, immutable object storage for the full retention period, then **delete on schedule**. Partitioning the audit table by month makes the move a cheap `DETACH PARTITION`.
 
 **Retention versus privacy.** Data-protection laws (India's DPDP Act 2023, the EU's GDPR) push you to delete personal data when it's no longer needed, while audit rules push you to keep records. Resolve it by keeping audit events minimal (ids, not personal details), pseudonymising actor ids where possible, and documenting the legal basis for retention. Hash chains and deletion interact too: when old entries are purged, verification starts from the oldest remaining anchored checkpoint.
 
@@ -225,7 +225,7 @@ sequenceDiagram
     participant DB as audit_log table
     participant A as Anchor store (WORM)
     participant V as Verifier job
-    API->>W: Append(actor, contractor.pan.viewed, contractor 42, success)
+    API->>W: Append(actor, restaurant.pan.viewed, restaurant 42, success)
     W->>W: Wait for single-writer lock
     W->>W: seq = last + 1, hash = HMAC(key, prev hash and fields)
     W->>DB: INSERT entry with seq, prev_hash, hash
@@ -244,32 +244,32 @@ The writer serialises appends so each entry knows the previous hash. That lock i
 
 ## Step-by-step example
 
-**Scenario.** A contractor-onboarding platform for an infrastructure consultancy has 220 internal users, a KYC API, a nightly payment-file job and an MIS team that builds Power BI reports. An internal audit found:
+**Scenario.** A food-delivery company onboards restaurants as partners. Each restaurant gives its PAN, GST number and bank account so it can be paid every week. The onboarding platform has 220 internal users (onboarding, finance and support staff), a KYC API, a nightly payout-file job that sends the bank the list of restaurant payouts, and an MIS team that builds Power BI reports. An internal audit found:
 
 1. The API, the job and Power BI all connect as `postgres` with the same password.
 2. Developers have the production connection string "for support".
 3. There is an `activity_log` table, but the app can `UPDATE` and `DELETE` it, and it stores full PAN numbers in a `details` column.
-4. Nobody can say who downloaded the payment file on 3 October.
+4. Nobody can say who downloaded the payout file on 3 October.
 
 ### Step 1 — roles and grants
 
-Create `kyc_owner`, `kyc_migrator`, `kyc_api`, `payment_job` and `mis_reader`. Transfer ownership of every table to `kyc_owner`. Grant `kyc_api` DML on its tables, `payment_job` `SELECT` on payment views and `INSERT` on `payment_runs`, and `mis_reader` column-level `SELECT` on non-sensitive columns. Add default privileges. Change the `postgres` password and store it in a break-glass vault.
+Create `kyc_owner`, `kyc_migrator`, `kyc_api`, `payout_job` and `mis_reader`. Transfer ownership of every table to `kyc_owner`. Grant `kyc_api` DML on its tables, `payout_job` `SELECT` on payout views and `INSERT` on `payout_runs`, and `mis_reader` column-level `SELECT` on non-sensitive columns. Add default privileges. Change the `postgres` password and store it in a break-glass vault.
 
 ### Step 2 — identities
 
-Map `kyc_api` and `payment_job` to the managed identities of the App Service and the Container Apps job (Entra authentication for PostgreSQL). There are no passwords in configuration any more. Power BI gets its own `mis_reader` login through the gateway. Developers lose standing access, and get `dba_readonly` through just-in-time approval for 2 hours.
+Map `kyc_api` and `payout_job` to the managed identities of the App Service and the Container Apps job (Entra authentication for PostgreSQL). There are no passwords in configuration any more. Power BI gets its own `mis_reader` login through the gateway. Developers lose standing access, and get `dba_readonly` through just-in-time approval for 2 hours.
 
 ### Step 3 — audit vocabulary
 
-The team agrees a list of 38 event types, such as `auth.login.succeeded`, `auth.login.failed`, `contractor.pan.viewed`, `payment.file.generated`, `payment.file.downloaded` and `role.granted`. Every event has actor, action, resource, tenant, outcome, IP, correlation id and an optional reason.
+The team agrees a list of 38 event types, such as `auth.login.succeeded`, `auth.login.failed`, `restaurant.pan.viewed`, `payout.file.generated`, `payout.file.downloaded` and `role.granted`. Every event has actor, action, resource, tenant, outcome, IP, correlation id and an optional reason.
 
 ### Step 4 — tamper-evident storage
 
-A new `audit.audit_log` table, partitioned by month. `kyc_api` has `INSERT` and `SELECT` only, and a trigger rejects updates and deletes. The writer chains entries with HMAC-SHA256 using a key from Key Vault, and anchors hourly to immutable blob storage. The old `activity_log` is exported, its PAN values are masked, and it is archived read-only.
+A new `audit.audit_log` table, partitioned by month. `kyc_api` has `INSERT` and `SELECT` only, and triggers reject updates, deletes and truncates. The writer chains entries with HMAC-SHA256 using a key from Key Vault, and anchors hourly to immutable blob storage. The old `activity_log` is exported, its PAN values are masked, and it is archived read-only.
 
 ### Step 5 — answer the question
 
-"Who downloaded the payment file on 3 October?" becomes one query: `action = 'payment.file.downloaded' AND at::date = '2026-10-03'`. It returns the actor, IP and reason. The chain verifies, so the answer can be trusted.
+"Who downloaded the payout file on 3 October?" becomes one query: `action = 'payout.file.downloaded' AND at >= '2026-10-03 00:00+05:30' AND at < '2026-10-04 00:00+05:30'` (an explicit IST range, because `at::date` depends on the session's time zone). It returns the actor, IP and reason. The chain verifies, so the answer can be trusted.
 
 ## Production-style C# implementation
 
@@ -289,7 +289,7 @@ namespace Kyc.Api.Audit;
 
 public enum AuditOutcome { Success, Denied, Failed }
 
-/// <summary>What the caller supplies. Actions come from a fixed vocabulary such as "contractor.pan.viewed".</summary>
+/// <summary>What the caller supplies. Actions come from a fixed vocabulary such as "restaurant.pan.viewed".</summary>
 public sealed record AuditEvent(
     string Actor,
     string Action,
@@ -584,9 +584,9 @@ var app = builder.Build();
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.MapGet("/contractors/{contractorId:guid}/pan", (Guid contractorId) => Results.Ok(new { pan = "ABCDE1234F" }))
+app.MapGet("/restaurants/{restaurantId:guid}/pan", (Guid restaurantId) => Results.Ok(new { pan = "ABCDE1234F" }))
    .RequireAuthorization("kyc.pan.read")
-   .AddEndpointFilter(new AuditEndpointFilterFactory("contractor.pan.viewed", "contractorId").Create);
+   .AddEndpointFilter(new AuditEndpointFilterFactory("restaurant.pan.viewed", "restaurantId").Create);
 
 app.MapGet("/audit/verify", async (HashChainAuditLog log, IAuditStore store, CancellationToken ct) =>
 {
@@ -612,6 +612,7 @@ Design notes:
 - **Denied and failed calls are audited.** Authorization middleware short-circuits before endpoint filters run, so in production you also record `403`s from an authorization-result handler (`IAuthorizationMiddlewareResultHandler`) or from middleware.
 - **The canonical form is length-prefixed.** With a plain `actor|action` join, actor `a|b` with action `c` would hash the same as actor `a` with action `b|c`.
 - **A single writer** keeps the chain ordered. In PostgreSQL you would take the last row `FOR UPDATE` or use an advisory lock in the same transaction as the insert, so two API instances can't both write `seq 18,241`.
+- **Fail closed for sensitive reads.** If the audit write throws, the exception propagates and the PAN is never returned. For a read of a full PAN that is the right default: no record, no data. For low-risk events you may prefer to queue and retry instead.
 
 The matching database setup:
 
@@ -629,6 +630,10 @@ CREATE FUNCTION audit.reject_change() RETURNS trigger LANGUAGE plpgsql AS
 $$ BEGIN RAISE EXCEPTION 'audit_log is append-only'; END $$;
 CREATE TRIGGER audit_log_append_only BEFORE UPDATE OR DELETE ON audit.audit_log
   FOR EACH ROW EXECUTE FUNCTION audit.reject_change();
+CREATE TRIGGER audit_log_no_truncate BEFORE TRUNCATE ON audit.audit_log
+  FOR EACH STATEMENT EXECUTE FUNCTION audit.reject_change();     -- row triggers don't fire on TRUNCATE
+-- The owner (kyc_owner) can still disable triggers, which is why nobody logs in as it
+-- and why the hash chain and external anchors exist.
 ```
 
 ## Bad design vs good design
@@ -654,32 +659,32 @@ Teams often add auditing the week before a security review, as a generic "log th
 
 ## Practical playground
 
-The database has a `kyc` schema with `contractors`, `projects` and `audit_log`, and three roles with **no grants yet**: `kyc_api`, `mis_reader` and `payment_job`. Try granting rights, then switch identity with `SET ROLE mis_reader;` and see what fails. `RESET ROLE;` takes you back to the superuser. Useful checks:
+The database has a `kyc` schema with `restaurants`, `outlets` and `audit_log`, and three roles with **no grants yet**: `kyc_api`, `mis_reader` and `payout_job`. Try granting rights, then switch identity with `SET ROLE mis_reader;` and see what fails. `RESET ROLE;` takes you back to the superuser. Useful checks:
 
-- `SELECT has_column_privilege('mis_reader', 'kyc.contractors', 'pan', 'SELECT');`
+- `SELECT has_column_privilege('mis_reader', 'kyc.restaurants', 'pan', 'SELECT');`
 - `SET ROLE kyc_api; UPDATE kyc.audit_log SET action = 'x';`, which should fail once you have granted only `INSERT`.
 - `\dp` isn't available here, so query `information_schema.role_table_grants`.
 
 :::playground type=sql title="Grant lab"
 ```sql
 CREATE SCHEMA kyc;
-CREATE TABLE kyc.contractors (
+CREATE TABLE kyc.restaurants (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   name text NOT NULL, city text NOT NULL, pan text NOT NULL, bank_account text NOT NULL
 );
-CREATE TABLE kyc.projects (id bigint PRIMARY KEY, name text NOT NULL, contractor_id bigint REFERENCES kyc.contractors(id));
+CREATE TABLE kyc.outlets (id bigint PRIMARY KEY, name text NOT NULL, restaurant_id bigint REFERENCES kyc.restaurants(id));
 CREATE TABLE kyc.audit_log (
   seq bigint PRIMARY KEY, at timestamptz NOT NULL DEFAULT now(), actor text NOT NULL,
   action text NOT NULL, resource text NOT NULL
 );
-INSERT INTO kyc.contractors (name, city, pan, bank_account) VALUES
-  ('Shree Ganesh Infra', 'Pune', 'AAACS1234K', '50100234567890'),
-  ('Brahmaputra Builders', 'Guwahati', 'AABCB5678L', '60200345678901'),
-  ('Kaveri Constructions', 'Mysuru', 'AAFCK9012M', '70300456789012');
-INSERT INTO kyc.projects VALUES (1, 'NH-27 package 4', 2), (2, 'Ring road bridge', 1);
+INSERT INTO kyc.restaurants (name, city, pan, bank_account) VALUES
+  ('Shree Krishna Bhojanalaya', 'Pune', 'AAACS1234K', '50100234567890'),
+  ('Brahmaputra Kitchen', 'Guwahati', 'AABCB5678L', '60200345678901'),
+  ('Kaveri Tiffin Room', 'Mysuru', 'AAFCK9012M', '70300456789012');
+INSERT INTO kyc.outlets VALUES (1, 'Paltan Bazaar outlet', 2), (2, 'FC Road outlet', 1);
 CREATE ROLE kyc_api NOLOGIN;
 CREATE ROLE mis_reader NOLOGIN;
-CREATE ROLE payment_job NOLOGIN;
+CREATE ROLE payout_job NOLOGIN;
 ```
 :::
 
@@ -805,66 +810,66 @@ Redaction is a safety net, not the design. The real fix is a fixed event vocabul
 :::exercise id=m14-least-privilege-audit-ex2 difficulty=beginner kind=sql ordered=true title="Grant exactly what each role needs"
 The setup creates a `kyc` schema, three tables and two roles with **no privileges**. Write the `GRANT` statements so that:
 
-- **`kyc_api`** can use the schema, can `SELECT`, `INSERT` and `UPDATE` `kyc.contractors` (but not `DELETE`), can `SELECT` `kyc.projects`, and can only `INSERT` and `SELECT` on `kyc.audit_log` (no `UPDATE` or `DELETE`).
-- **`mis_reader`** can use the schema, can `SELECT` `kyc.projects`, and can `SELECT` only the `id`, `name` and `city` columns of `kyc.contractors` (not `pan` or `bank_account`). It has no rights on `kyc.audit_log`.
+- **`kyc_api`** can use the schema, can `SELECT`, `INSERT` and `UPDATE` `kyc.restaurants` (but not `DELETE`), can `SELECT` `kyc.outlets`, and can only `INSERT` and `SELECT` on `kyc.audit_log` (no `UPDATE` or `DELETE`).
+- **`mis_reader`** can use the schema, can `SELECT` `kyc.outlets`, and can `SELECT` only the `id`, `name` and `city` columns of `kyc.restaurants` (not `pan` or `bank_account`). It has no rights on `kyc.audit_log`.
 
 End your script with this privilege matrix query (copy it as is):
 
 ```sql
 SELECT r AS role,
   has_schema_privilege(r, 'kyc', 'USAGE')                          AS schema_usage,
-  has_table_privilege(r, 'kyc.projects', 'SELECT')                 AS projects_select,
-  has_column_privilege(r, 'kyc.contractors', 'name', 'SELECT')     AS contractor_name,
-  has_column_privilege(r, 'kyc.contractors', 'pan', 'SELECT')      AS contractor_pan,
-  has_table_privilege(r, 'kyc.contractors', 'INSERT')              AS contractor_insert,
-  has_table_privilege(r, 'kyc.contractors', 'DELETE')              AS contractor_delete,
+  has_table_privilege(r, 'kyc.outlets', 'SELECT')                 AS outlets_select,
+  has_column_privilege(r, 'kyc.restaurants', 'name', 'SELECT')     AS restaurant_name,
+  has_column_privilege(r, 'kyc.restaurants', 'pan', 'SELECT')      AS restaurant_pan,
+  has_table_privilege(r, 'kyc.restaurants', 'INSERT')              AS restaurant_insert,
+  has_table_privilege(r, 'kyc.restaurants', 'DELETE')              AS restaurant_delete,
   has_table_privilege(r, 'kyc.audit_log', 'INSERT')                AS audit_insert,
   has_table_privilege(r, 'kyc.audit_log', 'UPDATE')                AS audit_update
 FROM unnest(ARRAY['kyc_api', 'mis_reader']) AS r
 ORDER BY r;
 ```
 ::acceptance
-- `kyc_api`: everything true except `contractor_delete` and `audit_update`.
-- `mis_reader`: `schema_usage`, `projects_select` and `contractor_name` true. Everything else false.
-- No `GRANT ALL`, and no table-level `SELECT` on `kyc.contractors` for `mis_reader`.
+- `kyc_api`: everything true except `restaurant_delete` and `audit_update`.
+- `mis_reader`: `schema_usage`, `outlets_select` and `restaurant_name` true. Everything else false.
+- No `GRANT ALL`, and no table-level `SELECT` on `kyc.restaurants` for `mis_reader`.
 ::hint
 Without `USAGE` on the schema, table grants are useless: the role can't even look inside `kyc`.
 ::hint
-Column-level grants list the columns in brackets after the privilege: `GRANT SELECT (id, name, city) ON kyc.contractors TO mis_reader;`
+Column-level grants list the columns in brackets after the privilege: `GRANT SELECT (id, name, city) ON kyc.restaurants TO mis_reader;`
 ::hint
-`has_column_privilege` returns true if the role has the privilege on the whole table *or* on that column. So a table-level `SELECT` would make `contractor_pan` true.
+`has_column_privilege` returns true if the role has the privilege on the whole table *or* on that column. So a table-level `SELECT` would make `restaurant_pan` true.
 ::hint
-`contractors.id` is an identity column, so `kyc_api` needs no sequence grant to insert. A `serial` column would need `GRANT USAGE ON SEQUENCE`.
+`restaurants.id` is an identity column, so `kyc_api` needs no sequence grant to insert. A `serial` column would need `GRANT USAGE ON SEQUENCE`.
 ::setup
 ```sql
 CREATE SCHEMA kyc;
-CREATE TABLE kyc.contractors (
+CREATE TABLE kyc.restaurants (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   name text NOT NULL, city text NOT NULL, pan text NOT NULL, bank_account text NOT NULL
 );
-CREATE TABLE kyc.projects (id bigint PRIMARY KEY, name text NOT NULL, contractor_id bigint REFERENCES kyc.contractors(id));
+CREATE TABLE kyc.outlets (id bigint PRIMARY KEY, name text NOT NULL, restaurant_id bigint REFERENCES kyc.restaurants(id));
 CREATE TABLE kyc.audit_log (seq bigint PRIMARY KEY, at timestamptz NOT NULL DEFAULT now(), actor text NOT NULL, action text NOT NULL, resource text NOT NULL);
-INSERT INTO kyc.contractors (name, city, pan, bank_account) VALUES
-  ('Shree Ganesh Infra', 'Pune', 'AAACS1234K', '50100234567890'),
-  ('Brahmaputra Builders', 'Guwahati', 'AABCB5678L', '60200345678901');
-INSERT INTO kyc.projects VALUES (1, 'NH-27 package 4', 2), (2, 'Ring road bridge', 1);
+INSERT INTO kyc.restaurants (name, city, pan, bank_account) VALUES
+  ('Shree Krishna Bhojanalaya', 'Pune', 'AAACS1234K', '50100234567890'),
+  ('Brahmaputra Kitchen', 'Guwahati', 'AABCB5678L', '60200345678901');
+INSERT INTO kyc.outlets VALUES (1, 'Paltan Bazaar outlet', 2), (2, 'FC Road outlet', 1);
 CREATE ROLE kyc_api NOLOGIN;
 CREATE ROLE mis_reader NOLOGIN;
 ```
 ::check
 ```sql
 GRANT USAGE ON SCHEMA kyc TO kyc_api, mis_reader;
-GRANT SELECT, INSERT, UPDATE ON kyc.contractors TO kyc_api;
-GRANT SELECT ON kyc.projects TO kyc_api, mis_reader;
+GRANT SELECT, INSERT, UPDATE ON kyc.restaurants TO kyc_api;
+GRANT SELECT ON kyc.outlets TO kyc_api, mis_reader;
 GRANT INSERT, SELECT ON kyc.audit_log TO kyc_api;
-GRANT SELECT (id, name, city) ON kyc.contractors TO mis_reader;
+GRANT SELECT (id, name, city) ON kyc.restaurants TO mis_reader;
 SELECT r AS role,
   has_schema_privilege(r, 'kyc', 'USAGE')                          AS schema_usage,
-  has_table_privilege(r, 'kyc.projects', 'SELECT')                 AS projects_select,
-  has_column_privilege(r, 'kyc.contractors', 'name', 'SELECT')     AS contractor_name,
-  has_column_privilege(r, 'kyc.contractors', 'pan', 'SELECT')      AS contractor_pan,
-  has_table_privilege(r, 'kyc.contractors', 'INSERT')              AS contractor_insert,
-  has_table_privilege(r, 'kyc.contractors', 'DELETE')              AS contractor_delete,
+  has_table_privilege(r, 'kyc.outlets', 'SELECT')                 AS outlets_select,
+  has_column_privilege(r, 'kyc.restaurants', 'name', 'SELECT')     AS restaurant_name,
+  has_column_privilege(r, 'kyc.restaurants', 'pan', 'SELECT')      AS restaurant_pan,
+  has_table_privilege(r, 'kyc.restaurants', 'INSERT')              AS restaurant_insert,
+  has_table_privilege(r, 'kyc.restaurants', 'DELETE')              AS restaurant_delete,
   has_table_privilege(r, 'kyc.audit_log', 'INSERT')                AS audit_insert,
   has_table_privilege(r, 'kyc.audit_log', 'UPDATE')                AS audit_update
 FROM unnest(ARRAY['kyc_api', 'mis_reader']) AS r
@@ -873,26 +878,26 @@ ORDER BY r;
 ::solution
 ```sql
 GRANT USAGE ON SCHEMA kyc TO kyc_api, mis_reader;
-GRANT SELECT, INSERT, UPDATE ON kyc.contractors TO kyc_api;
-GRANT SELECT ON kyc.projects TO kyc_api, mis_reader;
+GRANT SELECT, INSERT, UPDATE ON kyc.restaurants TO kyc_api;
+GRANT SELECT ON kyc.outlets TO kyc_api, mis_reader;
 GRANT INSERT, SELECT ON kyc.audit_log TO kyc_api;
-GRANT SELECT (id, name, city) ON kyc.contractors TO mis_reader;
+GRANT SELECT (id, name, city) ON kyc.restaurants TO mis_reader;
 SELECT r AS role,
   has_schema_privilege(r, 'kyc', 'USAGE')                          AS schema_usage,
-  has_table_privilege(r, 'kyc.projects', 'SELECT')                 AS projects_select,
-  has_column_privilege(r, 'kyc.contractors', 'name', 'SELECT')     AS contractor_name,
-  has_column_privilege(r, 'kyc.contractors', 'pan', 'SELECT')      AS contractor_pan,
-  has_table_privilege(r, 'kyc.contractors', 'INSERT')              AS contractor_insert,
-  has_table_privilege(r, 'kyc.contractors', 'DELETE')              AS contractor_delete,
+  has_table_privilege(r, 'kyc.outlets', 'SELECT')                 AS outlets_select,
+  has_column_privilege(r, 'kyc.restaurants', 'name', 'SELECT')     AS restaurant_name,
+  has_column_privilege(r, 'kyc.restaurants', 'pan', 'SELECT')      AS restaurant_pan,
+  has_table_privilege(r, 'kyc.restaurants', 'INSERT')              AS restaurant_insert,
+  has_table_privilege(r, 'kyc.restaurants', 'DELETE')              AS restaurant_delete,
   has_table_privilege(r, 'kyc.audit_log', 'INSERT')                AS audit_insert,
   has_table_privilege(r, 'kyc.audit_log', 'UPDATE')                AS audit_update
 FROM unnest(ARRAY['kyc_api', 'mis_reader']) AS r
 ORDER BY r;
 ```
 
-Then prove it behaves, not just that the catalog says so. In the playground, run `SET ROLE mis_reader; SELECT pan FROM kyc.contractors;`, which gives "permission denied for table contractors". `SELECT id, name, city FROM kyc.contractors;` works. `SELECT * FROM kyc.contractors;` fails too, because `*` includes `pan`, a useful reminder that column grants break `SELECT *` in reports.
+Then prove it behaves, not just that the catalog says so. In the playground, run `SET ROLE mis_reader; SELECT pan FROM kyc.restaurants;`, which gives "permission denied for table restaurants". `SELECT id, name, city FROM kyc.restaurants;` works. `SELECT * FROM kyc.restaurants;` fails too, because `*` includes `pan`, a useful reminder that column grants break `SELECT *` in reports.
 
-For a real database, add `ALTER DEFAULT PRIVILEGES` so tables created by future migrations get the same grants, and consider a reporting **view** (`kyc.contractors_public`) instead of column grants. Views are easier for BI tools and can also mask values.
+For a real database, add `ALTER DEFAULT PRIVILEGES` so tables created by future migrations get the same grants, and consider a reporting **view** (`kyc.restaurants_public`) instead of column grants. Views are easier for BI tools and can also mask values.
 ::mistakes
 - Forgetting `USAGE` on the schema, then wondering why `SELECT` on the table says "permission denied for schema".
 - Granting table-level `SELECT` and then `REVOKE SELECT (pan)`. Column revokes don't override a table-level grant.
@@ -979,7 +984,7 @@ public class AuditChainTests
     private static AuditChain Build(byte[] key, int n)
     {
         var c = new AuditChain(key, new StepClock());
-        for (var i = 1; i <= n; i++) c.Append("user:" + i, "contractor.pan.viewed", "contractor:" + (40 + i));
+        for (var i = 1; i <= n; i++) c.Append("user:" + i, "restaurant.pan.viewed", "restaurant:" + (40 + i));
         return c;
     }
 
@@ -998,7 +1003,7 @@ public class AuditChainTests
     {
         var c = Build(Key, 5);
         var list = c.Entries.ToList();
-        list[2] = list[2] with { Action = "contractor.viewed" };
+        list[2] = list[2] with { Action = "restaurant.viewed" };
         Assert.Equal(3L, c.FindFirstInvalid(list));
     }
 
@@ -1138,13 +1143,13 @@ DECLARE prev text := repeat('0', 64); h text; r record;
 BEGIN
   FOR r IN SELECT * FROM (VALUES
       (1, timestamptz '2026-10-03 09:02+05:30', 'user:asha', 'auth.login.succeeded', 'portal'),
-      (2, timestamptz '2026-10-03 09:05+05:30', 'user:asha', 'contractor.pan.viewed', 'contractor:42'),
+      (2, timestamptz '2026-10-03 09:05+05:30', 'user:asha', 'restaurant.pan.viewed', 'restaurant:42'),
       (3, timestamptz '2026-10-03 10:11+05:30', 'user:vikram', 'auth.login.succeeded', 'portal'),
-      (4, timestamptz '2026-10-03 10:14+05:30', 'user:vikram', 'payment.file.downloaded', 'payment_run:2026-10-B'),
-      (5, timestamptz '2026-10-03 10:20+05:30', 'user:asha', 'payment.released', 'payment_run:2026-10-B'),
-      (6, timestamptz '2026-10-03 11:00+05:30', 'service:payment-job', 'payment.file.generated', 'payment_run:2026-10-C'),
+      (4, timestamptz '2026-10-03 10:14+05:30', 'user:vikram', 'payout.file.downloaded', 'payout_run:2026-10-B'),
+      (5, timestamptz '2026-10-03 10:20+05:30', 'user:asha', 'payout.released', 'payout_run:2026-10-B'),
+      (6, timestamptz '2026-10-03 11:00+05:30', 'service:payout-job', 'payout.file.generated', 'payout_run:2026-10-C'),
       (7, timestamptz '2026-10-03 11:42+05:30', 'user:vikram', 'role.granted', 'user:vikram:finance-approver'),
-      (8, timestamptz '2026-10-03 11:43+05:30', 'user:vikram', 'payment.released', 'payment_run:2026-10-C'),
+      (8, timestamptz '2026-10-03 11:43+05:30', 'user:vikram', 'payout.released', 'payout_run:2026-10-C'),
       (9, timestamptz '2026-10-03 12:30+05:30', 'user:meera', 'auth.login.failed', 'portal'),
       (10, timestamptz '2026-10-03 12:31+05:30', 'user:meera', 'auth.login.succeeded', 'portal')
     ) AS v(seq, at, actor, action, resource) ORDER BY seq
@@ -1155,7 +1160,7 @@ BEGIN
   END LOOP;
 END $$;
 -- Someone covers their tracks:
-UPDATE audit_log SET action = 'contractor.viewed' WHERE seq = 4;
+UPDATE audit_log SET action = 'restaurant.viewed' WHERE seq = 4;
 DELETE FROM audit_log WHERE seq = 7;
 ```
 ::check
@@ -1185,7 +1190,7 @@ WHERE recomputed <> hash OR prev_hash <> expected_prev
 ORDER BY seq;
 ```
 
-Result: seq 4 `hash_mismatch` (someone renamed "payment file downloaded" to a harmless "contractor viewed"), and seq 8 `broken_link` (its `prev_hash` is the hash of the deleted row 7, in which Vikram granted himself the finance-approver role a minute before releasing a payment).
+Result: seq 4 `hash_mismatch` (someone renamed "payout file downloaded" to a harmless "restaurant viewed"), and seq 8 `broken_link` (its `prev_hash` is the hash of the deleted row 7, in which Vikram granted himself the finance-approver role a minute before releasing a payment).
 
 Notice what this plain SHA-256 chain can't stop: someone with write access could recompute every hash after their edit, and the chain would verify. That is why production chains use an HMAC with a key outside the database and anchor checkpoints externally. A gap in `seq` (6 → 8) is a second, independent signal.
 ::mistakes
@@ -1195,7 +1200,7 @@ Notice what this plain SHA-256 chain can't stop: someone with write access could
 :::
 
 :::exercise id=m14-least-privilege-audit-ex5 difficulty=advanced kind=code title="Scoped, short-lived capability tokens for file downloads"
-Drawings and payment files are served by a file service that has no database. The API issues a **capability token** that says "subject X may `read` resource `drawings/NH27-pkg4/rev-C.pdf` until 10:15". Implement `CapabilityTokenService`.
+Restaurant KYC documents (FSSAI licence, GST certificate, cancelled cheque) and payout files are served by a file service that has no database. The API issues a **capability token** that says "subject X may `read` resource `kyc-docs/restaurant-42/fssai-licence.pdf` until 10:15". Implement `CapabilityTokenService`.
 ::requirements
 - `Issue(Capability)` returns `base64url(payloadJson) + "." + base64url(HMAC-SHA256(key, payloadPart))`. The payload holds subject, resource, sorted permissions and expiry (Unix seconds).
 - `Issue` throws `ArgumentException` if the expiry is in the past or more than 15 minutes ahead (by the `TimeProvider`), or if there are no permissions.
@@ -1258,7 +1263,7 @@ public class CapabilityTokenServiceTests
         public override DateTimeOffset GetUtcNow() => Now;
     }
 
-    private const string File = "drawings/NH27-pkg4/rev-C.pdf";
+    private const string File = "kyc-docs/restaurant-42/fssai-licence.pdf";
     private static readonly byte[] Key = RandomNumberGenerator.GetBytes(32);
 
     private static (CapabilityTokenService svc, ManualClock clock, string token) Make()
@@ -1278,8 +1283,8 @@ public class CapabilityTokenServiceTests
         Assert.Equal("user:asha", cap!.Subject);
     }
 
-    [Fact] public void Other_resource_fails() { var (s, _, t) = Make(); Assert.Null(s.Validate(t, "drawings/NH27-pkg4/rev-D.pdf", "read")); }
-    [Fact] public void Prefix_resource_fails() { var (s, _, t) = Make(); Assert.Null(s.Validate(t, "drawings/NH27-pkg4/", "read")); }
+    [Fact] public void Other_resource_fails() { var (s, _, t) = Make(); Assert.Null(s.Validate(t, "kyc-docs/restaurant-42/gst-certificate.pdf", "read")); }
+    [Fact] public void Prefix_resource_fails() { var (s, _, t) = Make(); Assert.Null(s.Validate(t, "kyc-docs/restaurant-42/", "read")); }
     [Fact] public void Missing_permission_fails() { var (s, _, t) = Make(); Assert.Null(s.Validate(t, File, "write")); }
 
     [Fact]
@@ -1393,7 +1398,7 @@ public sealed class CapabilityTokenService
 }
 ```
 
-This is the same idea as an Azure Storage SAS token or an S3 pre-signed URL: the permission travels with the request, scoped to one resource, one verb and a few minutes. Leaking it exposes one file briefly. Revocation is hard, because nothing is looked up, which is why the lifetime must be short. Log the issuing in the audit trail ("issued read on rev-C.pdf to user:asha"), since the file service can't know who the subject really is beyond what the token says.
+This is the same idea as an Azure Storage SAS token or an S3 pre-signed URL: the permission travels with the request, scoped to one resource, one verb and a few minutes. Leaking it exposes one file briefly. Revocation is hard, because nothing is looked up, which is why the lifetime must be short. Log the issuing in the audit trail ("issued read on fssai-licence.pdf to user:asha"), since the file service can't know who the subject really is beyond what the token says.
 ::alternatives
 A random opaque token stored in Redis with a TTL is revocable and hides the payload, but the file service then needs Redis. A JWT signed with an asymmetric key lets many services verify without sharing the signing key, which helps when the issuer and verifiers are run by different teams.
 ::mistakes
@@ -1412,16 +1417,16 @@ A random opaque token stored in Redis with a TTL is revocable and hides the payl
 public async Task Api_role_cannot_delete_or_alter()
 {
     await using var conn = await OpenAsAsync("kyc_api");
-    await AssertDeniedAsync(conn, "DELETE FROM kyc.contractors WHERE id = 1");
+    await AssertDeniedAsync(conn, "DELETE FROM kyc.restaurants WHERE id = 1");
     await AssertDeniedAsync(conn, "UPDATE audit.audit_log SET action = 'x'");
-    await AssertDeniedAsync(conn, "DROP TABLE kyc.projects");
+    await AssertDeniedAsync(conn, "DROP TABLE kyc.outlets");
 }
 
 [Fact]
 public async Task Reporting_role_cannot_read_pan()
 {
     await using var conn = await OpenAsAsync("mis_reader");
-    await AssertDeniedAsync(conn, "SELECT pan FROM kyc.contractors");
+    await AssertDeniedAsync(conn, "SELECT pan FROM kyc.restaurants");
 }
 ```
 
@@ -1441,7 +1446,7 @@ Also snapshot-test the privilege matrix query from exercise 2. A migration that 
 - **Just-in-time access** (Entra Privileged Identity Management, similar features in other clouds and in PAM tools) is now common for production databases and admin portals in regulated organisations.
 - **Payment and banking systems** use maker-checker workflows (one person creates, another approves), which is separation of duties expressed in the domain model. The audit trail records both.
 - **Certificate Transparency** logs and many ledger databases use Merkle trees, the more scalable cousin of the hash chain in this lesson, so anyone can verify that entries were neither altered nor removed.
-- **Government e-procurement and grievance portals** typically must show auditors who viewed, changed or approved each record, which makes action-level audit trails a contractual requirement, not a nice-to-have.
+- **Government benefits and grievance portals** typically must show auditors who viewed, changed or approved each record, which makes action-level audit trails a contractual requirement, not a nice-to-have.
 
 ## Interview questions
 
@@ -1457,7 +1462,7 @@ It should contain who (actor id, on-behalf-of, auth method), what (an action fro
 ::q intermediate
 Your app connects to PostgreSQL as the owner of all its tables. Why is that a problem, and how do you fix it?
 ::a
-The owner can do anything to its tables (alter, drop, truncate, disable triggers and row-level security unless forced), and privileges can't be revoked from the owner. So an SQL injection or a leaked password gives total control, and append-only protections on the audit table are meaningless. Fix: make a `NOLOGIN` owner role, run migrations as a separate migrator role that is a member of it, and give the runtime role only the DML grants it needs, plus `ALTER DEFAULT PRIVILEGES` for future tables. Ideally, authenticate the runtime role with a managed identity instead of a password.
+The owner can do anything to its tables (alter, drop, truncate, disable triggers and row-level security unless forced), and these owner rights can't be removed with `REVOKE`. So an SQL injection or a leaked password gives total control, and append-only protections on the audit table are meaningless. Fix: make a `NOLOGIN` owner role, run migrations as a separate migrator role that is a member of it, and give the runtime role only the DML grants it needs, plus `ALTER DEFAULT PRIVILEGES` for future tables. Ideally, authenticate the runtime role with a managed identity instead of a password.
 ::q intermediate
 How does a hash chain make an audit log tamper-evident, and what are its limits?
 ::a
@@ -1467,7 +1472,7 @@ Design access control and auditing for production support at a company with 40 e
 ::a
 No standing production access. Engineers have personal identities in the corporate directory, and elevated roles (`db_readonly`, `db_operator`, `app_admin`) are granted just in time through an approval workflow with a ticket reference, a time limit (for example 2–4 hours) and MFA. Database access goes through a bastion or a managed proxy that records sessions, using personal database roles mapped to group roles, never a shared `postgres` login. Read-only access is the default. Writes need a second approver, or a reviewed script run through the pipeline. Sensitive columns are masked through views even for support roles. Every elevation, query session and data export is audited to a tamper-evident store owned by the security team. Break-glass accounts are sealed in a vault, alert on use, and are rotated after use. Monthly access reviews compare assignments with a baseline, and quarterly drills test that break-glass works. Communicate the policy clearly, because engineers who can't get work done find unsafe workarounds.
 ::q advanced
-The legal team wants audit logs kept for 8 years. The privacy team wants personal data deleted when a contractor leaves. How do you reconcile this?
+The legal team wants audit logs kept for 8 years. The privacy team wants personal data deleted when a restaurant owner closes their partner account. How do you reconcile this?
 ::a
 Separate what must be retained from what is personal. Audit events reference actors and subjects by stable pseudonymous ids, not names or contact details, and avoid personal data in `details`. The mapping from id to person lives in the identity or master-data system, under its own retention rules, and can be deleted or restricted when the person leaves. If an investigation needs re-identification within the retention period, an authorised and audited process can use the mapping as long as it exists, or an escrowed copy kept for exactly that legal purpose. Document the legal basis and periods in a retention schedule. Tier storage (hot for 90 days, immutable cold storage after that) and delete on schedule. Hash-chain verification restarts from the oldest retained checkpoint. Crypto-shredding (encrypting per-person fields with a per-person key and deleting the key) is an option when some personal data must sit inside events.
 :::
@@ -1488,7 +1493,7 @@ Separate what must be retained from what is personal. Audit events reference act
 
 :::flashcards
 Q: Why must the application not connect to PostgreSQL as the table owner?
-A: Owners can do anything to their tables and can't be restricted by REVOKE, so any compromise of the app becomes total control.
+A: Owners can always alter, drop, truncate and disable triggers on their tables, and REVOKE can't remove those rights, so any compromise of the app becomes total control.
 Q: Which grant is needed before any table grant in a schema is useful?
 A: USAGE on the schema.
 Q: Does a column-level REVOKE override a table-level SELECT grant?
@@ -1516,7 +1521,7 @@ After an SQL injection in the reporting module, the attacker dropped the `paymen
 - [ ] Enabling HSTS.
 > Only the owner (or a superuser) can drop a table. A runtime role with DML grants can't. Fixing the injection is also required, but least privilege limited the blast radius.
 ::q single
-`mis_reader` has `GRANT SELECT ON kyc.contractors`. You run `REVOKE SELECT (pan) ON kyc.contractors FROM mis_reader`. Can it still read `pan`?
+`mis_reader` has `GRANT SELECT ON kyc.restaurants`. You run `REVOKE SELECT (pan) ON kyc.restaurants FROM mis_reader`. Can it still read `pan`?
 - [x] Yes, because the table-level grant still covers every column.
 - [ ] No, because the column-level revoke takes precedence.
 - [ ] Only through `SELECT *`.
@@ -1530,9 +1535,9 @@ Three services share one database login. A row is deleted unexpectedly. What is 
 - [ ] PostgreSQL doesn't allow it.
 > Separate identities make actions attributable and access individually revocable.
 ::q multi
-Which belong in an audit event for "finance user released payment run 2026-10-B"? (Select all that apply.)
+Which belong in an audit event for "finance user released payout run 2026-10-B"? (Select all that apply.)
 - [x] Actor id and authentication method.
-- [x] Action `payment.released` and resource `payment_run:2026-10-B`.
+- [x] Action `payout.released` and resource `payout_run:2026-10-B`.
 - [x] Outcome and the user's stated reason.
 - [ ] The user's session cookie, to prove the session.
 - [ ] The full bank account numbers in the run.
@@ -1545,16 +1550,16 @@ An attacker with full database write access edits an audit row and recomputes th
 - [ ] A larger hash function such as SHA-512.
 > A plain hash can be recomputed by anyone. A secret key and external anchors force the attacker to compromise a second system.
 ::q single
-A download link to a drawing PDF must be shareable by email with a site engineer. Which token design best follows least privilege?
+A link to a restaurant's FSSAI licence PDF must be shareable by email with that restaurant's owner. Which token design best follows least privilege?
 - [ ] The user's full access token in the URL.
 - [ ] A permanent link with a long random id.
 - [x] A signed capability for `read` on that single file, valid for 10–15 minutes, whose issuing is audited.
 - [ ] A link to the folder with a password in the email.
 > Narrow by permission, resource and lifetime. Permanent links and full access tokens are far broader than needed.
 ::q single
-Auditors want proof of who viewed contractors' full PAN numbers over the last year. What is the most important design choice?
+Auditors want proof of who viewed restaurants' full PAN numbers over the last year. What is the most important design choice?
 - [ ] Log every HTTP request body.
-- [x] A dedicated `contractor.pan.viewed` audit event on the only code path that returns the full PAN, with denied attempts also recorded.
+- [x] A dedicated `restaurant.pan.viewed` audit event on the only code path that returns the full PAN, with denied attempts also recorded.
 - [ ] Turn application log level to Debug.
 - [ ] Store PANs in plain text so the logs can include them.
 > A specific event on a single, narrow access path makes the question answerable. Request-body logging leaks the data you are trying to protect.

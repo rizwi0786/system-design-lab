@@ -10,7 +10,7 @@ prerequisites: [m02-what-is-system-design, m01-classes-objects, m01-interfaces-a
 related: [m02-requirements, m02-what-is-architecture, m02-layered, m02-adr, m11-hld-framework, m03-layers]
 tags: [hld, lld, design-levels, c4, uml, artefacts, foundations]
 patterns: []
-summary: What high-level design (HLD) and low-level design (LLD) each decide, the artefacts each produces, and how they connect — shown by designing one feature, a construction site-inspection request, at both levels and in C#.
+summary: What high-level design (HLD) and low-level design (LLD) each decide, the artefacts each produces, and how they connect — shown by designing one feature, a used-car inspection booking, at both levels and in C#.
 references:
   - title: "Simon Brown — The C4 model for visualising software architecture"
     url: https://c4model.com/
@@ -42,13 +42,13 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Think about building a hospital.
+Think about opening a new shopping mall.
 
-The **site plan** shows the buildings on the plot: the main block, the emergency wing, the car park, the water tank, the power substation, the roads between them and the gate where ambulances enter. It says that the emergency wing must be close to the gate, that the power has a backup generator, and that the car park holds 300 cars. It does not show where the light switches go. **That is high-level design.**
+The **mall plan** shows the big pieces: the supermarket, the food court, the cinema, the parking levels, the escalators and lifts between floors, the loading bay where delivery trucks arrive, and the backup generator. It says that the food court must sit next to the cinema (people eat before and after a film), that parking holds 800 cars, and that the supermarket needs its own goods entrance. It does not say where the billing counters go inside any shop. **That is high-level design.**
 
-The **detailed drawings** for the emergency wing show each room, the width of each door so a stretcher fits, the wiring for each socket, the pipe sizes and the exact position of the oxygen outlets. They follow the site plan (the wing is where the site plan put it, and it uses the power supply the site plan provided). **That is low-level design.**
+The **store layout** for the supermarket shows each aisle, which shelf holds what, how many billing counters there are, how the queue reaches them, where the cold room sits and how a returned item is handled. It follows the mall plan (the store is where the mall plan put it, and it uses the goods entrance the plan provided). **That is low-level design.**
 
-You cannot build from the site plan alone (no one knows where the doors go), and you should not start the detailed drawings without the site plan (you might design a beautiful wing that is on the wrong side of the plot). Software works the same way: HLD first places the big parts and their connections; LLD then designs the inside of each part.
+You cannot open the mall from the plan alone (nobody knows how a shopper actually pays), and you should not design the store layout without the mall plan (you might design a perfect supermarket that delivery trucks cannot reach). Software works the same way: HLD first places the big parts and their connections; LLD then designs the inside of each part.
 
 ## First-principles explanation
 
@@ -129,7 +129,7 @@ HLD and LLD are not separate worlds. They talk to each other:
 
 - **HLD constrains LLD.** If the HLD says "notifications go through a queue", the LLD of the inspection service must publish an event rather than call the SMS provider directly. If the HLD says "app servers are stateless", the LLD cannot keep data in static fields.
 - **HLD defines the contracts between components; LLD implements them.** The HLD says "the mobile app calls `POST /inspections`"; the LLD defines the exact JSON body and the class that handles it.
-- **LLD can send you back to HLD.** While designing the scheduling rules, you discover that checking an engineer's free time needs data from the HR system, which the HLD did not include. That is a new connection between components, so the HLD must be updated.
+- **LLD can send you back to HLD.** While designing the scheduling rules, you discover that checking an inspector's free time needs data from the HR system, which the HLD did not include. That is a new connection between components, so the HLD must be updated.
 - **Requirements trace through both.** "An inspection must be scheduled within 48 hours" appears as a non-functional requirement in HLD (and maybe a reminder job), and as a rule and a test in LLD.
 
 ### How much design is enough?
@@ -144,38 +144,38 @@ Design is a thinking tool first and a document second. Diagrams that are drawn, 
 
 ## Visual explanation
 
-The feature used throughout this lesson: in a construction project management app, a **contractor requests an inspection** of finished work (for example "concrete slab at km 12+400 is ready for inspection"). A **site engineer** is assigned and schedules it, inspects, and records **passed** or **failed** with remarks and photos. The contractor gets notifications at each step.
+The feature used throughout this lesson: in a used-car marketplace app (the kind where you sell your car online), a **seller requests an inspection** of their car at an address they choose (for example "Hyundai i20, 2019, parked at Flat 4B, 12th Main, Indiranagar, Bengaluru"). An **inspector** is assigned, schedules the visit, checks the car and records **passed** or **failed** with remarks and photos. Only a passed car is shown to buyers. The seller gets notifications at each step.
 
 ### HLD view: the parts and their connections
 
 ```mermaid
 flowchart LR
-    APP["Contractor and engineer mobile app"] -->|"HTTPS JSON"| GW["API gateway / load balancer"]
-    GW --> API["Project API (ASP.NET Core, stateless)"]
-    API -->|"inspections, projects"| DB["PostgreSQL"]
+    APP["Seller and inspector mobile apps"] -->|"HTTPS JSON"| GW["API gateway / load balancer"]
+    GW --> API["Listings API (ASP.NET Core, stateless)"]
+    API -->|"inspections, listings"| DB["PostgreSQL"]
     API -->|"presigned upload URL"| OBJ["Object storage (inspection photos)"]
     APP -->|"upload photo directly"| OBJ
     API -->|"InspectionScheduled, InspectionCompleted"| Q["Queue"]
     Q --> NW["Notification worker"]
     NW --> SMS["SMS / push provider"]
     SCH["Scheduler (every 15 min)"] -->|"find overdue requests"| API
-    API -->|"engineer calendar"| HR["HR / roster system (external)"]
+    API -->|"inspector calendar"| HR["HR / roster system (external)"]
 ```
 
-At this zoom level you see **components**, not classes. The **mobile app** talks to the **Project API** through a **gateway** or load balancer. The API stores inspection data in **PostgreSQL** and hands the app a **presigned URL** so photos go **directly to object storage** without passing through the API. When an inspection is scheduled or completed, the API puts an event on a **queue**; a **notification worker** sends SMS or push messages, so a provider outage cannot block the engineer. A **scheduler** runs every 15 minutes to flag requests that have waited too long. The API reads engineers' availability from an external **HR roster system**. Every one of these is an HLD decision with a trade-off; none says anything about classes.
+At this zoom level you see **components**, not classes. The **mobile app** talks to the **Listings API** through a **gateway** or load balancer. The API stores inspection data in **PostgreSQL** and hands the app a **presigned URL** so photos go **directly to object storage** without passing through the API. When an inspection is scheduled or completed, the API puts an event on a **queue**; a **notification worker** sends SMS or push messages, so a provider outage cannot block the inspector. A **scheduler** runs every 15 minutes to flag requests that have waited too long. The API reads inspectors' availability from an external **HR roster system**. Every one of these is an HLD decision with a trade-off; none says anything about classes.
 
-### LLD view: the classes inside the Project API
+### LLD view: the classes inside the Listings API
 
 ```mermaid
 classDiagram
     class InspectionRequest {
         +Guid Id
-        +string ProjectId
+        +string ListingId
         +string Location
         +InspectionStatus Status
-        +string EngineerId
+        +string InspectorId
         +DateTimeOffset ScheduledFor
-        +Schedule(engineerId, when, now) void
+        +Schedule(inspectorId, when, now) void
         +RecordResult(passed, remarks) void
         +Cancel(reason) void
     }
@@ -188,8 +188,8 @@ classDiagram
         Cancelled
     }
     class InspectionService {
-        +RequestAsync(projectId, location, requestedBy) InspectionRequest
-        +ScheduleAsync(id, engineerId, when) InspectionRequest
+        +RequestAsync(listingId, location, requestedBy) InspectionRequest
+        +ScheduleAsync(id, inspectorId, when) InspectionRequest
         +RecordResultAsync(id, passed, remarks) InspectionRequest
     }
     class IInspectionRepository {
@@ -197,30 +197,30 @@ classDiagram
         +GetAsync(id) InspectionRequest
         +SaveAsync(request) void
     }
-    class IEngineerCalendar {
+    class IInspectorCalendar {
         <<interface>>
-        +IsFreeAsync(engineerId, start, duration) bool
+        +IsFreeAsync(inspectorId, start, duration) bool
     }
     class IInspectionEvents {
         <<interface>>
         +PublishAsync(evt) void
     }
     InspectionService --> IInspectionRepository
-    InspectionService --> IEngineerCalendar
+    InspectionService --> IInspectorCalendar
     InspectionService --> IInspectionEvents
     InspectionService ..> InspectionRequest
     InspectionRequest --> InspectionStatus
 ```
 
-Now we have zoomed into one box from the HLD diagram. **`InspectionRequest`** is the entity: it holds the data and **enforces its own rules** (you cannot record a result for an inspection that was never scheduled). **`InspectionStatus`** lists the allowed states. **`InspectionService`** coordinates a use case: load the request, check the engineer's calendar, change the state, save, publish an event. It depends on three **interfaces**, each one matching an arrow in the HLD diagram: `IInspectionRepository` is the PostgreSQL arrow, `IEngineerCalendar` is the HR roster arrow, `IInspectionEvents` is the queue arrow. That is how HLD connections become LLD seams.
+Now we have zoomed into one box from the HLD diagram. **`InspectionRequest`** is the entity: it holds the data and **enforces its own rules** (you cannot record a result for an inspection that was never scheduled). **`InspectionStatus`** lists the allowed states. **`InspectionService`** coordinates a use case: load the request, check the inspector's calendar, change the state, save, publish an event. It depends on three **interfaces**, each one matching an arrow in the HLD diagram: `IInspectionRepository` is the PostgreSQL arrow, `IInspectorCalendar` is the HR roster arrow, `IInspectionEvents` is the queue arrow. That is how HLD connections become LLD seams.
 
 ### LLD view: allowed state changes
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Requested : contractor requests
-    Requested --> Scheduled : engineer schedules
-    Requested --> Cancelled : contractor cancels
+    [*] --> Requested : seller requests
+    Requested --> Scheduled : inspector schedules
+    Requested --> Cancelled : seller cancels
     Scheduled --> Scheduled : rescheduled
     Scheduled --> Passed : result recorded, passed
     Scheduled --> Failed : result recorded, failed with remarks
@@ -230,7 +230,7 @@ stateDiagram-v2
     Cancelled --> [*]
 ```
 
-The state diagram is a precise LLD artefact: it says which changes are legal. An inspection starts as **Requested**. It can be **Scheduled** (and rescheduled), or **Cancelled** before anyone visits. Once scheduled, the engineer records **Passed** or **Failed**; a failure must include remarks so the contractor knows what to fix (a new request is raised after the fix). **Passed**, **Failed** and **Cancelled** are final. Any other change, such as recording a result on a request that was never scheduled, is a bug or misuse and the code must reject it.
+The state diagram is a precise LLD artefact: it says which changes are legal. An inspection starts as **Requested**. It can be **Scheduled** (and rescheduled), or **Cancelled** before anyone visits. Once scheduled, the inspector records **Passed** or **Failed**; a failure must include remarks so the seller knows what to fix (a new request is raised after the repair). **Passed**, **Failed** and **Cancelled** are final. Any other change, such as recording a result on a request that was never scheduled, is a bug or misuse and the code must reject it.
 
 ### LLD view: one use case, object by object
 
@@ -239,50 +239,50 @@ sequenceDiagram
     participant C as InspectionsEndpoint
     participant S as InspectionService
     participant R as IInspectionRepository
-    participant K as IEngineerCalendar
+    participant K as IInspectorCalendar
     participant E as InspectionRequest
     participant Q as IInspectionEvents
-    C->>S: ScheduleAsync(id, engineerId, when)
+    C->>S: ScheduleAsync(id, inspectorId, when)
     S->>R: GetAsync(id)
     R-->>S: request in Requested state
-    S->>K: IsFreeAsync(engineerId, when, 60 min)
+    S->>K: IsFreeAsync(inspectorId, when, 60 min)
     K-->>S: true
-    S->>E: Schedule(engineerId, when, now)
+    S->>E: Schedule(inspectorId, when, now)
     E-->>S: state is Scheduled
     S->>R: SaveAsync(request)
     S->>Q: PublishAsync(InspectionScheduled)
     S-->>C: updated request
 ```
 
-Compare this with an HLD sequence diagram, which would show the app, the API, the database and the queue as boxes. Here the participants are **objects and interfaces inside the API**. The **endpoint** calls the **service**, which **loads** the request through the repository, **checks** the engineer's calendar, asks the **entity** to change its own state (the entity validates the rule), **saves** it and **publishes** the event. If the calendar says the engineer is busy, the flow stops before any state changes. Reading this diagram, a developer knows exactly which methods to write.
+Compare this with an HLD sequence diagram, which would show the app, the API, the database and the queue as boxes. Here the participants are **objects and interfaces inside the API**. The **endpoint** calls the **service**, which **loads** the request through the repository, **checks** the inspector's calendar, asks the **entity** to change its own state (the entity validates the rule), **saves** it and **publishes** the event. If the calendar says the inspector is busy, the flow stops before any state changes. Reading this diagram, a developer knows exactly which methods to write.
 
 ## Step-by-step example
 
-Design the site-inspection feature from requirements to code, and notice at each step which level you are working at.
+Design the car-inspection feature from requirements to code, and notice at each step which level you are working at.
 
 ### Step 1 — Requirements (input to both levels)
 
-- Contractors request an inspection for a location on a project. (Functional.)
-- Site engineers schedule it, then record passed or failed with remarks and up to 10 photos. (Functional.)
-- Contractors are notified when an inspection is scheduled and when a result is recorded. (Functional.)
-- Requests not scheduled within 48 hours are flagged to the project manager. (Functional, time-based.)
-- About 400 projects, 3,000 inspections a day at peak season, 10 photos of about 3 MB each. (Scale.)
-- The app must work on poor site networks: photo uploads must resume, and the API must respond in under 500 ms at p95 (excluding uploads). (Non-functional.)
+- Sellers request an inspection of a listed car at an address they choose. (Functional.)
+- Inspectors schedule it, then record passed or failed with remarks and up to 10 photos. (Functional.)
+- Sellers are notified when an inspection is scheduled and when a result is recorded. (Functional.)
+- Requests not scheduled within 48 hours are flagged to the city operations manager. (Functional, time-based.)
+- About 25 cities, 3,000 inspections a day at the weekend peak, 10 photos of about 3 MB each. (Scale.)
+- The app must work on poor networks (inspectors often work in basement car parks): photo uploads must resume, and the API must respond in under 500 ms at p95 (excluding uploads). (Non-functional.)
 
 ### Step 2 — HLD decisions (the whole system)
 
 | Decision | Choice | Why (and trade-off) |
 |---|---|---|
-| Where inspection data lives | PostgreSQL, existing project database | Relational data with clear links to projects; no new database to run |
+| Where inspection data lives | PostgreSQL, existing listings database | Relational data with clear links to listings; no new database to run |
 | Where photos live | Object storage, uploaded with presigned URLs | 3,000 × 10 × 3 MB ≈ 90 GB a day is too much for the database and the API; trade-off: two-step upload flow |
-| Notifications | Queue + worker | SMS provider outages must not block engineers; trade-off: a few seconds' delay |
+| Notifications | Queue + worker | SMS provider outages must not block inspectors; trade-off: a few seconds' delay |
 | 48-hour rule | Scheduler job every 15 minutes | Simple and good enough; trade-off: a flag may appear up to 15 minutes late |
-| Engineer availability | Read from the HR roster system | Single source of truth for leave and shifts; trade-off: a new dependency that can be slow or down |
-| New service or existing API? | Add to the existing Project API | One team, modest load (3,000 a day is about 0.03 per second on average); a new service would add deployment and network work for no benefit |
+| Inspector availability | Read from the HR roster system | Single source of truth for leave and shifts; trade-off: a new dependency that can be slow or down |
+| New service or existing API? | Add to the existing Listings API | One team, modest load (3,000 a day is about 0.03 per second on average); a new service would add deployment and network work for no benefit |
 
 Notice what is **not** decided yet: class names, table columns, the JSON field names, the exact rule for rescheduling. Those are LLD.
 
-### Step 3 — LLD decisions (inside the Project API)
+### Step 3 — LLD decisions (inside the Listings API)
 
 **Entity and rules.** `InspectionRequest` owns its state and enforces:
 
@@ -299,17 +299,17 @@ Notice what is **not** decided yet: class names, table columns, the JSON field n
 ```sql
 CREATE TABLE inspection_requests (
     id             uuid        PRIMARY KEY,
-    project_id     text        NOT NULL REFERENCES projects (id),
-    location       text        NOT NULL,              -- e.g. 'km 12+400, slab S3'
+    listing_id     text        NOT NULL REFERENCES listings (id),
+    location       text        NOT NULL,              -- e.g. 'Flat 4B, 12th Main, Indiranagar'
     requested_by   text        NOT NULL,
     status         text        NOT NULL CHECK (status IN ('Requested','Scheduled','Passed','Failed','Cancelled')),
-    engineer_id    text,
+    inspector_id    text,
     scheduled_for  timestamptz,
     remarks        text,
     requested_at   timestamptz NOT NULL DEFAULT now(),
     version        integer     NOT NULL DEFAULT 0     -- optimistic concurrency
 );
-CREATE INDEX ix_inspections_project_status ON inspection_requests (project_id, status);
+CREATE INDEX ix_inspections_listing_status ON inspection_requests (listing_id, status);
 CREATE INDEX ix_inspections_unscheduled ON inspection_requests (requested_at) WHERE status = 'Requested';
 ```
 
@@ -318,25 +318,28 @@ The partial index exists because of an HLD decision: the 15-minute scheduler job
 **API contract.**
 
 ```text
-POST /projects/{projectId}/inspections        body { "location": "km 12+400, slab S3", "requestedBy": "contractor-17" }
+POST /listings/{listingId}/inspections        body { "location": "Flat 4B, 12th Main, Indiranagar", "requestedBy": "seller-17" }
+     header Idempotency-Key: <client-generated uuid>
      201 Created  { "id": "...", "status": "Requested", ... }
      400 Bad Request (ProblemDetails) if location is empty
-POST /inspections/{id}/schedule                body { "engineerId": "eng-4", "when": "2026-10-22T10:00:00+05:30" }
-     200 OK, 404 Not Found, 409 Conflict if the state does not allow it or the engineer is busy
-POST /inspections/{id}/result                  body { "passed": false, "remarks": "Honeycombing near joint J4" }
+POST /inspections/{id}/schedule                body { "inspectorId": "insp-4", "when": "2026-10-22T10:00:00+05:30" }
+     200 OK, 404 Not Found, 409 Conflict if the state does not allow it or the inspector is busy
+POST /inspections/{id}/result                  body { "passed": false, "remarks": "Flood damage: rust under the floor mats" }
      200 OK, 404 Not Found, 409 Conflict, 400 if failed without remarks
 ```
 
+The `Idempotency-Key` header is there because the HLD assumes mobile clients on weak networks will retry. Without it, a retried `POST` after a timeout creates a second inspection for the same car. The server stores the key with the created inspection and returns the original `201` for a repeat. This is an LLD detail that protects an HLD assumption.
+
 ### Step 4 — An LLD discovery that changes the HLD
 
-While writing `IEngineerCalendar`, the developer finds that the HR roster system only publishes a nightly file, not a live API. The HLD assumed a live call. Options: copy the roster nightly into a local table (stale by up to a day for last-minute leave), or ask the HR team for an API. The team chooses the nightly copy plus a manual "mark unavailable" button for engineers, and **updates the HLD diagram and decision record**. This feedback loop is normal and healthy.
+While writing `IInspectorCalendar`, the developer finds that the HR roster system only publishes a nightly file, not a live API. The HLD assumed a live call. Options: copy the roster nightly into a local table (stale by up to a day for last-minute leave), or ask the HR team for an API. The team chooses the nightly copy plus a manual "mark unavailable" button for inspectors, and **updates the HLD diagram and decision record**. This feedback loop is normal and healthy.
 
 ## Production-style C# implementation
 
 The LLD from the step-by-step example, as code. The interfaces match the HLD's arrows; the in-memory implementations stand in for PostgreSQL, the roster system and the queue.
 
 ```text
-SiteSure.Api/
+CarCheck.Api/
   Program.cs
   Inspections/InspectionRequest.cs
   Inspections/Ports.cs
@@ -345,45 +348,45 @@ SiteSure.Api/
 ```
 
 ```csharp file=Inspections/InspectionRequest.cs
-namespace SiteSure.Inspections;
+namespace CarCheck.Inspections;
 
 public enum InspectionStatus { Requested, Scheduled, Passed, Failed, Cancelled }
 
 /// <summary>The entity. It owns its state and enforces the rules from the LLD state diagram.</summary>
 public sealed class InspectionRequest
 {
-    public InspectionRequest(Guid id, string projectId, string location, string requestedBy, DateTimeOffset requestedAt)
+    public InspectionRequest(Guid id, string listingId, string location, string requestedBy, DateTimeOffset requestedAt)
     {
-        if (string.IsNullOrWhiteSpace(projectId)) throw new ArgumentException("Project is required.", nameof(projectId));
+        if (string.IsNullOrWhiteSpace(listingId)) throw new ArgumentException("Listing is required.", nameof(listingId));
         if (string.IsNullOrWhiteSpace(location)) throw new ArgumentException("Location is required.", nameof(location));
         if (string.IsNullOrWhiteSpace(requestedBy)) throw new ArgumentException("Requester is required.", nameof(requestedBy));
         Id = id;
-        ProjectId = projectId;
+        ListingId = listingId;
         Location = location;
         RequestedBy = requestedBy;
         RequestedAt = requestedAt;
     }
 
     public Guid Id { get; }
-    public string ProjectId { get; }
+    public string ListingId { get; }
     public string Location { get; }
     public string RequestedBy { get; }
     public DateTimeOffset RequestedAt { get; }
     public InspectionStatus Status { get; private set; } = InspectionStatus.Requested;
-    public string? EngineerId { get; private set; }
+    public string? InspectorId { get; private set; }
     public DateTimeOffset? ScheduledFor { get; private set; }
     public string? Remarks { get; private set; }
 
     public bool IsFinal => Status is InspectionStatus.Passed or InspectionStatus.Failed or InspectionStatus.Cancelled;
 
-    public void Schedule(string engineerId, DateTimeOffset when, DateTimeOffset now)
+    public void Schedule(string inspectorId, DateTimeOffset when, DateTimeOffset now)
     {
         if (Status is not (InspectionStatus.Requested or InspectionStatus.Scheduled))
             throw new InvalidOperationException($"Cannot schedule an inspection that is {Status}.");
-        if (string.IsNullOrWhiteSpace(engineerId)) throw new ArgumentException("Engineer is required.", nameof(engineerId));
+        if (string.IsNullOrWhiteSpace(inspectorId)) throw new ArgumentException("Inspector is required.", nameof(inspectorId));
         if (when <= now) throw new ArgumentOutOfRangeException(nameof(when), "Inspection time must be in the future.");
 
-        EngineerId = engineerId;
+        InspectorId = inspectorId;
         ScheduledFor = when;
         Status = InspectionStatus.Scheduled;
     }
@@ -410,61 +413,61 @@ public sealed class InspectionRequest
 ```
 
 ```csharp file=Inspections/Ports.cs
-namespace SiteSure.Inspections;
+namespace CarCheck.Inspections;
 
-/// <summary>HLD arrow: Project API to PostgreSQL.</summary>
+/// <summary>HLD arrow: Listings API to PostgreSQL.</summary>
 public interface IInspectionRepository
 {
     Task<InspectionRequest?> GetAsync(Guid id, CancellationToken ct);
     Task SaveAsync(InspectionRequest request, CancellationToken ct);
 }
 
-/// <summary>HLD arrow: Project API to the HR roster system.</summary>
-public interface IEngineerCalendar
+/// <summary>HLD arrow: Listings API to the HR roster system.</summary>
+public interface IInspectorCalendar
 {
-    Task<bool> IsFreeAsync(string engineerId, DateTimeOffset start, TimeSpan duration, CancellationToken ct);
+    Task<bool> IsFreeAsync(string inspectorId, DateTimeOffset start, TimeSpan duration, CancellationToken ct);
 }
 
-/// <summary>HLD arrow: Project API to the queue.</summary>
+/// <summary>HLD arrow: Listings API to the queue.</summary>
 public interface IInspectionEvents
 {
     Task PublishAsync(InspectionEvent evt, CancellationToken ct);
 }
 
-public sealed record InspectionEvent(string Type, Guid InspectionId, string ProjectId, InspectionStatus Status);
+public sealed record InspectionEvent(string Type, Guid InspectionId, string ListingId, InspectionStatus Status);
 
 public sealed class InspectionNotFoundException(Guid id) : Exception($"Inspection {id} was not found.");
 
-public sealed class EngineerBusyException(string engineerId) : Exception($"Engineer {engineerId} is not free at that time.");
+public sealed class InspectorBusyException(string inspectorId) : Exception($"Inspector {inspectorId} is not free at that time.");
 ```
 
 ```csharp file=Inspections/InspectionService.cs
-namespace SiteSure.Inspections;
+namespace CarCheck.Inspections;
 
 /// <summary>Coordinates use cases. Rules live in the entity, infrastructure behind interfaces.</summary>
 public sealed class InspectionService(
     IInspectionRepository repository,
-    IEngineerCalendar calendar,
+    IInspectorCalendar calendar,
     IInspectionEvents events,
     TimeProvider clock)
 {
     public static readonly TimeSpan InspectionDuration = TimeSpan.FromMinutes(60);
 
-    public async Task<InspectionRequest> RequestAsync(string projectId, string location, string requestedBy, CancellationToken ct)
+    public async Task<InspectionRequest> RequestAsync(string listingId, string location, string requestedBy, CancellationToken ct)
     {
-        var request = new InspectionRequest(Guid.NewGuid(), projectId, location, requestedBy, clock.GetUtcNow());
+        var request = new InspectionRequest(Guid.NewGuid(), listingId, location, requestedBy, clock.GetUtcNow());
         await repository.SaveAsync(request, ct);
         return request;
     }
 
-    public async Task<InspectionRequest> ScheduleAsync(Guid id, string engineerId, DateTimeOffset when, CancellationToken ct)
+    public async Task<InspectionRequest> ScheduleAsync(Guid id, string inspectorId, DateTimeOffset when, CancellationToken ct)
     {
         var request = await repository.GetAsync(id, ct) ?? throw new InspectionNotFoundException(id);
-        if (!await calendar.IsFreeAsync(engineerId, when, InspectionDuration, ct)) throw new EngineerBusyException(engineerId);
+        if (!await calendar.IsFreeAsync(inspectorId, when, InspectionDuration, ct)) throw new InspectorBusyException(inspectorId);
 
-        request.Schedule(engineerId, when, clock.GetUtcNow());
+        request.Schedule(inspectorId, when, clock.GetUtcNow());
         await repository.SaveAsync(request, ct);
-        await events.PublishAsync(new InspectionEvent("InspectionScheduled", request.Id, request.ProjectId, request.Status), ct);
+        await events.PublishAsync(new InspectionEvent("InspectionScheduled", request.Id, request.ListingId, request.Status), ct);
         return request;
     }
 
@@ -473,7 +476,7 @@ public sealed class InspectionService(
         var request = await repository.GetAsync(id, ct) ?? throw new InspectionNotFoundException(id);
         request.RecordResult(passed, remarks);
         await repository.SaveAsync(request, ct);
-        await events.PublishAsync(new InspectionEvent("InspectionCompleted", request.Id, request.ProjectId, request.Status), ct);
+        await events.PublishAsync(new InspectionEvent("InspectionCompleted", request.Id, request.ListingId, request.Status), ct);
         return request;
     }
 }
@@ -483,7 +486,7 @@ public sealed class InspectionService(
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 
-namespace SiteSure.Inspections;
+namespace CarCheck.Inspections;
 
 public sealed class InMemoryInspectionRepository : IInspectionRepository
 {
@@ -499,51 +502,51 @@ public sealed class InMemoryInspectionRepository : IInspectionRepository
     }
 }
 
-/// <summary>Stand-in for the nightly roster copy. Engineers listed here are on leave all day.</summary>
-public sealed class InMemoryEngineerCalendar : IEngineerCalendar
+/// <summary>Stand-in for the nightly roster copy. Inspectors listed here are on leave all day.</summary>
+public sealed class InMemoryInspectorCalendar : IInspectorCalendar
 {
-    private readonly ConcurrentDictionary<(string Engineer, DateOnly Day), bool> _leave = new();
+    private readonly ConcurrentDictionary<(string Inspector, DateOnly Day), bool> _leave = new();
 
-    public void MarkOnLeave(string engineerId, DateOnly day) => _leave[(engineerId, day)] = true;
+    public void MarkOnLeave(string inspectorId, DateOnly day) => _leave[(inspectorId, day)] = true;
 
-    public Task<bool> IsFreeAsync(string engineerId, DateTimeOffset start, TimeSpan duration, CancellationToken ct) =>
-        Task.FromResult(!_leave.ContainsKey((engineerId, DateOnly.FromDateTime(start.UtcDateTime))));
+    public Task<bool> IsFreeAsync(string inspectorId, DateTimeOffset start, TimeSpan duration, CancellationToken ct) =>
+        Task.FromResult(!_leave.ContainsKey((inspectorId, DateOnly.FromDateTime(start.UtcDateTime))));
 }
 
 public sealed class LoggingInspectionEvents(ILogger<LoggingInspectionEvents> logger) : IInspectionEvents
 {
     public Task PublishAsync(InspectionEvent evt, CancellationToken ct)
     {
-        logger.LogInformation("Event {Type} for inspection {Id} on project {Project}: {Status}", evt.Type, evt.InspectionId, evt.ProjectId, evt.Status);
+        logger.LogInformation("Event {Type} for inspection {Id} on listing {Listing}: {Status}", evt.Type, evt.InspectionId, evt.ListingId, evt.Status);
         return Task.CompletedTask;
     }
 }
 ```
 
 ```csharp file=Program.cs
-using SiteSure.Inspections;
+using CarCheck.Inspections;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<IInspectionRepository, InMemoryInspectionRepository>();
-builder.Services.AddSingleton<InMemoryEngineerCalendar>();
-builder.Services.AddSingleton<IEngineerCalendar>(sp => sp.GetRequiredService<InMemoryEngineerCalendar>());
+builder.Services.AddSingleton<InMemoryInspectorCalendar>();
+builder.Services.AddSingleton<IInspectorCalendar>(sp => sp.GetRequiredService<InMemoryInspectorCalendar>());
 builder.Services.AddSingleton<IInspectionEvents, LoggingInspectionEvents>();
 builder.Services.AddScoped<InspectionService>();
 builder.Services.AddProblemDetails();
 
 var app = builder.Build();
 
-app.MapPost("/projects/{projectId}/inspections", (string projectId, NewInspection body, InspectionService service, CancellationToken ct) =>
+app.MapPost("/listings/{listingId}/inspections", (string listingId, NewInspection body, InspectionService service, CancellationToken ct) =>
     Handle(async () =>
     {
-        var r = await service.RequestAsync(projectId, body.Location, body.RequestedBy, ct);
+        var r = await service.RequestAsync(listingId, body.Location, body.RequestedBy, ct);
         return Results.Created($"/inspections/{r.Id}", r);
     }));
 
 app.MapPost("/inspections/{id:guid}/schedule", (Guid id, ScheduleInspection body, InspectionService service, CancellationToken ct) =>
-    Handle(async () => Results.Ok(await service.ScheduleAsync(id, body.EngineerId, body.When, ct))));
+    Handle(async () => Results.Ok(await service.ScheduleAsync(id, body.InspectorId, body.When, ct))));
 
 app.MapPost("/inspections/{id:guid}/result", (Guid id, InspectionResult body, InspectionService service, CancellationToken ct) =>
     Handle(async () => Results.Ok(await service.RecordResultAsync(id, body.Passed, body.Remarks, ct))));
@@ -558,19 +561,19 @@ static async Task<IResult> Handle(Func<Task<IResult>> action)
 {
     try { return await action(); }
     catch (InspectionNotFoundException ex) { return Results.Problem(ex.Message, statusCode: 404); }
-    catch (EngineerBusyException ex) { return Results.Problem(ex.Message, statusCode: 409); }
+    catch (InspectorBusyException ex) { return Results.Problem(ex.Message, statusCode: 409); }
     catch (InvalidOperationException ex) { return Results.Problem(ex.Message, statusCode: 409); }
     catch (ArgumentException ex) { return Results.Problem(ex.Message, statusCode: 400); }
 }
 
 public sealed record NewInspection(string Location, string RequestedBy);
-public sealed record ScheduleInspection(string EngineerId, DateTimeOffset When);
+public sealed record ScheduleInspection(string InspectorId, DateTimeOffset When);
 public sealed record InspectionResult(bool Passed, string? Remarks);
 ```
 
 How the code reflects both levels:
 
-1. **HLD shows up as interfaces.** Each arrow leaving the Project API in the HLD diagram is an interface in `Ports.cs`. Swapping the in-memory version for PostgreSQL, the real roster copy or a message broker changes no business code.
+1. **HLD shows up as interfaces.** Each arrow leaving the Listings API in the HLD diagram is an interface in `Ports.cs`. Swapping the in-memory version for PostgreSQL, the real roster copy or a message broker changes no business code.
 2. **LLD rules live in one place.** All five rules from step 3 are in `InspectionRequest`. A reviewer checking "can a failed inspection have no remarks?" reads one method.
 3. **The API contract is explicit.** `Handle` maps each domain error to the status code promised in the contract (404, 409, 400), so the contract and the code agree.
 4. **Testable without infrastructure.** Every rule can be unit-tested by creating an `InspectionRequest` directly; use cases can be tested with the in-memory adapters.
@@ -579,7 +582,7 @@ How the code reflects both levels:
 
 **Bad: an HLD that is really an LLD.** The "architecture document" has 40 class diagrams and no picture of the components, so nobody can see that photos are stored in the database (90 GB a day) or that the SMS call is synchronous. The expensive mistakes hide among the cheap details.
 
-**Bad: an LLD that ignores the HLD.** The HLD says notifications go through the queue, but the developer calls the SMS provider directly from `InspectionService` "because it was quicker". The first SMS outage blocks engineers on site.
+**Bad: an LLD that ignores the HLD.** The HLD says notifications go through the queue, but the developer calls the SMS provider directly from `InspectionService` "because it was quicker". The first SMS outage blocks inspectors in the middle of a visit.
 
 **Bad: rules scattered across layers.**
 
@@ -621,16 +624,16 @@ The LLD canvas below holds the class model for the inspection feature. Try these
 {
   "classes": [
     { "id": "Req", "name": "InspectionRequest", "kind": "class",
-      "fields": ["+Guid Id", "+string ProjectId", "+string Location", "+InspectionStatus Status", "+string EngineerId"],
-      "methods": ["+void Schedule(string engineerId, DateTimeOffset when, DateTimeOffset now)", "+void RecordResult(bool passed, string remarks)", "+void Cancel(string reason)"],
+      "fields": ["+Guid Id", "+string ListingId", "+string Location", "+InspectionStatus Status", "+string InspectorId"],
+      "methods": ["+void Schedule(string inspectorId, DateTimeOffset when, DateTimeOffset now)", "+void RecordResult(bool passed, string remarks)", "+void Cancel(string reason)"],
       "responsibility": "Holds inspection state and enforces transition rules" },
     { "id": "Status", "name": "InspectionStatus", "kind": "enum", "fields": ["Requested", "Scheduled", "Passed", "Failed", "Cancelled"], "methods": [] },
     { "id": "Svc", "name": "InspectionService", "kind": "class",
-      "fields": ["-IInspectionRepository _repository", "-IEngineerCalendar _calendar", "-IInspectionEvents _events"],
-      "methods": ["+Task ScheduleAsync(Guid id, string engineerId, DateTimeOffset when)", "+Task RecordResultAsync(Guid id, bool passed, string remarks)"],
+      "fields": ["-IInspectionRepository _repository", "-IInspectorCalendar _calendar", "-IInspectionEvents _events"],
+      "methods": ["+Task ScheduleAsync(Guid id, string inspectorId, DateTimeOffset when)", "+Task RecordResultAsync(Guid id, bool passed, string remarks)"],
       "responsibility": "Coordinates use cases: load, check, change, save, publish" },
     { "id": "Repo", "name": "IInspectionRepository", "kind": "interface", "fields": [], "methods": ["Task GetAsync(Guid id)", "Task SaveAsync(InspectionRequest request)"] },
-    { "id": "Cal", "name": "IEngineerCalendar", "kind": "interface", "fields": [], "methods": ["Task IsFreeAsync(string engineerId, DateTimeOffset start, TimeSpan duration)"] },
+    { "id": "Cal", "name": "IInspectorCalendar", "kind": "interface", "fields": [], "methods": ["Task IsFreeAsync(string inspectorId, DateTimeOffset start, TimeSpan duration)"] },
     { "id": "Evt", "name": "IInspectionEvents", "kind": "interface", "fields": [], "methods": ["Task PublishAsync(InspectionEvent evt)"] }
   ],
   "relations": [
@@ -656,10 +659,10 @@ For each decision below, say whether it belongs to the high-level design or the 
 5. Notifications are sent through a queue and a worker.
 6. A failed inspection returns HTTP 400 if remarks are missing.
 7. The system runs in one cloud region with two availability zones.
-8. `InspectionService` depends on an `IEngineerCalendar` interface.
+8. `InspectionService` depends on an `IInspectorCalendar` interface.
 9. The API must answer in under 500 ms at p95.
 10. Use the State pattern if inspection states grow beyond eight.
-11. The mobile app talks to the Project API through an API gateway.
+11. The mobile app talks to the Listings API through an API gateway.
 12. The JSON field for the scheduled time is called `when` and uses ISO 8601 with offset.
 ::acceptance
 - All 12 items are classified.
@@ -668,7 +671,7 @@ For each decision below, say whether it belongs to the high-level design or the 
 ::hint
 Ask: does this decision affect which components exist or how they connect? Then it is HLD.
 ::hint
-Ask: could you change this decision without anyone outside the Project API noticing? Then it is probably LLD.
+Ask: could you change this decision without anyone outside the Listings API noticing? Then it is probably LLD.
 ::hint
 Some items are requirements rather than designs. Say which level is responsible for meeting them.
 ::hint
@@ -681,7 +684,7 @@ Interfaces are LLD artefacts, but they often exist because of an HLD arrow.
 5. **HLD**: how components communicate (asynchronously through a queue).
 6. **LLD**: exact API contract behaviour.
 7. **HLD**: deployment topology for availability.
-8. **LLD**: class dependency, but it is the code form of the HLD arrow "Project API → HR roster".
+8. **LLD**: class dependency, but it is the code form of the HLD arrow "Listings API → HR roster".
 9. **Requirement** (non-functional). HLD must show how it is met (stateless API, photos not through the API); LLD must not break it (no slow calls in the request).
 10. **LLD**: a design pattern inside one component.
 11. **HLD**: a connection between components.
@@ -695,12 +698,12 @@ Interfaces are LLD artefacts, but they often exist because of an HLD arrow.
 Implement the LLD state machine for `InspectionRequest` exactly as in the state diagram.
 ::requirements
 - New requests start in `Requested`.
-- `Schedule(engineerId, when, now)`: allowed from `Requested` or `Scheduled` (reschedule). `when` must be after `now` (`ArgumentOutOfRangeException`). An empty engineer id throws `ArgumentException`. From any other state: `InvalidOperationException`.
+- `Schedule(inspectorId, when, now)`: allowed from `Requested` or `Scheduled` (reschedule). `when` must be after `now` (`ArgumentOutOfRangeException`). An empty inspector id throws `ArgumentException`. From any other state: `InvalidOperationException`.
 - `RecordResult(passed, remarks)`: allowed only from `Scheduled`, otherwise `InvalidOperationException`. A failed result with empty remarks throws `ArgumentException`. Moves to `Passed` or `Failed`.
 - `Cancel(reason)`: allowed from `Requested` or `Scheduled`; empty reason throws `ArgumentException`; from a final state throws `InvalidOperationException`.
 ::acceptance
 - Requested → Scheduled → Passed works.
-- Rescheduling a scheduled inspection updates the engineer and time.
+- Rescheduling a scheduled inspection updates the inspector and time.
 - Recording a result on a requested (unscheduled) inspection throws `InvalidOperationException`.
 - A failed result without remarks throws `ArgumentException` and the state stays `Scheduled`.
 - Nothing can change a `Passed`, `Failed` or `Cancelled` inspection.
@@ -729,11 +732,11 @@ public enum InspectionStatus { Requested, Scheduled, Passed, Failed, Cancelled }
 public sealed class Inspection
 {
     public InspectionStatus Status { get; private set; } = InspectionStatus.Requested;
-    public string? EngineerId { get; private set; }
+    public string? InspectorId { get; private set; }
     public DateTimeOffset? ScheduledFor { get; private set; }
     public string? Remarks { get; private set; }
 
-    public void Schedule(string engineerId, DateTimeOffset when, DateTimeOffset now) => throw new NotImplementedException();
+    public void Schedule(string inspectorId, DateTimeOffset when, DateTimeOffset now) => throw new NotImplementedException();
 
     public void RecordResult(bool passed, string? remarks) => throw new NotImplementedException();
 
@@ -752,7 +755,7 @@ public class InspectionTests
     private static Inspection Scheduled()
     {
         var i = new Inspection();
-        i.Schedule("eng-4", Now.AddDays(1), Now);
+        i.Schedule("insp-4", Now.AddDays(1), Now);
         return i;
     }
 
@@ -766,11 +769,11 @@ public class InspectionTests
     }
 
     [Fact]
-    public void Reschedule_updates_engineer_and_time()
+    public void Reschedule_updates_inspector_and_time()
     {
         var i = Scheduled();
-        i.Schedule("eng-9", Now.AddDays(2), Now);
-        Assert.Equal("eng-9", i.EngineerId);
+        i.Schedule("insp-9", Now.AddDays(2), Now);
+        Assert.Equal("insp-9", i.InspectorId);
         Assert.Equal(Now.AddDays(2), i.ScheduledFor);
     }
 
@@ -778,7 +781,7 @@ public class InspectionTests
     public void Cannot_schedule_in_the_past()
     {
         var i = new Inspection();
-        Assert.Throws<ArgumentOutOfRangeException>(() => i.Schedule("eng-4", Now.AddMinutes(-5), Now));
+        Assert.Throws<ArgumentOutOfRangeException>(() => i.Schedule("insp-4", Now.AddMinutes(-5), Now));
         Assert.Equal(InspectionStatus.Requested, i.Status);
     }
 
@@ -792,7 +795,7 @@ public class InspectionTests
         var i = Scheduled();
         Assert.Throws<ArgumentException>(() => i.RecordResult(false, " "));
         Assert.Equal(InspectionStatus.Scheduled, i.Status);
-        i.RecordResult(false, "Honeycombing near joint J4");
+        i.RecordResult(false, "Flood damage: rust under the floor mats");
         Assert.Equal(InspectionStatus.Failed, i.Status);
     }
 
@@ -801,11 +804,11 @@ public class InspectionTests
     {
         var passed = Scheduled();
         passed.RecordResult(true, null);
-        Assert.Throws<InvalidOperationException>(() => passed.Schedule("eng-4", Now.AddDays(3), Now));
+        Assert.Throws<InvalidOperationException>(() => passed.Schedule("insp-4", Now.AddDays(3), Now));
         Assert.Throws<InvalidOperationException>(() => passed.Cancel("changed mind"));
 
         var cancelled = new Inspection();
-        cancelled.Cancel("work not ready");
+        cancelled.Cancel("car already sold");
         Assert.Equal(InspectionStatus.Cancelled, cancelled.Status);
         Assert.Throws<InvalidOperationException>(() => cancelled.RecordResult(true, null));
     }
@@ -824,20 +827,20 @@ public enum InspectionStatus { Requested, Scheduled, Passed, Failed, Cancelled }
 public sealed class Inspection
 {
     public InspectionStatus Status { get; private set; } = InspectionStatus.Requested;
-    public string? EngineerId { get; private set; }
+    public string? InspectorId { get; private set; }
     public DateTimeOffset? ScheduledFor { get; private set; }
     public string? Remarks { get; private set; }
 
     private bool IsFinal => Status is InspectionStatus.Passed or InspectionStatus.Failed or InspectionStatus.Cancelled;
 
-    public void Schedule(string engineerId, DateTimeOffset when, DateTimeOffset now)
+    public void Schedule(string inspectorId, DateTimeOffset when, DateTimeOffset now)
     {
         if (Status is not (InspectionStatus.Requested or InspectionStatus.Scheduled))
             throw new InvalidOperationException($"Cannot schedule an inspection that is {Status}.");
-        if (string.IsNullOrWhiteSpace(engineerId)) throw new ArgumentException("Engineer is required.", nameof(engineerId));
+        if (string.IsNullOrWhiteSpace(inspectorId)) throw new ArgumentException("Inspector is required.", nameof(inspectorId));
         if (when <= now) throw new ArgumentOutOfRangeException(nameof(when), "Inspection time must be in the future.");
 
-        EngineerId = engineerId;
+        InspectorId = inspectorId;
         ScheduledFor = when;
         Status = InspectionStatus.Scheduled;
     }
@@ -866,12 +869,12 @@ public sealed class Inspection
 Each method follows the same order: **check the state, validate the arguments, then change fields**. Because nothing is changed until all checks pass, a rejected call leaves the object exactly as it was, which the tests verify. This is the state diagram turned directly into code; if the diagram changes, these methods and their tests are the only places to update.
 ::mistakes
 - A public setter on `Status`, so other code can skip the rules.
-- Changing `EngineerId` before checking the time, leaving a half-updated object when the check fails.
+- Changing `InspectorId` before checking the time, leaving a half-updated object when the check fails.
 - Allowing `Cancel` on a passed inspection because "cancelling is always allowed".
 :::
 
 :::exercise id=m02-hld-vs-lld-ex3 difficulty=intermediate kind=design title="LLD for photo evidence"
-Extend the inspection LLD with photo evidence. Requirements: an engineer can attach up to 10 photos to a **scheduled** inspection; each photo is uploaded directly to object storage using a presigned URL (an HLD decision); an inspection cannot be **passed** without at least one photo; photos cannot be added after a result is recorded.
+Extend the inspection LLD with photo evidence. Requirements: an inspector can attach up to 10 photos to a **scheduled** inspection; each photo is uploaded directly to object storage using a presigned URL (an HLD decision); an inspection cannot be **passed** without at least one photo; photos cannot be added after a result is recorded.
 
 Design the classes and interfaces. Say which class enforces each rule and which interface represents which HLD arrow.
 ::acceptance
@@ -891,7 +894,7 @@ The upload is two steps: the API creates a presigned URL, the app uploads, then 
   "classes": [
     { "id": "Req", "name": "InspectionRequest", "kind": "class",
       "fields": ["+Guid Id", "+InspectionStatus Status"],
-      "methods": ["+void Schedule(string engineerId, DateTimeOffset when, DateTimeOffset now)", "+void RecordResult(bool passed, string remarks)"] },
+      "methods": ["+void Schedule(string inspectorId, DateTimeOffset when, DateTimeOffset now)", "+void RecordResult(bool passed, string remarks)"] },
     { "id": "Svc", "name": "InspectionService", "kind": "class", "fields": ["-IInspectionRepository _repository"], "methods": [] },
     { "id": "Repo", "name": "IInspectionRepository", "kind": "interface", "fields": [], "methods": ["Task GetAsync(Guid id)", "Task SaveAsync(InspectionRequest request)"] }
   ],
@@ -907,7 +910,7 @@ The upload is two steps: the API creates a presigned URL, the app uploads, then 
   "classes": [
     { "id": "Req", "name": "InspectionRequest", "kind": "class",
       "fields": ["+Guid Id", "+InspectionStatus Status", "-List~Photo~ _photos", "+IReadOnlyList~Photo~ Photos"],
-      "methods": ["+void Schedule(string engineerId, DateTimeOffset when, DateTimeOffset now)", "+void AddPhoto(Photo photo)", "+void RecordResult(bool passed, string remarks)"],
+      "methods": ["+void Schedule(string inspectorId, DateTimeOffset when, DateTimeOffset now)", "+void AddPhoto(Photo photo)", "+void RecordResult(bool passed, string remarks)"],
       "responsibility": "Enforces: max 10 photos, photos only while Scheduled, Passed needs at least one photo" },
     { "id": "Photo", "name": "Photo", "kind": "record", "fields": ["+Guid Id", "+string ObjectKey", "+DateTimeOffset TakenAt"], "methods": [] },
     { "id": "Svc", "name": "InspectionService", "kind": "class",
@@ -968,7 +971,7 @@ classDiagram
 :::
 
 :::exercise id=m02-hld-vs-lld-ex4 difficulty=intermediate kind=hld title="Draw the HLD for the inspection feature"
-Starting from a minimal graph (app, API, database), draw the HLD for the site-inspection feature using the requirements in step 1: 3,000 inspections a day at peak season, up to 10 photos of 3 MB each, notifications that must not block engineers, a 48-hour overdue check, and engineer availability from the HR roster.
+Starting from a minimal graph (app, API, database), draw the HLD for the car-inspection feature using the requirements in step 1: 3,000 inspections a day at the weekend peak, up to 10 photos of 3 MB each, notifications that must not block inspectors, a 48-hour overdue check, and inspector availability from the HR roster.
 ::acceptance
 - Photos go directly from the app to object storage; the API only issues upload URLs.
 - Notifications go through a queue and a worker to an external provider.
@@ -985,8 +988,8 @@ Node types: `object-storage`, `queue`, `worker`, `scheduler`, `external`.
 ```json
 {
   "nodes": [
-    { "id": "app", "type": "client", "label": "Mobile app (contractors, engineers)", "props": { "rps": 5 } },
-    { "id": "api", "type": "app-server", "label": "Project API", "props": { "instances": 2 } },
+    { "id": "app", "type": "client", "label": "Mobile apps (sellers, inspectors)", "props": { "rps": 5 } },
+    { "id": "api", "type": "app-server", "label": "Listings API", "props": { "instances": 2 } },
     { "id": "db", "type": "database", "label": "PostgreSQL" }
   ],
   "edges": [
@@ -999,10 +1002,10 @@ Node types: `object-storage`, `queue`, `worker`, `scheduler`, `external`.
 ```json
 {
   "nodes": [
-    { "id": "app", "type": "client", "label": "Mobile app (contractors, engineers)", "props": { "rps": 5 } },
+    { "id": "app", "type": "client", "label": "Mobile apps (sellers, inspectors)", "props": { "rps": 5 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
-    { "id": "api", "type": "app-server", "label": "Project API (stateless)", "props": { "instances": 2 } },
-    { "id": "db", "type": "database", "label": "PostgreSQL (inspections, projects)", "props": { "replicas": 1 } },
+    { "id": "api", "type": "app-server", "label": "Listings API (stateless)", "props": { "instances": 2 } },
+    { "id": "db", "type": "database", "label": "PostgreSQL (inspections, listings)", "props": { "replicas": 1 } },
     { "id": "obj", "type": "object-storage", "label": "Inspection photos (~90 GB/day at peak)" },
     { "id": "q", "type": "queue", "label": "Inspection events" },
     { "id": "w", "type": "worker", "label": "Notification worker" },
@@ -1025,29 +1028,29 @@ Node types: `object-storage`, `queue`, `worker`, `scheduler`, `external`.
 }
 ```
 
-**Reasoning.** 3,000 × 10 × 3 MB = 90 GB a day, far too much to push through the API or store in PostgreSQL, so photos go straight to object storage. Requests themselves are tiny (3,000 a day is well under 1 per second on average; even at a 10× site-morning peak it is a few per second), so two API instances are for availability, not load. Notifications are asynchronous so SMS outages never block engineers. The overdue check is a simple scheduled job. The roster arrives as a nightly import (the step 4 discovery). **Kept simple:** no new microservice, no cache, no read replicas for reads; the existing Project API and database handle this load easily.
+**Reasoning.** 3,000 × 10 × 3 MB = 90 GB a day, far too much to push through the API or store in PostgreSQL, so photos go straight to object storage. Requests themselves are tiny (3,000 a day is well under 1 per second on average; even at a 10× weekend-morning peak it is a few per second), so two API instances are for availability, not load. Notifications are asynchronous so SMS outages never block inspectors. The overdue check is a simple scheduled job. The roster arrives as a nightly import (the step 4 discovery). **Kept simple:** no new microservice, no cache, no read replicas for reads; the existing Listings API and database handle this load easily.
 ::mistakes
 - Uploading photos through the API.
 - Drawing classes (InspectionService, repository) on the HLD canvas.
 - Adding caches and replicas for a few requests per second.
 :::
 
-:::exercise id=m02-hld-vs-lld-ex5 difficulty=advanced kind=code title="Assign an engineer without double-booking"
-Implement the LLD for engineer assignment: pick a free engineer who covers the inspection's zone, preferring the one with the fewest bookings that day, and record the booking.
+:::exercise id=m02-hld-vs-lld-ex5 difficulty=advanced kind=code title="Assign an inspector without double-booking"
+Implement the LLD for inspector assignment: pick a free inspector who covers the inspection's zone, preferring the one with the fewest bookings that day, and record the booking.
 ::requirements
 - `Booking(DateTime Start, TimeSpan Duration)` with `End` and `Overlaps(DateTime start, TimeSpan duration)`. Intervals are half-open: a booking 10:00–11:00 does **not** overlap one starting at 11:00.
-- `Engineer(string id, params string[] zones)` with `Id`, `Zones` and a `Bookings` list.
-- `EngineerScheduler(IEnumerable<Engineer> engineers)`.
-- `Assign(string zone, DateTime start, TimeSpan duration)` returns the chosen `Engineer` or `null` if none is free:
-  - Only engineers whose `Zones` contain `zone` (case-insensitive) and who have no overlapping booking.
+- `Inspector(string id, params string[] zones)` with `Id`, `Zones` and a `Bookings` list.
+- `InspectorScheduler(IEnumerable<Inspector> inspectors)`.
+- `Assign(string zone, DateTime start, TimeSpan duration)` returns the chosen `Inspector` or `null` if none is free:
+  - Only inspectors whose `Zones` contain `zone` (case-insensitive) and who have no overlapping booking.
   - Prefer the fewest bookings on the same calendar date as `start`; break ties by `Id` (ordinal).
-  - Add the new booking to the chosen engineer.
+  - Add the new booking to the chosen inspector.
 - `duration <= TimeSpan.Zero` throws `ArgumentOutOfRangeException`.
 ::acceptance
 - With E1 booked 10:00–11:00 and 14:00–15:00 and E2 booked 10:30–11:30 (both north), a north request at 11:00 for 60 minutes goes to E1.
 - A north request at 16:00 goes to E2 (fewer bookings that day); a second 16:00 north request then goes to E1.
 - A north request at 10:45 for 30 minutes returns `null`.
-- A south request goes only to a south engineer.
+- A south request goes only to a south inspector.
 ::hint
 Two intervals [a, b) and [c, d) overlap when `a < d && c < b`.
 ::hint
@@ -1056,14 +1059,14 @@ Filter first (zone, free), then order (bookings that day, then id), then take th
 Count only bookings whose `Start.Date` equals `start.Date` for the "fewest bookings" rule.
 ::hint
 ```csharp
-var chosen = _engineers
+var chosen = _inspectors
     .Where(e => e.Zones.Contains(zone) && !e.Bookings.Any(b => b.Overlaps(start, duration)))
     .OrderBy(e => e.Bookings.Count(b => b.Start.Date == start.Date))
     .ThenBy(e => e.Id, StringComparer.Ordinal)
     .FirstOrDefault();
 ```
 ::starter
-```csharp file=EngineerScheduler.cs
+```csharp file=InspectorScheduler.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -1074,42 +1077,42 @@ public sealed record Booking(DateTime Start, TimeSpan Duration)
     public bool Overlaps(DateTime start, TimeSpan duration) => throw new NotImplementedException();
 }
 
-public sealed class Engineer
+public sealed class Inspector
 {
-    public Engineer(string id, params string[] zones) => throw new NotImplementedException();
+    public Inspector(string id, params string[] zones) => throw new NotImplementedException();
 
     public string Id { get; }
     public IReadOnlySet<string> Zones { get; }
     public List<Booking> Bookings { get; } = new();
 }
 
-public sealed class EngineerScheduler
+public sealed class InspectorScheduler
 {
-    public EngineerScheduler(IEnumerable<Engineer> engineers) => throw new NotImplementedException();
+    public InspectorScheduler(IEnumerable<Inspector> inspectors) => throw new NotImplementedException();
 
-    public Engineer? Assign(string zone, DateTime start, TimeSpan duration) => throw new NotImplementedException();
+    public Inspector? Assign(string zone, DateTime start, TimeSpan duration) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=EngineerSchedulerTests.cs
+```csharp file=InspectorSchedulerTests.cs
 using System;
 using Xunit;
 
-public class EngineerSchedulerTests
+public class InspectorSchedulerTests
 {
     private static readonly DateTime Day = new(2026, 10, 22);
     private static DateTime At(int h, int m = 0) => Day.AddHours(h).AddMinutes(m);
     private static readonly TimeSpan Hour = TimeSpan.FromMinutes(60);
 
-    private static (EngineerScheduler Scheduler, Engineer E1, Engineer E2, Engineer E3) Create()
+    private static (InspectorScheduler Scheduler, Inspector E1, Inspector E2, Inspector E3) Create()
     {
-        var e1 = new Engineer("E1", "north");
+        var e1 = new Inspector("E1", "north");
         e1.Bookings.Add(new Booking(At(10), Hour));
         e1.Bookings.Add(new Booking(At(14), Hour));
-        var e2 = new Engineer("E2", "North");
+        var e2 = new Inspector("E2", "North");
         e2.Bookings.Add(new Booking(At(10, 30), Hour));
-        var e3 = new Engineer("E3", "south");
-        return (new EngineerScheduler(new[] { e1, e2, e3 }), e1, e2, e3);
+        var e3 = new Inspector("E3", "south");
+        return (new InspectorScheduler(new[] { e1, e2, e3 }), e1, e2, e3);
     }
 
     [Fact]
@@ -1122,7 +1125,7 @@ public class EngineerSchedulerTests
     }
 
     [Fact]
-    public void Picks_the_free_engineer()
+    public void Picks_the_free_inspector()
     {
         var (s, e1, _, _) = Create();
         Assert.Same(e1, s.Assign("north", At(11), Hour));
@@ -1161,7 +1164,7 @@ public class EngineerSchedulerTests
 }
 ```
 ::solution
-```csharp file=EngineerScheduler.cs
+```csharp file=InspectorScheduler.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -1174,9 +1177,9 @@ public sealed record Booking(DateTime Start, TimeSpan Duration)
     public bool Overlaps(DateTime start, TimeSpan duration) => Start < start + duration && start < End;
 }
 
-public sealed class Engineer
+public sealed class Inspector
 {
-    public Engineer(string id, params string[] zones)
+    public Inspector(string id, params string[] zones)
     {
         if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException("Id is required.", nameof(id));
         Id = id;
@@ -1188,18 +1191,18 @@ public sealed class Engineer
     public List<Booking> Bookings { get; } = new();
 }
 
-public sealed class EngineerScheduler
+public sealed class InspectorScheduler
 {
-    private readonly IReadOnlyList<Engineer> _engineers;
+    private readonly IReadOnlyList<Inspector> _inspectors;
 
-    public EngineerScheduler(IEnumerable<Engineer> engineers) =>
-        _engineers = (engineers ?? throw new ArgumentNullException(nameof(engineers))).ToList();
+    public InspectorScheduler(IEnumerable<Inspector> inspectors) =>
+        _inspectors = (inspectors ?? throw new ArgumentNullException(nameof(inspectors))).ToList();
 
-    public Engineer? Assign(string zone, DateTime start, TimeSpan duration)
+    public Inspector? Assign(string zone, DateTime start, TimeSpan duration)
     {
         if (duration <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(duration));
 
-        var chosen = _engineers
+        var chosen = _inspectors
             .Where(e => e.Zones.Contains(zone))
             .Where(e => !e.Bookings.Any(b => b.Overlaps(start, duration)))
             .OrderBy(e => e.Bookings.Count(b => b.Start.Date == start.Date))
@@ -1212,13 +1215,13 @@ public sealed class EngineerScheduler
 }
 ```
 
-**Where this sits.** This is pure LLD: an algorithm and its data structures inside the Project API. The HLD only said "the API checks engineer availability using roster data". The zone set uses a case-insensitive comparer because zone names come from user input and roster files. In production, two requests could choose the same engineer at the same moment; the HLD's database would prevent that with a unique constraint or an exclusion constraint on engineer bookings (PostgreSQL supports `EXCLUDE USING gist` on time ranges), which is where LLD and HLD meet again.
+**Where this sits.** This is pure LLD: an algorithm and its data structures inside the Listings API. The HLD only said "the API checks inspector availability using roster data". The zone set uses a case-insensitive comparer because zone names come from user input and roster files. In production, two requests could choose the same inspector at the same moment; the HLD's database would prevent that with a unique constraint or an exclusion constraint on inspector bookings (PostgreSQL supports `EXCLUDE USING gist (inspector_id WITH =, slot WITH &&)` on a `tstzrange` column; the equality part needs the `btree_gist` extension), which is where LLD and HLD meet again.
 ::alternatives
-A round-robin pointer per zone spreads work evenly without counting bookings, but ignores how busy each engineer already is. A scoring function (bookings, distance to site, skills) generalises the ordering when more factors matter; at that point the Strategy pattern keeps scoring rules swappable.
+A round-robin pointer per zone spreads work evenly without counting bookings, but ignores how busy each inspector already is. A scoring function (bookings, distance to the seller's address, car brands they are trained on) generalises the ordering when more factors matter; at that point the Strategy pattern keeps scoring rules swappable.
 ::mistakes
 - Closed intervals (`<=`), which make back-to-back inspections impossible.
-- Counting all bookings ever, not just that day's, so a long-serving engineer is never chosen.
-- Choosing an engineer but forgetting to record the booking, so the next request picks the same engineer for the same slot.
+- Counting all bookings ever, not just that day's, so a long-serving inspector is never chosen.
+- Choosing an inspector but forgetting to record the booking, so the next request picks the same inspector for the same slot.
 :::
 
 ## Automated testing
@@ -1227,22 +1230,22 @@ Each level is tested in its own way.
 
 **LLD: unit tests for rules and algorithms.** The state rules (exercise 2) and the scheduler (exercise 5) are pure code and need nothing but xUnit. Write one test per rule; if the state diagram changes, the failing tests show exactly which rules moved.
 
-**LLD: use-case tests with in-memory adapters.** Test `InspectionService` with the in-memory repository, calendar and events to check the coordination: when the engineer is busy, nothing is saved and no event is published.
+**LLD: use-case tests with in-memory adapters.** Test `InspectionService` with the in-memory repository, calendar and events to check the coordination: when the inspector is busy, nothing is saved and no event is published.
 
 ```csharp
 [Fact]
-public async Task Busy_engineer_means_no_state_change_and_no_event()
+public async Task Busy_inspector_means_no_state_change_and_no_event()
 {
     var repo = new InMemoryInspectionRepository();
-    var calendar = new InMemoryEngineerCalendar();
+    var calendar = new InMemoryInspectorCalendar();
     var events = new RecordingEvents();                     // a hand-rolled fake that stores published events
     var service = new InspectionService(repo, calendar, events, TimeProvider.System);
-    var r = await service.RequestAsync("nh-48-pkg-3", "km 12+400, slab S3", "contractor-17", CancellationToken.None);
+    var r = await service.RequestAsync("listing-5521", "Flat 4B, 12th Main, Indiranagar", "seller-17", CancellationToken.None);
 
     var when = DateTimeOffset.UtcNow.AddDays(1);
-    calendar.MarkOnLeave("eng-4", DateOnly.FromDateTime(when.UtcDateTime));
+    calendar.MarkOnLeave("insp-4", DateOnly.FromDateTime(when.UtcDateTime));
 
-    await Assert.ThrowsAsync<EngineerBusyException>(() => service.ScheduleAsync(r.Id, "eng-4", when, CancellationToken.None));
+    await Assert.ThrowsAsync<InspectorBusyException>(() => service.ScheduleAsync(r.Id, "insp-4", when, CancellationToken.None));
     Assert.Equal(InspectionStatus.Requested, (await repo.GetAsync(r.Id, CancellationToken.None))!.Status);
     Assert.Empty(events.Published);
 }
@@ -1255,7 +1258,7 @@ public async Task Busy_engineer_means_no_state_change_and_no_event()
 ## Real-world application
 
 - **Design documents at many technology companies** follow the same split: a short design doc with context, goals, an architecture diagram and key flows (HLD), and per-component sections or follow-up docs with data models and APIs (LLD).
-- **Government and infrastructure tenders** often ask for both: a solution architecture (HLD) in the technical proposal, and detailed design documents (LLD) after award, before development starts.
+- **Large enterprise and government IT projects** often ask for both: a solution architecture (HLD) in the proposal, and detailed design documents (LLD) after the contract is awarded, before development starts.
 - **Interviews** are usually split the same way: "system design" rounds are HLD (design a food-delivery platform), "object-oriented design" or "machine coding" rounds are LLD (design a parking lot, implement a rate limiter class).
 - **The C4 model** is widely used to keep diagrams at a consistent zoom level, so a single diagram does not mix servers and classes.
 - **Code reviews** check LLD; **architecture reviews** check HLD. Knowing which review a change needs saves everyone time.
@@ -1266,7 +1269,7 @@ public async Task Busy_engineer_means_no_state_change_and_no_event()
 ::q beginner
 What is the difference between HLD and LLD?
 ::a
-HLD is the whole-system view: the major components (apps, services, databases, caches, queues, external systems), what each does, how they connect and how the system meets scale, availability and cost requirements. LLD is the inside of one component: classes, interfaces, methods, business rules, states, tables and exact API contracts. Like a site plan versus the detailed drawings of one building: you need the first to place things correctly and the second to actually build.
+HLD is the whole-system view: the major components (apps, services, databases, caches, queues, external systems), what each does, how they connect and how the system meets scale, availability and cost requirements. LLD is the inside of one component: classes, interfaces, methods, business rules, states, tables and exact API contracts. Like a shopping mall's plan versus the layout inside one store: you need the first to place things correctly and the second to actually run the shop.
 ::q beginner
 Name three artefacts of HLD and three of LLD.
 ::a
@@ -1278,13 +1281,13 @@ Each connection from a component to something else in the HLD usually becomes an
 ::q intermediate
 Can LLD change the HLD? Give an example.
 ::a
-Yes, and it should when it reveals something the HLD missed. For example, while designing engineer scheduling we found the HR roster system only provides a nightly file, not a live API. That changes a connection in the HLD (a nightly import into our database instead of a live call) and adds a trade-off (leave taken on the day is not seen). The team updated the HLD diagram and recorded the decision. Treating the HLD as fixed would leave a design document that describes something that does not exist.
+Yes, and it should when it reveals something the HLD missed. For example, while designing inspector scheduling we found the HR roster system only provides a nightly file, not a live API. That changes a connection in the HLD (a nightly import into our database instead of a live call) and adds a trade-off (leave taken on the day is not seen). The team updated the HLD diagram and recorded the decision. Treating the HLD as fixed would leave a design document that describes something that does not exist.
 ::q advanced
 How much design would you do before coding a new feature?
 ::a
 In proportion to the cost of getting it wrong. If the feature adds or changes components, adds a new kind of data (large files, high-volume events) or a new external dependency, I write a short HLD and get it reviewed, because those mistakes are expensive. Then LLD for the parts with real rules: entity states, table design, API contract. If the feature is a change inside one component with no new connections, the HLD is one sentence and the LLD may be a state diagram and a schema in the pull request. I avoid big up-front documents that go stale; the design should be just enough to catch expensive mistakes and align the team, then kept current as the code evolves.
 ::q advanced
-In an interview you are asked to "design an inspection management system". How do you decide whether to go HLD or LLD?
+In an interview you are asked to "design a car-inspection booking system". How do you decide whether to go HLD or LLD?
 ::a
 I ask. "Would you like the overall architecture, or the classes and data model for a part of it?" If it is HLD, I clarify requirements and scale, estimate load (3,000 inspections a day, 90 GB of photos), and draw components and data flows: API, PostgreSQL, object storage with presigned uploads, queue and worker for notifications, scheduler for overdue checks, and discuss failures and trade-offs. If it is LLD, I identify entities and their states, draw the class diagram and state diagram, define the repository and service interfaces, write the table schema and walk through one use case at the method level. I may sketch the HLD in one minute for context even in an LLD round, so the classes have a place to live.
 :::
@@ -1340,9 +1343,9 @@ A team's "design document" has 30 class diagrams and no architecture diagram. Wh
 - [ ] Nothing, class diagrams are enough.
 > Without HLD, the decisions that are hardest to change are never discussed.
 ::q single
-The HLD says the Project API reads engineer availability from the HR roster system. In the LLD, this most naturally becomes:
+The HLD says the Listings API reads inspector availability from the HR roster system. In the LLD, this most naturally becomes:
 - [ ] A static method in the controller that calls the HR system.
-- [x] An `IEngineerCalendar` interface that the service depends on, with an implementation that talks to the roster data.
+- [x] An `IInspectorCalendar` interface that the service depends on, with an implementation that talks to the roster data.
 - [ ] A column on the inspections table.
 - [ ] A new microservice.
 > HLD connections become interfaces in LLD, so business code is independent of how the dependency is reached.

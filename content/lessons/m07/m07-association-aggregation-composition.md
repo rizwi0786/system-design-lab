@@ -26,7 +26,7 @@ references:
 
 The [previous lesson](#/lesson/m07-relationships) covered direction and multiplicity. This one zooms in on a single question that causes a surprising number of production bugs: **when two objects are linked, who owns whom?** The answer decides who creates the part, what happens when the whole is deleted or copied, and who is allowed to call `Dispose`.
 
-The running example is a project-tracking module for an infrastructure consultancy: projects, work packages, activities and engineers.
+The running example is the project tracker of a small software agency that builds apps for clients (think of a Jira-style tool): projects, milestones, the activities (tasks) inside each milestone, and engineers.
 
 ## Learning objectives
 
@@ -63,7 +63,7 @@ A simple way to remember them:
 | Aggregation | "has, but does not own" | team – players |
 | Composition | "owns, and the part dies with it" | house – rooms |
 
-In code, the question "does the part die with the whole?" becomes very practical: when I delete a project from the database, should its work packages be deleted too (yes, composition), and should the engineers be deleted too (certainly not, aggregation)?
+In code, the question "does the part die with the whole?" becomes very practical: when I delete a client's app project from the database, should its milestones be deleted too (yes, composition), and should the engineers who worked on it be deleted too (certainly not, aggregation)?
 
 ## First-principles explanation
 
@@ -101,11 +101,11 @@ An honest note: the UML specification defines aggregation ("shared aggregation")
 
 ### Composition
 
-A whole–part relationship with exclusive ownership. A `Project` composes `WorkPackage`s ("Package 2: km 12 to km 24 earthworks"), and each work package composes its `Activity` entries. A work package has no meaning outside its project, cannot be moved to another project, and should be deleted when the project is.
+A whole–part relationship with exclusive ownership. A `Project` composes `Milestone`s ("Milestone 2: checkout and UPI payments"), and each milestone composes its `Activity` entries. A milestone has no meaning outside its project, cannot be moved to another project, and should be deleted when the project is.
 
 Code shape:
 
-- The **whole creates the part** (`project.AddWorkPackage(...)` returns the new package). The part's constructor is `internal` or `private`, so nothing else can create one.
+- The **whole creates the part** (`project.AddMilestone(...)` returns the new milestone). The part's constructor is `internal` or `private`, so nothing else can create one.
 - The part is **never shared**: no API accepts an existing part from outside.
 - The whole **controls all changes** to the part, or the part exposes only operations that cannot break the whole's rules.
 - **Copying** the whole copies the parts (a deep copy with new ids).
@@ -116,7 +116,7 @@ Code shape:
 
 In C++, composition literally means the whole's destructor destroys the part's memory. In C#, the garbage collector frees memory, so "the part dies with the whole" is about **logical lifetime**:
 
-- Is the part still reachable by the business after the whole is gone? (Can you look up a work package of a deleted project? You should not be able to.)
+- Is the part still reachable by the business after the whole is gone? (Can you look up a milestone of a deleted project? You should not be able to.)
 - Is it deleted from the database with the whole?
 - Who is responsible for releasing **unmanaged resources** (files, sockets, database connections) it holds?
 
@@ -136,7 +136,7 @@ Getting this wrong produces two classic bugs: disposing something you borrowed (
 
 Composition and aggregation behave differently when you copy:
 
-- Copying a **composed** part: make a new part with a new identity. Two projects created from one template must not share a work-package object, or progress recorded on one appears on the other.
+- Copying a **composed** part: make a new part with a new identity. Two projects created from one template must not share a milestone object, or progress recorded on one appears on the other.
 - Copying an **aggregated** part: copy the *reference* (both wholes now point to the same engineer) or do not copy at all. Never clone an engineer: you would create a second "Asha" in the HR system.
 
 ### Database mapping
@@ -171,12 +171,12 @@ classDiagram
         +Guid Id
         +string Name
         +Guid ClientId
-        +AddWorkPackage(string name, decimal budget) WorkPackage
+        +AddMilestone(string name, decimal budget) Milestone
         +Assign(Engineer engineer)
         +Release(Guid engineerId)
         +CopyAsTemplate(string newName) Project
     }
-    class WorkPackage {
+    class Milestone {
         +Guid Id
         +string Name
         +decimal Budget
@@ -198,15 +198,15 @@ classDiagram
         +Guid Id
         +string Name
     }
-    Project "1" *-- "0..*" WorkPackage : owns
-    WorkPackage "1" *-- "1..*" Activity : owns
+    Project "1" *-- "0..*" Milestone : owns
+    Milestone "1" *-- "1..*" Activity : owns
     Project "0..*" o-- "0..*" Engineer : team
     Project "0..*" --> "1" Client : for (by id)
 ```
 
 How to read it:
 
-- **Filled diamonds** (`*--`) at `Project` and `WorkPackage`: composition. A work package belongs to exactly one project and is created by it. An activity belongs to exactly one work package.
+- **Filled diamonds** (`*--`) at `Project` and `Milestone`: composition. A milestone belongs to exactly one project and is created by it. An activity belongs to exactly one milestone.
 - **Hollow diamond** (`o--`) at `Project` towards `Engineer`: aggregation. Note the multiplicity `0..*` on *both* ends: one engineer can be on many projects. Composition can never have `0..*` at the whole's end, because a part belongs to at most one whole.
 - **Plain arrow** to `Client`: association, held by id.
 
@@ -223,10 +223,10 @@ sequenceDiagram
     participant ED as IEngineerDirectory
     Admin->>S: Delete(projectId 42)
     S->>PR: Find(42)
-    PR-->>S: project (3 work packages, 2 engineers)
+    PR-->>S: project (3 milestones, 2 engineers)
     S->>PR: Delete(project)
     PR->>DB: DELETE FROM projects WHERE id = 42
-    DB->>DB: ON DELETE CASCADE removes work_packages and activities
+    DB->>DB: ON DELETE CASCADE removes milestones and activities
     DB->>DB: ON DELETE CASCADE removes project_engineers rows only
     DB-->>PR: ok
     S->>ED: Count active engineers
@@ -234,7 +234,7 @@ sequenceDiagram
     S-->>Admin: 204 No Content
 ```
 
-The deletion travels down the composition (work packages, then activities) and stops at the aggregation boundary. Only the *membership* rows in the junction table go; the engineers remain. The `Client` association is untouched, and if the operation had been "delete client" instead, the foreign key with `RESTRICT` would have refused while projects still reference it.
+The deletion travels down the composition (milestones, then activities) and stops at the aggregation boundary. Only the *membership* rows in the junction table go; the engineers remain. The `Client` association is untouched, and if the operation had been "delete client" instead, the foreign key with `RESTRICT` would have refused while projects still reference it.
 
 ## Step-by-step example
 
@@ -242,22 +242,22 @@ The deletion travels down the composition (work packages, then activities) and s
 
 | Link | Creates? | Shared? | Outlives? | Delete with whole? | Result |
 |---|---|---|---|---|---|
-| Project → WorkPackage | Project creates | No | No | Yes | Composition |
-| WorkPackage → Activity | Package creates | No | No | Yes | Composition |
+| Project → Milestone | Project creates | No | No | Yes | Composition |
+| Milestone → Activity | Milestone creates | No | No | Yes | Composition |
 | Project → Engineer | HR creates | Yes, many projects | Yes | No | Aggregation |
 | Project → Client | Sales creates | Yes | Yes | No, block instead | Association |
 
 ### Step 2: hide the part constructors
 
-`WorkPackage` and `Activity` get `internal` constructors. The only way to make one is through the owner's `Add...` method, which also enforces the owner's rules (unique names, budget limits).
+`Milestone` and `Activity` get `internal` constructors. The only way to make one is through the owner's `Add...` method, which also enforces the owner's rules (unique names, budget limits).
 
 ### Step 3: decide what the whole exposes
 
-The project exposes `IReadOnlyList<WorkPackage>`, so callers can read packages and call safe operations on them, but cannot add, remove or replace them.
+The project exposes `IReadOnlyList<Milestone>`, so callers can read milestones and call safe operations on them, but cannot add, remove or replace them.
 
 ### Step 4: write copy and delete behaviour explicitly
 
-`CopyAsTemplate` creates new packages and activities with zero progress, keeps the client id, and starts with an empty team. Deletion is a single repository call; the database cascade handles composed rows.
+`CopyAsTemplate` creates new milestones and activities with zero progress, keeps the client id, and starts with an empty team. Deletion is a single repository call; the database cascade handles composed rows.
 
 ### Step 5: check disposables
 
@@ -271,7 +271,7 @@ Projects.Api/
   Projects/
     Engineer.cs
     Project.cs
-    WorkPackage.cs
+    Milestone.cs
     ProjectStores.cs
     ProgressReportWriter.cs
     ProjectService.cs
@@ -289,16 +289,16 @@ public sealed class Engineer(Guid id, string name, string discipline)
 }
 ```
 
-```csharp file=Projects/WorkPackage.cs
+```csharp file=Projects/Milestone.cs
 namespace Projects;
 
-/// <summary>Composed by WorkPackage. Created only through WorkPackage.AddActivity.</summary>
+/// <summary>Composed by Milestone. Created only through Milestone.AddActivity.</summary>
 public sealed class Activity
 {
     internal Activity(string name, decimal weight) { Name = name; Weight = weight; }
 
     public string Name { get; }
-    public decimal Weight { get; }            // share of the package, e.g. 0.25 = 25 %
+    public decimal Weight { get; }            // share of the milestone, e.g. 0.25 = 25 %
     public decimal Progress { get; private set; }
 
     public void RecordProgress(decimal percent)
@@ -311,14 +311,14 @@ public sealed class Activity
     internal Activity CopyFresh() => new(Name, Weight);
 }
 
-/// <summary>Composed by Project. Owns its activities. Created only through Project.AddWorkPackage.</summary>
-public sealed class WorkPackage
+/// <summary>Composed by Project. Owns its activities. Created only through Project.AddMilestone.</summary>
+public sealed class Milestone
 {
     private readonly List<Activity> _activities = new();
 
-    internal WorkPackage(string name, decimal budget)
+    internal Milestone(string name, decimal budget)
     {
-        Id = Guid.NewGuid();
+        Id = Guid.CreateVersion7();   // time-ordered: friendlier to a B-tree primary key index than random v4
         Name = name;
         Budget = budget;
     }
@@ -344,9 +344,9 @@ public sealed class WorkPackage
     }
 
     /// <summary>Deep copy for templates: new identity, same structure, zero progress.</summary>
-    internal WorkPackage CopyFresh()
+    internal Milestone CopyFresh()
     {
-        var copy = new WorkPackage(Name, Budget);
+        var copy = new Milestone(Name, Budget);
         foreach (var a in _activities) copy._activities.Add(a.CopyFresh());
         return copy;
     }
@@ -357,19 +357,19 @@ public sealed class WorkPackage
 namespace Projects;
 
 /// <summary>
-/// Composition: work packages (created, owned, copied and deleted with the project).
+/// Composition: milestones (created, owned, copied and deleted with the project).
 /// Aggregation: engineers (passed in, shared with other projects, never copied or deleted).
 /// Association: client (by id).
 /// </summary>
 public sealed class Project
 {
-    private readonly List<WorkPackage> _packages = new();
+    private readonly List<Milestone> _milestones = new();
     private readonly Dictionary<Guid, Engineer> _team = new();
 
     public Project(string name, Guid clientId, decimal budgetCap)
     {
         if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("Name is required.", nameof(name));
-        Id = Guid.NewGuid();
+        Id = Guid.CreateVersion7();
         Name = name;
         ClientId = clientId;
         BudgetCap = budgetCap;
@@ -379,27 +379,27 @@ public sealed class Project
     public string Name { get; }
     public Guid ClientId { get; }
     public decimal BudgetCap { get; }
-    public IReadOnlyList<WorkPackage> WorkPackages => _packages;
+    public IReadOnlyList<Milestone> Milestones => _milestones;
     public IReadOnlyCollection<Engineer> Team => _team.Values;
-    public decimal AllocatedBudget => _packages.Sum(p => p.Budget);
+    public decimal AllocatedBudget => _milestones.Sum(p => p.Budget);
 
     // --- composition: the project creates its parts and enforces its rules while doing so
-    public WorkPackage AddWorkPackage(string name, decimal budget)
+    public Milestone AddMilestone(string name, decimal budget)
     {
         if (budget <= 0) throw new ArgumentOutOfRangeException(nameof(budget));
         if (AllocatedBudget + budget > BudgetCap)
             throw new InvalidOperationException($"Budget cap {BudgetCap:N0} would be exceeded.");
-        var package = new WorkPackage(name, budget);
-        _packages.Add(package);
-        return package;
+        var milestone = new Milestone(name, budget);
+        _milestones.Add(milestone);
+        return milestone;
     }
 
-    public void RemoveWorkPackage(Guid packageId)
+    public void RemoveMilestone(Guid milestoneId)
     {
-        var p = _packages.SingleOrDefault(x => x.Id == packageId)
-                ?? throw new InvalidOperationException($"Package {packageId} is not part of {Name}.");
-        if (p.PercentComplete > 0) throw new InvalidOperationException($"Package '{p.Name}' has progress and cannot be removed.");
-        _packages.Remove(p);          // the part is gone for good; nothing else references it
+        var p = _milestones.SingleOrDefault(x => x.Id == milestoneId)
+                ?? throw new InvalidOperationException($"Milestone {milestoneId} is not part of {Name}.");
+        if (p.PercentComplete > 0) throw new InvalidOperationException($"Milestone '{p.Name}' has progress and cannot be removed.");
+        _milestones.Remove(p);          // the part is gone for good; nothing else references it
     }
 
     // --- aggregation: engineers come from outside and leave unharmed
@@ -415,7 +415,7 @@ public sealed class Project
     public Project CopyAsTemplate(string newName)
     {
         var copy = new Project(newName, ClientId, BudgetCap);
-        foreach (var p in _packages) copy._packages.Add(p.CopyFresh());
+        foreach (var p in _milestones) copy._milestones.Add(p.CopyFresh());
         return copy;
     }
 }
@@ -447,7 +447,7 @@ public sealed class InMemoryProjectRepository : IProjectRepository
     private readonly ConcurrentDictionary<Guid, Project> _projects = new();
     public Project? Find(Guid id) => _projects.GetValueOrDefault(id);
     public void Save(Project project) => _projects[project.Id] = project;
-    public bool Delete(Guid id) => _projects.TryRemove(id, out _);   // packages go with the project object
+    public bool Delete(Guid id) => _projects.TryRemove(id, out _);   // milestones go with the project object
     public IReadOnlyList<Project> WithEngineer(Guid engineerId) =>
         _projects.Values.Where(p => p.Team.Any(e => e.Id == engineerId)).ToList();
 }
@@ -483,7 +483,7 @@ public sealed class ProgressReportWriter : IDisposable
     public void Write(Project project)
     {
         _writer.WriteLine($"Project,{project.Name}");
-        foreach (var p in project.WorkPackages)
+        foreach (var p in project.Milestones)
             _writer.WriteLine($"{p.Name},{p.Budget},{p.PercentComplete}");
         _writer.Flush();
     }
@@ -534,8 +534,8 @@ builder.Services.AddScoped<ProjectService>();   // the container owns it and dis
 var app = builder.Build();
 
 var directory = app.Services.GetRequiredService<IEngineerDirectory>();
-directory.Add(new Engineer(Guid.Parse("00000000-0000-0000-0000-0000000000a1"), "Asha", "Highways"));
-directory.Add(new Engineer(Guid.Parse("00000000-0000-0000-0000-0000000000a2"), "Ravi", "Structures"));
+directory.Add(new Engineer(Guid.Parse("00000000-0000-0000-0000-0000000000a1"), "Asha", "Backend"));
+directory.Add(new Engineer(Guid.Parse("00000000-0000-0000-0000-0000000000a2"), "Ravi", "Mobile"));
 
 app.MapPost("/projects", (string name, Guid clientId, decimal budgetCap, ProjectService service) =>
 {
@@ -578,12 +578,20 @@ CREATE TABLE projects (
     budget_cap  numeric(14,2) NOT NULL
 );
 
-CREATE TABLE work_packages (                                                -- composition
+CREATE TABLE milestones (                                                -- composition
     id          uuid PRIMARY KEY,
     project_id  uuid NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
     name        text NOT NULL,
     budget      numeric(14,2) NOT NULL,
     UNIQUE (project_id, name)
+);
+
+CREATE TABLE activities (                                                   -- composition, one level down
+    milestone_id uuid NOT NULL REFERENCES milestones (id) ON DELETE CASCADE,
+    name         text NOT NULL,
+    weight       numeric(4,3) NOT NULL CHECK (weight > 0 AND weight <= 1),
+    progress     numeric(5,2) NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
+    PRIMARY KEY (milestone_id, name)
 );
 
 CREATE TABLE project_engineers (                                            -- aggregation (membership only)
@@ -595,9 +603,11 @@ CREATE TABLE project_engineers (                                            -- a
 
 Design notes:
 
-- **`internal` constructors** on `WorkPackage` and `Activity` make "only the owner creates parts" a compiler rule. Put the domain in its own project so `internal` means something.
+- **`internal` constructors** on `Milestone` and `Activity` make "only the owner creates parts" a compiler rule. Put the domain in its own project so `internal` means something.
 - **`CopyAsTemplate` is written by hand.** A generic deep-clone (serialise and deserialise) would also copy the team and the progress, which is exactly wrong.
 - **`ProgressReportWriter` has two constructors with different ownership.** This mirrors `StreamWriter`'s `leaveOpen` parameter. The endpoint borrows its own `MemoryStream`, then hands ownership to `Results.File`, which disposes it after sending.
+- **The in-memory stores are for the demo only.** They hand the same mutable `Project` object to every request, and `Project` is not thread-safe. A real repository loads a fresh copy per request and saves it with optimistic concurrency (a version column checked in the `UPDATE`), so two people editing the same project cannot silently overwrite each other.
+
 
 ## Bad design vs good design
 
@@ -606,16 +616,16 @@ Design notes:
 ```csharp
 public class Project
 {
-    public List<WorkPackage> WorkPackages { get; set; } = new();
+    public List<Milestone> Milestones { get; set; } = new();
     public List<Engineer> Team { get; set; } = new();
 }
-public class WorkPackage { public WorkPackage() { } public string Name { get; set; } = ""; public decimal Budget { get; set; } }
+public class Milestone { public Milestone() { } public string Name { get; set; } = ""; public decimal Budget { get; set; } }
 
 // Somewhere else:
-var shared = new WorkPackage { Name = "Earthworks", Budget = 4_00_00_000m };
-projectA.WorkPackages.Add(shared);
-projectB.WorkPackages.Add(shared);          // one package in two projects: progress on A shows on B
-projectA.WorkPackages.Add(new WorkPackage { Budget = 99_00_00_000m });   // budget cap bypassed
+var shared = new Milestone { Name = "Checkout", Budget = 4_00_000m };
+projectA.Milestones.Add(shared);
+projectB.Milestones.Add(shared);          // one milestone in two projects: progress on A shows on B
+projectA.Milestones.Add(new Milestone { Budget = 99_00_000m });   // budget cap bypassed
 var clone = JsonSerializer.Deserialize<Project>(JsonSerializer.Serialize(projectA))!;  // clones the team too
 ```
 
@@ -632,7 +642,7 @@ public sealed class ReportExporter(Stream output) : IDisposable
 
 **Good**: the implementation above. Parts are created by the owner, exposed read-only, copied deliberately, and deleted by cascade. Borrowed resources are left open.
 
-**Is strict composition always worth it?** No. If a "part" is only ever displayed and never has rules (say, a list of tags on a project), a public `List<string>` is fine. Strictness pays off when the whole has invariants across its parts, such as "total package budgets ≤ project cap", which the bad version cannot protect.
+**Is strict composition always worth it?** No. If a "part" is only ever displayed and never has rules (say, a list of tags on a project), a public `List<string>` is fine. Strictness pays off when the whole has invariants across its parts, such as "total milestone budgets ≤ project cap", which the bad version cannot protect.
 
 :::callout type=mistake title="Cascade delete on an aggregation"
 Configuring `ON DELETE CASCADE` from `projects` to `engineers` (instead of to the junction table) will delete employees when a project is closed. ORMs make this easy to do by accident when a many-to-many is mapped as a one-to-many. Always ask "what rows disappear?" before adding a cascade, and test deletion against a real database in CI.
@@ -642,7 +652,7 @@ Configuring `ON DELETE CASCADE` from `projects` to `engineers` (instead of to th
 
 Run it and watch how copying and deleting treat composed and aggregated parts differently. Then:
 
-1. Make `CopyAsTemplate` copy the package list by reference (`copy._packages.AddRange(_packages)`). Record progress on the copy. What happens to the original?
+1. Make `CopyAsTemplate` copy the milestone list by reference (`copy._milestones.AddRange(_milestones)`). Record progress on the copy. What happens to the original?
 2. Make the template copy the team too. Is that ever correct? (Think: "same team, new project" might be a separate, explicit operation.)
 
 :::playground type=csharp title="Composition vs aggregation: copy and delete"
@@ -653,30 +663,30 @@ using System.Linq;
 
 public sealed class Engineer(string name) { public string Name { get; } = name; }
 
-public sealed class WorkPackage
+public sealed class Milestone
 {
-    internal WorkPackage(string name) { Name = name; }
+    internal Milestone(string name) { Name = name; }
     public string Name { get; }
     public int Progress { get; private set; }
     public void Record(int percent) => Progress = percent;
-    internal WorkPackage CopyFresh() => new(Name);
+    internal Milestone CopyFresh() => new(Name);
 }
 
 public sealed class Project(string name)
 {
-    private readonly List<WorkPackage> _packages = new();
+    private readonly List<Milestone> _milestones = new();
     private readonly List<Engineer> _team = new();
     public string Name { get; } = name;
-    public IReadOnlyList<WorkPackage> Packages => _packages;
+    public IReadOnlyList<Milestone> Milestones => _milestones;
     public IReadOnlyList<Engineer> Team => _team;
 
-    public WorkPackage AddPackage(string name) { var p = new WorkPackage(name); _packages.Add(p); return p; }
+    public Milestone AddMilestone(string name) { var p = new Milestone(name); _milestones.Add(p); return p; }
     public void Assign(Engineer e) { if (!_team.Contains(e)) _team.Add(e); }
 
     public Project CopyAsTemplate(string newName)
     {
         var copy = new Project(newName);
-        foreach (var p in _packages) copy._packages.Add(p.CopyFresh());   // deep copy: composition
+        foreach (var p in _milestones) copy._milestones.Add(p.CopyFresh());   // deep copy: composition
         return copy;                                                         // team not copied: aggregation
     }
 }
@@ -686,22 +696,22 @@ public static class Program
     public static void Main()
     {
         var asha = new Engineer("Asha");
-        var nh48 = new Project("NH-48 widening");
-        nh48.AddPackage("Earthworks km 0-12").Record(40);
-        nh48.AddPackage("Bridges");
-        nh48.Assign(asha);
+        var grocery = new Project("FreshCart grocery app");
+        grocery.AddMilestone("Checkout flow").Record(40);
+        grocery.AddMilestone("UPI payments");
+        grocery.Assign(asha);
 
-        var nh44 = nh48.CopyAsTemplate("NH-44 widening");
-        nh44.Assign(asha);                                      // same engineer, two projects
-        nh44.Packages[0].Record(5);
+        var pharmacy = grocery.CopyAsTemplate("MediQuick pharmacy app");
+        pharmacy.Assign(asha);                                  // same engineer, two projects
+        pharmacy.Milestones[0].Record(5);
 
-        Console.WriteLine($"{nh48.Name}: earthworks {nh48.Packages[0].Progress} %");   // still 40
-        Console.WriteLine($"{nh44.Name}: earthworks {nh44.Packages[0].Progress} %");   // 5
-        Console.WriteLine($"Asha on both: {nh48.Team.Contains(asha) && nh44.Team.Contains(asha)}");
+        Console.WriteLine($"{grocery.Name}: checkout {grocery.Milestones[0].Progress} %");    // still 40
+        Console.WriteLine($"{pharmacy.Name}: checkout {pharmacy.Milestones[0].Progress} %");  // 5
+        Console.WriteLine($"Asha on both: {grocery.Team.Contains(asha) && pharmacy.Team.Contains(asha)}");
 
-        var projects = new List<Project> { nh48, nh44 };
-        projects.Remove(nh48);                                   // "delete" NH-48 and everything it owns
-        Console.WriteLine($"Packages still reachable: {projects.Sum(p => p.Packages.Count)}");   // only NH-44's 2
+        var projects = new List<Project> { grocery, pharmacy };
+        projects.Remove(grocery);                                // "delete" FreshCart and everything it owns
+        Console.WriteLine($"Milestones still reachable: {projects.Sum(p => p.Milestones.Count)}");   // only MediQuick's 2
         Console.WriteLine($"Asha still exists and works on: {string.Join(", ", projects.Where(p => p.Team.Contains(asha)).Select(p => p.Name))}");
     }
 }
@@ -732,7 +742,7 @@ The Car–Engine answer depends on the business. In a car *showroom* the engine 
 ::hint
 Check multiplicities: if the whole's end could be more than 1 (a song on many playlists), it cannot be composition.
 ::hint
-For professors, ask "if the Civil Engineering department merges into a new School of Infrastructure, do the professors get deleted?" No, so it is not composition.
+For professors, ask "if the Statistics department merges into a new School of Data Science, do the professors get deleted?" No, so it is not composition.
 ::starter
 ```json file=six-relationships.json
 {
@@ -798,7 +808,7 @@ The Doctor–Patient link in a real clinic system becomes an association class (
 - `Taxable` is the sum of `quantity × rate`; `Gst` is the sum of each line's GST rounded to 2 decimals; `Total` = `Taxable + Gst`.
 - After `Finalise()`, adding or removing lines throws `InvalidOperationException`.
 ::acceptance
-- 10 × ₹372 at 28 % GST plus 2 × ₹1,250 at 18 % GST gives taxable ₹6,220, GST ₹1,491.60, total ₹7,711.60.
+- 10 × ₹372 at 5 % GST plus 2 × ₹1,250 at 18 % GST gives taxable ₹6,220, GST ₹636.00, total ₹6,856.00.
 - Removing a line taken from another invoice throws `InvalidOperationException`.
 - Adding a line after `Finalise()` throws `InvalidOperationException`.
 - A non-positive quantity or negative rate throws `ArgumentOutOfRangeException`.
@@ -853,8 +863,8 @@ public class InvoiceTests
     private static Invoice Sample()
     {
         var inv = new Invoice("INV-2026-0042");
-        inv.AddLine("OPC 53 cement bag", 10, 372m, 28m);
-        inv.AddLine("Site survey visit", 2, 1_250m, 18m);
+        inv.AddLine("Basmati rice 1 kg", 10, 372m, 5m);
+        inv.AddLine("Wireless mouse", 2, 1_250m, 18m);
         return inv;
     }
 
@@ -863,8 +873,8 @@ public class InvoiceTests
     {
         var inv = Sample();
         Assert.Equal(6_220m, inv.Taxable);
-        Assert.Equal(1_491.60m, inv.Gst);
-        Assert.Equal(7_711.60m, inv.Total);
+        Assert.Equal(636m, inv.Gst);
+        Assert.Equal(6_856m, inv.Total);
     }
 
     [Fact]
@@ -872,7 +882,7 @@ public class InvoiceTests
     {
         var a = Sample();
         var b = new Invoice("INV-2026-0043");
-        var foreign = b.AddLine("Steel", 1, 61m, 18m);
+        var foreign = b.AddLine("USB cable", 1, 61m, 18m);
         Assert.Throws<InvalidOperationException>(() => a.RemoveLine(foreign));
     }
 
@@ -934,7 +944,7 @@ public sealed class Invoice(string number)
         EnsureOpen();
         if (quantity <= 0) throw new ArgumentOutOfRangeException(nameof(quantity));
         if (rate < 0) throw new ArgumentOutOfRangeException(nameof(rate));
-        if (gstPercent is < 0 or > 28) throw new ArgumentOutOfRangeException(nameof(gstPercent));
+        if (gstPercent is < 0 or > 40) throw new ArgumentOutOfRangeException(nameof(gstPercent));
         var line = new InvoiceLine(item, quantity, rate, gstPercent);
         _lines.Add(line);
         return line;
@@ -955,7 +965,7 @@ public sealed class Invoice(string number)
 }
 ```
 
-`_lines.Remove(line)` uses reference equality, which is correct for composed parts: the question is "is this *my* line object?", not "is there a line with the same text?". Taxable: 3,720 + 2,500 = 6,220. GST: 1,041.60 + 450 = 1,491.60.
+`_lines.Remove(line)` uses reference equality, which is correct for composed parts: the question is "is this *my* line object?", not "is there a line with the same text?". Taxable: 3,720 + 2,500 = 6,220. GST: 186 + 450 = 636. The guard allows 0 to 40 % because India's GST slabs since September 2025 are 5 %, 18 % and 40 %; in a real system the allowed rates would come from configuration, not a constant.
 ::mistakes
 - Accepting an `InvoiceLine` parameter in `AddLine`. That lets callers create or share lines.
 - Giving `InvoiceLine` value equality (a `record`) and then removing "a line equal to this one", which removes the wrong one when two lines are identical.
@@ -965,7 +975,8 @@ public sealed class Invoice(string number)
 :::exercise id=m07-association-aggregation-composition-ex3 difficulty=intermediate kind=code title="Own or borrow: disposal rules"
 Write a `CsvExporter` that writes rows to a stream. When it creates the stream itself, it owns and disposes it. When given a stream, it borrows it and must leave it open, unless the caller passes `ownsStream: true`.
 ::requirements
-- `CsvExporter.ToStream(Stream s, bool ownsStream = false)` and `CsvExporter.ToFile(string path)` are the two ways to construct it (static factory methods).
+- `CsvExporter.ToStream(Stream s, bool ownsStream = false)` and `CsvExporter.ToFile(string path)` are the two ways
+ to construct it (static factory methods).
 - `WriteRow(params string[] cells)` writes cells separated by commas, quoting cells that contain a comma or quote (double the quotes inside).
 - `Dispose()` flushes, then disposes the stream only if owned. A second `Dispose()` does nothing.
 - `WriteRow` after `Dispose` throws `ObjectDisposedException`.
@@ -973,7 +984,7 @@ Write a `CsvExporter` that writes rows to a stream. When it creates the stream i
 - A borrowed stream is still usable after the exporter is disposed, and contains the rows.
 - A stream passed with `ownsStream: true` is disposed with the exporter.
 - `ToFile` writes a file that can be read back, and the file is not locked after `Dispose`.
-- `WriteRow("Pune", "Beam, RCC", "6\" slab")` writes `Pune,"Beam, RCC","6"" slab"`.
+- `WriteRow("Pune", "Paneer pizza, large", "12\" base")` writes `Pune,"Paneer pizza, large","12"" base"`.
 - Calling `Dispose` twice is safe.
 ::hint
 The exporter needs to remember *whether it owns* the stream. One `bool` field is enough.
@@ -1023,10 +1034,10 @@ public class CsvExporterTests
     public void Borrowed_stream_stays_open_and_has_rows()
     {
         var s = new TrackingStream();
-        using (var csv = CsvExporter.ToStream(s)) csv.WriteRow("Site", "Progress");
+        using (var csv = CsvExporter.ToStream(s)) csv.WriteRow("City", "Orders");
         Assert.False(s.WasDisposed);
         s.Position = 0;
-        Assert.Equal("Site,Progress", new StreamReader(s).ReadToEnd().TrimEnd());
+        Assert.Equal("City,Orders", new StreamReader(s).ReadToEnd().TrimEnd());
     }
 
     [Fact]
@@ -1041,8 +1052,8 @@ public class CsvExporterTests
     public void Quotes_cells_with_commas_and_quotes()
     {
         var s = new MemoryStream();
-        using (var csv = CsvExporter.ToStream(s)) csv.WriteRow("Pune", "Beam, RCC", "6\" slab");
-        Assert.Equal("Pune,\"Beam, RCC\",\"6\"\" slab\"", Encoding.UTF8.GetString(s.ToArray()).TrimEnd());
+        using (var csv = CsvExporter.ToStream(s)) csv.WriteRow("Pune", "Paneer pizza, large", "12\" base");
+        Assert.Equal("Pune,\"Paneer pizza, large\",\"12\"\" base\"", Encoding.UTF8.GetString(s.ToArray()).TrimEnd());
     }
 
     [Fact]
@@ -1114,12 +1125,12 @@ The ownership decision is made once, at construction, and every later method fol
 :::exercise id=m07-association-aggregation-composition-ex4 difficulty=intermediate kind=code title="Copy a project as a template"
 Implement `Project.CopyAsTemplate(newName)` so that composed parts are deep-copied with fresh state, aggregated parts are not copied, and associations are kept.
 ::requirements
-- Work packages and their activities are copied with **new ids**, the same names, budgets and weights, and **zero progress**.
+- Milestones and their activities are copied with **new ids**, the same names, budgets and weights, and **zero progress**.
 - The team (aggregated engineers) is **empty** in the copy.
 - The client id (association) is the **same**.
 - Changing the copy never affects the original, and vice versa.
 ::acceptance
-- The copy has the same number of packages and activities, all with different ids from the original.
+- The copy has the same number of milestones and activities, all with different ids from the original.
 - Recording progress on a copied activity leaves the original's progress unchanged.
 - The original's team still has its engineers; the copy's team is empty.
 - `ClientId` and `BudgetCap` are equal on both.
@@ -1128,7 +1139,7 @@ Which parts does the project *own*? Those are the ones to deep-copy.
 ::hint
 Give each composed class an `internal CopyFresh()` method, so each class knows how to copy itself and the project just loops.
 ::hint
-`WorkPackage.CopyFresh()` creates `new WorkPackage(Name, Budget)` and then adds `a.CopyFresh()` for each activity. Activities copy with `Progress = 0`.
+`Milestone.CopyFresh()` creates `new Milestone(Name, Budget)` and then adds `a.CopyFresh()` for each activity. Activities copy with `Progress = 0`.
 ::hint
 Do not touch `_team` in `CopyAsTemplate` at all. The empty dictionary from the constructor is the right answer.
 ::starter
@@ -1150,29 +1161,29 @@ public sealed class Activity
     internal Activity CopyFresh() => throw new NotImplementedException();
 }
 
-public sealed class WorkPackage
+public sealed class Milestone
 {
     private readonly List<Activity> _activities = new();
-    internal WorkPackage(string name, decimal budget) { Name = name; Budget = budget; }
+    internal Milestone(string name, decimal budget) { Name = name; Budget = budget; }
     public Guid Id { get; } = Guid.NewGuid();
     public string Name { get; }
     public decimal Budget { get; }
     public IReadOnlyList<Activity> Activities => _activities;
     public Activity AddActivity(string name, decimal weight) { var a = new Activity(name, weight); _activities.Add(a); return a; }
-    internal WorkPackage CopyFresh() => throw new NotImplementedException();
+    internal Milestone CopyFresh() => throw new NotImplementedException();
 }
 
 public sealed class Project(string name, Guid clientId, decimal budgetCap)
 {
-    private readonly List<WorkPackage> _packages = new();
+    private readonly List<Milestone> _milestones = new();
     private readonly List<Engineer> _team = new();
     public string Name { get; } = name;
     public Guid ClientId { get; } = clientId;
     public decimal BudgetCap { get; } = budgetCap;
-    public IReadOnlyList<WorkPackage> WorkPackages => _packages;
+    public IReadOnlyList<Milestone> Milestones => _milestones;
     public IReadOnlyList<Engineer> Team => _team;
 
-    public WorkPackage AddWorkPackage(string name, decimal budget) { var p = new WorkPackage(name, budget); _packages.Add(p); return p; }
+    public Milestone AddMilestone(string name, decimal budget) { var p = new Milestone(name, budget); _milestones.Add(p); return p; }
     public void Assign(Engineer e) { if (!_team.Contains(e)) _team.Add(e); }
     public Project CopyAsTemplate(string newName) => throw new NotImplementedException();
 }
@@ -1187,11 +1198,11 @@ public class ProjectTemplateTests
 {
     private static Project Original()
     {
-        var p = new Project("NH-48 widening", Guid.Parse("11111111-1111-1111-1111-111111111111"), 50_00_00_000m);
-        var earth = p.AddWorkPackage("Earthworks", 12_00_00_000m);
-        earth.AddActivity("Clearing", 0.2m).Record(100m);
-        earth.AddActivity("Embankment", 0.8m).Record(30m);
-        p.AddWorkPackage("Bridges", 20_00_00_000m).AddActivity("Piling", 1m);
+        var p = new Project("FreshCart grocery app", Guid.Parse("11111111-1111-1111-1111-111111111111"), 50_00_000m);
+        var mvp = p.AddMilestone("MVP", 12_00_000m);
+        mvp.AddActivity("Wireframes", 0.2m).Record(100m);
+        mvp.AddActivity("Checkout screens", 0.8m).Record(30m);
+        p.AddMilestone("Payments", 20_00_000m).AddActivity("UPI integration", 1m);
         p.Assign(new Engineer("Asha"));
         return p;
     }
@@ -1200,36 +1211,36 @@ public class ProjectTemplateTests
     public void Structure_copied_with_new_ids()
     {
         var o = Original();
-        var c = o.CopyAsTemplate("NH-44 widening");
-        Assert.Equal(2, c.WorkPackages.Count);
-        Assert.Equal(new[] { "Earthworks", "Bridges" }, c.WorkPackages.Select(w => w.Name).ToArray());
-        Assert.Equal(3, c.WorkPackages.Sum(w => w.Activities.Count));
-        Assert.Empty(c.WorkPackages.Select(w => w.Id).Intersect(o.WorkPackages.Select(w => w.Id)));
-        Assert.Empty(c.WorkPackages.SelectMany(w => w.Activities).Select(a => a.Id)
-                      .Intersect(o.WorkPackages.SelectMany(w => w.Activities).Select(a => a.Id)));
+        var c = o.CopyAsTemplate("MediQuick pharmacy app");
+        Assert.Equal(2, c.Milestones.Count);
+        Assert.Equal(new[] { "MVP", "Payments" }, c.Milestones.Select(w => w.Name).ToArray());
+        Assert.Equal(3, c.Milestones.Sum(w => w.Activities.Count));
+        Assert.Empty(c.Milestones.Select(w => w.Id).Intersect(o.Milestones.Select(w => w.Id)));
+        Assert.Empty(c.Milestones.SelectMany(w => w.Activities).Select(a => a.Id)
+                      .Intersect(o.Milestones.SelectMany(w => w.Activities).Select(a => a.Id)));
     }
 
     [Fact]
     public void Progress_reset_and_independent()
     {
         var o = Original();
-        var c = o.CopyAsTemplate("NH-44 widening");
-        Assert.All(c.WorkPackages.SelectMany(w => w.Activities), a => Assert.Equal(0m, a.Progress));
-        c.WorkPackages[0].Activities[1].Record(10m);
-        Assert.Equal(30m, o.WorkPackages[0].Activities[1].Progress);
-        Assert.Equal(0.8m, c.WorkPackages[0].Activities[1].Weight);
+        var c = o.CopyAsTemplate("MediQuick pharmacy app");
+        Assert.All(c.Milestones.SelectMany(w => w.Activities), a => Assert.Equal(0m, a.Progress));
+        c.Milestones[0].Activities[1].Record(10m);
+        Assert.Equal(30m, o.Milestones[0].Activities[1].Progress);
+        Assert.Equal(0.8m, c.Milestones[0].Activities[1].Weight);
     }
 
     [Fact]
     public void Team_not_copied_association_kept()
     {
         var o = Original();
-        var c = o.CopyAsTemplate("NH-44 widening");
+        var c = o.CopyAsTemplate("MediQuick pharmacy app");
         Assert.Empty(c.Team);
         Assert.Single(o.Team);
         Assert.Equal(o.ClientId, c.ClientId);
         Assert.Equal(o.BudgetCap, c.BudgetCap);
-        Assert.Equal(12_00_00_000m, c.WorkPackages[0].Budget);
+        Assert.Equal(12_00_000m, c.Milestones[0].Budget);
     }
 }
 ```
@@ -1252,19 +1263,19 @@ public sealed class Activity
     internal Activity CopyFresh() => new(Name, Weight);            // new id, zero progress
 }
 
-public sealed class WorkPackage
+public sealed class Milestone
 {
     private readonly List<Activity> _activities = new();
-    internal WorkPackage(string name, decimal budget) { Name = name; Budget = budget; }
+    internal Milestone(string name, decimal budget) { Name = name; Budget = budget; }
     public Guid Id { get; } = Guid.NewGuid();
     public string Name { get; }
     public decimal Budget { get; }
     public IReadOnlyList<Activity> Activities => _activities;
     public Activity AddActivity(string name, decimal weight) { var a = new Activity(name, weight); _activities.Add(a); return a; }
 
-    internal WorkPackage CopyFresh()
+    internal Milestone CopyFresh()
     {
-        var copy = new WorkPackage(Name, Budget);
+        var copy = new Milestone(Name, Budget);
         foreach (var a in _activities) copy._activities.Add(a.CopyFresh());
         return copy;
     }
@@ -1272,21 +1283,21 @@ public sealed class WorkPackage
 
 public sealed class Project(string name, Guid clientId, decimal budgetCap)
 {
-    private readonly List<WorkPackage> _packages = new();
+    private readonly List<Milestone> _milestones = new();
     private readonly List<Engineer> _team = new();
     public string Name { get; } = name;
     public Guid ClientId { get; } = clientId;
     public decimal BudgetCap { get; } = budgetCap;
-    public IReadOnlyList<WorkPackage> WorkPackages => _packages;
+    public IReadOnlyList<Milestone> Milestones => _milestones;
     public IReadOnlyList<Engineer> Team => _team;
 
-    public WorkPackage AddWorkPackage(string name, decimal budget) { var p = new WorkPackage(name, budget); _packages.Add(p); return p; }
+    public Milestone AddMilestone(string name, decimal budget) { var p = new Milestone(name, budget); _milestones.Add(p); return p; }
     public void Assign(Engineer e) { if (!_team.Contains(e)) _team.Add(e); }
 
     public Project CopyAsTemplate(string newName)
     {
         var copy = new Project(newName, ClientId, BudgetCap);   // association kept
-        foreach (var p in _packages) copy._packages.Add(p.CopyFresh());   // composition: deep copy
+        foreach (var p in _milestones) copy._milestones.Add(p.CopyFresh());   // composition: deep copy
         return copy;                                             // aggregation: team left empty
     }
 }
@@ -1294,8 +1305,8 @@ public sealed class Project(string name, Guid clientId, decimal budgetCap)
 
 Each composed class copies itself, so adding a field to `Activity` later means changing one `CopyFresh` method. The relationship kind on the diagram translated directly into three different lines of code.
 ::mistakes
-- `copy._packages.AddRange(_packages)`: a shallow copy that shares package objects between projects.
-- Copying progress values, so the new project starts "30 % done".
+- `copy._milestones.AddRange(_milestones)`: a shallow copy that shares milestone objects between projects.
+- Copying progress values, so the new client's app starts "30 % done" before anyone has written a line of code.
 - Copying the team, which silently assigns engineers to a project they never agreed to join.
 :::
 
@@ -1308,10 +1319,10 @@ A company composes its departments; each department composes its cost centres an
 - `CloseDepartment(code, moveStaffTo)` moves every employee to the target department, then removes the closed department and its cost centres. It refuses (`InvalidOperationException`) if the target is the same department or does not exist, and in that case changes nothing.
 - `DepartmentOf(employeeId)` returns the employee's current department code.
 ::acceptance
-- Closing "CIVIL" into "INFRA" moves both civil engineers to INFRA; INFRA keeps its own staff too.
-- After closing, `Departments` no longer contains CIVIL and its cost centres are not reachable from the company.
+- Closing "SUPPORT" into "CX" moves both support agents to CX; CX keeps its own staff too.
+- After closing, `Departments` no longer contains SUPPORT and its cost centres are not reachable from the company.
 - No employee is lost: total headcount is unchanged.
-- Closing into a non-existent department throws and CIVIL still exists with its staff.
+- Closing into a non-existent department throws and SUPPORT still exists with its staff.
 - An employee cannot be hired into two departments.
 ::hint
 Three relationships: Company `*--` Department (composition), Department `*--` CostCentre (composition), Department `o--` Employee (aggregation by id). What happens to each on close?
@@ -1375,11 +1386,11 @@ public class CompanyTests
     private static Company Setup()
     {
         var c = new Company();
-        c.OpenDepartment("CIVIL", "Civil Engineering").AddCostCentre("CC-101", 2_00_00_000m);
-        c.OpenDepartment("INFRA", "Infrastructure");
-        c.Hire(Asha, "CIVIL");
-        c.Hire(Ravi, "civil");
-        c.Hire(Meera, "INFRA");
+        c.OpenDepartment("SUPPORT", "Customer Support").AddCostCentre("CC-101", 2_00_00_000m);
+        c.OpenDepartment("CX", "Customer Experience");
+        c.Hire(Asha, "SUPPORT");
+        c.Hire(Ravi, "support");
+        c.Hire(Meera, "CX");
         return c;
     }
 
@@ -1387,11 +1398,11 @@ public class CompanyTests
     public void Close_moves_staff_and_removes_department()
     {
         var c = Setup();
-        c.CloseDepartment("CIVIL", "INFRA");
-        Assert.Equal("INFRA", c.DepartmentOf(Asha));
-        Assert.Equal("INFRA", c.DepartmentOf(Ravi));
-        Assert.Equal("INFRA", c.DepartmentOf(Meera));
-        Assert.DoesNotContain(c.Departments, d => d.Code == "CIVIL");
+        c.CloseDepartment("SUPPORT", "CX");
+        Assert.Equal("CX", c.DepartmentOf(Asha));
+        Assert.Equal("CX", c.DepartmentOf(Ravi));
+        Assert.Equal("CX", c.DepartmentOf(Meera));
+        Assert.DoesNotContain(c.Departments, d => d.Code == "SUPPORT");
         Assert.Empty(c.Departments.SelectMany(d => d.CostCentres));
         Assert.Equal(3, c.Departments.Single().EmployeeIds.Count);
     }
@@ -1400,7 +1411,7 @@ public class CompanyTests
     public void Headcount_unchanged()
     {
         var c = Setup();
-        c.CloseDepartment("CIVIL", "INFRA");
+        c.CloseDepartment("SUPPORT", "CX");
         Assert.Equal(3, c.Headcount);
     }
 
@@ -1408,34 +1419,34 @@ public class CompanyTests
     public void Invalid_target_changes_nothing()
     {
         var c = Setup();
-        Assert.Throws<InvalidOperationException>(() => c.CloseDepartment("CIVIL", "LEGAL"));
-        Assert.Throws<InvalidOperationException>(() => c.CloseDepartment("CIVIL", "civil"));
-        Assert.Equal("CIVIL", c.DepartmentOf(Asha));
+        Assert.Throws<InvalidOperationException>(() => c.CloseDepartment("SUPPORT", "LEGAL"));
+        Assert.Throws<InvalidOperationException>(() => c.CloseDepartment("SUPPORT", "support"));
+        Assert.Equal("SUPPORT", c.DepartmentOf(Asha));
         Assert.Equal(2, c.Departments.Count);
-        Assert.Single(c.Departments.First(d => d.Code == "CIVIL").CostCentres);
+        Assert.Single(c.Departments.First(d => d.Code == "SUPPORT").CostCentres);
     }
 
     [Fact]
     public void Cannot_hire_twice()
     {
         var c = Setup();
-        Assert.Throws<InvalidOperationException>(() => c.Hire(Asha, "INFRA"));
+        Assert.Throws<InvalidOperationException>(() => c.Hire(Asha, "CX"));
     }
 
     [Fact]
     public void Duplicate_department_code_refused()
     {
         var c = Setup();
-        Assert.Throws<InvalidOperationException>(() => c.OpenDepartment("infra", "Again"));
+        Assert.Throws<InvalidOperationException>(() => c.OpenDepartment("cx", "Again"));
     }
 
     [Fact]
     public void Transfer_updates_both_departments()
     {
         var c = Setup();
-        c.Transfer(Asha, "INFRA");
-        Assert.Equal("INFRA", c.DepartmentOf(Asha));
-        Assert.Single(c.Departments.First(d => d.Code == "CIVIL").EmployeeIds);
+        c.Transfer(Asha, "CX");
+        Assert.Equal("CX", c.DepartmentOf(Asha));
+        Assert.Single(c.Departments.First(d => d.Code == "SUPPORT").EmployeeIds);
     }
 }
 ```
@@ -1550,20 +1561,20 @@ Ownership bugs show up in four operations, so test each one for every whole in y
 public class ProjectCompositionTests
 {
     [Fact]
-    public void Budget_cap_applies_to_composed_packages()
+    public void Budget_cap_applies_to_composed_milestones()
     {
-        var p = new Project("NH-48 widening", Guid.NewGuid(), budgetCap: 10_00_00_000m);
-        p.AddWorkPackage("Earthworks", 6_00_00_000m);
-        Assert.Throws<InvalidOperationException>(() => p.AddWorkPackage("Bridges", 5_00_00_000m));
+        var p = new Project("FreshCart grocery app", Guid.NewGuid(), budgetCap: 10_00_000m);
+        p.AddMilestone("MVP", 6_00_000m);
+        Assert.Throws<InvalidOperationException>(() => p.AddMilestone("Payments", 5_00_000m));
     }
 
     [Fact]
-    public void Removing_a_package_with_progress_is_refused()
+    public void Removing_a_milestone_with_progress_is_refused()
     {
-        var p = new Project("NH-48 widening", Guid.NewGuid(), 10_00_00_000m);
-        var wp = p.AddWorkPackage("Earthworks", 1_00_00_000m);
-        wp.AddActivity("Clearing", 1m).RecordProgress(10m);
-        Assert.Throws<InvalidOperationException>(() => p.RemoveWorkPackage(wp.Id));
+        var p = new Project("FreshCart grocery app", Guid.NewGuid(), 10_00_000m);
+        var m = p.AddMilestone("MVP", 1_00_000m);
+        m.AddActivity("Wireframes", 1m).RecordProgress(10m);
+        Assert.Throws<InvalidOperationException>(() => p.RemoveMilestone(m.Id));
     }
 }
 ```
@@ -1578,10 +1589,10 @@ public void Deleting_a_project_keeps_engineers()
 {
     var projects = new InMemoryProjectRepository();
     var engineers = new InMemoryEngineerDirectory();
-    var asha = new Engineer(Guid.NewGuid(), "Asha", "Highways");
+    var asha = new Engineer(Guid.NewGuid(), "Asha", "Backend");
     engineers.Add(asha);
     var svc = new ProjectService(projects, engineers, NullLogger<ProjectService>.Instance);
-    var p = svc.Create("NH-48", Guid.NewGuid(), 1_00_00_000m);
+    var p = svc.Create("FreshCart grocery app", Guid.NewGuid(), 1_00_000m);
     svc.AssignEngineer(p.Id, asha.Id);
 
     svc.Delete(p.Id);
@@ -1601,7 +1612,7 @@ For a database-backed repository, run the same test against PostgreSQL (for exam
 - **ASP.NET Core DI.** The container owns what it creates. Services that you register with an existing instance (`AddSingleton(myObject)`) are *not* disposed by the container, because it did not create them. That is aggregation versus composition at framework level.
 - **EF Core.** Owned types (`OwnsMany`) express composition: they have no `DbSet`, cannot be queried alone, and are deleted with their owner. Many-to-many join entities express aggregation.
 - **Document stores.** In a JSON document database, composition means "embed the parts in the parent document"; aggregation means "store ids and keep the parts in their own documents".
-- **Infrastructure project systems.** A contract composes its BOQ items and measurement entries; it aggregates the engineers, consultants and equipment deployed on it. Closing a contract archives the first group and releases the second.
+- **Food-delivery platforms.** An order composes its line items and its status history (placed, picked up, delivered); it refers to the customer, the restaurant and the delivery rider by id, and all three outlive the order. Archiving an order archives the first group and leaves the second untouched.
 
 ## Interview questions
 
@@ -1625,11 +1636,11 @@ Composition: a child table with a `NOT NULL` foreign key to the parent and `ON D
 ::q advanced
 Composition gives strong invariants, so why not make everything part of one big composite?
 ::a
-Because a composite is loaded, locked and saved as a unit. A `Project` that composes every activity, measurement, photo and comment for five years becomes slow to load, causes concurrency conflicts when two engineers edit different parts, and turns every save into a large write. Keep compositions as small as the invariants require: if a rule spans the whole and its parts (total budget ≤ cap), they belong together; if not (photos), make them separate objects referencing the whole by id. This is the reasoning behind DDD aggregates.
+Because a composite is loaded, locked and saved as a unit. A `Project` that composes every task, comment, attachment and time-log entry for five years becomes slow to load, causes concurrency conflicts when two engineers edit different parts, and turns every save into a large write. Keep compositions as small as the invariants require: if a rule spans the whole and its parts (total budget ≤ cap), they belong together; if not (attachments), make them separate objects referencing the whole by id. This is the reasoning behind DDD aggregates.
 ::q advanced
 When would you deliberately not cascade-delete a composed part?
 ::a
-When the part has legal, financial or audit history. Invoice lines, payroll cost centres and measurement-book entries are composed conceptually, but you usually archive or soft-delete the whole instead of deleting rows, so reports and audits remain correct. Composition then means "shares the whole's lifecycle state" (closed with it, archived with it) rather than "physically deleted with it". Hard cascade delete remains right for drafts and data with no history.
+When the part has legal, financial or audit history. Invoice lines, payroll cost centres and bank-statement entries are composed conceptually, but you usually archive or soft-delete the whole instead of deleting rows, so reports and audits remain correct. Composition then means "shares the whole's lifecycle state" (closed with it, archived with it) rather than "physically deleted with it". Hard cascade delete remains right for drafts and data with no history.
 :::
 
 ## Summary and revision
@@ -1697,10 +1708,10 @@ Which statements about composition in C# are true? (Select all that apply.)
 - [x] The whole should expose parts through read-only collections.
 > Accepting existing parts from outside allows sharing, which breaks exclusive ownership.
 ::q single
-`CopyAsTemplate` uses `copy._packages.AddRange(_packages)`. What bug does this introduce?
+`CopyAsTemplate` uses `copy._milestones.AddRange(_milestones)`. What bug does this introduce?
 - [ ] None; it is a fast deep copy.
-- [x] Both projects share the same work-package objects, so progress on one appears on the other.
-- [ ] The copy has no packages.
+- [x] Both projects share the same milestone objects, so progress on one appears on the other.
+- [ ] The copy has no milestones.
 - [ ] It copies the team.
 > `AddRange` copies references (a shallow copy). Composed parts must be deep-copied.
 ::q single

@@ -45,15 +45,15 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Think of a passport application at a Passport Seva Kendra.
+Think of checking in at a hotel in Goa.
 
-The **form you fill in** has exactly the fields the office needs from you: name, date of birth, address, proof documents. It does not have a box for "application approved" or "officer's remarks". Those are decided by the office, not by you. That form is a **request DTO**: the data a client is allowed to send.
+The **booking form you fill in** on the app has exactly the fields the hotel needs from you: your name, phone, check-in and check-out dates, room type and number of guests. It has no box for "price per night", "payment received" or "booking confirmed". Those are decided by the hotel, not by you. That form is a **request DTO**: the data a client is allowed to send.
 
-The **file the office keeps** has everything: your details, the officer who verified them, the approval status, internal notes, audit dates. That file is the **entity**: the full record the system owns.
+The **register the hotel keeps** has everything: your details, the rate the hotel actually charged, the payment reference, whether you are a repeat guest, and notes the front desk wrote ("asked for a late check-out", "card declined once"). That record is the **entity**: the full record the system owns.
 
-The **passport you receive** shows only what the public needs: name, number, validity. It does not show the officer's notes. That is a **response DTO**: the data a client is allowed to see.
+The **confirmation voucher you receive** shows only what you need: booking id, dates, room type, total amount and status. It does not show the front-desk notes or your full card details. That is a **response DTO**: the data a client is allowed to see.
 
-Now imagine the office used one single document for all three. You could write "approved" on your own form. A change to the internal filing format would change the passport layout. Anyone holding the passport could read the officer's notes. That is exactly what happens when a web API uses its database entity as its request and response type.
+Now imagine the hotel used one single document for all three. You could write "paid, ₹1 per night, confirmed" on your own form. A change to the hotel's internal register would change the voucher layout. Anyone holding the voucher could read the staff notes. That is exactly what happens when a web API uses its database entity as its request and response type.
 
 The three shapes have three owners: the client owns what it may send, the system owns what it stores, and the API contract owns what it exposes. **DTO** stands for data transfer object: a plain object whose only job is to carry data across a boundary.
 
@@ -61,9 +61,9 @@ The three shapes have three owners: the client owns what it may send, the system
 
 ### Entities and DTOs serve different masters
 
-An **entity** (or domain model) is shaped by business rules and storage: it has an identity, private state, behaviour, and often fields that are purely internal (`CreatedBy`, `RowVersion`, `IsVerified`). It changes when the business changes.
+An **entity** (or domain model) is shaped by business rules and storage: it has an identity, private state, behaviour, and often fields that are purely internal (`CreatedBy`, `RowVersion`, `PaymentReference`). It changes when the business changes.
 
-A **DTO** is shaped by a conversation: "what does the mobile app need to send to register a vendor?" It has no behaviour, only data. It changes when the API contract changes, which should be rarely and deliberately, because clients you do not control depend on it.
+A **DTO** is shaped by a conversation: "what does the mobile app need to send to book a room?" It has no behaviour, only data. It changes when the API contract changes, which should be rarely and deliberately, because clients you do not control depend on it.
 
 Using one class for both couples two things that change for different reasons. That is a Single Responsibility violation at the class level ([SRP](#/lesson/m04-srp)): renaming a database column should never break a mobile app, and adding a client-facing field should never add a database column.
 
@@ -74,12 +74,12 @@ Model binding in ASP.NET Core fills every public settable property it can match 
 ```csharp
 // DO NOT do this
 [HttpPost]
-public async Task<IActionResult> Register([FromBody] Vendor vendor) { _db.Vendors.Add(vendor); ... }
+public async Task<IActionResult> Book([FromBody] Booking booking) { _db.Bookings.Add(booking); ... }
 ```
 
-then a client can send `{"name":"Acme","isVerified":true,"rating":5,"creditLimit":10000000}` and all of it lands in the database. This is **over-posting**, also called **mass assignment**. It is on the OWASP list and it has caused real breaches (one well-known case involved a public code-hosting site where a user added their own key to another project's settings by posting an unexpected field).
+then a client can send `{"roomType":"Suite","checkIn":"2026-12-24","checkOut":"2026-12-27","nightlyRate":1,"status":"Confirmed","paymentReference":"fake"}` and all of it lands in the database: a three-night Christmas suite for ₹3, already marked as paid. This is **over-posting**, also called **mass assignment**. It is on the OWASP list and it has caused real breaches (one well-known case involved a public code-hosting site where a user added their own key to another project's settings by posting an unexpected field).
 
-The fix is structural, not a checklist: the request DTO contains only the fields the client may set. There is no `IsVerified` property to bind to, so no amount of creative JSON can set it. `[Bind]` attributes and `[JsonIgnore]` on the entity are fragile alternatives; someone will forget one.
+The fix is structural, not a checklist: the request DTO contains only the fields the client may set. There is no `NightlyRate` or `Status` property to bind to, so no amount of creative JSON can set them. `[Bind]` attributes and `[JsonIgnore]` on the entity are fragile alternatives; someone will forget one.
 
 ### Mapping: the cost of two shapes
 
@@ -92,7 +92,7 @@ Two shapes means code that copies between them. There are three ways:
 Our recommendation for most teams: write the mapping by hand. A typical API has 20–50 DTO pairs. That is maybe 800 lines of boring, obvious code that never surprises anyone. Reach for a generator when the count climbs and the mappings are truly mechanical. Avoid reflection-based mapping on the hot path of a high-throughput API, and avoid *any* mapper when a mapping involves a business decision; that is a domain method, not a copy.
 
 :::callout type=tip title="Mapping is not where rules live"
-`ToEntity()` should never contain `if (request.Amount > 100000) ...`. Mapping is copying. If a decision is being made, it is either validation (before mapping) or a domain rule (inside the entity's method). Keeping mappers dumb is what makes them boring, and boring is what you want here.
+`ToEntity()` should never contain `if (request.Guests > 2) entity.AddExtraBedCharge(...)`. Mapping is copying. If a decision is being made, it is either validation (before mapping) or a domain rule (inside the entity's method). Keeping mappers dumb is what makes them boring, and boring is what you want here.
 :::
 
 ### Validation: three places, three kinds of rule
@@ -101,19 +101,25 @@ Input can be wrong in three different ways, and each has a natural home:
 
 | Kind of rule | Example | Where it belongs | Response |
 |---|---|---|---|
-| Shape and format | GSTIN must be 15 characters matching the pattern; email must be an email; quantity ≥ 1 | Request validation (DataAnnotations or a validator class), before the service is called | `400 Bad Request` with per-field errors |
-| Cross-field and contextual | End date after start date; if `PaymentMode == "Bank"` then IFSC required | Request validation, same place | `400` with per-field errors |
-| Business and state | GSTIN not already registered; vendor not blacklisted; bill not already paid | Domain model or service, because it needs data the request does not carry | `409 Conflict` or `422 Unprocessable Content` |
+| Shape and format | Phone must be a 10-digit mobile number; email must be an email; guests ≥ 1 | Request validation (DataAnnotations or a validator class), before the service is called | `400 Bad Request` with per-field errors |
+| Cross-field and contextual | Check-out after check-in; a Deluxe room holds at most 3 guests; check-in not in the past | Request validation, same place | `400` with per-field errors |
+| Business and state | Room still free for those dates; guest not on the hotel's blocked list; booking not already cancelled | Domain model or service, because it needs data the request does not carry | `409 Conflict` or `422 Unprocessable Content` |
 
-The first two are about the *request*. They can be checked with no database. The third is about the *world*. Mixing them (checking uniqueness inside a `[Required]`-style attribute, say) ties your request validation to a database call and makes it untestable in isolation.
+The first two are about the *request*. They can be checked with no database. The third is about the *world*. Mixing them (checking room availability inside a `[Required]`-style attribute, say) ties your request validation to a database call and makes it untestable in isolation.
+
+"Check-in not in the past" needs today's date, which is not in the request. That is fine: inject a `TimeProvider` into the validator. The clock is a stateless, in-memory dependency, not data about the world, so the validator stays fast and testable (tests pass a fake clock).
 
 ### The tools in ASP.NET Core
 
-**DataAnnotations** are attributes on DTO properties: `[Required]`, `[StringLength(100)]`, `[Range(1, 1000)]`, `[RegularExpression(...)]`, `[EmailAddress]`. With `[ApiController]` on a controller, an invalid model automatically produces a `400` with a `ValidationProblemDetails` body before your action runs. They are built in, declarative and fine for 80 % of rules. They are awkward for cross-field rules (you need `IValidatableObject` or a custom attribute) and they cannot take dependencies.
+**DataAnnotations** are attributes on DTO properties: `[Required]`, `[StringLength(100)]`, `[Range(1, 10)]`, `[RegularExpression(...)]`, `[EmailAddress]`. With `[ApiController]` on a controller, an invalid model automatically produces a `400` with a `ValidationProblemDetails` body before your action runs. They are built in, declarative and fine for 80 % of rules. They are awkward for cross-field rules (you need `IValidatableObject` or a custom attribute) and they cannot take dependencies.
 
-**Validator classes** put the rules in code: one class per DTO, a method that returns a list of errors. FluentValidation is the popular library for this style: `RuleFor(x => x.Gstin).Matches(...)`. The same idea can be hand-rolled in 40 lines with no package, which is what we compile below. Validator classes handle cross-field rules naturally, can be unit-tested directly, and can be registered in DI.
+**Validator classes** put the rules in code: one class per DTO, a method that returns a list of errors. FluentValidation is the popular library for this style: `RuleFor(x => x.CheckOut).GreaterThan(x => x.CheckIn)`. The same idea can be hand-rolled in 40 lines with no package, which is what we compile below. Validator classes handle cross-field rules naturally, can be unit-tested directly, and can be registered in DI.
 
-**Minimal APIs** do not validate automatically by default. In .NET 10, built-in validation for minimal APIs (`AddValidation()` and DataAnnotations on parameters and types) is available, so the gap has narrowed. Alternatively, call your validator in the endpoint, or use an endpoint filter.
+**Minimal APIs** do not validate automatically by default. In .NET 10, built-in validation for minimal APIs (`builder.Services.AddValidation()` plus DataAnnotations on parameters and types) is available, so the gap has narrowed. Alternatively, call your validator in the endpoint, or use an endpoint filter.
+
+:::callout type=warning title="[Required] does not catch a missing date or Guid"
+`DateOnly`, `Guid` and `int` are value types. If the JSON leaves out `checkIn`, System.Text.Json simply leaves the default value (`0001-01-01`), and `[Required]` is satisfied because a value type is never null. Either make the property nullable (`DateOnly?` with `[Required]`), mark it with the C# `required` keyword or `[JsonRequired]` so deserialisation fails, or check for the default in your validator (`HotelId != Guid.Empty`). The code below does the last; a past check-in date also catches a missing `checkIn`.
+:::
 
 ### ProblemDetails: the standard shape for "no"
 
@@ -125,8 +131,8 @@ RFC 9457 (which replaced RFC 7807) defines a JSON body for errors: `type`, `titl
   "title": "One or more validation errors occurred.",
   "status": 400,
   "errors": {
-    "Gstin": ["GSTIN must be 15 characters in the format 22AAAAA0000A1Z5."],
-    "BankAccount.Ifsc": ["IFSC is required when payment mode is Bank."]
+    "CheckOut": ["Check-out must be after check-in."],
+    "Guest.Phone": ["Phone must be a 10-digit Indian mobile number, e.g. 9876543210."]
   },
   "traceId": "00-7f3a...-01"
 }
@@ -136,9 +142,9 @@ Why a standard shape? Because every client can write one error handler. A React 
 
 ### What goes wrong without this discipline
 
-- Entity exposed as response: a new `PasswordHash` or `InternalNotes` column appears in the JSON the day it is added.
-- Entity accepted as request: over-posting, plus the client can send a malformed `Id` and overwrite someone else's record.
-- Validation in the controller as `if` statements: the import endpoint forgets half of them; errors come back as plain strings in inconsistent formats.
+- Entity exposed as response: a new `PaymentReference` or `FrontDeskNotes` column appears in the JSON the day it is added.
+- Entity accepted as request: over-posting, plus the client can send a malformed `Id` and overwrite someone else's booking.
+- Validation in the controller as `if` statements: the partner-app endpoint forgets half of them; errors come back as plain strings in inconsistent formats.
 - Validation in the mapper: nobody expects a `ToEntity()` call to throw.
 
 ## Visual explanation
@@ -147,56 +153,63 @@ Why a standard shape? Because every client can write one error handler. A React 
 
 ```mermaid
 classDiagram
-    class RegisterVendorRequest {
-        +string LegalName
-        +string Gstin
-        +string Pan
-        +string ContactEmail
-        +BankAccountDto Bank
+    class CreateBookingRequest {
+        +Guid HotelId
+        +string RoomType
+        +DateOnly CheckIn
+        +DateOnly CheckOut
+        +int Guests
+        +GuestDetailsDto Guest
     }
-    class BankAccountDto {
-        +string AccountNumber
-        +string Ifsc
+    class GuestDetailsDto {
+        +string FullName
+        +string Email
+        +string Phone
     }
-    class VendorResponse {
+    class BookingResponse {
         +Guid Id
-        +string LegalName
-        +string Gstin
+        +string RoomType
+        +DateOnly CheckIn
+        +DateOnly CheckOut
+        +int Nights
+        +string PhoneMasked
+        +decimal TotalAmount
         +string Status
-        +DateTimeOffset RegisteredAt
     }
-    class Vendor {
+    class Booking {
         +Guid Id
-        +string LegalName
-        +string Gstin
-        +string Pan
-        +string ContactEmail
-        +BankAccount Bank
-        +VendorStatus Status
-        +bool IsVerified
-        +DateTimeOffset RegisteredAt
-        +Register(...) Vendor$
-        +MarkVerified(string officerId)
+        +Guid HotelId
+        +RoomType RoomType
+        +DateOnly CheckIn
+        +DateOnly CheckOut
+        +int Guests
+        +GuestDetails Guest
+        +decimal NightlyRate
+        +BookingStatus Status
+        +string PaymentReference
+        +string FrontDeskNotes
+        +Create(...) Booking$
+        +Confirm(string paymentReference)
     }
-    class VendorMapper {
+    class BookingMapper {
         <<static>>
-        +ToEntity(RegisterVendorRequest r, Guid id, DateTimeOffset now) Vendor
-        +ToResponse(Vendor v) VendorResponse
+        +ToEntity(CreateBookingRequest r, Guid id, decimal nightlyRate, DateTimeOffset now) Booking
+        +ToResponse(Booking b) BookingResponse
     }
     class IValidator~T~ {
         <<interface>>
         +Validate(T instance) ValidationResult
     }
-    class RegisterVendorRequestValidator
-    RegisterVendorRequest *-- BankAccountDto
-    VendorMapper ..> RegisterVendorRequest
-    VendorMapper ..> Vendor
-    VendorMapper ..> VendorResponse
-    IValidator~T~ <|.. RegisterVendorRequestValidator
-    RegisterVendorRequestValidator ..> RegisterVendorRequest
+    class CreateBookingRequestValidator
+    CreateBookingRequest *-- GuestDetailsDto
+    BookingMapper ..> CreateBookingRequest
+    BookingMapper ..> Booking
+    BookingMapper ..> BookingResponse
+    IValidator~T~ <|.. CreateBookingRequestValidator
+    CreateBookingRequestValidator ..> CreateBookingRequest
 ```
 
-How to read it: `RegisterVendorRequest` has five fields the client may set. `Vendor` has those plus `Status`, `IsVerified` and `RegisteredAt`, which only the system sets. `VendorResponse` shows a subset of the entity (no PAN, no bank details) and formats `Status` as a string. The mapper depends on all three but none of them depend on it or on each other. The validator depends only on the request type, so it can be tested with a request object and nothing else.
+How to read it: `CreateBookingRequest` has the six fields the client may set. `Booking` has those plus `NightlyRate`, `Status`, `PaymentReference` and `FrontDeskNotes`, which only the system sets. `BookingResponse` shows a subset of the entity (no email, no full phone number, no payment reference, no staff notes) and adds values the server computed (`Nights`, `TotalAmount`). The mapper depends on all three but none of them depend on it or on each other. The validator depends only on the request type, so it can be tested with a request object and nothing else.
 
 ### Sequence diagram — a request with a validation failure and one that succeeds
 
@@ -204,219 +217,287 @@ How to read it: `RegisterVendorRequest` has five fields the client may set. `Ven
 sequenceDiagram
     participant C as Client
     participant MB as Model binding
-    participant V as RegisterVendorRequestValidator
-    participant Ctrl as VendorsController
-    participant Svc as VendorRegistrationService
-    participant M as VendorMapper
-    C->>MB: POST /api/vendors { gstin: "BAD", ... }
-    MB->>Ctrl: RegisterVendorRequest
+    participant V as CreateBookingRequestValidator
+    participant Ctrl as BookingsController
+    participant Svc as BookingService
+    participant M as BookingMapper
+    C->>MB: POST /api/bookings { checkIn: 12-24, checkOut: 12-22, ... }
+    MB->>Ctrl: CreateBookingRequest
     Ctrl->>V: Validate(request)
-    V-->>Ctrl: 1 error (Gstin)
-    Ctrl-->>C: 400 ValidationProblemDetails { errors: { Gstin: [...] } }
-    C->>MB: POST /api/vendors { gstin: "27AAPFU0939F1ZV", ... }
-    MB->>Ctrl: RegisterVendorRequest
+    V-->>Ctrl: 1 error (CheckOut)
+    Ctrl-->>C: 400 ValidationProblemDetails { errors: { CheckOut: [...] } }
+    C->>MB: POST /api/bookings { checkIn: 12-24, checkOut: 12-27, ... }
+    MB->>Ctrl: CreateBookingRequest
     Ctrl->>V: Validate(request)
     V-->>Ctrl: valid
-    Ctrl->>Svc: RegisterAsync(request)
-    Svc->>M: ToEntity(request, id, now)
-    M-->>Svc: Vendor (Status Pending, IsVerified false)
-    Svc->>M: ToResponse(vendor)
-    M-->>Svc: VendorResponse
-    Svc-->>Ctrl: VendorResponse
-    Ctrl-->>C: 201 Created, Location: /api/vendors/{id}
+    Ctrl->>Svc: CreateAsync(request)
+    Svc->>Svc: room free? look up nightly rate
+    Svc->>M: ToEntity(request, id, rate, now)
+    M-->>Svc: Booking (Status PendingPayment, server price)
+    Svc->>M: ToResponse(booking)
+    M-->>Svc: BookingResponse
+    Svc-->>Ctrl: BookingResponse
+    Ctrl-->>C: 201 Created, Location: /api/bookings/{id}
 ```
 
-The first request never reaches the service: validation is cheap and happens first. The second passes, is mapped to an entity with system-owned fields set by the server (`IsVerified` is `false` no matter what the client sent, because the request type has no such property), and comes back as a response DTO that omits sensitive fields.
+The first request never reaches the service: validation is cheap and happens first. The second passes, the service checks availability and looks up the price itself, and the mapper builds an entity whose system-owned fields come from the server (`Status` is `PendingPayment` and `NightlyRate` is the hotel's rate no matter what the client sent, because the request type has no such properties). It comes back as a response DTO that omits sensitive fields.
 
 ## Step-by-step example
 
-The scenario: a state e-procurement portal where contractors register as vendors. The business needs the legal name, GSTIN, PAN, a contact email and bank details. Verification is done later by an officer. Vendors must never be able to mark themselves verified.
+The scenario: a hotel booking app, the kind you use to book a room in Goa, Jaipur or Manali. The guest picks a hotel, a room type (Standard, Deluxe or Suite), check-in and check-out dates and the number of guests, and gives a name, email and mobile number. The server decides the price and the booking stays `PendingPayment` until the payment gateway confirms. Guests must never be able to set their own price or mark a booking as paid.
 
 ### Step 1 — the naive version and its three bugs
 
 ```csharp
 // Entity used for everything
-public class Vendor
+public class Booking
 {
     public Guid Id { get; set; }
-    public string LegalName { get; set; }
-    public string Gstin { get; set; }
-    public string Pan { get; set; }
-    public string BankAccountNumber { get; set; }
-    public bool IsVerified { get; set; }
-    public string? OfficerNotes { get; set; }
+    public string RoomType { get; set; }
+    public DateOnly CheckIn { get; set; }
+    public DateOnly CheckOut { get; set; }
+    public decimal NightlyRate { get; set; }
+    public string Status { get; set; }
+    public string GuestPhone { get; set; }
+    public string? FrontDeskNotes { get; set; }
 }
 
-[HttpPost] public IActionResult Register(Vendor v) { if (v.LegalName == null) return BadRequest("name"); _db.Add(v); _db.SaveChanges(); return Ok(v); }
+[HttpPost] public IActionResult Book(Booking b) { if (b.RoomType == null) return BadRequest("room"); _db.Add(b); _db.SaveChanges(); return Ok(b); }
 ```
 
-Bug 1: `IsVerified` can be set by the client. Bug 2: `Ok(v)` returns `OfficerNotes` and the full bank account number to the caller. Bug 3: the error is a bare string; the client cannot tell which field failed. The GSTIN is not checked at all.
+Bug 1: `NightlyRate` and `Status` can be set by the client. Bug 2: `Ok(b)` returns `FrontDeskNotes` and the full phone number to the caller. Bug 3: the error is a bare string; the client cannot tell which field failed. The dates are not checked at all, so a booking with check-out before check-in is saved and the invoice shows a negative number of nights.
 
 ### Step 2 — split the shapes
 
-Create `RegisterVendorRequest` with exactly the five client-settable fields, `VendorResponse` with the public view, and keep `Vendor` as a proper entity with private setters and a `Register` factory method.
+Create `CreateBookingRequest` with exactly the client-settable fields, `BookingResponse` with the public view, and keep `Booking` as a proper entity with private setters and a `Create` factory method.
 
 ### Step 3 — map by hand
 
-A static `VendorMapper` with two methods. Server-owned values (`Id`, `RegisteredAt`) are parameters, so the mapper stays pure and testable.
+A static `BookingMapper` with two methods. Server-owned values (`Id`, the nightly rate, `CreatedAt`) are parameters, so the mapper stays pure and testable.
 
 ### Step 4 — validate before the service
 
-Add DataAnnotations for the simple rules so `[ApiController]` rejects obviously broken requests. Add a validator class for the format rules (GSTIN, PAN, IFSC patterns) and the cross-field rule (bank details required). Return `ValidationProblem(...)` with the per-field errors.
+Add DataAnnotations for the simple rules so `[ApiController]` rejects obviously broken requests. Add a validator class for the rules that need code: known room type, check-in not in the past, check-out after check-in, at most 30 nights, guests within the room's limit, and the mobile-number format. Return `ValidationProblem(...)` with the per-field errors.
 
 ### Step 5 — the business rule that needs data
 
-"GSTIN must not already be registered" needs the database, so it lives in the service and comes back as `409 Conflict`, not `400`.
+"A Deluxe room must still be free for 24–27 December" needs the database, so it lives in the service and comes back as `409 Conflict`, not `400`. The pre-check in the service gives a friendly message; the real guarantee must be in PostgreSQL, because two guests can tap "Book" for the last room within the same millisecond. Typical options are an atomic `UPDATE room_inventory SET booked = booked + 1 WHERE hotel_id = $1 AND room_type = $2 AND night = ANY($3) AND booked < total` that must touch every night, or, when specific rooms are assigned, an exclusion constraint (`EXCLUDE USING gist (room_id WITH =, stay WITH &&)` on a `daterange` column, with the `btree_gist` extension). Mobile networks also retry, so a production booking endpoint accepts an `Idempotency-Key` header ([Idempotency keys](#/lesson/m10-idempotency)) so a retried POST does not create two bookings.
 
 ## Production-style C# implementation
 
 Folder layout:
 
 ```text
-Procure.Api/
+Stays.Api/
   Program.cs
-  Domain/Vendor.cs
-  Contracts/VendorContracts.cs
-  Contracts/VendorMapper.cs
+  Domain/Booking.cs
+  Contracts/BookingContracts.cs
+  Contracts/BookingMapper.cs
   Validation/Validation.cs
-  Validation/RegisterVendorRequestValidator.cs
-  Application/VendorRegistrationService.cs
-  Api/VendorsController.cs
+  Validation/CreateBookingRequestValidator.cs
+  Application/BookingService.cs
+  Api/BookingsController.cs
 ```
 
-```csharp file=Domain/Vendor.cs
-namespace Procure.Domain;
+```csharp file=Domain/Booking.cs
+namespace Stays.Domain;
 
-public enum VendorStatus { Pending, Verified, Rejected }
+public enum RoomType { Standard, Deluxe, Suite }
 
-public sealed record BankAccount(string AccountNumber, string Ifsc)
+public enum BookingStatus { PendingPayment, Confirmed, Cancelled }
+
+public static class RoomTypes
+{
+    /// <summary>Accepts names only ("Deluxe", "deluxe"). Enum.TryParse would also accept "1" or "7", which we do not want.</summary>
+    public static bool TryParse(string? value, out RoomType roomType)
+    {
+        foreach (var candidate in Enum.GetValues<RoomType>())
+        {
+            if (string.Equals(candidate.ToString(), value?.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                roomType = candidate;
+                return true;
+            }
+        }
+        roomType = default;
+        return false;
+    }
+
+    public static RoomType Parse(string value) =>
+        TryParse(value, out var roomType) ? roomType : throw new ArgumentException($"Unknown room type '{value}'.", nameof(value));
+
+    public static int MaxGuests(RoomType roomType) => roomType switch
+    {
+        RoomType.Standard => 2,
+        RoomType.Deluxe => 3,
+        RoomType.Suite => 4,
+        _ => throw new ArgumentOutOfRangeException(nameof(roomType))
+    };
+}
+
+public sealed record GuestDetails(string FullName, string Email, string Phone)
 {
     /// <summary>Last four digits only, for display. The full number never leaves the server.</summary>
-    public string Masked => AccountNumber.Length <= 4 ? "****" : $"****{AccountNumber[^4..]}";
+    public string MaskedPhone => Phone.Length <= 4 ? "******" : $"******{Phone[^4..]}";
 }
 
-/// <summary>The entity. System-owned fields (Status, IsVerified, RegisteredAt) have no public setter.</summary>
-public sealed class Vendor
+/// <summary>The entity. System-owned fields (NightlyRate, Status, PaymentReference, notes) have no public setter.</summary>
+public sealed class Booking
 {
     public Guid Id { get; }
-    public string LegalName { get; private set; }
-    public string Gstin { get; }
-    public string Pan { get; }
-    public string ContactEmail { get; private set; }
-    public BankAccount Bank { get; private set; }
-    public VendorStatus Status { get; private set; } = VendorStatus.Pending;
-    public bool IsVerified => Status == VendorStatus.Verified;
-    public string? VerifiedByOfficerId { get; private set; }
-    public DateTimeOffset RegisteredAt { get; }
+    public Guid HotelId { get; }
+    public RoomType RoomType { get; }
+    public DateOnly CheckIn { get; }
+    public DateOnly CheckOut { get; }
+    public int Guests { get; }
+    public GuestDetails Guest { get; private set; }
+    public decimal NightlyRate { get; }
+    public BookingStatus Status { get; private set; } = BookingStatus.PendingPayment;
+    public string? PaymentReference { get; private set; }
+    public string? FrontDeskNotes { get; private set; }
+    public DateTimeOffset CreatedAt { get; }
 
-    private Vendor(Guid id, string legalName, string gstin, string pan, string contactEmail, BankAccount bank, DateTimeOffset registeredAt)
+    public int Nights => CheckOut.DayNumber - CheckIn.DayNumber;
+    public decimal TotalAmount => NightlyRate * Nights;
+
+    private Booking(Guid id, Guid hotelId, RoomType roomType, DateOnly checkIn, DateOnly checkOut, int guests,
+                    GuestDetails guest, decimal nightlyRate, DateTimeOffset createdAt)
     {
         Id = id;
-        LegalName = legalName;
-        Gstin = gstin;
-        Pan = pan;
-        ContactEmail = contactEmail;
-        Bank = bank;
-        RegisteredAt = registeredAt;
+        HotelId = hotelId;
+        RoomType = roomType;
+        CheckIn = checkIn;
+        CheckOut = checkOut;
+        Guests = guests;
+        Guest = guest;
+        NightlyRate = nightlyRate;
+        CreatedAt = createdAt;
     }
 
-    /// <summary>The only way to create a vendor. Trusts that format validation already happened; still guards the invariants it owns.</summary>
-    public static Vendor Register(Guid id, string legalName, string gstin, string pan, string contactEmail, BankAccount bank, DateTimeOffset now)
+    /// <summary>The only way to create a booking. Trusts that request validation already happened; still guards the invariants it owns.</summary>
+    public static Booking Create(Guid id, Guid hotelId, RoomType roomType, DateOnly checkIn, DateOnly checkOut, int guests,
+                                 GuestDetails guest, decimal nightlyRate, DateTimeOffset now)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(legalName);
-        ArgumentException.ThrowIfNullOrWhiteSpace(gstin);
-        if (!gstin.Substring(2, 10).Equals(pan, StringComparison.Ordinal))
-            throw new ArgumentException("GSTIN characters 3–12 must equal the PAN.", nameof(gstin));
-        return new Vendor(id, legalName.Trim(), gstin.ToUpperInvariant(), pan.ToUpperInvariant(), contactEmail.Trim(), bank, now);
+        ArgumentNullException.ThrowIfNull(guest);
+        ArgumentException.ThrowIfNullOrWhiteSpace(guest.FullName);
+        if (checkOut <= checkIn)
+            throw new ArgumentException("Check-out must be after check-in.", nameof(checkOut));
+        if (guests < 1 || guests > RoomTypes.MaxGuests(roomType))
+            throw new ArgumentOutOfRangeException(nameof(guests), $"A {roomType} room takes 1 to {RoomTypes.MaxGuests(roomType)} guests.");
+        if (nightlyRate <= 0)
+            throw new ArgumentOutOfRangeException(nameof(nightlyRate), "The nightly rate must be positive.");
+
+        var cleanGuest = guest with { FullName = guest.FullName.Trim(), Email = guest.Email.Trim() };
+        return new Booking(id, hotelId, roomType, checkIn, checkOut, guests, cleanGuest, nightlyRate, now);
     }
 
-    public void MarkVerified(string officerId)
+    /// <summary>Called by the payment webhook handler, never by the booking request.</summary>
+    public void Confirm(string paymentReference)
     {
-        if (Status != VendorStatus.Pending) throw new InvalidOperationException($"Cannot verify a vendor in status {Status}.");
-        ArgumentException.ThrowIfNullOrWhiteSpace(officerId);
-        Status = VendorStatus.Verified;
-        VerifiedByOfficerId = officerId;
+        if (Status != BookingStatus.PendingPayment) throw new InvalidOperationException($"Cannot confirm a booking in status {Status}.");
+        ArgumentException.ThrowIfNullOrWhiteSpace(paymentReference);
+        Status = BookingStatus.Confirmed;
+        PaymentReference = paymentReference;
     }
 
-    /// <summary>Only the fields a vendor may change after registration. GSTIN and PAN are fixed; re-register to change them.</summary>
-    public void UpdateContact(string contactEmail, BankAccount bank)
+    /// <summary>The only thing a guest may change after booking. Dates and room type change through a separate "modify stay" flow that re-prices.</summary>
+    public void UpdateGuestDetails(GuestDetails guest)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(contactEmail);
-        ContactEmail = contactEmail.Trim();
-        Bank = bank;
+        ArgumentNullException.ThrowIfNull(guest);
+        if (Status == BookingStatus.Cancelled) throw new InvalidOperationException("A cancelled booking cannot be edited.");
+        Guest = guest;
+    }
+
+    public void AddFrontDeskNote(string note)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(note);
+        FrontDeskNotes = string.IsNullOrEmpty(FrontDeskNotes) ? note.Trim() : $"{FrontDeskNotes}\n{note.Trim()}";
     }
 }
 ```
 
-```csharp file=Contracts/VendorContracts.cs
+```csharp file=Contracts/BookingContracts.cs
 using System.ComponentModel.DataAnnotations;
 
-namespace Procure.Contracts;
+namespace Stays.Contracts;
 
-/// <summary>What a client may send. Note what is missing: Id, Status, IsVerified, RegisteredAt.</summary>
-public sealed record RegisterVendorRequest
+/// <summary>What a client may send. Note what is missing: Id, NightlyRate, Status, PaymentReference, CreatedAt.</summary>
+public sealed record CreateBookingRequest
 {
-    [Required, StringLength(200, MinimumLength = 3)]
-    public string LegalName { get; init; } = "";
+    // [Required] cannot reject Guid.Empty (a value type is never null); the validator checks that.
+    public Guid HotelId { get; init; }
 
-    [Required, StringLength(15, MinimumLength = 15)]
-    public string Gstin { get; init; } = "";
+    [Required, StringLength(20)]
+    public string RoomType { get; init; } = "";
 
-    [Required, StringLength(10, MinimumLength = 10)]
-    public string Pan { get; init; } = "";
+    public DateOnly CheckIn { get; init; }
 
-    [Required, EmailAddress, StringLength(254)]
-    public string ContactEmail { get; init; } = "";
+    public DateOnly CheckOut { get; init; }
+
+    [Range(1, 10)]
+    public int Guests { get; init; }
 
     [Required]
-    public BankAccountDto Bank { get; init; } = new();
+    public GuestDetailsDto Guest { get; init; } = new();
 }
 
-public sealed record BankAccountDto
+public sealed record GuestDetailsDto
 {
-    [Required, StringLength(18, MinimumLength = 9)]
-    public string AccountNumber { get; init; } = "";
+    [Required, StringLength(100, MinimumLength = 2)]
+    public string FullName { get; init; } = "";
 
-    [Required, StringLength(11, MinimumLength = 11)]
-    public string Ifsc { get; init; } = "";
+    [Required, EmailAddress, StringLength(254)]
+    public string Email { get; init; } = "";
+
+    [Required, StringLength(10, MinimumLength = 10)]
+    public string Phone { get; init; } = "";
 }
 
-/// <summary>What a client may see. No PAN, no full account number, no officer id.</summary>
-public sealed record VendorResponse(
+/// <summary>What a client may see. No email, no full phone number, no payment reference, no staff notes.</summary>
+public sealed record BookingResponse(
     Guid Id,
-    string LegalName,
-    string Gstin,
-    string ContactEmail,
-    string BankAccountMasked,
+    Guid HotelId,
+    string RoomType,
+    DateOnly CheckIn,
+    DateOnly CheckOut,
+    int Nights,
+    int Guests,
+    string GuestName,
+    string PhoneMasked,
+    decimal NightlyRate,
+    decimal TotalAmount,
     string Status,
-    DateTimeOffset RegisteredAt);
+    DateTimeOffset CreatedAt);
 ```
 
-```csharp file=Contracts/VendorMapper.cs
-using Procure.Domain;
+```csharp file=Contracts/BookingMapper.cs
+using Stays.Domain;
 
-namespace Procure.Contracts;
+namespace Stays.Contracts;
 
 /// <summary>Pure copying. No decisions, no I/O. Server-owned values come in as parameters.</summary>
-public static class VendorMapper
+public static class BookingMapper
 {
-    public static Vendor ToEntity(this RegisterVendorRequest r, Guid id, DateTimeOffset now) =>
-        Vendor.Register(
+    public static Booking ToEntity(this CreateBookingRequest r, Guid id, decimal nightlyRate, DateTimeOffset now) =>
+        Booking.Create(
             id,
-            r.LegalName,
-            r.Gstin.ToUpperInvariant(),
-            r.Pan.ToUpperInvariant(),
-            r.ContactEmail,
-            new BankAccount(r.Bank.AccountNumber, r.Bank.Ifsc.ToUpperInvariant()),
+            r.HotelId,
+            RoomTypes.Parse(r.RoomType),
+            r.CheckIn,
+            r.CheckOut,
+            r.Guests,
+            new GuestDetails(r.Guest.FullName, r.Guest.Email, r.Guest.Phone),
+            nightlyRate,
             now);
 
-    public static VendorResponse ToResponse(this Vendor v) =>
-        new(v.Id, v.LegalName, v.Gstin, v.ContactEmail, v.Bank.Masked, v.Status.ToString(), v.RegisteredAt);
+    public static BookingResponse ToResponse(this Booking b) =>
+        new(b.Id, b.HotelId, b.RoomType.ToString(), b.CheckIn, b.CheckOut, b.Nights, b.Guests,
+            b.Guest.FullName, b.Guest.MaskedPhone, b.NightlyRate, b.TotalAmount, b.Status.ToString(), b.CreatedAt);
 }
 ```
 
 ```csharp file=Validation/Validation.cs
-namespace Procure.Validation;
+namespace Stays.Validation;
 
 public sealed record ValidationFailure(string PropertyName, string ErrorMessage);
 
@@ -459,156 +540,197 @@ public abstract class AbstractValidator<T> : IValidator<T>
 }
 ```
 
-```csharp file=Validation/RegisterVendorRequestValidator.cs
+```csharp file=Validation/CreateBookingRequestValidator.cs
 using System.Text.RegularExpressions;
-using Procure.Contracts;
+using Stays.Contracts;
+using Stays.Domain;
 
-namespace Procure.Validation;
+namespace Stays.Validation;
 
-public sealed partial class RegisterVendorRequestValidator : AbstractValidator<RegisterVendorRequest>
+/// <summary>Request rules only: no database. The clock is injected so tests can fix "today".</summary>
+public sealed partial class CreateBookingRequestValidator(TimeProvider clock) : AbstractValidator<CreateBookingRequest>
 {
-    // Format only. The GSTIN check digit is not verified here; the GST network is the authority for that.
-    [GeneratedRegex("^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$")]
-    private static partial Regex GstinPattern();
+    public const int MaxNights = 30;
+    public const int BookingWindowDays = 365;
 
-    [GeneratedRegex("^[A-Z]{5}[0-9]{4}[A-Z]$")]
-    private static partial Regex PanPattern();
+    // Hotels in this example are in India. IST is UTC+05:30 all year (no daylight saving), so a fixed offset is correct.
+    private static readonly TimeSpan HotelOffset = TimeSpan.FromHours(5.5);
 
-    [GeneratedRegex("^[A-Z]{4}0[A-Z0-9]{6}$")]
-    private static partial Regex IfscPattern();
+    [GeneratedRegex("^[6-9][0-9]{9}$")]
+    private static partial Regex IndianMobile();
 
-    protected override void Rules(RegisterVendorRequest r, List<ValidationFailure> f)
+    protected override void Rules(CreateBookingRequest r, List<ValidationFailure> f)
     {
-        var gstin = r.Gstin.ToUpperInvariant();
-        var pan = r.Pan.ToUpperInvariant();
+        var today = DateOnly.FromDateTime(clock.GetUtcNow().ToOffset(HotelOffset).DateTime);
 
-        Must(f, GstinPattern().IsMatch(gstin), nameof(r.Gstin), "GSTIN must be 15 characters in the format 22AAAAA0000A1Z5.");
-        Must(f, PanPattern().IsMatch(pan), nameof(r.Pan), "PAN must be 10 characters in the format AAAAA0000A.");
+        Must(f, r.HotelId != Guid.Empty, nameof(r.HotelId), "HotelId is required.");
 
-        // Cross-field rule: characters 3–12 of a GSTIN are the PAN of the registrant.
-        if (gstin.Length == 15 && pan.Length == 10)
-            Must(f, gstin.Substring(2, 10) == pan, nameof(r.Pan), "PAN does not match the PAN embedded in the GSTIN.");
+        var knownRoomType = RoomTypes.TryParse(r.RoomType, out var roomType);
+        Must(f, knownRoomType, nameof(r.RoomType), "RoomType must be Standard, Deluxe or Suite.");
 
-        Must(f, IfscPattern().IsMatch(r.Bank.Ifsc.ToUpperInvariant()), $"{nameof(r.Bank)}.{nameof(r.Bank.Ifsc)}", "IFSC must be 11 characters, e.g. SBIN0001234.");
-        Must(f, r.Bank.AccountNumber.All(char.IsDigit), $"{nameof(r.Bank)}.{nameof(r.Bank.AccountNumber)}", "Account number must contain digits only.");
+        Must(f, r.CheckIn >= today, nameof(r.CheckIn), "Check-in cannot be in the past.");
+        Must(f, r.CheckIn <= today.AddDays(BookingWindowDays), nameof(r.CheckIn), $"Bookings open at most {BookingWindowDays} days ahead.");
+
+        // Cross-field rules: reported once, under the field the user should fix.
+        if (r.CheckOut <= r.CheckIn)
+            f.Add(new ValidationFailure(nameof(r.CheckOut), "Check-out must be after check-in."));
+        else
+            Must(f, r.CheckOut.DayNumber - r.CheckIn.DayNumber <= MaxNights, nameof(r.CheckOut), $"A single booking can be at most {MaxNights} nights.");
+
+        if (knownRoomType)
+            Must(f, r.Guests <= RoomTypes.MaxGuests(roomType), nameof(r.Guests),
+                 $"A {roomType} room allows at most {RoomTypes.MaxGuests(roomType)} guests.");
+
+        Must(f, IndianMobile().IsMatch(r.Guest.Phone ?? ""), $"{nameof(r.Guest)}.{nameof(r.Guest.Phone)}",
+             "Phone must be a 10-digit Indian mobile number, e.g. 9876543210.");
     }
 }
 ```
 
-```csharp file=Application/VendorRegistrationService.cs
+```csharp file=Application/BookingService.cs
 using System.Collections.Concurrent;
-using Procure.Contracts;
-using Procure.Domain;
+using Stays.Contracts;
+using Stays.Domain;
 
-namespace Procure.Application;
+namespace Stays.Application;
 
-public interface IVendorRepository
+public interface IHotelCatalog
 {
-    Task<bool> ExistsByGstinAsync(string gstin, CancellationToken ct = default);
-    Task AddAsync(Vendor vendor, CancellationToken ct = default);
-    Task<Vendor?> GetAsync(Guid id, CancellationToken ct = default);
+    decimal GetNightlyRate(Guid hotelId, RoomType roomType);
+    int GetRoomCount(Guid hotelId, RoomType roomType);
 }
 
-public sealed class InMemoryVendorRepository : IVendorRepository
+/// <summary>Stand-in for the rates and inventory tables. Real rates vary by date and season.</summary>
+public sealed class FixedHotelCatalog : IHotelCatalog
 {
-    private readonly ConcurrentDictionary<Guid, Vendor> _vendors = new();
-    public Task<bool> ExistsByGstinAsync(string gstin, CancellationToken ct = default) =>
-        Task.FromResult(_vendors.Values.Any(v => v.Gstin == gstin));
-    public Task AddAsync(Vendor vendor, CancellationToken ct = default) { _vendors[vendor.Id] = vendor; return Task.CompletedTask; }
-    public Task<Vendor?> GetAsync(Guid id, CancellationToken ct = default) => Task.FromResult(_vendors.GetValueOrDefault(id));
-}
-
-public enum RegistrationStatus { Created, DuplicateGstin }
-public sealed record RegistrationOutcome(RegistrationStatus Status, VendorResponse? Vendor = null);
-
-public sealed class VendorRegistrationService(IVendorRepository vendors, TimeProvider clock)
-{
-    public async Task<RegistrationOutcome> RegisterAsync(RegisterVendorRequest request, CancellationToken ct = default)
+    public decimal GetNightlyRate(Guid hotelId, RoomType roomType) => roomType switch
     {
-        var gstin = request.Gstin.ToUpperInvariant();
-        // A business rule that needs data the request does not carry: belongs here, not in the validator.
-        if (await vendors.ExistsByGstinAsync(gstin, ct)) return new RegistrationOutcome(RegistrationStatus.DuplicateGstin);
+        RoomType.Standard => 3_500m,
+        RoomType.Deluxe => 5_500m,
+        _ => 9_000m
+    };
 
-        var vendor = request.ToEntity(Guid.NewGuid(), clock.GetUtcNow());
-        await vendors.AddAsync(vendor, ct);
-        return new RegistrationOutcome(RegistrationStatus.Created, vendor.ToResponse());
+    public int GetRoomCount(Guid hotelId, RoomType roomType) => roomType == RoomType.Suite ? 2 : 20;
+}
+
+public interface IBookingRepository
+{
+    Task<int> CountOverlappingAsync(Guid hotelId, RoomType roomType, DateOnly checkIn, DateOnly checkOut, CancellationToken ct = default);
+    Task AddAsync(Booking booking, CancellationToken ct = default);
+    Task<Booking?> GetAsync(Guid id, CancellationToken ct = default);
+}
+
+public sealed class InMemoryBookingRepository : IBookingRepository
+{
+    private readonly ConcurrentDictionary<Guid, Booking> _bookings = new();
+
+    // Two stays overlap when each one starts before the other ends. Check-out day is free for the next guest.
+    public Task<int> CountOverlappingAsync(Guid hotelId, RoomType roomType, DateOnly checkIn, DateOnly checkOut, CancellationToken ct = default) =>
+        Task.FromResult(_bookings.Values.Count(b =>
+            b.HotelId == hotelId && b.RoomType == roomType && b.Status != BookingStatus.Cancelled &&
+            b.CheckIn < checkOut && checkIn < b.CheckOut));
+
+    public Task AddAsync(Booking booking, CancellationToken ct = default) { _bookings[booking.Id] = booking; return Task.CompletedTask; }
+    public Task<Booking?> GetAsync(Guid id, CancellationToken ct = default) => Task.FromResult(_bookings.GetValueOrDefault(id));
+}
+
+public enum BookingResult { Created, SoldOut }
+public sealed record BookingOutcome(BookingResult Result, BookingResponse? Booking = null);
+
+public sealed class BookingService(IBookingRepository bookings, IHotelCatalog catalog, TimeProvider clock)
+{
+    public async Task<BookingOutcome> CreateAsync(CreateBookingRequest request, CancellationToken ct = default)
+    {
+        var roomType = RoomTypes.Parse(request.RoomType);
+
+        // A business rule that needs data the request does not carry: belongs here, not in the validator.
+        // This check-then-insert can race; in PostgreSQL an atomic inventory UPDATE or an exclusion constraint is the real guarantee.
+        var taken = await bookings.CountOverlappingAsync(request.HotelId, roomType, request.CheckIn, request.CheckOut, ct);
+        if (taken >= catalog.GetRoomCount(request.HotelId, roomType)) return new BookingOutcome(BookingResult.SoldOut);
+
+        // The price comes from the server's catalogue, never from the request.
+        var rate = catalog.GetNightlyRate(request.HotelId, roomType);
+        var booking = request.ToEntity(Guid.NewGuid(), rate, clock.GetUtcNow());
+        await bookings.AddAsync(booking, ct);
+        return new BookingOutcome(BookingResult.Created, booking.ToResponse());
     }
 
-    public async Task<VendorResponse?> GetAsync(Guid id, CancellationToken ct = default) =>
-        (await vendors.GetAsync(id, ct))?.ToResponse();
+    public async Task<BookingResponse?> GetAsync(Guid id, CancellationToken ct = default) =>
+        (await bookings.GetAsync(id, ct))?.ToResponse();
 }
 ```
 
-```csharp file=Api/VendorsController.cs
+```csharp file=Api/BookingsController.cs
 using Microsoft.AspNetCore.Mvc;
-using Procure.Application;
-using Procure.Contracts;
-using Procure.Validation;
+using Stays.Application;
+using Stays.Contracts;
+using Stays.Validation;
 
-namespace Procure.Api;
+namespace Stays.Api;
 
 [ApiController]
-[Route("api/vendors")]
-public sealed class VendorsController(VendorRegistrationService registration, IValidator<RegisterVendorRequest> validator) : ControllerBase
+[Route("api/bookings")]
+public sealed class BookingsController(BookingService bookingService, IValidator<CreateBookingRequest> validator) : ControllerBase
 {
     // [ApiController] has already returned 400 for DataAnnotation failures before this method runs.
     [HttpPost]
-    [ProducesResponseType<VendorResponse>(StatusCodes.Status201Created)]
+    [ProducesResponseType<BookingResponse>(StatusCodes.Status201Created)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
-    public async Task<IActionResult> Register([FromBody] RegisterVendorRequest request, CancellationToken ct)
+    public async Task<IActionResult> Create([FromBody] CreateBookingRequest request, CancellationToken ct)
     {
         var validation = validator.Validate(request);
         if (!validation.IsValid)
             return ValidationProblem(new ValidationProblemDetails(validation.ToDictionary()));
 
-        var outcome = await registration.RegisterAsync(request, ct);
-        return outcome.Status switch
+        var outcome = await bookingService.CreateAsync(request, ct);
+        return outcome.Result switch
         {
-            RegistrationStatus.Created => CreatedAtAction(nameof(GetById), new { id = outcome.Vendor!.Id }, outcome.Vendor),
-            RegistrationStatus.DuplicateGstin => Problem(
-                title: "Vendor already registered",
-                detail: $"A vendor with GSTIN {request.Gstin.ToUpperInvariant()} already exists.",
+            BookingResult.Created => CreatedAtAction(nameof(GetById), new { id = outcome.Booking!.Id }, outcome.Booking),
+            BookingResult.SoldOut => Problem(
+                title: "No rooms left",
+                detail: $"No {request.RoomType} room is free from {request.CheckIn:yyyy-MM-dd} to {request.CheckOut:yyyy-MM-dd}.",
                 statusCode: StatusCodes.Status409Conflict),
             _ => Problem(statusCode: StatusCodes.Status500InternalServerError)
         };
     }
 
     [HttpGet("{id:guid}")]
-    public async Task<ActionResult<VendorResponse>> GetById(Guid id, CancellationToken ct) =>
-        await registration.GetAsync(id, ct) is { } vendor ? Ok(vendor) : NotFound();
+    public async Task<ActionResult<BookingResponse>> GetById(Guid id, CancellationToken ct) =>
+        await bookingService.GetAsync(id, ct) is { } booking ? Ok(booking) : NotFound();
 }
 ```
 
 ```csharp file=Program.cs
-using Procure.Application;
-using Procure.Contracts;
-using Procure.Validation;
+using Stays.Application;
+using Stays.Contracts;
+using Stays.Validation;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddProblemDetails();          // consistent ProblemDetails bodies for unhandled errors too
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<IVendorRepository, InMemoryVendorRepository>();
-builder.Services.AddScoped<VendorRegistrationService>();
-builder.Services.AddSingleton<IValidator<RegisterVendorRequest>, RegisterVendorRequestValidator>();
+builder.Services.AddSingleton<IHotelCatalog, FixedHotelCatalog>();
+builder.Services.AddSingleton<IBookingRepository, InMemoryBookingRepository>();
+builder.Services.AddScoped<BookingService>();
+builder.Services.AddSingleton<IValidator<CreateBookingRequest>, CreateBookingRequestValidator>();
 
 var app = builder.Build();
 app.UseExceptionHandler();
 app.MapControllers();
 
 // The same validation from a minimal API endpoint: call the validator and use Results.ValidationProblem.
-app.MapPost("/v2/vendors", async (RegisterVendorRequest request, IValidator<RegisterVendorRequest> validator,
-                                  VendorRegistrationService registration, CancellationToken ct) =>
+app.MapPost("/v2/bookings", async (CreateBookingRequest request, IValidator<CreateBookingRequest> validator,
+                                   BookingService bookingService, CancellationToken ct) =>
 {
     var validation = validator.Validate(request);
     if (!validation.IsValid) return Results.ValidationProblem(validation.ToDictionary());
 
-    var outcome = await registration.RegisterAsync(request, ct);
-    return outcome.Status == RegistrationStatus.Created
-        ? Results.Created($"/api/vendors/{outcome.Vendor!.Id}", outcome.Vendor)
-        : Results.Problem(title: "Vendor already registered", statusCode: StatusCodes.Status409Conflict);
+    var outcome = await bookingService.CreateAsync(request, ct);
+    return outcome.Result == BookingResult.Created
+        ? Results.Created($"/api/bookings/{outcome.Booking!.Id}", outcome.Booking)
+        : Results.Problem(title: "No rooms left", statusCode: StatusCodes.Status409Conflict);
 });
 
 app.Run();
@@ -616,32 +738,34 @@ app.Run();
 
 Points worth noticing:
 
-- **Two validation passes, on purpose.** DataAnnotations catch the cheap, universal problems (missing, wrong length) and `[ApiController]` turns them into a 400 before the action runs. The validator class handles the domain-specific formats and the cross-field rule. Both produce the same `ValidationProblemDetails` shape, so the client sees one format.
-- **The validator is a singleton** because it is stateless. A validator that needed a database (for uniqueness) would have to be scoped, and that is the smell telling you the rule belongs in the service instead.
-- **`Vendor.Register` re-checks the GSTIN/PAN relationship.** The domain does not trust callers. Validation protects the user experience; invariants protect the data. Both are worth having, and the duplication is one line.
-- **`Masked`** is how a response DTO avoids leaking: the mapper calls `v.Bank.Masked`, never `v.Bank.AccountNumber`.
+- **Two validation passes, on purpose.** DataAnnotations catch the cheap, universal problems (missing, wrong length, guests out of 1–10) and `[ApiController]` turns them into a 400 before the action runs. The validator class handles the domain-specific formats and the cross-field rules (dates, guests per room type). Both produce the same `ValidationProblemDetails` shape, so the client sees one format. One catch: the validator runs only after the annotations pass, so a client with both kinds of mistake sees the errors in two rounds. If that matters, move all rules into the validator.
+- **The validator is a singleton** because it is stateless; its only dependency, `TimeProvider`, is a singleton too. A validator that needed a database (for availability) would have to be scoped, and that is the smell telling you the rule belongs in the service instead.
+- **`Booking.Create` re-checks dates and guest count.** The domain does not trust callers. Validation protects the user experience; invariants protect the data. A nightly import from a partner channel that skips the API still cannot create a zero-night booking.
+- **The price never comes from the client.** `NightlyRate` is a parameter of the mapper, supplied by the service from the catalogue. `TotalAmount` is computed by the entity.
+- **`MaskedPhone`** is how a response DTO avoids leaking: the mapper calls `b.Guest.MaskedPhone`, never `b.Guest.Phone`.
 
 ### The same validator in FluentValidation
 
 If your team prefers the library (it is widely used and well documented), the class above becomes:
 
 ```csharp
-public sealed class RegisterVendorRequestValidator : AbstractValidator<RegisterVendorRequest>
+public sealed class CreateBookingRequestValidator : AbstractValidator<CreateBookingRequest>
 {
-    public RegisterVendorRequestValidator()
+    public CreateBookingRequestValidator(TimeProvider clock)
     {
-        RuleFor(x => x.LegalName).NotEmpty().Length(3, 200);
-        RuleFor(x => x.Gstin).Matches("^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$")
-            .WithMessage("GSTIN must be 15 characters in the format 22AAAAA0000A1Z5.");
-        RuleFor(x => x.Pan).Matches("^[A-Z]{5}[0-9]{4}[A-Z]$");
-        RuleFor(x => x).Must(r => r.Gstin.Length == 15 && r.Gstin.Substring(2, 10) == r.Pan)
-            .WithName("Pan").WithMessage("PAN does not match the PAN embedded in the GSTIN.");
-        RuleFor(x => x.Bank.Ifsc).Matches("^[A-Z]{4}0[A-Z0-9]{6}$");
-        RuleFor(x => x.Bank.AccountNumber).Must(a => a.All(char.IsDigit));
+        RuleFor(x => x.HotelId).NotEmpty();   // NotEmpty treats Guid.Empty as empty
+        RuleFor(x => x.RoomType).Must(t => RoomTypes.TryParse(t, out _))
+            .WithMessage("RoomType must be Standard, Deluxe or Suite.");
+        RuleFor(x => x.CheckIn).Must(d => d >= TodayInIndia(clock)).WithMessage("Check-in cannot be in the past.");
+        RuleFor(x => x.CheckOut).GreaterThan(x => x.CheckIn).WithMessage("Check-out must be after check-in.");
+        RuleFor(x => x.Guests)
+            .Must((r, guests) => !RoomTypes.TryParse(r.RoomType, out var t) || guests <= RoomTypes.MaxGuests(t))
+            .WithMessage("Too many guests for this room type.");
+        RuleFor(x => x.Guest.Phone).Matches("^[6-9][0-9]{9}$");
     }
 }
 
-// Registration: builder.Services.AddValidatorsFromAssemblyContaining<RegisterVendorRequestValidator>();
+// Registration: builder.Services.AddValidatorsFromAssemblyContaining<CreateBookingRequestValidator>();
 // In the action: var result = await validator.ValidateAsync(request, ct);
 //                if (!result.IsValid) return ValidationProblem(new ValidationProblemDetails(result.ToDictionary()));
 ```
@@ -650,33 +774,33 @@ The shape is the same as our hand-rolled version. The library adds a fluent API,
 
 ## Bad design vs good design
 
-**Bad**: one `Vendor` class for request, storage and response; validation by scattered `if` statements; errors as strings.
+**Bad**: one `Booking` class for request, storage and response; validation by scattered `if` statements; errors as strings.
 
 ```csharp
 [HttpPut("{id}")]
-public async Task<IActionResult> Update(Guid id, Vendor incoming)
+public async Task<IActionResult> Update(Guid id, Booking incoming)
 {
-    var v = await _db.Vendors.FindAsync(id);
-    if (v == null) return NotFound();
-    _db.Entry(v).CurrentValues.SetValues(incoming);   // copies EVERY property, including IsVerified
+    var b = await _db.Bookings.FindAsync(id);
+    if (b == null) return NotFound();
+    _db.Entry(b).CurrentValues.SetValues(incoming);   // copies EVERY property, including NightlyRate and Status
     await _db.SaveChangesAsync();
-    return Ok(v);                                     // returns OfficerNotes and the full account number
+    return Ok(b);                                     // returns FrontDeskNotes and the full phone number
 }
 ```
 
-`SetValues(incoming)` is a one-line over-posting hole: whatever the client sends becomes the truth. And `Ok(v)` is a one-line data leak.
+`SetValues(incoming)` is a one-line over-posting hole: whatever the client sends becomes the truth, so a guest can drop the rate to ₹1 or mark an unpaid booking as `Confirmed`. And `Ok(b)` is a one-line data leak.
 
-**Good**: an `UpdateVendorContactRequest` with only `ContactEmail` and `Bank`, validated, then `vendor.UpdateContact(...)` which can only change those two things, then `ToResponse()`. The entity's design makes the vulnerability impossible rather than merely unlikely.
+**Good**: an `UpdateGuestDetailsRequest` with only `FullName`, `Email` and `Phone`, validated, then `booking.UpdateGuestDetails(...)` which can only change those three things, then `ToResponse()`. Changing dates is a separate "modify stay" endpoint that re-checks availability and re-prices. The entity's design makes the vulnerability impossible rather than merely unlikely.
 
 **Also bad, in the other direction**: five DTOs per entity "for consistency" when three endpoints exist, a mapping library configured with 400 lines of profiles for 12 entities, and a validation layer that re-implements every domain invariant so the domain model becomes anemic. DTOs are a boundary tool. Inside the boundary (service to repository), pass the entity.
 
 :::callout type=tradeoff title="How many DTOs per resource?"
-A common, sensible set is: one *create* request, one *update* request (often a subset, because identity fields cannot change), and one *response*. Sometimes a *summary* response for list endpoints. Share a response type across GET-by-id and the body of a 201. Do not share a request type between create and update if the allowed fields differ; that is where over-posting creeps back in.
+A common, sensible set is: one *create* request, one *update* request (often a subset, because identity fields cannot change), and one *response*. Sometimes a *summary* response for list endpoints ("My trips"). Share a response type across GET-by-id and the body of a 201. Do not share a request type between create and update if the allowed fields differ; that is where over-posting creeps back in.
 :::
 
 ## Practical playground
 
-A console version of the request → validate → map → respond flow. Change the GSTIN or PAN and watch the errors appear per field. Then try sending an `IsVerified` property: there is nowhere for it to go.
+A console version of the request → validate → map → respond flow. Change the dates, the guest count or the phone number and watch the errors appear per field. Then notice that the request has no price field: the total comes from the server's rate card.
 
 :::playground type=csharp title="Validate, map, respond"
 ```csharp file=Program.cs
@@ -685,30 +809,41 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 
-public sealed record RegisterVendorRequest(string LegalName, string Gstin, string Pan, string Ifsc);
+public sealed record CreateBookingRequest(string RoomType, DateOnly CheckIn, DateOnly CheckOut, int Guests, string Phone);
 
-public sealed class Vendor
+public sealed class Booking
 {
     public Guid Id { get; } = Guid.NewGuid();
-    public string LegalName { get; }
-    public string Gstin { get; }
-    public bool IsVerified { get; private set; }   // no public setter: cannot be over-posted
-    public Vendor(string legalName, string gstin) { LegalName = legalName; Gstin = gstin; }
-    public void MarkVerified() => IsVerified = true;
+    public string RoomType { get; }
+    public DateOnly CheckIn { get; }
+    public DateOnly CheckOut { get; }
+    public decimal NightlyRate { get; }                 // set by the server, never bound from JSON
+    public string Status { get; private set; } = "PendingPayment";
+    public int Nights => CheckOut.DayNumber - CheckIn.DayNumber;
+    public decimal Total => NightlyRate * Nights;
+    public Booking(string roomType, DateOnly checkIn, DateOnly checkOut, decimal nightlyRate)
+    {
+        RoomType = roomType; CheckIn = checkIn; CheckOut = checkOut; NightlyRate = nightlyRate;
+    }
 }
 
-public sealed record VendorResponse(Guid Id, string LegalName, string Gstin, string Status);
+public sealed record BookingResponse(Guid Id, string RoomType, int Nights, decimal Total, string Status);
 
 public static class Validator
 {
-    public static Dictionary<string, string[]> Validate(RegisterVendorRequest r)
+    public static readonly Dictionary<string, (int MaxGuests, decimal Rate)> Rooms = new()
+    {
+        ["Standard"] = (2, 3_500m), ["Deluxe"] = (3, 5_500m), ["Suite"] = (4, 9_000m)
+    };
+
+    public static Dictionary<string, string[]> Validate(CreateBookingRequest r, DateOnly today)
     {
         var errors = new List<(string Field, string Message)>();
-        if (string.IsNullOrWhiteSpace(r.LegalName) || r.LegalName.Length < 3) errors.Add(("LegalName", "At least 3 characters."));
-        if (!Regex.IsMatch(r.Gstin, "^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$")) errors.Add(("Gstin", "Invalid GSTIN format."));
-        if (!Regex.IsMatch(r.Pan, "^[A-Z]{5}[0-9]{4}[A-Z]$")) errors.Add(("Pan", "Invalid PAN format."));
-        else if (r.Gstin.Length == 15 && r.Gstin.Substring(2, 10) != r.Pan) errors.Add(("Pan", "PAN does not match GSTIN."));
-        if (!Regex.IsMatch(r.Ifsc, "^[A-Z]{4}0[A-Z0-9]{6}$")) errors.Add(("Ifsc", "Invalid IFSC."));
+        if (!Rooms.TryGetValue(r.RoomType, out var room)) errors.Add(("RoomType", "Must be Standard, Deluxe or Suite."));
+        else if (r.Guests < 1 || r.Guests > room.MaxGuests) errors.Add(("Guests", $"A {r.RoomType} room takes 1 to {room.MaxGuests} guests."));
+        if (r.CheckIn < today) errors.Add(("CheckIn", "Check-in cannot be in the past."));
+        if (r.CheckOut <= r.CheckIn) errors.Add(("CheckOut", "Check-out must be after check-in."));
+        if (!Regex.IsMatch(r.Phone, "^[6-9][0-9]{9}$")) errors.Add(("Phone", "Must be a 10-digit Indian mobile number."));
         return errors.GroupBy(e => e.Field).ToDictionary(g => g.Key, g => g.Select(e => e.Message).ToArray());
     }
 }
@@ -717,10 +852,11 @@ public static class Program
 {
     public static void Main()
     {
-        var request = new RegisterVendorRequest("Shree Infra Pvt Ltd", "27AAPFU0939F1ZV", "AAPFU0939F", "SBIN0001234");
-        // Try: "27AAPFU0939F1ZV" with Pan "AAPFU0939G", or Ifsc "SBIN1234"
+        var today = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5.5));   // IST
+        var request = new CreateBookingRequest("Deluxe", today.AddDays(14), today.AddDays(17), 2, "9876543210");
+        // Try: Guests = 4, CheckOut = today.AddDays(14), RoomType = "Penthouse", Phone = "12345"
 
-        var errors = Validator.Validate(request);
+        var errors = Validator.Validate(request, today);
         if (errors.Count > 0)
         {
             Console.WriteLine("400 Bad Request");
@@ -728,9 +864,10 @@ public static class Program
             return;
         }
 
-        var vendor = new Vendor(request.LegalName, request.Gstin);
-        var response = new VendorResponse(vendor.Id, vendor.LegalName, vendor.Gstin, vendor.IsVerified ? "Verified" : "Pending");
-        Console.WriteLine($"201 Created: {response}");
+        var rate = Validator.Rooms[request.RoomType].Rate;              // the server decides the price
+        var booking = new Booking(request.RoomType, request.CheckIn, request.CheckOut, rate);
+        var response = new BookingResponse(booking.Id, booking.RoomType, booking.Nights, booking.Total, booking.Status);
+        Console.WriteLine($"201 Created: {response}");                   // 3 nights x ₹5,500 = ₹16,500
     }
 }
 ```
@@ -739,44 +876,44 @@ public static class Program
 ## Exercises
 
 :::exercise id=m03-dtos-mapping-validation-ex1 difficulty=beginner kind=code title="Write a request validator"
-Implement `CreateWorkOrderRequestValidator.Rules` for a work-order API used by a municipal corporation. Collect every failure (do not stop at the first) with the property name and a message.
+Implement `CreateGroupBookingRequestValidator.Rules` for the hotel's group-booking API, used by wedding planners and companies that block many rooms at once. Collect every failure (do not stop at the first) with the property name and a message.
 ::requirements
-- `Title`: required, 5–120 characters after trimming.
-- `WardNumber`: between 1 and 250 inclusive.
-- `EstimatedCost`: greater than 0 and at most ₹5,00,00,000 (5 crore).
-- `StartDate` must be on or before `EndDate` (cross-field; report under `EndDate`).
-- `ContractorGstin`: if provided (not null or empty), must match the GSTIN pattern `^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$`.
+- `GroupName`: required, 5–120 characters after trimming.
+- `Rooms`: between 1 and 20 inclusive.
+- `BudgetPerNight`: greater than 0 and at most ₹50,000.
+- `CheckOut` must be after `CheckIn`; a same-day check-out is zero nights and invalid (cross-field; report under `CheckOut`).
+- `PromoCode`: if provided (not null or empty), must match `^[A-Z0-9]{4,12}$`.
 ::acceptance
 - A fully valid request returns `IsValid == true` with zero errors.
-- A request with a 3-character title and ward 0 returns two errors, one per field.
-- `ContractorGstin == null` produces no error; `"BAD"` produces one under `ContractorGstin`.
-- `EndDate` before `StartDate` produces one error under `EndDate`.
+- A request with a 3-character group name and 0 rooms returns two errors, one per field.
+- `PromoCode == null` produces no error; `"bad code!"` produces one under `PromoCode`.
+- `CheckOut` equal to `CheckIn` produces one error under `CheckOut`.
 ::hint
 Each rule is one `Must(...)` call. Collect, do not return early.
 ::hint
-Trim the title before measuring it; `"  abc  "` has 3 real characters.
+Trim the group name before measuring it; `"  abc  "` has 3 real characters.
 ::hint
-For the optional GSTIN, guard with `string.IsNullOrEmpty` before running the regex.
+For the optional promo code, guard with `string.IsNullOrEmpty` before running the regex.
 ::hint
 ```csharp
-Must(f, r.StartDate <= r.EndDate, nameof(r.EndDate), "End date must be on or after start date.");
-if (!string.IsNullOrEmpty(r.ContractorGstin))
-    Must(f, Gstin.IsMatch(r.ContractorGstin), nameof(r.ContractorGstin), "Invalid GSTIN format.");
+Must(f, r.CheckOut > r.CheckIn, nameof(r.CheckOut), "Check-out must be after check-in.");
+if (!string.IsNullOrEmpty(r.PromoCode))
+    Must(f, PromoCodePattern.IsMatch(r.PromoCode), nameof(r.PromoCode), "Promo code must be 4–12 capital letters or digits.");
 ```
 ::starter
-```csharp file=CreateWorkOrderRequestValidator.cs
+```csharp file=CreateGroupBookingRequestValidator.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 
-public sealed record CreateWorkOrderRequest(
-    string Title,
-    int WardNumber,
-    decimal EstimatedCost,
-    DateOnly StartDate,
-    DateOnly EndDate,
-    string? ContractorGstin);
+public sealed record CreateGroupBookingRequest(
+    string GroupName,
+    int Rooms,
+    decimal BudgetPerNight,
+    DateOnly CheckIn,
+    DateOnly CheckOut,
+    string? PromoCode);
 
 public sealed record ValidationFailure(string PropertyName, string ErrorMessage);
 
@@ -806,27 +943,27 @@ public abstract class AbstractValidator<T>
     }
 }
 
-public sealed class CreateWorkOrderRequestValidator : AbstractValidator<CreateWorkOrderRequest>
+public sealed class CreateGroupBookingRequestValidator : AbstractValidator<CreateGroupBookingRequest>
 {
-    private static readonly Regex Gstin = new("^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$", RegexOptions.Compiled);
+    private static readonly Regex PromoCodePattern = new("^[A-Z0-9]{4,12}$", RegexOptions.Compiled);
 
-    protected override void Rules(CreateWorkOrderRequest r, List<ValidationFailure> f)
+    protected override void Rules(CreateGroupBookingRequest r, List<ValidationFailure> f)
     {
         throw new NotImplementedException();
     }
 }
 ```
 ::tests
-```csharp file=CreateWorkOrderRequestValidatorTests.cs
+```csharp file=CreateGroupBookingRequestValidatorTests.cs
 using System;
 using System.Linq;
 using Xunit;
 
-public class CreateWorkOrderRequestValidatorTests
+public class CreateGroupBookingRequestValidatorTests
 {
-    private static readonly CreateWorkOrderRequestValidator V = new();
-    private static CreateWorkOrderRequest Valid() => new(
-        "Resurfacing of MG Road, Ward 42", 42, 1_250_000m, new DateOnly(2026, 11, 1), new DateOnly(2027, 1, 31), "27AAPFU0939F1ZV");
+    private static readonly CreateGroupBookingRequestValidator V = new();
+    private static CreateGroupBookingRequest Valid() => new(
+        "Sharma–Iyer wedding, Udaipur", 12, 6_500m, new DateOnly(2026, 12, 10), new DateOnly(2026, 12, 13), "WINTER25");
 
     [Fact]
     public void Valid_request_has_no_errors()
@@ -839,56 +976,56 @@ public class CreateWorkOrderRequestValidatorTests
     [Fact]
     public void Collects_multiple_failures()
     {
-        var result = V.Validate(Valid() with { Title = "  abc ", WardNumber = 0 });
+        var result = V.Validate(Valid() with { GroupName = "  abc ", Rooms = 0 });
         Assert.False(result.IsValid);
         var dict = result.ToDictionary();
         Assert.Equal(2, dict.Count);
-        Assert.True(dict.ContainsKey("Title"));
-        Assert.True(dict.ContainsKey("WardNumber"));
+        Assert.True(dict.ContainsKey("GroupName"));
+        Assert.True(dict.ContainsKey("Rooms"));
     }
 
     [Fact]
-    public void Cost_bounds()
+    public void Budget_bounds()
     {
-        Assert.False(V.Validate(Valid() with { EstimatedCost = 0m }).IsValid);
-        Assert.False(V.Validate(Valid() with { EstimatedCost = 50_000_001m }).IsValid);
-        Assert.True(V.Validate(Valid() with { EstimatedCost = 50_000_000m }).IsValid);
+        Assert.False(V.Validate(Valid() with { BudgetPerNight = 0m }).IsValid);
+        Assert.False(V.Validate(Valid() with { BudgetPerNight = 50_001m }).IsValid);
+        Assert.True(V.Validate(Valid() with { BudgetPerNight = 50_000m }).IsValid);
     }
 
     [Fact]
-    public void End_before_start_is_reported_under_EndDate()
+    public void Same_day_checkout_is_reported_under_CheckOut()
     {
-        var result = V.Validate(Valid() with { EndDate = new DateOnly(2026, 10, 1) });
+        var result = V.Validate(Valid() with { CheckOut = new DateOnly(2026, 12, 10) });
         var only = Assert.Single(result.Errors);
-        Assert.Equal("EndDate", only.PropertyName);
+        Assert.Equal("CheckOut", only.PropertyName);
     }
 
     [Fact]
-    public void Gstin_is_optional_but_must_be_valid_when_present()
+    public void Promo_code_is_optional_but_must_be_valid_when_present()
     {
-        Assert.True(V.Validate(Valid() with { ContractorGstin = null }).IsValid);
-        Assert.True(V.Validate(Valid() with { ContractorGstin = "" }).IsValid);
-        var result = V.Validate(Valid() with { ContractorGstin = "BAD" });
-        Assert.Equal("ContractorGstin", Assert.Single(result.Errors).PropertyName);
+        Assert.True(V.Validate(Valid() with { PromoCode = null }).IsValid);
+        Assert.True(V.Validate(Valid() with { PromoCode = "" }).IsValid);
+        var result = V.Validate(Valid() with { PromoCode = "bad code!" });
+        Assert.Equal("PromoCode", Assert.Single(result.Errors).PropertyName);
     }
 }
 ```
 ::solution
 Five rules, five `Must` calls, one guard for the optional field.
 
-```csharp file=CreateWorkOrderRequestValidator.cs
+```csharp file=CreateGroupBookingRequestValidator.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 
-public sealed record CreateWorkOrderRequest(
-    string Title,
-    int WardNumber,
-    decimal EstimatedCost,
-    DateOnly StartDate,
-    DateOnly EndDate,
-    string? ContractorGstin);
+public sealed record CreateGroupBookingRequest(
+    string GroupName,
+    int Rooms,
+    decimal BudgetPerNight,
+    DateOnly CheckIn,
+    DateOnly CheckOut,
+    string? PromoCode);
 
 public sealed record ValidationFailure(string PropertyName, string ErrorMessage);
 
@@ -918,20 +1055,20 @@ public abstract class AbstractValidator<T>
     }
 }
 
-public sealed class CreateWorkOrderRequestValidator : AbstractValidator<CreateWorkOrderRequest>
+public sealed class CreateGroupBookingRequestValidator : AbstractValidator<CreateGroupBookingRequest>
 {
-    private static readonly Regex Gstin = new("^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$", RegexOptions.Compiled);
-    private const decimal MaxCost = 50_000_000m;   // ₹5 crore
+    private static readonly Regex PromoCodePattern = new("^[A-Z0-9]{4,12}$", RegexOptions.Compiled);
+    private const decimal MaxBudgetPerNight = 50_000m;   // ₹50,000
 
-    protected override void Rules(CreateWorkOrderRequest r, List<ValidationFailure> f)
+    protected override void Rules(CreateGroupBookingRequest r, List<ValidationFailure> f)
     {
-        var title = (r.Title ?? "").Trim();
-        Must(f, title.Length is >= 5 and <= 120, nameof(r.Title), "Title must be 5–120 characters.");
-        Must(f, r.WardNumber is >= 1 and <= 250, nameof(r.WardNumber), "Ward number must be between 1 and 250.");
-        Must(f, r.EstimatedCost > 0 && r.EstimatedCost <= MaxCost, nameof(r.EstimatedCost), "Estimated cost must be between ₹1 and ₹5 crore.");
-        Must(f, r.StartDate <= r.EndDate, nameof(r.EndDate), "End date must be on or after start date.");
-        if (!string.IsNullOrEmpty(r.ContractorGstin))
-            Must(f, Gstin.IsMatch(r.ContractorGstin), nameof(r.ContractorGstin), "Invalid GSTIN format.");
+        var name = (r.GroupName ?? "").Trim();
+        Must(f, name.Length is >= 5 and <= 120, nameof(r.GroupName), "Group name must be 5–120 characters.");
+        Must(f, r.Rooms is >= 1 and <= 20, nameof(r.Rooms), "Rooms must be between 1 and 20.");
+        Must(f, r.BudgetPerNight > 0 && r.BudgetPerNight <= MaxBudgetPerNight, nameof(r.BudgetPerNight), "Budget per night must be between ₹1 and ₹50,000.");
+        Must(f, r.CheckOut > r.CheckIn, nameof(r.CheckOut), "Check-out must be after check-in.");
+        if (!string.IsNullOrEmpty(r.PromoCode))
+            Must(f, PromoCodePattern.IsMatch(r.PromoCode), nameof(r.PromoCode), "Promo code must be 4–12 capital letters or digits.");
     }
 }
 ```
@@ -939,8 +1076,9 @@ public sealed class CreateWorkOrderRequestValidator : AbstractValidator<CreateWo
 `ToDictionary()` produces exactly the `errors` member that `ValidationProblemDetails` expects, so the controller can return `ValidationProblem(new ValidationProblemDetails(result.ToDictionary()))` without any further shaping.
 ::mistakes
 - Returning after the first failure, so the user fixes one field, resubmits, and discovers the next problem. Collect everything.
-- Reporting the date rule under `StartDate` and `EndDate` both, which shows the same message twice in a form.
-- Treating `""` as a GSTIN to validate. Empty means "not provided".
+- Reporting the date rule under `CheckIn` and `CheckOut` both, which shows the same message twice in a form.
+- Using `>=` for the date rule: a same-day check-out is a zero-night stay and would produce a ₹0 invoice.
+- Treating `""` as a promo code to validate. Empty means "not provided".
 :::
 
 :::exercise id=m03-dtos-mapping-validation-ex2 difficulty=beginner kind=written title="Find the over-posting and the data leaks"
@@ -1013,210 +1151,210 @@ The request type has nowhere to put `salary`; unknown JSON properties are ignore
 :::
 
 :::exercise id=m03-dtos-mapping-validation-ex3 difficulty=intermediate kind=code title="Map a request to an entity without leaking system fields"
-Implement `TenderMapper.ToEntity`, `TenderMapper.ToResponse` and `Tender.ApplyUpdate` for a tender-publishing API. The update must be able to change only the title, description and closing date; the tender's reference number, status and publication timestamp must be untouchable through the API.
+Implement `OfferMapper.ToEntity`, `OfferMapper.ToResponse` and `HotelOffer.ApplyUpdate` for the hotel's deals API (for example "Monsoon getaway: 20 % off in Goa"). Revenue managers create offers as drafts and publish them to the app. The update must be able to change only the title, description and valid-until date; the offer code, status and creation timestamp must be untouchable through the API.
 ::requirements
-- `ToEntity(request, referenceNumber, now)` creates a `Tender` with `Status = Draft` and `CreatedAt = now`.
-- `ToResponse(tender)` returns `TenderResponse` with `Status` as a string and `DaysUntilClose` computed from `asOf`.
-- `ApplyUpdate(request)` changes title, description and closing date; throws `InvalidOperationException` if the tender is `Published` and the closing date would move earlier.
+- `ToEntity(request, code, now)` creates a `HotelOffer` with `Status = Draft` and `CreatedAt = now`.
+- `ToResponse(offer, asOf)` returns `OfferResponse` with `Status` as a string and `DaysLeft` computed from `asOf`.
+- `ApplyUpdate(title, description, validUntil)` changes those three fields; throws `InvalidOperationException` if the offer is `Published` and the valid-until date would move earlier (guests may already be planning around the advertised date).
 ::acceptance
 - Mapping a request never sets `Status` to anything but `Draft`.
-- `DaysUntilClose` for a tender closing 2026-12-01 as of 2026-11-21 is 10.
-- Updating a published tender to an earlier closing date throws; to a later date succeeds.
+- `DaysLeft` for an offer valid until 2026-12-01 as of 2026-11-21 is 10.
+- Updating a published offer to an earlier valid-until date throws; to a later date succeeds.
 ::hint
 The mapper calls the entity's factory method. Server-owned values are parameters of the mapper so it stays pure.
 ::hint
-`DaysUntilClose` is `closingDate.DayNumber - asOf.DayNumber`.
+`DaysLeft` is `validUntil.DayNumber - asOf.DayNumber`.
 ::hint
 `ApplyUpdate` is a domain method: it knows the status rule. The mapper does not.
 ::hint
 ```csharp
-public void ApplyUpdate(string title, string description, DateOnly closingDate)
+public void ApplyUpdate(string title, string description, DateOnly validUntil)
 {
-    if (Status == TenderStatus.Published && closingDate < ClosingDate)
-        throw new InvalidOperationException("Cannot bring forward the closing date of a published tender.");
+    if (Status == OfferStatus.Published && validUntil < ValidUntil)
+        throw new InvalidOperationException("Cannot cut short a published offer.");
     ...
 }
 ```
 ::starter
-```csharp file=TenderMapper.cs
+```csharp file=OfferMapper.cs
 using System;
 
-public enum TenderStatus { Draft, Published, Closed }
+public enum OfferStatus { Draft, Published, Expired }
 
-public sealed class Tender
+public sealed class HotelOffer
 {
-    public string ReferenceNumber { get; }
+    public string Code { get; }
     public string Title { get; private set; }
     public string Description { get; private set; }
-    public DateOnly ClosingDate { get; private set; }
-    public TenderStatus Status { get; private set; }
+    public DateOnly ValidUntil { get; private set; }
+    public OfferStatus Status { get; private set; }
     public DateTimeOffset CreatedAt { get; }
     public DateTimeOffset? PublishedAt { get; private set; }
 
-    private Tender(string referenceNumber, string title, string description, DateOnly closingDate, DateTimeOffset createdAt)
+    private HotelOffer(string code, string title, string description, DateOnly validUntil, DateTimeOffset createdAt)
     {
-        ReferenceNumber = referenceNumber;
+        Code = code;
         Title = title;
         Description = description;
-        ClosingDate = closingDate;
+        ValidUntil = validUntil;
         CreatedAt = createdAt;
-        Status = TenderStatus.Draft;
+        Status = OfferStatus.Draft;
     }
 
-    public static Tender Create(string referenceNumber, string title, string description, DateOnly closingDate, DateTimeOffset now)
+    public static HotelOffer Create(string code, string title, string description, DateOnly validUntil, DateTimeOffset now)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(referenceNumber);
+        ArgumentException.ThrowIfNullOrWhiteSpace(code);
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
-        return new Tender(referenceNumber, title.Trim(), description?.Trim() ?? "", closingDate, now);
+        return new HotelOffer(code, title.Trim(), description?.Trim() ?? "", validUntil, now);
     }
 
     public void Publish(DateTimeOffset now)
     {
-        if (Status != TenderStatus.Draft) throw new InvalidOperationException("Only drafts can be published.");
-        Status = TenderStatus.Published;
+        if (Status != OfferStatus.Draft) throw new InvalidOperationException("Only drafts can be published.");
+        Status = OfferStatus.Published;
         PublishedAt = now;
     }
 
-    public void ApplyUpdate(string title, string description, DateOnly closingDate) => throw new NotImplementedException();
+    public void ApplyUpdate(string title, string description, DateOnly validUntil) => throw new NotImplementedException();
 }
 
-public sealed record CreateTenderRequest(string Title, string Description, DateOnly ClosingDate);
-public sealed record UpdateTenderRequest(string Title, string Description, DateOnly ClosingDate);
-public sealed record TenderResponse(string ReferenceNumber, string Title, string Description, DateOnly ClosingDate, string Status, int DaysUntilClose);
+public sealed record CreateOfferRequest(string Title, string Description, DateOnly ValidUntil);
+public sealed record UpdateOfferRequest(string Title, string Description, DateOnly ValidUntil);
+public sealed record OfferResponse(string Code, string Title, string Description, DateOnly ValidUntil, string Status, int DaysLeft);
 
-public static class TenderMapper
+public static class OfferMapper
 {
-    public static Tender ToEntity(this CreateTenderRequest request, string referenceNumber, DateTimeOffset now) => throw new NotImplementedException();
-    public static TenderResponse ToResponse(this Tender tender, DateOnly asOf) => throw new NotImplementedException();
+    public static HotelOffer ToEntity(this CreateOfferRequest request, string code, DateTimeOffset now) => throw new NotImplementedException();
+    public static OfferResponse ToResponse(this HotelOffer offer, DateOnly asOf) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=TenderMapperTests.cs
+```csharp file=OfferMapperTests.cs
 using System;
 using Xunit;
 
-public class TenderMapperTests
+public class OfferMapperTests
 {
     private static readonly DateTimeOffset Now = new(2026, 11, 1, 10, 0, 0, TimeSpan.Zero);
 
     [Fact]
     public void ToEntity_sets_system_fields_from_server_values()
     {
-        var request = new CreateTenderRequest("  Supply of LED street lights  ", "500 units, 90W", new DateOnly(2026, 12, 1));
-        var tender = request.ToEntity("PWD/2026/0117", Now);
-        Assert.Equal("PWD/2026/0117", tender.ReferenceNumber);
-        Assert.Equal("Supply of LED street lights", tender.Title);
-        Assert.Equal(TenderStatus.Draft, tender.Status);
-        Assert.Equal(Now, tender.CreatedAt);
-        Assert.Null(tender.PublishedAt);
+        var request = new CreateOfferRequest("  Monsoon getaway: 20% off in Goa  ", "Min 2 nights, breakfast included", new DateOnly(2026, 12, 1));
+        var offer = request.ToEntity("GOA-2026-0117", Now);
+        Assert.Equal("GOA-2026-0117", offer.Code);
+        Assert.Equal("Monsoon getaway: 20% off in Goa", offer.Title);
+        Assert.Equal(OfferStatus.Draft, offer.Status);
+        Assert.Equal(Now, offer.CreatedAt);
+        Assert.Null(offer.PublishedAt);
     }
 
     [Fact]
     public void ToResponse_formats_status_and_days()
     {
-        var tender = Tender.Create("PWD/2026/0118", "Road marking", "", new DateOnly(2026, 12, 1), Now);
-        var response = tender.ToResponse(new DateOnly(2026, 11, 21));
+        var offer = HotelOffer.Create("JAI-2026-0118", "Weekend in Jaipur", "", new DateOnly(2026, 12, 1), Now);
+        var response = offer.ToResponse(new DateOnly(2026, 11, 21));
         Assert.Equal("Draft", response.Status);
-        Assert.Equal(10, response.DaysUntilClose);
-        Assert.Equal("PWD/2026/0118", response.ReferenceNumber);
+        Assert.Equal(10, response.DaysLeft);
+        Assert.Equal("JAI-2026-0118", response.Code);
     }
 
     [Fact]
     public void Update_changes_only_allowed_fields()
     {
-        var tender = Tender.Create("PWD/2026/0119", "Old", "Old desc", new DateOnly(2026, 12, 1), Now);
-        tender.ApplyUpdate("New", "New desc", new DateOnly(2026, 12, 15));
-        Assert.Equal("New", tender.Title);
-        Assert.Equal("New desc", tender.Description);
-        Assert.Equal(new DateOnly(2026, 12, 15), tender.ClosingDate);
-        Assert.Equal(TenderStatus.Draft, tender.Status);
-        Assert.Equal(Now, tender.CreatedAt);
+        var offer = HotelOffer.Create("MAN-2026-0119", "Old", "Old desc", new DateOnly(2026, 12, 1), Now);
+        offer.ApplyUpdate("New", "New desc", new DateOnly(2026, 12, 15));
+        Assert.Equal("New", offer.Title);
+        Assert.Equal("New desc", offer.Description);
+        Assert.Equal(new DateOnly(2026, 12, 15), offer.ValidUntil);
+        Assert.Equal(OfferStatus.Draft, offer.Status);
+        Assert.Equal(Now, offer.CreatedAt);
     }
 
     [Fact]
-    public void Published_tender_cannot_close_earlier()
+    public void Published_offer_cannot_end_earlier()
     {
-        var tender = Tender.Create("PWD/2026/0120", "T", "", new DateOnly(2026, 12, 1), Now);
-        tender.Publish(Now);
-        Assert.Throws<InvalidOperationException>(() => tender.ApplyUpdate("T", "", new DateOnly(2026, 11, 25)));
-        tender.ApplyUpdate("T", "", new DateOnly(2026, 12, 10));
-        Assert.Equal(new DateOnly(2026, 12, 10), tender.ClosingDate);
+        var offer = HotelOffer.Create("OOT-2026-0120", "T", "", new DateOnly(2026, 12, 1), Now);
+        offer.Publish(Now);
+        Assert.Throws<InvalidOperationException>(() => offer.ApplyUpdate("T", "", new DateOnly(2026, 11, 25)));
+        offer.ApplyUpdate("T", "", new DateOnly(2026, 12, 10));
+        Assert.Equal(new DateOnly(2026, 12, 10), offer.ValidUntil);
     }
 }
 ```
 ::solution
-The mapper is two expression-bodied methods. The rule about published tenders is in the entity because it depends on entity state.
+The mapper is two expression-bodied methods. The rule about published offers is in the entity because it depends on entity state.
 
-```csharp file=TenderMapper.cs
+```csharp file=OfferMapper.cs
 using System;
 
-public enum TenderStatus { Draft, Published, Closed }
+public enum OfferStatus { Draft, Published, Expired }
 
-public sealed class Tender
+public sealed class HotelOffer
 {
-    public string ReferenceNumber { get; }
+    public string Code { get; }
     public string Title { get; private set; }
     public string Description { get; private set; }
-    public DateOnly ClosingDate { get; private set; }
-    public TenderStatus Status { get; private set; }
+    public DateOnly ValidUntil { get; private set; }
+    public OfferStatus Status { get; private set; }
     public DateTimeOffset CreatedAt { get; }
     public DateTimeOffset? PublishedAt { get; private set; }
 
-    private Tender(string referenceNumber, string title, string description, DateOnly closingDate, DateTimeOffset createdAt)
+    private HotelOffer(string code, string title, string description, DateOnly validUntil, DateTimeOffset createdAt)
     {
-        ReferenceNumber = referenceNumber;
+        Code = code;
         Title = title;
         Description = description;
-        ClosingDate = closingDate;
+        ValidUntil = validUntil;
         CreatedAt = createdAt;
-        Status = TenderStatus.Draft;
+        Status = OfferStatus.Draft;
     }
 
-    public static Tender Create(string referenceNumber, string title, string description, DateOnly closingDate, DateTimeOffset now)
+    public static HotelOffer Create(string code, string title, string description, DateOnly validUntil, DateTimeOffset now)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(referenceNumber);
+        ArgumentException.ThrowIfNullOrWhiteSpace(code);
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
-        return new Tender(referenceNumber, title.Trim(), description?.Trim() ?? "", closingDate, now);
+        return new HotelOffer(code, title.Trim(), description?.Trim() ?? "", validUntil, now);
     }
 
     public void Publish(DateTimeOffset now)
     {
-        if (Status != TenderStatus.Draft) throw new InvalidOperationException("Only drafts can be published.");
-        Status = TenderStatus.Published;
+        if (Status != OfferStatus.Draft) throw new InvalidOperationException("Only drafts can be published.");
+        Status = OfferStatus.Published;
         PublishedAt = now;
     }
 
-    public void ApplyUpdate(string title, string description, DateOnly closingDate)
+    public void ApplyUpdate(string title, string description, DateOnly validUntil)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
-        if (Status == TenderStatus.Published && closingDate < ClosingDate)
-            throw new InvalidOperationException("Cannot bring forward the closing date of a published tender.");
+        if (Status == OfferStatus.Published && validUntil < ValidUntil)
+            throw new InvalidOperationException("Cannot cut short a published offer.");
         Title = title.Trim();
         Description = description?.Trim() ?? "";
-        ClosingDate = closingDate;
+        ValidUntil = validUntil;
     }
 }
 
-public sealed record CreateTenderRequest(string Title, string Description, DateOnly ClosingDate);
-public sealed record UpdateTenderRequest(string Title, string Description, DateOnly ClosingDate);
-public sealed record TenderResponse(string ReferenceNumber, string Title, string Description, DateOnly ClosingDate, string Status, int DaysUntilClose);
+public sealed record CreateOfferRequest(string Title, string Description, DateOnly ValidUntil);
+public sealed record UpdateOfferRequest(string Title, string Description, DateOnly ValidUntil);
+public sealed record OfferResponse(string Code, string Title, string Description, DateOnly ValidUntil, string Status, int DaysLeft);
 
-public static class TenderMapper
+public static class OfferMapper
 {
-    public static Tender ToEntity(this CreateTenderRequest request, string referenceNumber, DateTimeOffset now) =>
-        Tender.Create(referenceNumber, request.Title, request.Description, request.ClosingDate, now);
+    public static HotelOffer ToEntity(this CreateOfferRequest request, string code, DateTimeOffset now) =>
+        HotelOffer.Create(code, request.Title, request.Description, request.ValidUntil, now);
 
-    public static TenderResponse ToResponse(this Tender tender, DateOnly asOf) =>
-        new(tender.ReferenceNumber, tender.Title, tender.Description, tender.ClosingDate, tender.Status.ToString(),
-            tender.ClosingDate.DayNumber - asOf.DayNumber);
+    public static OfferResponse ToResponse(this HotelOffer offer, DateOnly asOf) =>
+        new(offer.Code, offer.Title, offer.Description, offer.ValidUntil, offer.Status.ToString(),
+            offer.ValidUntil.DayNumber - asOf.DayNumber);
 }
 ```
 
-In the controller, the update endpoint becomes `tender.ApplyUpdate(request.Title, request.Description, request.ClosingDate)`. There is no code path through which `Status`, `ReferenceNumber` or `CreatedAt` can be set from a request.
+In the controller, the update endpoint becomes `offer.ApplyUpdate(request.Title, request.Description, request.ValidUntil)`. There is no code path through which `Status`, `Code` or `CreatedAt` can be set from a request.
 ::alternatives
-If the update DTO allowed partial updates (only the fields present), you would use nullable properties and `JSON Merge Patch` semantics, or `JsonPatchDocument`. That is more flexible and more complex; most APIs are fine with "send the whole editable subset".
+If the update DTO allowed partial updates (only the fields present), you would use nullable properties and JSON Merge Patch semantics (RFC 7396), or `JsonPatchDocument` (which in .NET 10 has a System.Text.Json-based implementation). That is more flexible and more complex; most APIs are fine with "send the whole editable subset".
 ::mistakes
-- Putting the "published tender cannot close earlier" rule in the mapper or the controller.
+- Putting the "published offer cannot end earlier" rule in the mapper or the controller.
 - Letting `ToResponse` call `DateTime.Today` for `asOf`, making the mapper impure and untestable at a fixed date.
 :::
 
@@ -1278,7 +1416,7 @@ A unique index in PostgreSQL plus catching the unique-violation error (SQLSTATE 
 
 ```json
 {
-  "type": "https://example.gov.in/problems/username-taken",
+  "type": "https://example.com/problems/username-taken",
   "title": "Username already taken",
   "status": 409,
   "detail": "The username 'ravi' is already registered.",
@@ -1299,32 +1437,34 @@ Including an `errors` extension member lets the same client-side form code highl
 
 Three kinds of test, matching the three things this lesson introduced.
 
-**Validator tests** are the cheapest and should be the most numerous. Construct a valid request, mutate one field with `with { ... }`, assert exactly which property failed and with what message. Exercise 1 shows the pattern. Aim for one test per rule plus one "all valid" test. Because the validator has no dependencies, a hundred of these run in well under a second.
+**Validator tests** are the cheapest and should be the most numerous. Construct a valid request, mutate one field with `with { ... }`, assert exactly which property failed and with what message. Exercise 1 shows the pattern. Aim for one test per rule plus one "all valid" test. For rules that depend on today's date, pass a fake `TimeProvider` (the `Microsoft.Extensions.TimeProvider.Testing` package has `FakeTimeProvider`, or write a three-line subclass) so "check-in cannot be in the past" is tested at a fixed date instead of whatever day CI happens to run. Because the validator has no I/O, a hundred of these run in well under a second.
 
 **Mapper tests** check two things: that server-owned fields come from the parameters and not from the request, and that sensitive fields do not appear in responses. The second is worth an explicit test:
 
 ```csharp
 [Fact]
-public void Response_never_contains_full_account_number()
+public void Response_never_contains_full_phone_number()
 {
-    var vendor = Vendor.Register(Guid.NewGuid(), "Shree Infra", "27AAPFU0939F1ZV", "AAPFU0939F", "a@b.in",
-        new BankAccount("123456789012", "SBIN0001234"), DateTimeOffset.UtcNow);
-    var json = JsonSerializer.Serialize(vendor.ToResponse());
-    Assert.DoesNotContain("123456789012", json);
-    Assert.Contains("****9012", json);
+    var booking = Booking.Create(Guid.NewGuid(), Guid.NewGuid(), RoomType.Deluxe,
+        new DateOnly(2026, 12, 24), new DateOnly(2026, 12, 27), 2,
+        new GuestDetails("Ananya Rao", "ananya@example.com", "9876543210"), 5_500m, DateTimeOffset.UtcNow);
+    var json = JsonSerializer.Serialize(booking.ToResponse());
+    Assert.DoesNotContain("9876543210", json);
+    Assert.DoesNotContain("ananya@example.com", json);
+    Assert.Contains("******3210", json);
 }
 ```
 
 Serialising to JSON and searching the string is crude, but it catches the exact bug that matters: a secret in the wire format.
 
-**Contract tests** through `WebApplicationFactory<Program>` send a real HTTP request with a bad body and assert the response is `400`, has `Content-Type: application/problem+json`, and that `errors` contains the expected key. One such test per endpoint proves the whole chain (binding, DataAnnotations, validator, `ValidationProblem`) is wired. Also send a body with an extra `"isVerified": true` property and assert that the created vendor's status is still `Pending`; that is your over-posting regression test.
+**Contract tests** through `WebApplicationFactory<Program>` send a real HTTP request with a bad body and assert the response is `400`, has `Content-Type: application/problem+json`, and that `errors` contains the expected key. One such test per endpoint proves the whole chain (binding, DataAnnotations, validator, `ValidationProblem`) is wired. Also send a body with extra `"nightlyRate": 1` and `"status": "Confirmed"` properties and assert that the created booking costs ₹16,500 for three Deluxe nights and is still `PendingPayment`; that is your over-posting regression test.
 
 ## Real-world application
 
-- **Public APIs with long-lived clients** (payment gateways, government data portals, UPI switches) treat DTOs as versioned contracts. The internal entity can be refactored freely as long as the mapper keeps producing the same JSON. Breaking changes get a new version ([API versioning, pagination, filtering and sorting](#/lesson/m03-api-shape)).
-- **ASP.NET Core Identity** does not expose `IdentityUser` over HTTP in its templates; you write `RegisterRequest` and `LoginRequest` DTOs. The reason is exactly over-posting: `IdentityUser` has `EmailConfirmed`, `LockoutEnabled` and `PasswordHash`.
-- **Infrastructure project platforms** that take progress data from contractors keep the "contractor-submitted" DTO strictly smaller than the entity, because the entity also carries engineer-approved quantities and payment certification flags that a contractor must never set.
-- **Mobile apps on slow networks** benefit from response DTOs tailored to each screen, because sending a 40-field entity to render a 5-field list item wastes bandwidth and leaks data.
+- **Public APIs with long-lived clients** (payment gateways, UPI apps, airline and hotel distribution APIs) treat DTOs as versioned contracts. The internal entity can be refactored freely as long as the mapper keeps producing the same JSON. Breaking changes get a new version ([API versioning, pagination, filtering and sorting](#/lesson/m03-api-shape)).
+- **ASP.NET Core Identity** does not expose `IdentityUser` over HTTP; the Identity API endpoints (`MapIdentityApi`) and the templates use dedicated `RegisterRequest` and `LoginRequest` DTOs. The reason is exactly over-posting: `IdentityUser` has `EmailConfirmed`, `LockoutEnabled` and `PasswordHash`.
+- **Travel marketplaces** that accept bookings from partner apps and travel agents keep the partner-submitted DTO strictly smaller than the entity, because the entity also carries the negotiated rate, the commission, payment status and fraud flags that a partner must never set.
+- **Mobile apps on slow networks** benefit from response DTOs tailored to each screen, because sending a 40-field entity to render a 5-field "My trips" list item wastes bandwidth and leaks data.
 
 ## Interview questions
 
@@ -1360,28 +1500,30 @@ Request validation answers "is this request well-formed and self-consistent?" an
 **Key takeaways**
 
 - Three shapes, three owners: request DTO (what the client may send), entity (what the system owns), response DTO (what the client may see).
-- Over-posting is prevented by the *absence* of a property on the request type, not by attributes.
+- Over-posting is prevented by the *absence* of a property on the request type, not by attributes. Prices, statuses and payment fields never belong on a request DTO.
 - Map by hand unless the count of mappings makes a source generator worthwhile; keep mappers free of decisions.
-- Validate request shape with DataAnnotations and a validator class; validate world-state rules in the service or domain.
+- Validate request shape with DataAnnotations and a validator class; validate world-state rules (availability, uniqueness, balances) in the service or domain, with a database constraint as the real guarantee.
 - Return validation failures as `ValidationProblemDetails` so clients can map `errors` to fields; use 409 or 422, not 400, for state conflicts.
 
 **Terminology**: DTO, entity, over-posting / mass assignment, mapper, DataAnnotations, `[ApiController]`, `IValidatableObject`, FluentValidation, ProblemDetails (RFC 9457), `ValidationProblemDetails`, `application/problem+json`.
 
 :::flashcards
-Q: Why should a request DTO not include `IsVerified`?
-A: So the client cannot set it. Model binding can only fill properties that exist on the bound type; absence is the protection.
+Q: Why should a booking request DTO not include `NightlyRate` or `Status`?
+A: So the client cannot set them. Model binding can only fill properties that exist on the bound type; absence is the protection. The server looks up the price and starts every booking as PendingPayment.
 Q: What is over-posting?
 A: A client sending JSON fields the developer did not intend to be settable; model binding fills them because the bound type has them.
 Q: What content type does ASP.NET Core use for ProblemDetails?
 A: `application/problem+json`.
 Q: Which member of ValidationProblemDetails holds per-field errors?
 A: `errors`, a dictionary of property name to an array of messages.
-Q: Where should "GSTIN must be unique" be checked?
-A: In the service with a database unique constraint as the guarantee; returns 409, not 400.
+Q: Where should "a Deluxe room must still be free for these dates" be checked?
+A: In the service, with a database guarantee (atomic inventory update or exclusion constraint) behind it; returns 409, not 400.
 Q: What should a mapper never contain?
 A: Business decisions or I/O. Mapping is copying; decisions belong in validation or the domain.
 Q: What does [ApiController] do for invalid models?
 A: Returns 400 with ValidationProblemDetails automatically before the action runs.
+Q: Why does `[Required]` on a `DateOnly CheckIn` property not catch a missing check-in date?
+A: `DateOnly` is a value type, so a missing JSON property becomes `0001-01-01`, which is not null. Use `DateOnly?` with `[Required]`, the `required` keyword / `[JsonRequired]`, or a validator rule.
 Q: Manual mapping versus convention-based mapping: what is the key trade-off?
 A: Manual costs typing but fails at compile time on renames; convention saves typing but fails silently at runtime.
 :::
@@ -1397,27 +1539,27 @@ A `PUT /api/employees/me` action binds directly to the `Employee` entity, which 
 - [ ] Crash the server.
 > This is over-posting. The fix is a request DTO with only `Name` and `Email`, so there is no `Salary` to bind.
 ::q single
-Which status code best fits "a vendor with this GSTIN is already registered"?
+A guest tries to book the last Suite for 24–27 December, but another guest booked it a minute earlier. Which status code fits best?
 - [ ] 400 Bad Request
 - [x] 409 Conflict
 - [ ] 404 Not Found
 - [ ] 500 Internal Server Error
-> The request is well-formed; it conflicts with existing state. 400 tells the client its input was malformed, which is misleading here.
+> The request is well-formed; it conflicts with the current state of the hotel's inventory. 400 tells the client its input was malformed, which is misleading and invites a pointless retry with the same dates.
 ::q multi
 Which rules belong in request validation (before the service is called)? (Select all that apply.)
-- [x] PAN must match `^[A-Z]{5}[0-9]{4}[A-Z]$`.
-- [x] End date must be on or after start date.
-- [ ] The username must not already exist.
-- [ ] The vendor must not be blacklisted.
-- [x] Quantity must be at least 1.
-> Format, range and cross-field rules need only the request. Uniqueness and blacklist status need the database and belong in the service, returning 409 or 422.
+- [x] Phone must match `^[6-9][0-9]{9}$`.
+- [x] Check-out must be after check-in.
+- [ ] The room must still be free for those dates.
+- [ ] The guest must not be on the hotel's blocked list.
+- [x] Guests must be at least 1.
+> Format, range and cross-field rules need only the request (plus, at most, the clock). Availability and the blocked list need the database and belong in the service, returning 409 or 422.
 ::q single
-A team's `ToEntity()` mapper contains `if (request.Amount > 100000) entity.RequiresApproval = true;`. What is the problem?
+A team's `ToEntity()` mapper contains `if (request.Guests > 2) entity.AddExtraBedCharge(1_200m);`. What is the problem?
 - [ ] Mappers cannot contain `if` statements in C#.
-- [x] A business decision is hidden in a copy routine; it belongs in the domain (`Order.Create` or `RequiresApproval` computed property) where it is visible and tested.
-- [ ] The threshold should be 50000.
+- [x] A business decision (a pricing rule) is hidden in a copy routine; it belongs in the domain or a pricing service where it is visible and tested.
+- [ ] The charge should be ₹1,500.
 - [ ] Nothing; mappers are the right place for rules.
-> Mapping should be boring copying. When a decision hides in a mapper, nobody looks for it there and the import job that bypasses the mapper will miss it.
+> Mapping should be boring copying. When a decision hides in a mapper, nobody looks for it there, and the partner-channel import that bypasses the mapper will miss it.
 ::q single
 What does `ValidationProblemDetails.Errors` contain?
 - [ ] A single error string.
@@ -1433,12 +1575,19 @@ Your API has 60 DTO pairs with purely mechanical property copies, and the team h
 - [ ] Disable the mapper's validation.
 > Compile-time failure is the property you want for data-carrying code. Source generators give it with less typing than fully manual mapping.
 ::q single
-A custom validation attribute queries the database to check uniqueness. Under load, duplicates still appear. Why?
+A custom validation attribute queries the database to check that a room is free. Under load, the hotel still gets double bookings. Why?
 - [ ] DataAnnotations run asynchronously.
-- [x] The check and the insert are separate operations; two requests can both pass the check before either inserts. Only a database unique constraint prevents it.
+- [x] The check and the insert are separate operations; two requests can both pass the check before either inserts. Only a database-level guarantee (atomic update or constraint) prevents it.
 - [ ] The attribute is not registered in DI.
 - [ ] The regular expression is wrong.
-> Time-of-check to time-of-use. Validation code cannot see the other request. The constraint, plus translating the violation to 409, is the real rule.
+> Time-of-check to time-of-use. Validation code cannot see the other request. The database guarantee, plus translating its failure to 409, is the real rule.
+::q single
+A client omits `checkIn` from the JSON. The DTO property is `public DateOnly CheckIn { get; init; }` with `[Required]`. What happens?
+- [ ] `[ApiController]` returns 400 because `CheckIn` is required.
+- [x] Binding succeeds with `CheckIn = 0001-01-01`; `[Required]` passes because a value type is never null, so only a validator rule (or a nullable / `required` property) catches it.
+- [ ] The server throws a `NullReferenceException`.
+- [ ] System.Text.Json uses today's date.
+> Value types get their default when the JSON property is missing. Make the property nullable with `[Required]`, mark it `required`, or check it in the validator.
 :::
 
 ## Completion criteria

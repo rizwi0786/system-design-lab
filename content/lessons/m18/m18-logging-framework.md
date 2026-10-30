@@ -7,9 +7,9 @@ status: reviewed
 template: lld-case
 minutes: 90
 prerequisites: [m03-logging, m06-decorator, m06-builder, m06-adapter]
-related: [m14-observability, m17-logging-analytics, m06-composite, m06-flyweight, m13-backpressure]
+related: [m14-observability, m17-logging-analytics, m06-composite, m13-backpressure]
 tags: [lld, case-study, logging, observability, sinks, concurrency]
-patterns: [Builder, Decorator, Strategy, Adapter, Flyweight, Composite]
+patterns: [Builder, Decorator, Strategy, Adapter, Composite]
 summary: Design a small structured-logging library — severity levels with per-category overrides, message templates that keep properties, enrichers and scopes, pluggable sinks and formatters, a bounded asynchronous sink with explicit drop policies, and an adapter so ASP.NET Core's ILogger writes through it.
 references:
   - title: Microsoft Learn — Logging in .NET
@@ -299,16 +299,15 @@ An event can end in four ways, and only one of them (Written) means a human will
 stateDiagram-v2
     [*] --> Created : constructed with startImmediately false
     [*] --> Running : constructed and started
-    Created --> Running : Start
+    Created --> Running : Start, or StopAsync before Start
     Running --> Running : Emit enqueues or drops by policy
     Running --> Draining : StopAsync or DisposeAsync
-    Created --> Draining : StopAsync before Start
     Draining --> Stopped : Buffer drained
     Draining --> Stopped : Drain timeout reached
     Stopped --> [*]
 ```
 
-During **Draining**, new events are refused (counted as dropped) and the consumer writes out what's already in the buffer. The drain has a time limit (5 seconds by default) because shutdown must finish: in Kubernetes, a pod that doesn't stop within its grace period is killed anyway. `StopAsync` returns `false` if the timeout was hit, so the host can log one last warning to the console. The `Created` state exists so tests can fill a buffer deterministically before any consumer runs.
+During **Draining**, new events are refused (counted as dropped) and the consumer writes out what's already in the buffer. The drain has a time limit (5 seconds by default) because shutdown must finish: in Kubernetes, a pod that doesn't stop within its grace period is killed anyway. `StopAsync` returns `false` if the timeout was hit, so the host can log one last warning to the console. The `Created` state exists so tests can fill a buffer deterministically before any consumer runs; calling `StopAsync` on a sink that was never started starts the consumer first, so the buffered events still get written.
 
 ## C# implementation
 
@@ -381,6 +380,7 @@ public sealed class MessageTemplate
 {
     public const int MaxCachedTemplates = 1000;
     private static readonly ConcurrentDictionary<string, MessageTemplate> Cache = new(StringComparer.Ordinal);
+    private static int _cachedCount;   // ConcurrentDictionary.Count takes every internal lock, so keep our own counter
 
     private MessageTemplate(string text, IReadOnlyList<TemplateToken> tokens)
     {
@@ -398,8 +398,12 @@ public sealed class MessageTemplate
         ArgumentNullException.ThrowIfNull(text);
         if (Cache.TryGetValue(text, out var cached)) return cached;
         var parsed = new MessageTemplate(text, Tokenize(text));
-        // Bounded: interpolated strings would otherwise grow the cache forever.
-        return Cache.Count < MaxCachedTemplates ? Cache.GetOrAdd(text, parsed) : parsed;
+        // Bounded: interpolated strings would otherwise grow the cache forever. The limit is soft:
+        // threads racing past the check can each add one entry, which is harmless.
+        if (Volatile.Read(ref _cachedCount) >= MaxCachedTemplates) return parsed;
+        var winner = Cache.GetOrAdd(text, parsed);
+        if (ReferenceEquals(winner, parsed)) Interlocked.Increment(ref _cachedCount);
+        return winner;
     }
 
     /// <summary>Positional binding: the n-th distinct property name receives args[n]. Missing args leave the property unset.</summary>
@@ -459,6 +463,8 @@ public sealed class MessageTemplate
     }
 }
 ```
+
+Two details in `Parse` are deliberate. The size check reads a counter we maintain ourselves, because `ConcurrentDictionary.Count` acquires all of the dictionary's internal locks; once the cache is full, every interpolated log line would otherwise serialise on that call. And the check-then-add is a race on purpose: two threads can both see 999 and both add, so the cap is "about 1,000". For a cache bound that's fine; for money it wouldn't be.
 
 Rendering with `CultureInfo.InvariantCulture` by default means `{Amount:F2}` always prints `1499.50`, whatever the server's locale. Logs are read by machines and by engineers around the world; they shouldn't change format when a server's culture changes.
 
@@ -723,6 +729,7 @@ public sealed class BufferedAsyncSink : ILogSink, IAsyncDisposable
     private readonly DropPolicy _policy;
     private readonly Channel<LogEvent> _buffer;
     private Task? _consumer;
+    private Lazy<Task<bool>>? _stop;
     private int _state;
     private long _dropped;
     private long _written;
@@ -769,14 +776,22 @@ public sealed class BufferedAsyncSink : ILogSink, IAsyncDisposable
         catch (ChannelClosedException) { Interlocked.Increment(ref _dropped); }
     }
 
-    /// <summary>Stops accepting events and drains the buffer. Returns false if the timeout was reached first.</summary>
-    public async Task<bool> StopAsync(TimeSpan timeout)
+    /// <summary>Stops accepting events and drains the buffer. Returns false if the timeout was reached first.
+    /// Safe to call more than once and from several threads: every caller awaits the same drain.</summary>
+    public Task<bool> StopAsync(TimeSpan timeout)
     {
         Start();                                                    // drain even if nobody started us
-        if (Interlocked.CompareExchange(ref _state, (int)SinkState.Draining, (int)SinkState.Running) != (int)SinkState.Running)
-            return State == SinkState.Stopped;
-        _buffer.Writer.TryComplete();
-        var finished = await Task.WhenAny(_consumer!, Task.Delay(timeout)) == _consumer;
+        var mine = new Lazy<Task<bool>>(() => StopCoreAsync(timeout));
+        return (Interlocked.CompareExchange(ref _stop, mine, null) ?? mine).Value;
+    }
+
+    private async Task<bool> StopCoreAsync(TimeSpan timeout)
+    {
+        Volatile.Write(ref _state, (int)SinkState.Draining);
+        _buffer.Writer.TryComplete();                               // writers racing with us get "closed" and count a drop
+        bool finished;
+        try { await _consumer!.WaitAsync(timeout); finished = true; }
+        catch (TimeoutException) { finished = false; }
         Volatile.Write(ref _state, (int)SinkState.Stopped);
         if (finished)
         {
@@ -800,6 +815,12 @@ public sealed class BufferedAsyncSink : ILogSink, IAsyncDisposable
 ```
 
 `Channel.CreateBounded` with an `itemDropped` callback gives us drop counting for free in both drop modes. `SingleReader = true` lets the channel use a faster internal implementation, which is safe because only our one consumer task reads.
+
+Check the races a reviewer will ask about. `Emit` reads the state and then writes; `StopAsync` may complete the channel in between. That's safe because a write to a completed channel fails (`TryWrite` returns false, `WriteAsync` throws `ChannelClosedException`) and both paths count a drop, so no event disappears uncounted. Two concurrent `StopAsync` calls (the host's shutdown hook and `DisposeAsync`, say) share one `Lazy<Task<bool>>`, so the second caller waits for the same drain instead of returning early with a wrong answer. `Task.WaitAsync(timeout)` replaces the old `Task.WhenAny(..., Task.Delay(...))` idiom and doesn't leave a timer running.
+
+:::callout type=warning title="Block mode is sync-over-async"
+`Emit` is synchronous, so in `Block` mode it waits on `WriteAsync` with `GetResult()`, parking a thread-pool thread. If many request threads block at once, the consumer itself may wait for a free thread-pool thread, and throughput collapses while the pool slowly grows. That's why `Block` is only for a low-volume stream on its own sink. If the drain timeout is hit, the inner sink isn't disposed, so a `FileSink` may still hold unflushed lines; `StopAsync` returning `false` is the signal to write one last line to the console.
+:::
 
 ### Pipeline, loggers, manager and builder
 
@@ -1229,7 +1250,35 @@ public class BufferedAsyncSinkTests
 }
 ```
 
-Add one more test in a real suite: an inner sink that blocks on a `ManualResetEventSlim`, to prove that `StopAsync` returns `false` after its timeout instead of hanging shutdown.
+The last test proves that shutdown can't hang: the inner sink blocks until the test releases it, and `StopAsync` must give up after its timeout.
+
+```csharp
+using MiniLog;
+using Xunit;
+
+public class BufferedAsyncSinkShutdownTests
+{
+    private sealed class StuckSink(ManualResetEventSlim gate) : ILogSink
+    {
+        public void Emit(LogEvent logEvent) => gate.Wait();
+    }
+
+    [Fact]
+    public async Task Stop_returns_false_when_the_inner_sink_hangs_and_all_callers_agree()
+    {
+        using var gate = new ManualResetEventSlim(false);
+        var sink = new BufferedAsyncSink(new StuckSink(gate), capacity: 10);
+        sink.Emit(new LogEvent(DateTimeOffset.UnixEpoch, Severity.Error, "T", MessageTemplate.Parse("stuck"),
+            new Dictionary<string, object?>(), null));
+        var first = sink.StopAsync(TimeSpan.FromMilliseconds(200));
+        var second = sink.StopAsync(TimeSpan.FromSeconds(30));     // shares the first drain, doesn't start another
+        Assert.False(await first);
+        Assert.False(await second);
+        Assert.Equal(SinkState.Stopped, sink.State);
+        gate.Set();                                                // let the consumer finish so the test exits cleanly
+    }
+}
+```
 
 ## Bad design vs good design
 

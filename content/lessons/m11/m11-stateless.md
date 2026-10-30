@@ -101,7 +101,7 @@ Move each kind of state to a store that every instance can reach.
 
 **Session data in a distributed cache.** In ASP.NET Core, session state sits on top of `IDistributedCache`. Swap the in-memory implementation for Redis (`AddStackExchangeRedisCache`) and every instance sees the same session.
 
-Back-of-the-envelope for a state building-permit portal:
+Back-of-the-envelope for a state's common college-admissions portal in the last week before the deadline:
 
 ```text
 Concurrent sessions at peak:     200,000
@@ -153,7 +153,7 @@ The fix has three parts:
 
 1. **Persist keys to a shared location**: a network file share, Azure Blob Storage, Redis, or a database. Packages exist for Blob storage, Redis and EF Core; you can also implement `IXmlRepository` yourself.
 2. **Protect the keys at rest**: encrypt them with Azure Key Vault or an X.509 certificate. Anyone who can read unprotected keys can forge your users' cookies.
-3. **Set the application name** with `SetApplicationName("permits-portal")`. Apps that should share protected payloads must use the same name; apps that should be isolated must use different names. Do not rely on the default, which is derived from the app's content root path and can differ between hosts.
+3. **Set the application name** with `SetApplicationName("admissions-portal")`. Apps that should share protected payloads must use the same name; apps that should be isolated must use different names. Do not rely on the default, which is derived from the app's content root path and can differ between hosts.
 
 Remember deployment slots and blue-green deployments too: if the blue and green environments use different key rings, every swap logs everyone out.
 
@@ -212,13 +212,13 @@ flowchart LR
     A --> PG[("PostgreSQL: applications")]
     BB --> PG
     C --> PG
-    B -. "direct upload with signed URL" .-> OBJ[("Blob: uploaded drawings")]
+    B -. "direct upload with signed URL" .-> OBJ[("Blob: uploaded certificates")]
     S["Scheduler (one job run)"] --> Q["Queue: reminder batches"]
     Q --> W["Worker"]
     W --> PG
 ```
 
-The **browser** carries two cookies: the authentication cookie (claims, encrypted) and a session-id cookie. The **load balancer** has affinity turned off, so each request may land on **instance A, B or C**. All three read and write session data in **Redis**, and all three load the same **Data Protection key ring** from Blob storage, so a cookie encrypted by A decrypts on C. Durable data (permit applications) lives in **PostgreSQL**. Large files never pass through the instances: the browser uploads directly to **object storage** using a short-lived signed URL. Scheduled work starts from a single **scheduler**, which puts one message on a **queue** for a **worker**, so it runs once however many API instances exist. Nothing important lives inside A, B or C, so any of them can be killed at any time.
+The **browser** carries two cookies: the authentication cookie (claims, encrypted) and a session-id cookie. The **load balancer** has affinity turned off, so each request may land on **instance A, B or C**. All three read and write session data in **Redis**, and all three load the same **Data Protection key ring** from Blob storage, so a cookie encrypted by A decrypts on C. Durable data (admission applications) lives in **PostgreSQL**. Large files never pass through the instances: the browser uploads directly to **object storage** using a short-lived signed URL. Scheduled work starts from a single **scheduler**, which puts one message on a **queue** for a **worker**, so it runs once however many API instances exist. Nothing important lives inside A, B or C, so any of them can be killed at any time.
 
 ### Sequence: the scale-out bug and its fix
 
@@ -252,7 +252,7 @@ The top half is the bug. Instance **A** encrypts the login cookie with a key onl
 
 ## Step-by-step example
 
-**Scenario.** A state government's online building-permit portal runs on one Windows VM under IIS. Architects log in, fill a 6-step application with drawings (5–50 MB PDFs), pay a fee and track status. Peak is the end of each financial quarter. The VM runs at 90 % CPU and the team adds two more VMs behind a load balancer. Within an hour, support receives complaints: "logged out at step 4", "uploaded drawing disappeared", "got three reminder SMSs".
+**Scenario.** A state's common college-admissions portal runs on one Windows VM under IIS. Students log in, fill a 6-step application (personal details, marks, college preferences) with scanned certificates and a photo (1–10 MB PDFs and images), pay the application fee and track their status. Peak is the last week before the application deadline. The VM runs at 90 % CPU and the team adds two more VMs behind a load balancer. Within an hour, support receives complaints: "logged out at step 4", "uploaded marksheet disappeared", "got three reminder SMSs".
 
 ### Step 1 — Inventory the state
 
@@ -261,21 +261,21 @@ The team searches the code for anything kept between requests:
 - `HttpContext.Session` stores the draft application (all 6 steps, about 30 KB including a base64 thumbnail).
 - `AddDistributedMemoryCache()` backs the session: local memory, so not shared.
 - No Data Protection configuration. On IIS each VM generated its own keys.
-- Uploaded drawings saved to `D:\PermitUploads\{applicationId}`.
+- Uploaded certificates saved to `D:\AdmissionUploads\{applicationId}`.
 - `ReminderService : BackgroundService` sends SMS reminders at 09:00.
-- `static ConcurrentDictionary` caching fee tables. Fine: fees change quarterly.
+- `static ConcurrentDictionary` caching the fee table and the college list. Fine: they change once a year.
 
 ### Step 2 — Share the key ring first
 
-This fixes the logouts and antiforgery errors immediately. Keys go to Blob storage, protected with Key Vault, and `SetApplicationName("permits-portal")` is set on all three VMs. Existing users are logged out once (their old cookies were encrypted with per-VM keys), and never again.
+This fixes the logouts and antiforgery errors immediately. Keys go to Blob storage, protected with Key Vault, and `SetApplicationName("admissions-portal")` is set on all three VMs. Existing users are logged out once (their old cookies were encrypted with per-VM keys), and never again.
 
 ### Step 3 — Shrink and move the session
 
-30 KB per session is too much. The draft moves to a PostgreSQL `application_drafts` table (it is valuable data that architects spend an hour on; it should survive anything). Session keeps only `{ draftId, currentStep }`, about 100 bytes, and moves to Redis. A Redis outage now costs the user a click to reopen their draft, not the draft itself.
+30 KB per session is too much. The draft moves to a PostgreSQL `application_drafts` table (it is valuable data that students spend an hour on; it should survive anything). Session keeps only `{ draftId, currentStep }`, about 100 bytes, and moves to Redis. A Redis outage now costs the user a click to reopen their draft, not the draft itself.
 
 ### Step 4 — Move files to object storage
 
-The browser asks the API for a signed upload URL valid for 15 minutes, uploads the PDF directly to Blob storage, and the API records the blob name. Uploads no longer consume API bandwidth or threads, and they survive VM rebuilds.
+The browser asks the API for a signed upload URL valid for 15 minutes, uploads the scan directly to Blob storage, and the API records the blob name. Uploads no longer consume API bandwidth or threads, and they survive VM rebuilds.
 
 ### Step 5 — Run the reminder job once
 
@@ -290,7 +290,7 @@ With state externalised, ARR affinity is switched off so the load balancer can s
 The code below makes an ASP.NET Core app safe to run as many instances. It shares the Data Protection key ring through a custom `IXmlRepository`, keeps session small and on a distributed cache, stores draft applications in a repository rather than in memory, and tags each response with the instance name for debugging. Stores are behind interfaces with in-memory implementations so the project compiles offline; production registrations are shown in comments.
 
 ```text
-Permits.Portal/
+Admissions.Portal/
   Program.cs
   State/SharedKeyStore.cs
   State/SharedStoreXmlRepository.cs
@@ -301,7 +301,7 @@ Permits.Portal/
 ```csharp file=State/SharedKeyStore.cs
 using System.Collections.Concurrent;
 
-namespace Permits.Portal.State;
+namespace Admissions.Portal.State;
 
 /// <summary>Somewhere every instance can read and write small named documents.
 /// Production: Azure Blob Storage, Redis or a PostgreSQL table.</summary>
@@ -327,7 +327,7 @@ public sealed class InMemorySharedKeyStore : ISharedKeyStore
 using System.Xml.Linq;
 using Microsoft.AspNetCore.DataProtection.Repositories;
 
-namespace Permits.Portal.State;
+namespace Admissions.Portal.State;
 
 /// <summary>Plugs a shared store into ASP.NET Core Data Protection so every instance
 /// uses the same key ring. Data Protection caches keys and calls this rarely.</summary>
@@ -346,26 +346,26 @@ Data Protection calls `StoreElement` when it creates a key (about every 90 days)
 ```csharp file=State/DraftRepository.cs
 using System.Collections.Concurrent;
 
-namespace Permits.Portal.State;
+namespace Admissions.Portal.State;
 
-public sealed record PermitDraft(Guid Id, string ArchitectId, int CurrentStep, string PlotNumber, string? DrawingBlobName);
+public sealed record ApplicationDraft(Guid Id, string ApplicantId, int CurrentStep, string ProgrammeCode, string? CertificateBlobName);
 
-/// <summary>Drafts are valuable (an architect may spend an hour on one), so they live in the
+/// <summary>Drafts are valuable (a student may spend an hour on one), so they live in the
 /// database, not in session. Production: a PostgreSQL table with a version column.</summary>
 public interface IDraftRepository
 {
-    Task<PermitDraft?> GetAsync(Guid id, CancellationToken ct);
-    Task SaveAsync(PermitDraft draft, CancellationToken ct);
+    Task<ApplicationDraft?> GetAsync(Guid id, CancellationToken ct);
+    Task SaveAsync(ApplicationDraft draft, CancellationToken ct);
 }
 
 public sealed class InMemoryDraftRepository : IDraftRepository
 {
-    private readonly ConcurrentDictionary<Guid, PermitDraft> _drafts = new();
+    private readonly ConcurrentDictionary<Guid, ApplicationDraft> _drafts = new();
 
-    public Task<PermitDraft?> GetAsync(Guid id, CancellationToken ct) =>
+    public Task<ApplicationDraft?> GetAsync(Guid id, CancellationToken ct) =>
         Task.FromResult(_drafts.TryGetValue(id, out var d) ? d : null);
 
-    public Task SaveAsync(PermitDraft draft, CancellationToken ct)
+    public Task SaveAsync(ApplicationDraft draft, CancellationToken ct)
     {
         _drafts[draft.Id] = draft;
         return Task.CompletedTask;
@@ -374,7 +374,7 @@ public sealed class InMemoryDraftRepository : IDraftRepository
 ```
 
 ```csharp file=State/InstanceHeaderMiddleware.cs
-namespace Permits.Portal.State;
+namespace Admissions.Portal.State;
 
 /// <summary>Adds the instance name to every response. When a user reports "logged out at
 /// step 4", the header in their browser's network tab shows which instances were involved.</summary>
@@ -399,14 +399,14 @@ public sealed class InstanceHeaderMiddleware(RequestDelegate next)
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.DataProtection.KeyManagement;
-using Permits.Portal.State;
+using Admissions.Portal.State;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // 1. One key ring for every instance and every deployment slot.
 builder.Services.AddSingleton<ISharedKeyStore, InMemorySharedKeyStore>();
 builder.Services.AddDataProtection()
-    .SetApplicationName("permits-portal");
+    .SetApplicationName("admissions-portal");
 builder.Services.AddOptions<KeyManagementOptions>()
     .Configure<ISharedKeyStore>((options, store) => options.XmlRepository = new SharedStoreXmlRepository(store));
 // Production alternatives (packages not available offline):
@@ -443,7 +443,7 @@ app.UseAntiforgery();
 // Start a draft: the draft goes to the repository; session holds only its id.
 app.MapPost("/drafts", async (HttpContext http, IDraftRepository drafts, CancellationToken ct) =>
 {
-    var draft = new PermitDraft(Guid.NewGuid(), ArchitectId: "demo-architect", CurrentStep: 1, PlotNumber: "", DrawingBlobName: null);
+    var draft = new ApplicationDraft(Guid.NewGuid(), ApplicantId: "demo-student", CurrentStep: 1, ProgrammeCode: "", CertificateBlobName: null);
     await drafts.SaveAsync(draft, ct);
     http.Session.SetString("draftId", draft.Id.ToString());
     return Results.Created($"/drafts/{draft.Id}", draft);
@@ -475,11 +475,11 @@ Choices worth defending:
 // Each instance has its own copy. Scale to 3 and drafts appear and disappear at random.
 public static class DraftCache
 {
-    public static readonly Dictionary<string, PermitDraft> ByUser = new();
+    public static readonly Dictionary<string, ApplicationDraft> ByUser = new();
 }
 
 // Files on local disk: gone when the VM is rebuilt, invisible to other instances.
-await using var file = File.Create(Path.Combine(@"D:\PermitUploads", upload.FileName));
+await using var file = File.Create(Path.Combine(@"D:\AdmissionUploads", upload.FileName));
 
 // Runs on every instance: 3 instances, 3 SMS reminders.
 public sealed class ReminderService : BackgroundService { /* timer at 09:00 */ }
@@ -505,15 +505,15 @@ Session is quick and temporary: it can vanish on timeout or cache eviction. The 
 
 ## Practical playground
 
-The graph below is the permit portal straight after the team added two VMs: three app servers, but sessions and files still local, the reminder job on every instance and affinity on. Open it in the HLD canvas and make the web tier stateless: add a `cache` for sessions, `object-storage` for drawings and the key ring, a `queue` and `worker` for reminders, and remove affinity from the load balancer label. Write next to each new node which piece of state it holds.
+The graph below is the admissions portal straight after the team added two VMs: three app servers, but sessions and files still local, the reminder job on every instance and affinity on. Open it in the HLD canvas and make the web tier stateless: add a `cache` for sessions, `object-storage` for certificates and the key ring, a `queue` and `worker` for reminders, and remove affinity from the load balancer label. Write next to each new node which piece of state it holds.
 
-:::playground type=hld title="Make the permit portal stateless"
+:::playground type=hld title="Make the admissions portal stateless"
 ```json
 {
   "nodes": [
-    { "id": "arch", "type": "client", "label": "Architects (browser)", "props": { "rps": 3000 } },
+    { "id": "arch", "type": "client", "label": "Students (browser)", "props": { "rps": 3000 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer (ARR affinity ON)" },
-    { "id": "api", "type": "app-server", "label": "Permit portal (session + uploads + reminder job on each VM)", "props": { "instances": 3 } },
+    { "id": "api", "type": "app-server", "label": "Admissions portal (session + uploads + reminder job on each VM)", "props": { "instances": 3 } },
     { "id": "db", "type": "database", "label": "PostgreSQL", "props": { "replicas": 0 } },
     { "id": "sms", "type": "external", "label": "SMS gateway" }
   ],
@@ -821,8 +821,8 @@ public class KeyRingTests
     public void Instances_sharing_a_store_can_read_each_other()
     {
         var store = new InMemoryKeyBlobStore();
-        var instanceA = KeyRingSetup.CreateProtector(store, "permits-portal", "drafts");
-        var instanceB = KeyRingSetup.CreateProtector(store, "permits-portal", "drafts");
+        var instanceA = KeyRingSetup.CreateProtector(store, "admissions-portal", "drafts");
+        var instanceB = KeyRingSetup.CreateProtector(store, "admissions-portal", "drafts");
 
         string token = instanceA.Protect("draft-42");
         Assert.Equal("draft-42", instanceB.Unprotect(token));
@@ -832,15 +832,15 @@ public class KeyRingTests
     public void One_key_is_written_on_first_use()
     {
         var store = new InMemoryKeyBlobStore();
-        KeyRingSetup.CreateProtector(store, "permits-portal", "drafts").Protect("x");
+        KeyRingSetup.CreateProtector(store, "admissions-portal", "drafts").Protect("x");
         Assert.Single(store.ReadAll());
     }
 
     [Fact]
     public void Separate_stores_cannot_read_each_other()
     {
-        var instanceA = KeyRingSetup.CreateProtector(new InMemoryKeyBlobStore(), "permits-portal", "drafts");
-        var instanceB = KeyRingSetup.CreateProtector(new InMemoryKeyBlobStore(), "permits-portal", "drafts");
+        var instanceA = KeyRingSetup.CreateProtector(new InMemoryKeyBlobStore(), "admissions-portal", "drafts");
+        var instanceB = KeyRingSetup.CreateProtector(new InMemoryKeyBlobStore(), "admissions-portal", "drafts");
 
         string token = instanceA.Protect("draft-42");
         Assert.ThrowsAny<CryptographicException>(() => instanceB.Unprotect(token));
@@ -850,7 +850,7 @@ public class KeyRingTests
     public void Different_application_names_are_isolated()
     {
         var store = new InMemoryKeyBlobStore();
-        var portal = KeyRingSetup.CreateProtector(store, "permits-portal", "drafts");
+        var portal = KeyRingSetup.CreateProtector(store, "admissions-portal", "drafts");
         var other = KeyRingSetup.CreateProtector(store, "fees-admin", "drafts");
 
         string token = portal.Protect("draft-42");

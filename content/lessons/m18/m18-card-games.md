@@ -230,6 +230,8 @@ A correct shuffle walks from the last index down and swaps each element with a r
 - `FisherYatesShuffler(Random)`: seeded for tests and replays, or `Random.Shared` for casual games.
 - `CryptoShuffler`: uses `RandomNumberGenerator.GetInt32`, which is unpredictable even to someone who has seen earlier shuffles. Use it for anything involving real money. `System.Random` is fast, but it's not designed to resist prediction.
 
+There is a second, less obvious limit. A deck has 52! ≈ 8 × 10⁶⁷ possible orders, which needs about 226 bits of randomness to reach them all. `new Random(seed)` takes a 32-bit seed, so a seeded shuffler can only ever produce about 4.3 billion different decks. That's fine for tests and replays, and a real weakness for a money game: an attacker who sees the first few cards can search all seeds and predict the rest. `RandomNumberGenerator` has no such ceiling.
+
 (.NET 8 added `Random.Shuffle`. It's a fine Fisher–Yates implementation, but it doesn't plug into an interface or a cryptographic source, so we wrap our own.)
 
 ### A rule table for settlement (a tiny rules engine)
@@ -267,6 +269,57 @@ The last rule always matches, so the table is **total**: every situation has an 
 ### Results versus exceptions
 
 In this domain, a player trying to hit when it isn't their turn is a client bug (the UI should not offer the button), so we throw. If this were a public API facing untrusted clients, we'd translate these into `409 Conflict` responses at the edge.
+
+### Concurrency: one table, one writer
+
+`BlackjackRound` and `Deck` are deliberately **not thread-safe**. Inside one process and one game loop that is correct: locking every method would cost clarity for nothing. Online, it stops being true. Five players at one table send actions over the network, and a player on a shaky mobile connection taps "Hit" twice or the app retries a request that timed out. Two failure modes appear:
+
+1. **Interleaving.** Two requests run `Hit` at the same time. Both read `_current`, both call `deck.Draw()`, and the `_next` index in `Deck` can hand out the same card twice or skip one. Every verb is a check-then-act sequence ("is it this seat's turn? then draw"), so the whole verb must run alone.
+2. **Duplicates.** A retried "Hit" is applied twice, and the player gets a card they didn't ask for, possibly busting.
+
+The fix sits in front of the round, not inside it: a `TableSession` that owns one round, runs actions **one at a time** (a lock here; a `Channel<T>` consumer or an actor per table at scale), remembers the result of each client-generated `actionId` (idempotency), and rejects actions sent against an old `Version` of the table (optimistic concurrency: "you pressed Hit while looking at a screen that is already out of date"). The round stays a simple, single-threaded domain object that is easy to test.
+
+```csharp file=Blackjack/TableSession.cs
+using CardTable.Core;
+
+namespace CardTable.Blackjack;
+
+public enum PlayerAction { Hit, Stand }
+public enum ActionStatus { Applied, Duplicate, StaleVersion, NotYourTurn }
+public sealed record ActionResult(ActionStatus Status, int Version, Card? CardDrawn = null);
+
+/// <summary>
+/// Single writer for one table. Each action is checked and applied under one lock, so "is it your turn,
+/// is your view current, have I seen this action id" and "apply it" are one atomic step.
+/// </summary>
+public sealed class TableSession(BlackjackRound round)
+{
+    private readonly Lock _sync = new();
+    private readonly Dictionary<Guid, ActionResult> _seen = [];
+
+    public int Version { get; private set; }
+    public BlackjackRound Round => round;
+
+    public ActionResult Submit(Guid actionId, string player, int expectedVersion, PlayerAction action)
+    {
+        lock (_sync)
+        {
+            if (_seen.TryGetValue(actionId, out var earlier)) return earlier with { Status = ActionStatus.Duplicate };
+            if (expectedVersion != Version) return new ActionResult(ActionStatus.StaleVersion, Version);
+            if (round.CurrentSeat?.Player != player) return new ActionResult(ActionStatus.NotYourTurn, Version);
+
+            Card? drawn = null;
+            if (action == PlayerAction.Hit) drawn = round.Hit(); else round.Stand();
+            Version++;
+            var result = new ActionResult(ActionStatus.Applied, Version, drawn);
+            _seen[actionId] = result;
+            return result;
+        }
+    }
+}
+```
+
+`System.Threading.Lock` is the .NET 9+ lock type; `lock` on it compiles to its faster `EnterScope` path. Rejected actions (stale or out of turn) are not stored under their `actionId`, so the client can fix its view and resend. In a multi-server deployment the same rules move into the database: the table row carries a `version` column, an action is an `UPDATE ... WHERE id = $1 AND version = $2`, and processed action ids live in a table with a unique key.
 
 ### A round, end to end
 
@@ -329,6 +382,7 @@ CardTable/
   Blackjack/Scoring.cs     HandValue, BlackjackScoring, dealer policies, BlackjackRules
   Blackjack/Settlement.cs  HandOutcome, SettlementContext, SettlementRule(s)
   Blackjack/Round.cs       RoundPhase, Seat, BlackjackRound
+  Blackjack/TableSession.cs  single-writer, idempotent front door for online play (shown earlier)
   Program.cs               demo with a seeded shoe
 ```
 
@@ -583,7 +637,8 @@ public sealed class BlackjackRound(Deck deck, BlackjackRules rules, IReadOnlyLis
 
         if (BlackjackScoring.IsBlackjack(DealerHand.Cards)) { Settle(); return; }   // dealer peeks
 
-        SetPhase(RoundPhase.PlayerTurns);
+        // If every player has blackjack, go straight to the dealer: no PlayerTurns phase (and no event for it).
+        if (_seats.Any(s => !s.IsDone)) SetPhase(RoundPhase.PlayerTurns);
         AdvanceToNextSeat();
     }
 
@@ -853,6 +908,54 @@ public sealed class BlackjackTests
         tiny.Draw();
         Assert.Throws<DeckExhaustedException>(() => tiny.Draw());
     }
+
+    [Fact]
+    public void All_blackjack_table_skips_player_turns()
+    {
+        var r = Round("AS 9C KH 7D", ("Asha", 100m));
+        var phases = new List<RoundPhase>();
+        r.PhaseChanged += phases.Add;
+        r.Deal();
+        Assert.DoesNotContain(RoundPhase.PlayerTurns, phases);
+        Assert.Equal(RoundPhase.Settled, r.Phase);
+    }
+
+    [Fact]
+    public void Table_session_applies_a_retried_action_once()
+    {
+        var table = new TableSession(Round("TH 9C 2S 8D 3H 4C", ("Asha", 100m)));
+        table.Round.Deal();                                   // Asha 12, dealer 17
+        var actionId = Guid.NewGuid();
+        var first = table.Submit(actionId, "Asha", 0, PlayerAction.Hit);
+        var retry = table.Submit(actionId, "Asha", 0, PlayerAction.Hit);
+        Assert.Equal(ActionStatus.Applied, first.Status);
+        Assert.Equal(ActionStatus.Duplicate, retry.Status);
+        Assert.Equal(first.CardDrawn, retry.CardDrawn);
+        Assert.Equal(3, table.Round.Seats[0].Hand.Cards.Count);   // one extra card, not two
+    }
+
+    [Fact]
+    public void Table_session_rejects_stale_and_out_of_turn_actions()
+    {
+        var table = new TableSession(Round("TH 5C 9D 8S 6H 8C 9S", ("Asha", 100m), ("Ravi", 50m)));
+        table.Round.Deal();
+        Assert.Equal(ActionStatus.NotYourTurn, table.Submit(Guid.NewGuid(), "Ravi", 0, PlayerAction.Stand).Status);
+        Assert.Equal(ActionStatus.Applied, table.Submit(Guid.NewGuid(), "Asha", 0, PlayerAction.Stand).Status);
+        Assert.Equal(ActionStatus.StaleVersion, table.Submit(Guid.NewGuid(), "Ravi", 0, PlayerAction.Hit).Status);
+        Assert.Equal(ActionStatus.Applied, table.Submit(Guid.NewGuid(), "Ravi", 1, PlayerAction.Hit).Status);
+    }
+
+    [Fact]
+    public async Task Table_session_serialises_parallel_duplicates()
+    {
+        var table = new TableSession(Round("TH 9C 2S 8D 3H 4C", ("Asha", 100m)));
+        table.Round.Deal();
+        var actionId = Guid.NewGuid();
+        var results = await Task.WhenAll(Enumerable.Range(0, 20)
+            .Select(_ => Task.Run(() => table.Submit(actionId, "Asha", 0, PlayerAction.Hit))));
+        Assert.Equal(1, results.Count(r => r.Status == ActionStatus.Applied));
+        Assert.Equal(3, table.Round.Seats[0].Hand.Cards.Count);
+    }
 }
 ```
 
@@ -860,6 +963,7 @@ Testing notes:
 
 - **Each round test reads like a story**: the stacked cards are the scenario, the asserts are the expected outcome *and* the rule that decided it.
 - **`Settlement_table_is_total`** sweeps combinations to prove that some rule always matches. It's a cheap property test.
+- **The `TableSession` tests pin the online rules**: a retried action id is applied once even when 20 copies race, an out-of-date view is refused, and only the current seat may act.
 - **Randomness is tested by comparison, not prediction**: the same seed gives the same order. To check the shuffle is *unbiased*, a separate statistical test shuffles a 3-card list, say, 60,000 times, and checks that each of the 6 orders appears about 10,000 times. Keep that kind of test out of the fast unit-test suite.
 
 ## Bad design vs good design

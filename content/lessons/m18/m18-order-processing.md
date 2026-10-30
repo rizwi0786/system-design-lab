@@ -61,7 +61,7 @@ Finally, the clerk writes each shout in the register on the same line as the sta
 
 ### The scenario
 
-A direct-to-consumer brand sells air purifiers and water purifiers (₹6,000 to ₹25,000) through its own website and app: about 3,000 orders a day, 10 times that during festival sales. Payments go through a payment gateway (a provider such as Razorpay or Stripe) using cards, UPI and net banking. The warehouse ships through two couriers. Stock is held by the [inventory reservation](#/lesson/m18-inventory-reservation) service for 10 minutes while the customer pays.
+A direct-to-consumer brand sells air purifiers and water purifiers (₹6,000 to ₹25,000) through its own website and app: about 3,000 orders a day, 10 times that during festival sales. Payments go through a payment gateway (a provider such as Razorpay or Stripe) using cards, UPI and net banking. The warehouse ships through two couriers. Stock is held by the [inventory reservation](#/lesson/m18-inventory-reservation) service for 10 minutes while the customer pays. This lesson is about getting one order right; what changes when the same order core has to absorb 100 times the traffic (read replicas, partitioned outbox relays, queues in front of the gateway) is covered in [Scaling journey](#/lesson/m17-scaling-journey), and the sale-day stampede on a few hot SKUs in [Flash sale](#/lesson/m17-flash-sale).
 
 ### Functional requirements
 
@@ -140,6 +140,8 @@ classDiagram
         +RecordPaymentFailed(string reason, DateTimeOffset now)
         +RetryPayment(DateTimeOffset now)
         +Cancel(string reason, DateTimeOffset now)
+        +StartShipping(DateTimeOffset now)
+        +AbortShipping(string reason, DateTimeOffset now)
         +MarkShipped(string tracking, Money captured, DateTimeOffset now)
         +MarkDelivered(DateTimeOffset now)
         +Refund(Money amount, string reason, DateTimeOffset now)
@@ -218,20 +220,24 @@ sequenceDiagram
     WH->>S: ShipAsync(order 42, "DLV123")
     S->>R: FindAsync(42)
     R-->>S: Order v3
-    S->>O: can fire Ship?
-    O-->>S: yes
+    S->>O: StartShipping()
+    O->>O: ShippingStartedAt = now, record OrderShippingStarted
+    S->>R: SaveAsync(order, expected v3)
+    R-->>S: saved as v4 (Cancel now refused)
     S->>G: Capture(pay_9x, 14999, key "capture:42")
     G-->>S: captured
     S->>O: MarkShipped("DLV123", 14999)
     O->>O: Status = Shipped, record OrderShipped
-    S->>R: SaveAsync(order, expected v3)
+    S->>R: SaveAsync(order, expected v4)
     R->>X: same transaction: append OrderShipped
-    R-->>S: saved as v4
+    R-->>S: saved as v5
     S-->>WH: Shipped
-    Note over S,G: If SaveAsync fails after capture, a retry reuses "capture:42",<br/>so the gateway returns the same capture instead of charging again
+    Note over S,G: If the process dies after the capture, a retry reuses "capture:42",<br/>so the gateway returns the same capture instead of charging again
 ```
 
-Read it with failures in mind, because that is where the design earns its keep. The money movement (capture) happens *before* the state change, because shipping without payment is the worse failure. If the process crashes between "captured" and "saved", the order is still Authorized in the database while the money is captured. The warehouse app retries; the service sends the **same idempotency key** `capture:42`, so the gateway answers "already captured" and the order is then saved as Shipped. No double charge, no lost shipment. The `OrderShipped` event is appended to the outbox in the same transaction as the state change, so the customer notification cannot be lost either.
+Read it with failures in mind, because that is where the design earns its keep. There are three steps: **claim, capture, record**. The money movement (capture) happens *before* the status changes to Shipped, because shipping without payment is the worse failure. But a capture is a check-then-act across two systems: we checked "Authorized" at v3, and between the capture and the save a support agent could cancel the order. Without the claim, the cancel would save first, the ship's save would fail the version check, the reload would show Cancelled, and the customer would be charged for a cancelled order (and the void handler can't void a captured payment). The claim closes that window: it is saved *before* any money moves, so a concurrent cancel either saves first (and `StartShipping` then fails, before any capture) or finds the claim and is refused.
+
+If the process crashes between "captured" and "saved", the order is still Authorized and claimed while the money is captured. The warehouse app retries; `StartShipping` sees the existing claim and does nothing, and the service sends the **same idempotency key** `capture:42`, so the gateway answers "already captured" and the order is then saved as Shipped. No double charge, no lost shipment. If the capture *times out*, the claim stays: we don't know whether money moved, so the order must not be cancelled until a retry (or an operator checking the gateway) settles it. Alert on orders that stay claimed for more than a few minutes. The `OrderShipped` event is appended to the outbox in the same transaction as the state change, so the customer notification cannot be lost either.
 
 ## Patterns and design decisions
 
@@ -261,7 +267,7 @@ The outbox fixes it by writing events **into the same transaction** as the state
 
 ### Optimistic concurrency
 
-The warehouse ships order 42 at the same moment support cancels it. Both load version 3. Whoever saves first wins and the version becomes 4; the other's save finds version 4 instead of 3 and fails with `ConcurrencyException`. `OrderService` then **reloads and re-applies** the command. If ship won, the reloaded order is Shipped and cancel now fails with a clear "cannot cancel a Shipped order". Without the version check, the second save would silently overwrite the first: an order that is both shipped and cancelled, with stock released for a parcel that left the building.
+The warehouse ships order 42 at the same moment support cancels it. Both load version 3. Whoever saves first wins and the version becomes 4; the other's save finds version 4 instead of 3 and fails with `ConcurrencyException`. `OrderService` then **reloads and re-applies** the command. If the ship's claim won, the reloaded order is claimed (or already Shipped) and the cancel fails with a clear "shipping has started". If the cancel won, the ship's claim fails on the reloaded Cancelled order before any money moves. Without the version check, the second save would silently overwrite the first: an order that is both shipped and cancelled, with stock released for a parcel that left the building.
 
 Pessimistic locking (`SELECT ... FOR UPDATE`) also works but holds a database lock while the service calls the gateway, which can take seconds. Optimistic concurrency holds nothing during the slow call.
 
@@ -295,9 +301,10 @@ stateDiagram-v2
 
 How to read it: labels follow the UML style "trigger [guard] / effect". The table in code has exactly these nine arrows (the partial-refund self-loop is a guarded rule inside `Refund`, not a table entry). Some things to notice:
 
-- **Cancel is allowed from three states but not after Shipped.** Once a parcel is with the courier, undoing it is a *return*, a separate process with its own steps (pickup, inspection, refund).
+- **Cancel is allowed from three states but not after Shipped.** Once a parcel is with the courier, undoing it is a *return*, a separate process with its own steps (pickup, inspection, refund). From Authorized, Cancel also has a guard: it is refused while a shipping claim is held, because the payment may already be captured.
 - **The effect of Cancel depends on where you came from.** From Authorized it must void the authorisation; from PendingPayment there is nothing to void. The `OrderCancelled` event carries `PaymentIdToVoid` only in the first case.
 - **Ship has a guard that is checked outside the aggregate**: the capture must have succeeded. The service performs the capture and passes the captured amount; the order checks it equals the total.
+- **Out-of-order webhooks.** Gateways don't promise ordering. A `payment.failed` for an earlier attempt that arrives after `payment.authorized` hits Authorized + FailPayment, which the table rejects. The webhook endpoint should log it and still answer 2xx, otherwise the gateway keeps redelivering a message that can never apply.
 - **Late payments** (F9) do not appear as a transition because the order does not change state: a `Cancelled` order that receives an authorisation records a `LatePaymentReceived` event and stays Cancelled, and a handler voids the payment.
 
 ## C# implementation
@@ -396,6 +403,11 @@ public sealed record OrderCancelled(Guid OrderId, DateTimeOffset OccurredAt, str
 public sealed record LatePaymentReceived(Guid OrderId, DateTimeOffset OccurredAt, string PaymentId)
     : OrderEvent(OrderId, OccurredAt);
 
+/// <summary>The warehouse has claimed the order for shipping; a capture may be in flight, so Cancel is refused.</summary>
+public sealed record OrderShippingStarted(Guid OrderId, DateTimeOffset OccurredAt) : OrderEvent(OrderId, OccurredAt);
+
+public sealed record OrderShippingAborted(Guid OrderId, DateTimeOffset OccurredAt, string Reason) : OrderEvent(OrderId, OccurredAt);
+
 public sealed record OrderShipped(Guid OrderId, DateTimeOffset OccurredAt, string CustomerId, string TrackingNumber, Money Captured)
     : OrderEvent(OrderId, OccurredAt);
 
@@ -490,6 +502,8 @@ public sealed class Order
     public Money Refunded { get; private set; }
     public string? TrackingNumber { get; private set; }
     public string? CancelReason { get; private set; }
+    /// <summary>Set while a capture may be in flight. Cancel is refused until the order ships or shipping is aborted.</summary>
+    public DateTimeOffset? ShippingStartedAt { get; private set; }
 
     public int PendingEventCount => _events.Count;
 
@@ -547,10 +561,32 @@ public sealed class Order
     public void Cancel(string reason, DateTimeOffset now)
     {
         if (Status == OrderStatus.Cancelled) return;                          // idempotent
+        if (ShippingStartedAt is not null)
+            throw new OrderRuleViolationException("Shipping has started and the payment may already be captured; cancel is not possible.");
         bool hadAuthorisation = Status == OrderStatus.Authorized;
         Move(OrderTrigger.Cancel, now);
         CancelReason = reason;
         Raise(new OrderCancelled(Id, now, reason, hadAuthorisation ? PaymentId : null, ReservationId));
+    }
+
+    /// <summary>Claims the order for shipping before any money moves. Saved on its own, so a concurrent
+    /// cancel either wins before the capture or is refused after it.</summary>
+    public void StartShipping(DateTimeOffset now)
+    {
+        if (!OrderStateMachine.CanFire(Status, OrderTrigger.Ship)) throw new InvalidOrderTransitionException(Status, OrderTrigger.Ship);
+        if (ShippingStartedAt is not null) return;                            // already claimed: a retry after a crash
+        ShippingStartedAt = now;
+        UpdatedAt = now;
+        Raise(new OrderShippingStarted(Id, now));
+    }
+
+    /// <summary>Releases the claim when the capture definitely failed, so the order can be cancelled again.</summary>
+    public void AbortShipping(string reason, DateTimeOffset now)
+    {
+        if (Status != OrderStatus.Authorized || ShippingStartedAt is null) return;
+        ShippingStartedAt = null;
+        UpdatedAt = now;
+        Raise(new OrderShippingAborted(Id, now, reason));
     }
 
     public void MarkShipped(string trackingNumber, Money captured, DateTimeOffset now)
@@ -804,21 +840,34 @@ public sealed class OrderService(IOrderRepository orders, IPaymentGateway gatewa
     public Task<OrderView> DeliverAsync(Guid id, CancellationToken ct = default) =>
         MutateAsync(id, o => { o.MarkDelivered(Now); return Task.CompletedTask; }, ct);
 
-    /// <summary>Capture first, then change state. A retry reuses the same key, so money moves once.</summary>
-    public Task<OrderView> ShipAsync(Guid id, string trackingNumber, CancellationToken ct = default) =>
-        MutateAsync(id, async o =>
+    /// <summary>Claim, capture, record. The claim is saved before money moves, so a concurrent cancel can't
+    /// slip in between "captured" and "saved". A retry reuses the same capture key, so money moves once.</summary>
+    public async Task<OrderView> ShipAsync(Guid id, string trackingNumber, CancellationToken ct = default)
+    {
+        // 1. Claim. If a cancel saved first, StartShipping throws here, before any capture.
+        var claimed = await MutateAsync(id, o =>
         {
-            if (o.Status == OrderStatus.Shipped && o.TrackingNumber == trackingNumber) return;
-            if (!OrderStateMachine.CanFire(o.Status, OrderTrigger.Ship)) throw new InvalidOrderTransitionException(o.Status, OrderTrigger.Ship);
-
-            var result = await gateway.CaptureAsync(o.PaymentId!, o.Total, $"capture:{o.Id}", ct);
-            if (!result.Succeeded)
-            {
-                log.LogWarning("Capture failed for order {OrderId}: {Error}", o.Id, result.Error);
-                throw new PaymentGatewayException("capture", result.Error);
-            }
-            o.MarkShipped(trackingNumber, o.Total, Now);
+            if (o.Status == OrderStatus.Shipped && o.TrackingNumber == trackingNumber) return Task.CompletedTask;
+            o.StartShipping(Now);
+            return Task.CompletedTask;
         }, ct);
+        if (claimed.Status == OrderStatus.Shipped) return claimed;           // retried after success
+
+        // 2. Capture, with no lock or transaction held. From here on, Cancel is refused.
+        var order = await orders.FindAsync(id, ct) ?? throw new OrderNotFoundException(id);
+        var result = await gateway.CaptureAsync(order.PaymentId!, order.Total, $"capture:{id}", ct);
+        if (!result.Succeeded)
+        {
+            // A definite "no" from the gateway: release the claim so the order can be cancelled or shipped later.
+            // A timeout (exception) leaves the claim in place: we don't know whether money moved.
+            log.LogWarning("Capture failed for order {OrderId}: {Error}", id, result.Error);
+            await MutateAsync(id, o => { o.AbortShipping(result.Error ?? "capture failed", Now); return Task.CompletedTask; }, ct);
+            throw new PaymentGatewayException("capture", result.Error);
+        }
+
+        // 3. Record. Only Ship can still move this order, so a version conflict here is just retried.
+        return await MutateAsync(id, o => { o.MarkShipped(trackingNumber, o.Total, Now); return Task.CompletedTask; }, ct);
+    }
 
     /// <summary>The caller supplies the refund key (for example from the support ticket), so a double click refunds once.</summary>
     public Task<OrderView> RefundAsync(Guid id, Money amount, string reason, string refundKey, CancellationToken ct = default) =>
@@ -1294,6 +1343,24 @@ public class OrderServiceTests
         gw.FailCaptures = true;
         await Assert.ThrowsAsync<PaymentGatewayException>(() => svc.ShipAsync(o.Id, "DLV123"));
         Assert.Equal(OrderStatus.Authorized, (await svc.GetAsync(o.Id)).Status);
+        await svc.CancelAsync(o.Id, "customer");                  // a definite failure released the claim
+        Assert.Equal(OrderStatus.Cancelled, (await svc.GetAsync(o.Id)).Status);
+    }
+
+    [Fact]
+    public async Task Cancel_is_refused_once_shipping_has_started()
+    {
+        var (svc, store, gw, clock) = New();
+        var o = await svc.PlaceAsync(Purifier());
+        await svc.PaymentAuthorizedAsync(o.Id, "pay_1", Money.Inr(14_999m));
+        var claimed = (await store.FindAsync(o.Id, default))!;
+        claimed.StartShipping(clock.Now);                         // the warehouse claimed it; the capture is in flight
+        await store.SaveAsync(claimed, default);
+
+        await Assert.ThrowsAsync<OrderRuleViolationException>(() => svc.CancelAsync(o.Id, "customer"));
+        await svc.ShipAsync(o.Id, "DLV123");                      // the warehouse's retry finishes the job
+        Assert.Equal(OrderStatus.Shipped, (await svc.GetAsync(o.Id)).Status);
+        Assert.Equal(["capture INR 14999.00"], gw.MoneyMovements);
     }
 
     [Fact]
@@ -2348,7 +2415,7 @@ public sealed class ShippingService
 }
 ```
 
-Two loops, one key. The inner loop handles "did the gateway get my request?", the outer loop handles "did someone change the order while I was busy?". The test gateway deliberately *captures and then times out*, which is the realistic nasty case: without a stable key, the retry would capture a second time. The cancel-wins test also exposes the remaining business gap: the money was captured but the order is cancelled, so the cancellation handler must check for a capture under `capture:{orderId}` and refund it.
+Two loops, one key. The inner loop handles "did the gateway get my request?", the outer loop handles "did someone change the order while I was busy?". The test gateway deliberately *captures and then times out*, which is the realistic nasty case: without a stable key, the retry would capture a second time. The cancel-wins test also exposes the remaining business gap in this simplified model: the money was captured but the order is cancelled. The main implementation closes that gap by saving a shipping claim *before* capturing (`Order.StartShipping`), so a cancel can't land between capture and save; without a claim, the cancellation flow would have to find the capture under `capture:{orderId}` and refund it.
 ::alternatives
 Lock the row (`SELECT ... FOR UPDATE`) for the whole operation instead of optimistic retries. Simpler reasoning, but you hold a database lock across a network call that may take seconds, which hurts throughput and risks lock timeouts under load.
 ::mistakes
@@ -2377,7 +2444,7 @@ Use a transactional outbox: in the same database transaction as the order update
 ::q intermediate
 Two requests, ship and cancel, hit the same order at once. What happens in your design?
 ::a
-Both load the order at version *n*. The one that saves first succeeds and bumps the version to *n+1*. The other's save checks `WHERE version = n`, updates zero rows and raises a concurrency exception. The service reloads the order and re-applies the command against the new state: if ship won, cancel now fails with "cannot cancel a Shipped order" (409); if cancel won, ship fails before capturing. Because ship captures before saving, if cancel wins after a capture, the cancellation handler must refund the capture, which it can detect through the deterministic capture key.
+Both load the order at version *n*. The one that saves first succeeds and bumps the version to *n+1*. The other's save checks `WHERE version = n`, updates zero rows and raises a concurrency exception. The service reloads the order and re-applies the command against the new state. The subtle part is that ship talks to the gateway, so "check Authorized, capture, save Shipped" is a check-then-act across two systems: if a cancel could save between the capture and the ship's save, the customer would be charged for a cancelled order. So ship first saves a claim (`StartShipping`) before any money moves. If the cancel saves first, the claim fails on the reloaded Cancelled order and nothing is captured. If the claim saves first, the cancel reloads, sees the claim and is refused (or sees Shipped and gets 409). After a definite capture failure the claim is released; after a timeout it stays until a retry settles whether money moved.
 ::q advanced
 Where would you put the rule "a refund can never exceed what was captured", and why?
 ::a
@@ -2404,6 +2471,8 @@ Q: What lives in the transition table, and what lives in guards?
 A: The table holds which (state, trigger) pairs are legal; guards hold data-dependent rules like amount checks and attempt limits.
 Q: Why capture payment before marking the order Shipped?
 A: Shipping without payment is the worse failure; a crash after capture is recovered by retrying with the same idempotency key.
+Q: Why does ShipAsync save a shipping claim before capturing?
+A: So a concurrent cancel can't save between the capture and the Shipped save; otherwise the customer is charged for a cancelled order.
 Q: What problem does the transactional outbox solve?
 A: Losing (or wrongly sending) events when the state change and the publish are not atomic.
 Q: What delivery guarantee does an outbox give, and what does it require of handlers?
@@ -2450,12 +2519,12 @@ Which are good reasons to keep the `Order` aggregate free of network calls? (Sel
 - [ ] It makes the aggregate thread-safe automatically.
 > Purity helps testing and atomicity of decisions. Thread safety still needs concurrency control (here, the version check).
 ::q single
-A cancel request arrives while `ShipAsync` is waiting on the gateway. Both loaded version 5. Ship saves first. What happens to the cancel?
-- [ ] It overwrites the shipped order with Cancelled.
-- [x] Its save fails the version check; after reloading, Cancel is rejected because the order is Shipped.
+A cancel request loads order 42 at version 5. Meanwhile `ShipAsync` saves its shipping claim (version 6) and starts the capture. What happens to the cancel?
+- [ ] It overwrites the claimed order with Cancelled, and the capture is voided later.
+- [x] Its save fails the version check; after reloading, Cancel sees the shipping claim and is refused.
 - [ ] It waits until ship finishes, then succeeds.
-- [ ] Both succeed, leaving two rows.
-> Optimistic concurrency detects the stale write; re-evaluating against the new state applies the business rules correctly.
+- [ ] Both succeed, and a handler refunds the capture.
+> Optimistic concurrency detects the stale write, and re-evaluating against the new state finds the claim. Saving the claim before the capture is what stops "charged for a cancelled order".
 ::q single
 Your release-stock handler runs twice for the same `OrderCancelled` event. Why is that acceptable here?
 - [ ] It is not acceptable; the outbox must guarantee exactly-once.

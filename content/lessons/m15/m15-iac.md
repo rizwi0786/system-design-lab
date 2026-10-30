@@ -24,7 +24,7 @@ references:
     url: https://martinfowler.com/bliki/InfrastructureAsCode.html
 ---
 
-**JalMitra** is a smart water-metering platform for a municipal corporation: 1.8 lakh household meters send readings every 15 minutes, and an ASP.NET Core API serves billing, leak alerts and a citizen app. It runs on Azure Container Apps with Azure Database for PostgreSQL, Key Vault and Blob Storage, in three environments. All of it was created by clicking through the Azure portal. Six months in, staging has a 2-vCore database and production a 4-vCore one, nobody remembers why; a developer added his home IP to production's database firewall during an incident and never removed it; and when the corporation asked for a disaster-recovery copy in another region, the team estimated two weeks "to work out what we actually have". Infrastructure as Code (IaC) turns that unknown into a set of reviewed files in Git, from which any environment can be created, compared or rebuilt.
+**CityCare** is the booking and lab-report platform of a chain of 60 clinics across five Indian cities: 1.8 lakh registered patients book about 9,000 appointments a day, and an ASP.NET Core API serves booking, doctors' schedules, lab-report PDFs and a patient app. It runs on Azure Container Apps with Azure Database for PostgreSQL, Key Vault and Blob Storage, in three environments. All of it was created by clicking through the Azure portal. Six months in, staging has a 2-vCore database and production a 4-vCore one, nobody remembers why; a developer added his home IP to production's database firewall (a database full of patient records) during an incident and never removed it; and when the clinic chain's auditors asked for a disaster-recovery copy in another region, the team estimated two weeks "to work out what we actually have". Infrastructure as Code (IaC) turns that unknown into a set of reviewed files in Git, from which any environment can be created, compared or rebuilt.
 
 ## Learning objectives
 
@@ -46,16 +46,16 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Building a house from memory works once. The second time, the windows end up in slightly different places. An architect's **drawing** fixes that: any builder can construct the same house from it, inspectors can compare the house with the drawing, and a change ("add a balcony") is first made on paper and approved.
+Think of a restaurant chain opening its tenth branch. If the head chef cooks the signature biryani from memory, it tastes slightly different in every branch, and nobody can say exactly why. A written **recipe card** fixes that: any trained cook can make the same dish from it, a quality checker can compare a plate with the card, and a change ("less salt, add saffron") is first made on the card and approved by the head chef before any kitchen uses it.
 
-Infrastructure as Code is the architect's drawing for your cloud resources.
+Infrastructure as Code is the recipe card for your cloud resources.
 
 - You write a file that says *what should exist*: "a PostgreSQL 17 server, General Purpose, 4 vCores, 14 days of backups, in Central India".
 - A tool reads the file, compares it with what exists, and makes only the changes needed. Run it twice and nothing happens the second time (it is **idempotent**).
 - Before changing anything, the tool shows a **plan**: "will change backup days from 7 to 14, will create one storage account". You review the plan like a code review.
 - The files live in Git, so every change has an author, a review and a history.
 
-**Bicep** is Microsoft's IaC language for Azure. **Terraform** (and its open-source fork OpenTofu) is a multi-cloud IaC tool that also manages things like DNS providers, GitHub settings and even local Docker containers.
+**Bicep** is Microsoft's IaC language for Azure. **Terraform** is a multi-cloud IaC tool that also manages things like DNS providers, GitHub settings and even local Docker containers. In 2023 HashiCorp moved Terraform from an open-source licence to the Business Source License (BSL); **OpenTofu**, a Linux Foundation project, is the open-source fork. OpenTofu reads the same HCL, providers and state format, so everything in this lesson applies to both (run `tofu plan` instead of `terraform plan`). The two have started to add different features, so check compatibility before switching an existing codebase.
 
 ## First-principles explanation
 
@@ -69,7 +69,7 @@ Infrastructure as Code is the architect's drawing for your cloud resources.
 
 **Declarative** means you describe the end state, not the steps. The tool works out the steps: create what's missing, update what differs, and (if configured) delete what's no longer declared. That is the same idea as desired-state controllers in Kubernetes.
 
-The practical benefits for JalMitra:
+The practical benefits for CityCare:
 
 - **Parity**: staging and production come from the same code with different parameters, so differences are deliberate and visible in one parameter file.
 - **Review**: a firewall rule for a home IP shows up in a pull request, where someone asks "why?".
@@ -106,8 +106,8 @@ Terraform's **state** maps each resource in your code (`azurerm_postgresql_flexi
 
 Rules for state:
 
-- **Store it remotely** with **locking**: an Azure Storage blob (the `azurerm` backend locks with a blob lease), Terraform Cloud, or another supported backend. Local state on a laptop means a second person runs an apply against stale state.
-- **One state per environment and component**: `jalmitra/prod/platform.tfstate`, `jalmitra/staging/platform.tfstate`. A smaller state means a smaller blast radius and faster plans.
+- **Store it remotely** with **locking**: an Azure Storage blob (the `azurerm` backend locks with a blob lease), HCP Terraform (formerly Terraform Cloud), or another supported backend. Local state on a laptop means a second person runs an apply against stale state.
+- **One state per environment and component**: `citycare/prod/platform.tfstate`, `citycare/staging/platform.tfstate`. A smaller state means a smaller blast radius and faster plans.
 - **State contains secrets**: generated passwords, connection strings and keys appear in plain text. Restrict access to the storage account, enable versioning and soft delete, and avoid putting secrets into state where possible (use Entra ID authentication instead of passwords, Key Vault references, managed identities).
 - **Never edit state by hand.** Use `terraform state mv`, `moved` blocks, `import` or `terraform state rm` for the rare repairs.
 
@@ -134,7 +134,7 @@ The plan is the most valuable output of IaC. A sample Terraform plan line:
 - Azure itself: platform-managed updates, autoscale changing instance counts, Azure Policy remediation adding tags.
 - Partially failed deployments.
 
-Detect it on a schedule: run `terraform plan -detailed-exitcode` or `az deployment group what-if` nightly against every environment, and alert when there is a difference. Then decide per change:
+Detect it on a schedule: run `terraform plan -detailed-exitcode` or `az deployment group what-if` nightly against every environment, and alert when there is a difference. `terraform plan -refresh-only` shows *only* what changed outside Terraform, without mixing in pending code changes, which makes a drift report easier to read. Bicep what-if output can include "noise" (properties Azure fills in or normalises); learn which lines are noise for your resources before you alert on every difference. Then decide per change:
 
 - **Revert**: the change was wrong or temporary (the home IP). Re-apply the code.
 - **Codify**: the change was right (an incident fix that increased connections). Put it into the code, review it, apply.
@@ -180,7 +180,7 @@ infra/
     main.tf
 ```
 
-What legitimately differs between JalMitra's environments:
+What legitimately differs between CityCare's environments:
 
 | Parameter | dev | staging | prod |
 |---|---|---|---|
@@ -209,6 +209,7 @@ The pipeline authenticates with OIDC federation to an identity that has rights o
 
 - Don't pass secrets as parameters if you can avoid them. Prefer **managed identities** and **Entra ID authentication** for PostgreSQL, Storage and Key Vault, so no password exists.
 - When a secret is unavoidable, create it directly in Key Vault (outside the template) and reference it, or mark Bicep parameters `@secure()` so they are not logged, and Terraform variables `sensitive = true` (which hides them in output but **not** in state).
+- Recent Terraform versions add **ephemeral** values (1.10 and later) and **write-only arguments** (1.11 and later): a secret passed to a write-only argument is sent to the provider but never stored in the plan or state. Use them where your provider version supports them for that resource; otherwise assume anything you pass ends up in state.
 - Output non-secret wiring only: URIs, host names, client IDs.
 
 ### The application's side: an infrastructure contract
@@ -225,7 +226,7 @@ You can learn the full Terraform workflow without an Azure subscription:
 
 ### Cost of IaC itself
 
-IaC tools are free (Bicep, Terraform CLI, OpenTofu). The real cost is time: writing modules and keeping them current. A rough estimate for a platform like JalMitra: one to two weeks to codify the existing environments (including imports), then minutes per change instead of hours. It pays back the first time you build a new environment or recover from a mistake.
+IaC tools are free (Bicep, Terraform CLI, OpenTofu). The real cost is time: writing modules and keeping them current. A rough estimate for a platform like CityCare: one to two weeks to codify the existing environments (including imports), then minutes per change instead of hours. It pays back the first time you build a new environment or recover from a mistake.
 
 ### When a simpler approach is enough
 
@@ -266,7 +267,7 @@ sequenceDiagram
     P->>TF: terraform plan -out tfplan
     TF->>S: acquire lease lock
     S-->>TF: lock granted
-    TF->>S: read state jalmitra prod
+    TF->>S: read state citycare prod
     TF->>AZ: refresh live attributes
     AZ-->>TF: backup days 7, firewall rule home-ip present
     TF->>TF: diff code vs state vs live
@@ -322,7 +323,7 @@ targetScope = 'resourceGroup'
 @allowed(['dev', 'staging', 'prod'])
 param environment string
 param location string = resourceGroup().location
-param workload string = 'jalmitra'
+param workload string = 'citycare'
 param postgresSkuName string
 @allowed(['Burstable', 'GeneralPurpose', 'MemoryOptimized'])
 param postgresSkuTier string
@@ -390,7 +391,7 @@ module api 'modules/container-app.bicep' = {
       { name: 'Infrastructure__KeyVaultUri', value: kv.outputs.uri }
       { name: 'Infrastructure__BlobEndpoint', value: storage.outputs.blobEndpoint }
       { name: 'Infrastructure__PostgresHost', value: pg.outputs.fqdn }
-      { name: 'Infrastructure__PostgresDatabase', value: 'jalmitra' }
+      { name: 'Infrastructure__PostgresDatabase', value: 'citycare' }
       { name: 'Infrastructure__ManagedIdentityClientId', value: identity.outputs.clientId }
     ]
   }
@@ -430,7 +431,7 @@ resource server 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
 
 resource db 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-01' = {
   parent: server
-  name: 'jalmitra'
+  name: 'citycare'
 }
 
 output fqdn string = server.properties.fullyQualifiedDomainName
@@ -448,20 +449,20 @@ param backupRetentionDays = 14
 param geoRedundantBackup = true
 param minReplicas = 2
 param maxReplicas = 10
-param apiImage = 'acrjalmitra.azurecr.io/jalmitra/api@sha256:9f2c...'   // set by the pipeline
+param apiImage = 'acrcitycare.azurecr.io/citycare/api@sha256:9f2c...'   // set by the pipeline
 param tags = {
-  workload: 'jalmitra'
+  workload: 'citycare'
   environment: 'prod'
-  costCentre: 'MUNI-WATER-07'
-  owner: 'water-it@example.gov.in'
+  costCentre: 'CLINIC-IT-07'
+  owner: 'platform-team@citycare.example'
   managedBy: 'bicep'
 }
 ```
 
 ```text
 # Preview and deploy (pipeline, with OIDC login)
-az deployment group what-if --resource-group rg-jalmitra-prd-cin-001 --template-file infra/bicep/main.bicep --parameters infra/bicep/env/prod.bicepparam
-az deployment group create  --resource-group rg-jalmitra-prd-cin-001 --template-file infra/bicep/main.bicep --parameters infra/bicep/env/prod.bicepparam
+az deployment group what-if --resource-group rg-citycare-prd-cin-001 --template-file infra/bicep/main.bicep --parameters infra/bicep/env/prod.bicepparam
+az deployment group create  --resource-group rg-citycare-prd-cin-001 --template-file infra/bicep/main.bicep --parameters infra/bicep/env/prod.bicepparam
 ```
 
 Resource API versions in these files are examples; use the current stable versions from the Azure resource reference when you write your own.
@@ -479,7 +480,7 @@ terraform {
     resource_group_name  = "rg-tfstate-prd-cin-001"
     storage_account_name = "sttfstateprdcin001"
     container_name       = "tfstate"
-    key                  = "jalmitra/prod/platform.tfstate"
+    key                  = "citycare/prod/platform.tfstate"
     use_azuread_auth     = true          # pipeline identity, no storage key
   }
 }
@@ -541,8 +542,8 @@ output "fqdn" { value = azurerm_postgresql_flexible_server.main.fqdn }
 # infra/terraform/envs/prod/main.tf
 module "postgres" {
   source                = "../../modules/postgres"
-  name                  = "psql-jalmitra-prd-cin-001"
-  resource_group_name   = "rg-jalmitra-prd-cin-001"
+  name                  = "psql-citycare-prd-cin-001"
+  resource_group_name   = "rg-citycare-prd-cin-001"
   location              = "centralindia"
   sku_name              = "GP_Standard_D4ds_v5"
   zone_redundant        = true
@@ -555,7 +556,7 @@ module "postgres" {
 # Bring the click-created server under management without recreating it.
 import {
   to = module.postgres.azurerm_postgresql_flexible_server.main
-  id = "/subscriptions/<sub-id>/resourceGroups/rg-jalmitra-prd-cin-001/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-jalmitra-prd-cin-001"
+  id = "/subscriptions/<sub-id>/resourceGroups/rg-citycare-prd-cin-001/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-citycare-prd-cin-001"
 }
 ```
 
@@ -584,9 +585,9 @@ variable "pg_password" {
 }
 variable "pg_port" { default = 5433 }
 
-resource "docker_network" "lab" { name = "jalmitra-${var.environment}" }
+resource "docker_network" "lab" { name = "citycare-${var.environment}" }
 
-resource "docker_volume" "pgdata" { name = "jalmitra-pgdata-${var.environment}" }
+resource "docker_volume" "pgdata" { name = "citycare-pgdata-${var.environment}" }
 
 resource "docker_image" "postgres" {
   name         = "postgres:17.6"
@@ -594,9 +595,9 @@ resource "docker_image" "postgres" {
 }
 
 resource "docker_container" "postgres" {
-  name  = "jalmitra-postgres-${var.environment}"
+  name  = "citycare-postgres-${var.environment}"
   image = docker_image.postgres.image_id
-  env   = ["POSTGRES_DB=jalmitra", "POSTGRES_USER=jal", "POSTGRES_PASSWORD=${var.pg_password}"]
+  env   = ["POSTGRES_DB=citycare", "POSTGRES_USER=citycare", "POSTGRES_PASSWORD=${var.pg_password}"]
   networks_advanced { name = docker_network.lab.name }
   volumes {
     volume_name    = docker_volume.pgdata.name
@@ -610,29 +611,32 @@ resource "docker_container" "postgres" {
 }
 
 resource "docker_container" "api" {
-  name  = "jalmitra-api-${var.environment}"
-  image = "jalmitra-api:dev"
+  name  = "citycare-api-${var.environment}"
+  image = "citycare-api:dev"
   env = [
     "Infrastructure__Environment=${var.environment}",
-    "Infrastructure__ResourceSuffix=jalmitra-${var.environment}-local-001",
-    "Infrastructure__KeyVaultUri=https://kv-jalmitra-${var.environment}-local.example/",
+    "Infrastructure__ResourceSuffix=citycare-${var.environment}-local-001",
+    "Infrastructure__KeyVaultUri=https://kv-citycare-${var.environment}-local.example/",
     "Infrastructure__BlobEndpoint=http://azurite-${var.environment}:10000/devstoreaccount1",
     "Infrastructure__PostgresHost=${docker_container.postgres.name}",
-    "Infrastructure__PostgresDatabase=jalmitra",
+    "Infrastructure__PostgresDatabase=citycare",
   ]
   networks_advanced { name = docker_network.lab.name }
-  ports { internal = 8080, external = 8080 }
+  ports {
+    internal = 8080
+    external = 8080
+  }
 }
 ```
 
-Try: `terraform apply -var pg_password=local-only`, then `docker rm -f jalmitra-postgres-dev`, then `terraform plan`: Terraform reports that the container must be created again. That is drift detection on your laptop. Change `pg_port` and plan again: changing a container's port forces replacement, which you can see in the plan.
+Try: `terraform apply -var pg_password=local-only`, then `docker rm -f citycare-postgres-dev`, then `terraform plan`: Terraform reports that the container must be created again. That is drift detection on your laptop. Change `pg_port` and plan again: changing a container's port forces replacement, which you can see in the plan.
 
 ### Application side: validate the infrastructure contract
 
 ```csharp file=Infrastructure/InfrastructureContract.cs
 using System.ComponentModel.DataAnnotations;
 
-namespace JalMitra.Infrastructure;
+namespace CityCare.Infrastructure;
 
 /// <summary>Values the IaC deployment hands to the app (module outputs to environment variables).
 /// None of them are secrets: the app authenticates with its managed identity.</summary>
@@ -641,7 +645,7 @@ public sealed class InfrastructureContract
     [Required, RegularExpression("^(dev|staging|prod)$")]
     public string Environment { get; set; } = "";
 
-    /// <summary>For example "jalmitra-prd-cin-001": the naming suffix shared by every resource.</summary>
+    /// <summary>For example "citycare-prd-cin-001": the naming suffix shared by every resource.</summary>
     [Required, MinLength(5)]
     public string ResourceSuffix { get; set; } = "";
 
@@ -672,7 +676,7 @@ public sealed class InfrastructureContract
 ```csharp file=Infrastructure/EnvironmentGuard.cs
 using Microsoft.Extensions.Options;
 
-namespace JalMitra.Infrastructure;
+namespace CityCare.Infrastructure;
 
 /// <summary>Refuses to start if the wiring points at another environment's resources, for example a
 /// staging app configured with the production database host. Relies on the naming convention
@@ -711,7 +715,7 @@ public sealed class EnvironmentGuard : IValidateOptions<InfrastructureContract>
 ```
 
 ```csharp file=Program.cs
-using JalMitra.Infrastructure;
+using CityCare.Infrastructure;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -744,8 +748,8 @@ app.MapGet("/infra", (IOptions<InfrastructureContract> infra) =>
     });
 });
 
-app.MapGet("/api/meters/{meterId}/latest", (string meterId) =>
-    Results.Ok(new { meterId, litres = 412.6, readAtIst = "2026-10-20T09:45:00+05:30" }));
+app.MapGet("/api/appointments/{appointmentId}", (string appointmentId) =>
+    Results.Ok(new { appointmentId, clinic = "Indiranagar, Bengaluru", doctor = "Dr. A. Rao", slotIst = "2026-10-20T09:45:00+05:30", status = "Confirmed" }));
 
 app.Run();
 ```
@@ -785,7 +789,7 @@ Bicep: Azure-only, no state file to manage, day-zero support for new Azure featu
 
 ## Practical playground
 
-The canvas shows JalMitra's current state: three environments created by hand, with nothing connecting them to Git. Redesign the delivery of infrastructure.
+The canvas shows CityCare's current state: three environments created by hand, with nothing connecting them to Git. Redesign the delivery of infrastructure.
 
 1. Add a Git repository, a pipeline worker and a remote state store. Which arrows are reads and which are writes?
 2. Show where plans are reviewed and where production approval happens.
@@ -819,19 +823,24 @@ A pull request contains this file and the plan output below. Write a review: wha
 
 ```hcl
 terraform {
-  required_providers { azurerm = { source = "hashicorp/azurerm" } }
+  required_providers {
+    azurerm = { source = "hashicorp/azurerm" }
+  }
 }
-provider "azurerm" { features {} }
 
-variable "admin_password" { default = "Jal@Mitra2026" }
+provider "azurerm" {
+  features {}
+}
+
+variable "admin_password" { default = "City@Care2026" }
 
 resource "azurerm_postgresql_flexible_server" "main" {
-  name                   = "psql-jalmitra-prd-cin-001"
-  resource_group_name    = "rg-jalmitra-prd-cin-001"
+  name                   = "psql-citycare-prd-cin-001"
+  resource_group_name    = "rg-citycare-prd-cin-001"
   location               = "southindia"
   version                = "17"
   sku_name               = "GP_Standard_D4ds_v5"
-  administrator_login    = "jaladmin"
+  administrator_login    = "ccadmin"
   administrator_password = var.admin_password
   backup_retention_days  = 14
 }
@@ -853,13 +862,13 @@ Plan: 1 to add, 0 to change, 1 to destroy.
 ::hint
 Read the plan's summary line first. What does "1 to destroy" mean for a database?
 ::hint
-Where does `default = "Jal@Mitra2026"` end up? Think of Git history and the state file.
+Where does `default = "City@Care2026"` end up? Think of Git history and the state file.
 ::hint
 What happens when `terraform init` runs without a `backend` block?
 ::solution
 **Verdict: request changes. Do not approve.**
 
-1. **The plan replaces the production database.** `location` forces replacement, so Terraform will destroy `psql-jalmitra-prd-cin-001` in Central India and create an empty one in South India. All meter readings and bills would be lost (backups are tied to the deleted server's lifecycle and retention rules; don't rely on them for this). Moving regions is a migration project: create a new server in South India (or geo-restore from a geo-redundant backup), replicate or copy data, cut the app over, then retire the old one, each step planned and reviewed.
+1. **The plan replaces the production database.** `location` forces replacement, so Terraform will destroy `psql-citycare-prd-cin-001` in Central India and create an empty one in South India. Every appointment, patient record and lab-report index would be lost (backups are tied to the deleted server's lifecycle and retention rules; don't rely on them for this). Moving regions is a migration project: create a new server in South India (or geo-restore from a geo-redundant backup), replicate or copy data, cut the app over, then retire the old one, each step planned and reviewed.
 2. **Hard-coded password.** The default value lives in Git history forever and in the state file in plain text. Use Entra ID authentication with `password_auth_enabled = false`, or if a password is unavoidable, generate it outside Terraform into Key Vault and reference it, and mark the variable `sensitive = true` (knowing it still lands in state).
 3. **No backend.** Without a `backend` block, state is a local file on whoever runs it. Add the `azurerm` backend with Entra authentication, locking, versioning and restricted access.
 4. **Unpinned provider.** Pin with `version = "~> 4.0"` and commit the lock file (`.terraform.lock.hcl`), so upgrades are deliberate.
@@ -880,8 +889,8 @@ Write a naming function based on a Cloud Adoption Framework-style pattern: `{abb
 - Storage accounts have **no hyphens**: `st{workload}{env}{region}{instance}`.
 - Maximum lengths: ResourceGroup 90, ContainerApp 32, PostgresServer 63, KeyVault 24, StorageAccount 24, LogAnalytics 63. If too long, **shorten the workload** so the name fits exactly.
 ::acceptance
-- `ContainerApp, "JalMitra", "prod", "centralindia", 1` gives `ca-jalmitra-prd-cin-001`.
-- `StorageAccount` gives `stjalmitraprdcin001`.
+- `ContainerApp, "CityCare", "prod", "centralindia", 1` gives `ca-citycare-prd-cin-001`.
+- `StorageAccount` gives `stcitycareprdcin001`.
 - Long workloads are shortened to fit (Key Vault 24, Container App 32).
 - Invalid environment, region, workload or instance throw.
 ::hint
@@ -912,40 +921,40 @@ public class ResourceNamerTests
     [Fact]
     public void Standard_names()
     {
-        Assert.Equal("ca-jalmitra-prd-cin-001", ResourceNamer.Name(ResourceKind.ContainerApp, "JalMitra", "prod", "centralindia", 1));
-        Assert.Equal("rg-jalmitra-stg-sin-002", ResourceNamer.Name(ResourceKind.ResourceGroup, "jal-mitra", "staging", "southindia", 2));
-        Assert.Equal("psql-jalmitra-dev-win-010", ResourceNamer.Name(ResourceKind.PostgresServer, "jalmitra", "dev", "westindia", 10));
+        Assert.Equal("ca-citycare-prd-cin-001", ResourceNamer.Name(ResourceKind.ContainerApp, "CityCare", "prod", "centralindia", 1));
+        Assert.Equal("rg-citycare-stg-sin-002", ResourceNamer.Name(ResourceKind.ResourceGroup, "city-care", "staging", "southindia", 2));
+        Assert.Equal("psql-citycare-dev-win-010", ResourceNamer.Name(ResourceKind.PostgresServer, "citycare", "dev", "westindia", 10));
     }
 
     [Fact]
     public void Storage_has_no_hyphens() =>
-        Assert.Equal("stjalmitraprdcin001", ResourceNamer.Name(ResourceKind.StorageAccount, "Jal_Mitra!", "prod", "centralindia", 1));
+        Assert.Equal("stcitycareprdcin001", ResourceNamer.Name(ResourceKind.StorageAccount, "City_Care!", "prod", "centralindia", 1));
 
     [Fact]
     public void Long_workloads_are_shortened_to_fit()
     {
-        var kv = ResourceNamer.Name(ResourceKind.KeyVault, "smartwatermetering", "prod", "centralindia", 1);
-        Assert.Equal("kv-smartwate-prd-cin-001", kv);
+        var kv = ResourceNamer.Name(ResourceKind.KeyVault, "clinicappointments", "prod", "centralindia", 1);
+        Assert.Equal("kv-clinicapp-prd-cin-001", kv);
         Assert.Equal(24, kv.Length);
 
-        var ca = ResourceNamer.Name(ResourceKind.ContainerApp, "smartwatermetering", "prod", "centralindia", 1);
-        Assert.Equal("ca-smartwatermeterin-prd-cin-001", ca);
+        var ca = ResourceNamer.Name(ResourceKind.ContainerApp, "clinicappointments", "prod", "centralindia", 1);
+        Assert.Equal("ca-clinicappointment-prd-cin-001", ca);
         Assert.Equal(32, ca.Length);
 
-        var st = ResourceNamer.Name(ResourceKind.StorageAccount, "smartwatermeteringplatform", "staging", "southindia", 3);
+        var st = ResourceNamer.Name(ResourceKind.StorageAccount, "clinicappointmentsplatform", "staging", "southindia", 3);
         Assert.Equal(24, st.Length);
-        Assert.StartsWith("stsmartwatermet", st);
+        Assert.StartsWith("stclinicappoint", st);
         Assert.EndsWith("stgsin003", st);
     }
 
     [Fact]
     public void Invalid_inputs_throw()
     {
-        Assert.Throws<ArgumentException>(() => ResourceNamer.Name(ResourceKind.KeyVault, "jalmitra", "qa", "centralindia", 1));
-        Assert.Throws<ArgumentException>(() => ResourceNamer.Name(ResourceKind.KeyVault, "jalmitra", "prod", "eastus", 1));
+        Assert.Throws<ArgumentException>(() => ResourceNamer.Name(ResourceKind.KeyVault, "citycare", "qa", "centralindia", 1));
+        Assert.Throws<ArgumentException>(() => ResourceNamer.Name(ResourceKind.KeyVault, "citycare", "prod", "eastus", 1));
         Assert.Throws<ArgumentException>(() => ResourceNamer.Name(ResourceKind.KeyVault, "---", "prod", "centralindia", 1));
-        Assert.Throws<ArgumentOutOfRangeException>(() => ResourceNamer.Name(ResourceKind.KeyVault, "jalmitra", "prod", "centralindia", 1000));
-        Assert.Throws<ArgumentOutOfRangeException>(() => ResourceNamer.Name(ResourceKind.KeyVault, "jalmitra", "prod", "centralindia", 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ResourceNamer.Name(ResourceKind.KeyVault, "citycare", "prod", "centralindia", 1000));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ResourceNamer.Name(ResourceKind.KeyVault, "citycare", "prod", "centralindia", 0));
     }
 }
 ```
@@ -1073,10 +1082,10 @@ public class PlanCalculatorTests
 
     private static ResourceState Pg(string location = "centralindia", string backup = "14") =>
         new("azurerm_postgresql_flexible_server.main", "azurerm_postgresql_flexible_server",
-            new Dictionary<string, string> { ["name"] = "psql-jalmitra-prd-cin-001", ["location"] = location, ["backup_retention_days"] = backup });
+            new Dictionary<string, string> { ["name"] = "psql-citycare-prd-cin-001", ["location"] = location, ["backup_retention_days"] = backup });
 
     private static ResourceState Kv() =>
-        new("azurerm_key_vault.main", "azurerm_key_vault", new Dictionary<string, string> { ["name"] = "kv-jalmitra-prd-cin-001", ["location"] = "centralindia" });
+        new("azurerm_key_vault.main", "azurerm_key_vault", new Dictionary<string, string> { ["name"] = "kv-citycare-prd-cin-001", ["location"] = "centralindia" });
 
     private static ResourceState Rule(string ip) =>
         new("azurerm_postgresql_flexible_server_firewall_rule.home", "azurerm_postgresql_flexible_server_firewall_rule", new Dictionary<string, string> { ["start_ip"] = ip });
@@ -1536,7 +1545,7 @@ How to act on each status: **PendingChange** is normal; the next apply handles i
 :::
 
 :::exercise id=m15-iac-ex6 difficulty=intermediate kind=hld title="IaC delivery for three environments and a DR region"
-Design how JalMitra's infrastructure code is stored, reviewed and applied for dev, staging and production, plus a disaster-recovery copy of production in South India that must be creatable within 4 hours. Include: repository layout, state or deployment strategy, identities and permissions, the pipeline stages, drift detection, and how the DR environment differs from production.
+Design how CityCare's infrastructure code is stored, reviewed and applied for dev, staging and production, plus a disaster-recovery copy of production in South India that must be creatable within 4 hours. Include: repository layout, state or deployment strategy, identities and permissions, the pipeline stages, drift detection, and how the DR environment differs from production.
 ::acceptance
 - One codebase with per-environment parameters; DR is another parameter set, not a copy of the code.
 - Separate state (or deployment scope) and pipeline identity per environment, with least privilege.
@@ -1601,7 +1610,7 @@ Each environment's pipeline identity should be unable to touch other environment
 
 **Repository.** One `main.bicep` composing versioned modules, and four parameter files: `dev`, `staging`, `prod`, `dr`. `dr.bicepparam` is production's file with `location = 'southindia'`, the DR resource group, and `restoreFromGeoBackup = true` for the database module. No copied code.
 
-**Deployment and state.** Bicep with one resource group per environment (`rg-jalmitra-prd-cin-001`, `rg-jalmitra-prd-sin-001` for DR). Production in a deployment stack with deny settings, so portal writes are blocked. (With Terraform: one state file per environment in a locked, versioned storage container that only the pipeline identities can read.)
+**Deployment and state.** Bicep with one resource group per environment (`rg-citycare-prd-cin-001`, `rg-citycare-prd-sin-001` for DR). Production in a deployment stack with deny settings, so portal writes are blocked. (With Terraform: one state file per environment in a locked, versioned storage container that only the pipeline identities can read.)
 
 **Identities.** OIDC federated identities per environment. The dev/staging identity has Contributor only on dev and staging resource groups. The production identity has rights on the production and DR resource groups and can only be used by jobs in the approval-gated `production` environment. Humans have Reader on production, plus a break-glass group with time-limited elevation (for example Privileged Identity Management), whose every use triggers a ticket to codify or revert.
 
@@ -1609,7 +1618,7 @@ Each environment's pipeline identity should be unable to touch other environment
 
 **Drift.** Nightly what-if per environment; any difference raises an alert to the platform channel with the diff. Triage with the three-way logic (exercise 5): pending, drifted, conflict.
 
-**DR.** The infrastructure itself deploys in roughly 20–40 minutes (estimate, measure with a drill). The slow part is data: PostgreSQL geo-restore from geo-redundant backups takes time proportional to database size (estimate an hour or more for a large database; drill it), and the restore point may be some time behind the primary (RPO in the order of an hour for geo-redundant backup; check current documentation). Container images are geo-replicated so the DR app can pull them even if Central India is down. DNS switches to the DR endpoint at the end. Total: well within 4 hours if drilled twice a year. A cold DR environment costs almost nothing until used; if the corporation later needs an RTO of minutes, switch to a warm standby with a cross-region read replica, at the cost of running it permanently.
+**DR.** The infrastructure itself deploys in roughly 20–40 minutes (estimate, measure with a drill). The slow part is data: PostgreSQL geo-restore from geo-redundant backups takes time proportional to database size (estimate an hour or more for a large database; drill it), and the restore point may be some time behind the primary (RPO in the order of an hour for geo-redundant backup; check current documentation). Container images are geo-replicated so the DR app can pull them even if Central India is down. DNS switches to the DR endpoint at the end. Total: well within 4 hours if drilled twice a year. A cold DR environment costs almost nothing until used; if the clinic chain later needs an RTO of minutes, switch to a warm standby with a cross-region read replica, at the cost of running it permanently.
 ::mistakes
 - Creating DR by copying the production folder, which drifts from production within weeks.
 - One pipeline identity with Owner on the whole subscription.
@@ -1624,7 +1633,7 @@ Each environment's pipeline identity should be unable to touch other environment
 
 **3. Plan assertions.** Save the plan as JSON (`terraform show -json tfplan`) or what-if output, and assert in the pipeline: no deletes of resources tagged `stateful=true`, no public network access in production, every resource has the required tags. A small C# or script step that reads the JSON is enough.
 
-**4. Ephemeral environments.** For module changes, deploy the module into a short-lived resource group (`rg-jalmitra-pr-1234`), run smoke tests, and delete the group. Locally, the Docker-provider lab gives the same loop for free.
+**4. Ephemeral environments.** For module changes, deploy the module into a short-lived resource group (`rg-citycare-pr-1234`), run smoke tests, and delete the group. Locally, the Docker-provider lab gives the same loop for free.
 
 **5. App contract tests.** Start the API with `WebApplicationFactory` and configuration that points a `staging` app at a `prd` host; assert that start-up fails with the guard's message. Start it with consistent values and assert `/infra` returns them.
 
@@ -1743,7 +1752,7 @@ The nightly drift job finds a property where the code and the recorded state agr
 - [ ] A conflict
 > Code equals state, live differs: someone or something changed the resource directly.
 ::q single
-A staging container app starts with `Infrastructure__PostgresHost=psql-jalmitra-prd-cin-001...`. With the lesson's EnvironmentGuard, what happens?
+A staging container app starts with `Infrastructure__PostgresHost=psql-citycare-prd-cin-001...`. With the lesson's EnvironmentGuard, what happens?
 - [ ] The app starts and connects to production.
 - [x] Options validation fails at start-up, so the new revision never becomes ready and receives no traffic.
 - [ ] The app rewrites the host to the staging server.

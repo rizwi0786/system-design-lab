@@ -7,7 +7,7 @@ status: reviewed
 template: hld-case
 minutes: 120
 prerequisites: [m11-capacity-estimation, m12-redis, m13-sharding, m13-distributed-locks, m07-lifecycle-state]
-related: [m17-food-delivery, m17-payment-system, m17-chat, m06-state, m12-kafka, m16-multi-region]
+related: [m17-proximity-service, m17-food-delivery, m17-payment-system, m17-chat, m06-state, m12-kafka, m16-multi-region]
 tags: [hld, case-study, geospatial, geohash, h3, quadtree, matching, surge, state-machine]
 patterns: [State]
 summary: Design an Uber-style ride-hailing backend — high-rate driver location updates, geospatial indexing with geohash, H3 or quadtrees, driver matching with exclusive offers, surge pricing and a guarded trip state machine — with capacity maths, a PostgreSQL data model and C# for geohash encoding and the trip lifecycle.
@@ -312,6 +312,8 @@ Strengths: a plain string, works as a key in any database, prefix queries are ch
 
 **PostGIS** (a PostgreSQL extension with GiST indexes) is the durable choice for zones, geofences and analytics. It is usually not the store for 375,000 position updates per second.
 
+The [proximity service case study](#/lesson/m17-proximity-service) compares these indexes in more depth for mostly static places (restaurants, clinics); here the twist is that every indexed point moves every few seconds, so update cost matters as much as query cost.
+
 Here is geohash in C#. It is the core of the index below.
 
 ```csharp file=Geo/GeoHash.cs
@@ -474,11 +476,13 @@ public sealed class DriverLocationIndex(TimeProvider clock)
         var freshAfter = clock.GetUtcNow() - MaxAge;
 
         var results = new List<NearbyDriver>();
+        var seen = new HashSet<long>();   // a driver moving between cells mid-search can be read in both
         foreach (var cell in GeoHash.CellsAround(centre, rings))
         {
             if (!_cells.TryGetValue(cell, out var members)) continue;
             foreach (var driverId in members.Keys)
             {
+                if (!seen.Add(driverId)) continue;
                 if (!_drivers.TryGetValue(driverId, out var p) || p.Vehicle != vehicle || p.At < freshAfter) continue;
                 var d = Distance.Meters(lat, lng, p.Lat, p.Lng);
                 if (d <= radiusMeters) results.Add(new NearbyDriver(p, d));
@@ -489,18 +493,18 @@ public sealed class DriverLocationIndex(TimeProvider clock)
 }
 ```
 
-Writes go through one gate per shard, while searches read the concurrent maps without blocking. That is the **single writer per city shard** model: one thread (or actor) owns each shard's mutations, fed by a queue. It removes lock contention between writers, and 375,000 updates/s split over 100+ city shards is a few thousand per shard, well within one core's budget for O(1) in-memory updates. A search can briefly see a driver in neither or both cells during a move; the exact-distance and freshness filters make that harmless.
+Writes go through one gate per shard, while searches read the concurrent maps without blocking. That is the **single writer per city shard** model: one thread (or actor) owns each shard's mutations, fed by a queue. It removes lock contention between writers. 375,000 updates/s over 100 cities averages 3,750 per shard, but traffic is skewed: a large metro may hold 10–15 % of all online drivers, roughly 40,000–55,000 updates/s, which is why big metros are split into zone shards so each stays comfortably within one core's budget for O(1) in-memory updates. A search can briefly miss a driver who is between cells, or read the same driver from both cells; the `seen` set removes duplicates, and missing one driver for a few microseconds is harmless.
 
 **Stale drivers** are filtered at query time (`MaxAge` of 30 s): a phone that lost signal in a tunnel should not receive offers. A sweeper removes drivers who haven't reported for a few minutes.
 
-**Batching and dead-reckoning.** Drivers on a highway at constant speed don't need to send every 4 s; the app can send less often when movement is predictable, and the server can extrapolate. That trades a little accuracy for a large cut in update rate.
+**Batching and dead-reckoning.** Drivers cruising on an expressway at constant speed don't need to send every 4 s; the app can send less often when movement is predictable, and the server can extrapolate. That trades a little accuracy for a large cut in update rate.
 
 ### 3. Matching: candidates, ranking, exclusive offers
 
 Matching has three steps.
 
 1. **Candidate generation.** Search the index around the pickup at 1 km; if fewer than, say, 5 candidates, expand to 2 km, then 4 km. Filter by vehicle type, status `AVAILABLE`, and business rules (driver's destination filter, accessibility needs).
-2. **Ranking by ETA.** Straight-line distance is a poor proxy: a driver 400 m away on the other side of a highway may need 12 minutes. Ask the routing service for ETAs of the top 10 by distance and rank by ETA, with small adjustments (acceptance rate, rating, fairness to drivers who've waited longer).
+2. **Ranking by ETA.** Straight-line distance is a poor proxy: a driver 400 m away on the other side of a divided main road, with the next U-turn 2 km away, may need 12 minutes. Ask the routing service for ETAs of the top 10 by distance and rank by ETA, with small adjustments (acceptance rate, rating, fairness to drivers who've waited longer).
 3. **Exclusive offer.** Atomically move the chosen driver from `AVAILABLE` to `OFFERED(tripId)`. Only the winner of that compare-and-set sends the offer. On accept, the trip service records the assignment (the partial unique index backs this up). On decline or a 15-second timeout, release the driver and try the next candidate, up to a limit, then mark the trip `NO_DRIVERS_FOUND`.
 
 **Greedy versus batched matching.** Matching each request instantly to its best driver is simple but globally wasteful: two riders 200 m apart might both be best served by driver A, and the second gets a far driver. Batched matching collects requests for a short window (1–2 s) per zone and solves an assignment problem minimising total ETA. It costs a second or two of latency and is worth it in dense areas.
@@ -523,8 +527,14 @@ public sealed class DriverStatusBoard
     private readonly ConcurrentDictionary<long, DriverAvailability> _drivers = new();
     private static readonly DriverAvailability Free = new(DriverStatus.Available, null);
 
-    public void SetAvailable(long driverId) => _drivers[driverId] = Free;
-    public void SetOffline(long driverId) => _drivers[driverId] = new(DriverStatus.Offline, null);
+    /// <summary>Driver comes online. Only moves Offline → Available, so a stray "online" ping can never
+    /// overwrite an open offer or an active trip (an unconditional write here would be a lost update).</summary>
+    public void GoOnline(long driverId) =>
+        _drivers.AddOrUpdate(driverId, Free, (_, current) => current.Status == DriverStatus.Offline ? Free : current);
+
+    /// <summary>Driver goes offline, but only when idle: a driver with an offer or trip must finish or cancel first.</summary>
+    public bool GoOffline(long driverId) =>
+        _drivers.TryUpdate(driverId, new DriverAvailability(DriverStatus.Offline, null), Free);
 
     public DriverAvailability Get(long driverId) =>
         _drivers.TryGetValue(driverId, out var a) ? a : new(DriverStatus.Offline, null);
@@ -538,10 +548,14 @@ public sealed class DriverStatusBoard
     public bool ConfirmOnTrip(long driverId, Guid tripId) =>
         _drivers.TryUpdate(driverId, new DriverAvailability(DriverStatus.OnTrip, tripId),
             new DriverAvailability(DriverStatus.Offered, tripId));
+
+    /// <summary>Trip ended, was cancelled or was handed back for re-matching: OnTrip(tripId) → Available.</summary>
+    public bool EndTrip(long driverId, Guid tripId) =>
+        _drivers.TryUpdate(driverId, Free, new DriverAvailability(DriverStatus.OnTrip, tripId));
 }
 ```
 
-`TryUpdate(key, newValue, comparisonValue)` succeeds only if the current value equals `comparisonValue`; records compare by value, so "reserve only if exactly `Available` with no trip" is a single atomic step. `Release` and `ConfirmOnTrip` also check the trip id, so a late timeout for trip A can't free a driver who has since been offered trip B.
+`TryUpdate(key, newValue, comparisonValue)` succeeds only if the current value equals `comparisonValue`; records compare by value, so "reserve only if exactly `Available` with no trip" is a single atomic step. `Release`, `ConfirmOnTrip` and `EndTrip` also check the trip id, so a late timeout for trip A can't free a driver who has since been offered trip B. Coming online and going offline are conditional too: an unconditional "set available" from a delayed app ping would silently wipe out an offer that another matcher just made.
 
 ### 4. The trip state machine
 
@@ -676,6 +690,9 @@ public sealed class Matcher(DriverLocationIndex index, DriverStatusBoard board, 
     /// <summary>Returns the assigned driver id, or null if matching gave up.</summary>
     public async Task<long?> MatchAsync(Trip trip, VehicleType vehicle, CancellationToken ct)
     {
+        // The REQUESTED version this run started from. Re-reading trip.Version just before Apply would defeat
+        // optimistic concurrency: a rider cancel during the 15 s offer must make our Assign fail, not be overwritten.
+        var version = trip.Version;
         var tried = new HashSet<long>();
         foreach (var radius in RadiiMeters)
         {
@@ -691,16 +708,25 @@ public sealed class Matcher(DriverLocationIndex index, DriverStatusBoard board, 
                 if (!board.TryReserve(driverId, trip.Id)) continue;          // someone else got this driver
 
                 var accepted = await offers.OfferAsync(driverId, trip, OfferTimeout, ct);
-                if (accepted && board.ConfirmOnTrip(driverId, trip.Id))
+                if (!accepted || !board.ConfirmOnTrip(driverId, trip.Id))
                 {
-                    trip.Apply(TripAction.Assign, trip.Version, driverId);
-                    return driverId;
+                    board.Release(driverId, trip.Id);
+                    continue;
                 }
-                board.Release(driverId, trip.Id);
+                // The trip record is the referee (in SQL: versioned UPDATE + one-active-trip unique index).
+                if (TryApply(trip, TripAction.Assign, version, driverId)) return driverId;
+                board.EndTrip(driverId, trip.Id);   // rider cancelled during the offer: free the driver again
+                return null;
             }
         }
-        trip.Apply(TripAction.GiveUp, trip.Version);
+        TryApply(trip, TripAction.GiveUp, version);   // fails harmlessly if the rider already cancelled
         return null;
+    }
+
+    private static bool TryApply(Trip trip, TripAction action, int expectedVersion, long? driverId = null)
+    {
+        try { trip.Apply(action, expectedVersion, driverId); return true; }
+        catch (Exception ex) when (ex is TripConflictException or InvalidOperationException) { return false; }
     }
 }
 ```
@@ -785,7 +811,7 @@ The status board makes double offers rare, but a failover can briefly run two ma
 
 - **Location privacy.** Riders see only approximate, slightly delayed car positions before booking; the exact driver location is shared only with the matched rider, and only until the trip ends. Location history is sensitive personal data: restrict access, log every access, and set retention limits (for India's DPDP Act and other regimes).
 - **GPS spoofing.** Drivers may fake locations to sit in surge zones or game airport queues. Detect impossible speeds and jumps, mock-location flags, and mismatch between GPS and network signals; act through review, not instant bans.
-- **Trip start OTP.** The rider tells the driver a 4-digit code, so a trip can't be started for the wrong person or without the rider present.
+- **Trip start OTP.** The rider tells the driver a 4-digit code, so a trip can't be started for the wrong person or without the rider present. Four digits are only 10,000 guesses, so lock the trip after a handful of wrong attempts and alert on repeated failures.
 - **Authorisation.** Only the assigned driver can send `ARRIVE`, `START` and `COMPLETE`; only the trip's rider can cancel as rider. Check on the server for every event.
 - **Safety features.** SOS button, trip sharing with trusted contacts, route deviation alerts (computed from the location stream), masked phone numbers through a calling proxy.
 - **Fraud and abuse.** Rate-limit quotes and bookings per account and device; detect collusion (a driver and rider repeatedly doing short trips for incentives).
@@ -852,7 +878,7 @@ app.MapPost("/v1/drivers/{driverId:long}/location", (long driverId, LocationPing
     DriverLocationIndex index, DriverStatusBoard board) =>
 {
     index.Update(driverId, ping.Lat, ping.Lng, ping.Vehicle);
-    if (board.Get(driverId).Status == DriverStatus.Offline) board.SetAvailable(driverId);   // demo: online on first ping
+    board.GoOnline(driverId);   // demo: online on first ping; atomic, never overwrites an offer or a trip
     return Results.NoContent();
 });
 
@@ -875,12 +901,13 @@ app.MapPost("/v1/trips/{tripId:guid}/events", (Guid tripId, TripEventRequest bod
 {
     var trip = trips.Get(tripId);
     if (trip is null) return Results.NotFound();
+    // Production: check the caller is this trip's rider (cancel) or its assigned driver (arrive, start, complete).
     try
     {
         var driverId = trip.DriverId;
         var state = trip.Apply(body.Action, body.ExpectedVersion, otp: body.Otp);
         if (driverId is long d && state is TripState.Completed or TripState.Cancelled or TripState.Requested)
-            board.SetAvailable(d);
+            board.EndTrip(d, trip.Id);
         return Results.Ok(new { state = state.ToString(), trip.Version });
     }
     catch (TripConflictException ex) { return Results.Conflict(new { error = ex.Message, trip.Version }); }

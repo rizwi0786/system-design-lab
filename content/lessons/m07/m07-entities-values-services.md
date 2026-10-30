@@ -575,6 +575,8 @@ Design notes:
 - **`AccountNumber.ToString()` masks the number.** Value objects are a natural place for "how this value is shown" rules, including privacy rules.
 - **Value objects as dictionary keys.** `InMemoryAccountRepository` keys by `AccountNumber`. That works only because records implement `GetHashCode` from their content.
 - **Persistence.** EF Core maps value objects with owned types or complex types, and single-value wrappers with value converters. The domain code does not change; only the mapping configuration does.
+- **What this demo leaves out: idempotency and concurrency.** A mobile app that times out will retry `POST /transfers`. In production, store each transfer's `Reference` under a unique constraint in the same transaction as the two balance updates, and return the original result when the same reference arrives again; otherwise one retry moves the money twice. Lock or version both account rows (for example `SELECT ... FOR UPDATE` in a fixed order, lowest account number first) so two concurrent transfers cannot overdraw an account.
+
 
 ## Bad design vs good design
 
@@ -1456,7 +1458,8 @@ public class AccountTests
 - **Payments.** A UPI transaction id, a VPA (`name@bank`), an IFSC and an amount are all value objects in a payments system. The payment itself is an entity with a status lifecycle (initiated, pending, success, failed, reversed).
 - **.NET itself** has many value objects: `DateOnly`, `TimeSpan`, `Guid`, `Uri` and `IPAddress` are all compared by value and are immutable. `System.String` is the most-used value object in .NET.
 - **E-commerce.** The shipping address on an order is a value object, copied onto the order at checkout, so later changes to the customer's address book do not rewrite history.
-- **Infrastructure projects.** A chainage (`km 12+450`), a GPS coordinate and a BOQ item rate are values; a contract, a measurement book and a bridge are entities with ids and histories.
+- **Ride-hailing.** A pickup point (latitude and longitude), a fare (`₹184.50`) and a vehicle number plate are values; a trip, a rider and a driver are entities with ids and histories. A trip keeps its id while it moves from requested to accepted, started and completed.
+
 - **EF Core** supports this split directly: owned entity types and complex types for value objects, and entity types with keys for entities.
 
 ## Interview questions

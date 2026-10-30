@@ -535,7 +535,7 @@ using Hr.Application.Salaries;
 
 namespace Hr.Api;
 
-public sealed record ReviseSalaryRequest(decimal NewMonthlySalary, DateOnly EffectiveFrom, bool DirectorApproved);
+public sealed record ReviseSalaryRequest(decimal NewMonthlySalary, DateOnly EffectiveFrom);
 
 public static class SalaryEndpoints
 {
@@ -545,8 +545,11 @@ public static class SalaryEndpoints
             ReviseSalaryHandler handler, CancellationToken ct) =>
         {
             // Adapter work: turn HTTP and identity into a plain command.
+            // Approval comes from the caller's verified role, never from a flag in the JSON body that anyone could set.
+            // In production, also add .RequireAuthorization() once authentication is configured.
             var actorId = Guid.TryParse(http.User.FindFirst("sub")?.Value, out var sub) ? sub : Guid.Empty;
-            var command = new ReviseSalaryCommand(id, body.NewMonthlySalary, body.EffectiveFrom, body.DirectorApproved, actorId);
+            var directorApproved = http.User.IsInRole("Director");
+            var command = new ReviseSalaryCommand(id, body.NewMonthlySalary, body.EffectiveFrom, directorApproved, actorId);
             return Present(await handler.HandleAsync(command, ct));
         });
         return app;

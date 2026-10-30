@@ -1619,7 +1619,7 @@ If a fake and a real implementation behave differently, consumer tests pass whil
 - **`IDistributedCache` leaks on purpose**: it is byte-array based and async, which honestly reflects that the cache may be Redis on another machine.
 - **`IQueryable` is the textbook leak**: it is powerful inside a data layer, but returning it from a repository spreads ORM-specific behaviour into every caller.
 - **Payment gateways**: an `IPaymentGateway` that returns only "success" or "failure" leaks badly, because real UPI and card payments have *pending* states and asynchronous callbacks. The honest interface includes `Pending` and a way to query status later.
-- **Government and infrastructure integrations**: portals for tenders, GST or land records differ wildly in reliability. An honest adapter interface exposes timeouts, retries and "temporarily unavailable" explicitly, so the calling workflow can queue work rather than fail.
+- **Government and third-party integrations**: GST e-invoicing, DigiLocker, train-booking or courier-tracking APIs differ wildly in reliability. An honest adapter interface exposes timeouts, retries and "temporarily unavailable" explicitly, so the calling workflow can queue work rather than fail.
 
 ## Interview questions
 

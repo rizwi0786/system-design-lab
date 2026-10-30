@@ -1140,7 +1140,7 @@ Add `Order "0..*" --> "0..1" Coupon` and implement it as a nullable property wit
 :::
 
 :::exercise id=m05-class-diagrams-ex3 difficulty=intermediate kind=code title="Aggregation, composition and an optional association"
-Implement this project-tracking model for an infrastructure consultancy:
+Implement this project-tracking model for a software company (think of a Jira-style tool):
 
 ```mermaid
 classDiagram
@@ -1254,34 +1254,34 @@ public class ProjectTests
     public void Engineer_can_be_in_two_teams()
     {
         var priya = new Engineer("Priya");
-        var bridges = new Team("Bridges");
-        var highways = new Team("Highways");
-        Assert.True(bridges.Add(priya));
-        Assert.True(highways.Add(priya));
-        Assert.True(bridges.Remove(priya));
-        Assert.Contains(priya, highways.Members);
-        Assert.Empty(bridges.Members);
+        var payments = new Team("Payments");
+        var checkout = new Team("Checkout");
+        Assert.True(payments.Add(priya));
+        Assert.True(checkout.Add(priya));
+        Assert.True(payments.Remove(priya));
+        Assert.Contains(priya, checkout.Members);
+        Assert.Empty(payments.Members);
     }
 
     [Fact]
     public void Duplicate_member_rejected()
     {
-        var t = new Team("Survey");
+        var t = new Team("Search");
         var e = new Engineer("Imran");
         Assert.True(t.Add(e));
         Assert.False(t.Add(e));
         Assert.Single(t.Members);
     }
 
-    [Fact] public void Team_is_required() => Assert.Throws<ArgumentNullException>(() => new Project("NH-48 widening", null!, Start, End));
+    [Fact] public void Team_is_required() => Assert.Throws<ArgumentNullException>(() => new Project("UPI AutoPay launch", null!, Start, End));
 
     [Fact] public void End_before_start_rejected() => Assert.Throws<ArgumentException>(() => new Project("X", new Team("T"), End, Start));
 
     [Fact]
     public void Milestones_belong_to_project_and_respect_dates()
     {
-        var p = new Project("NH-48 widening", new Team("Highways"), Start, End);
-        var m = p.AddMilestone("Detailed project report", new DateOnly(2026, 6, 30));
+        var p = new Project("UPI AutoPay launch", new Team("Checkout"), Start, End);
+        var m = p.AddMilestone("Design review signed off", new DateOnly(2026, 6, 30));
         Assert.Same(m, Assert.Single(p.Milestones));
         Assert.Throws<ArgumentOutOfRangeException>(() => p.AddMilestone("Late", End.AddDays(1)));
         m.MarkDone();
@@ -1291,10 +1291,10 @@ public class ProjectTests
     [Fact]
     public void Lead_must_be_team_member()
     {
-        var team = new Team("Highways");
+        var team = new Team("Checkout");
         var member = new Engineer("Neha");
         team.Add(member);
-        var p = new Project("NH-48 widening", team, Start, End);
+        var p = new Project("UPI AutoPay launch", team, Start, End);
         Assert.Null(p.Lead);
         Assert.Throws<InvalidOperationException>(() => p.AssignLead(new Engineer("Outsider")));
         p.AssignLead(member);
@@ -1864,7 +1864,7 @@ The comment on each test names the diagram line it protects. When someone change
 - **Design reviews and RFCs.** Before building a feature, engineers share a small class diagram of the new and changed types. Reviewers spot wrong ownership (a filled diamond that should be hollow) before any code exists.
 - **System design interviews (LLD rounds).** Parking lots, elevators, libraries: the interviewer expects a class diagram first, with sensible relationships and multiplicities. See [Module 18](#/lesson/m18-parking-lot).
 - **Docs as code.** Teams keep `docs/*.md` with Mermaid diagrams in the repository. GitHub and Azure DevOps render them in pull requests.
-- **Onboarding.** A one-page diagram of the core domain (orders, customers, payments, or for an infrastructure project: contracts, BOQ items, measurement entries and bills) helps new developers more than a thousand lines of code.
+- **Onboarding.** A one-page diagram of the core domain (orders, customers, payments, or for a hotel-booking product: hotels, rooms, rate plans and bookings) helps new developers more than a thousand lines of code.
 - **Mapping to the database.** The same model drives tables: composition often becomes a foreign key with `ON DELETE CASCADE`, aggregation a nullable or junction-table relationship. The [ER diagrams lesson](#/lesson/m05-er-diagrams) covers that side.
 
 ## Interview questions

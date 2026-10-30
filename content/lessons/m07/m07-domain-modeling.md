@@ -882,7 +882,7 @@ public readonly record struct Money
 :::
 
 :::exercise id=m07-domain-modeling-ex2 difficulty=beginner kind=design title="Model a small warehouse"
-A building-materials distributor in Gurgaon asks for stock tracking. In their words: *"Every product has a SKU, like CEM-OPC53-50KG. Stock sits in bins inside a warehouse — bin A-03-2 is aisle A, rack 3, level 2. We receive stock against a purchase order, pick it for sales orders, and sometimes adjust it after a physical count. We must always know why stock changed. Stock in a bin can never go negative."*
+A pharmacy distributor in Gurgaon that supplies chemists across Delhi NCR asks for stock tracking. In their words: *"Every product has a SKU, like PCM-500MG-STRIP10. Stock sits in bins inside a warehouse — bin A-03-2 is aisle A, rack 3, level 2. We receive stock against a purchase order, pick it for sales orders, and sometimes adjust it after a physical count. We must always know why stock changed. Stock in a bin can never go negative."*
 
 Write the glossary (5–8 terms) in the description field of your model, then build the class model in the LLD designer: entities, value objects, the aggregate root, and where the "never negative" rule lives.
 ::acceptance
@@ -915,12 +915,12 @@ Glossary: **SKU** (product code), **Bin location** (aisle-rack-level address), *
 {
   "classes": [
     { "id": "Sku", "name": "Sku", "kind": "record", "fields": ["+string Value"], "methods": ["+static Sku Parse(string s)"],
-      "responsibility": "Value object; upper-case, pattern like CEM-OPC53-50KG" },
+      "responsibility": "Value object; upper-case, pattern like PCM-500MG-STRIP10" },
     { "id": "Bin", "name": "BinLocation", "kind": "record", "fields": ["+char Aisle", "+int Rack", "+int Level"],
       "methods": ["+static BinLocation Parse(string code)", "+string ToString()"],
       "responsibility": "Value object; parses and formats A-03-2" },
     { "id": "Qty", "name": "Quantity", "kind": "record", "fields": ["+int Value", "+string Unit"], "methods": [],
-      "responsibility": "Value object; non-negative, unit like BAG or KG" },
+      "responsibility": "Value object; non-negative, unit like STRIP or BOX" },
     { "id": "Stock", "name": "StockItem", "kind": "class",
       "fields": ["-Guid Id", "-Guid WarehouseId", "-Sku Sku", "-BinLocation Bin", "-int OnHand", "-List~StockMovement~ Movements", "-int Version"],
       "methods": ["+void Receive(int qty, string purchaseOrderNo)", "+void Pick(int qty, string salesOrderNo)", "+void Adjust(int countedQty, string countSheetNo, string reason)"],
@@ -1520,7 +1520,8 @@ Boundary cases to cover: exactly ₹149 and ₹148.99; exactly 20 and 21 of an i
 
 - **Food delivery and e-commerce** platforms separate cart/ordering, fulfilment, delivery and billing because those areas change for different reasons and are owned by different teams.
 - **Payments**: a payment aggregate protects "captured amount ≤ authorised amount" and "refunds ≤ captured", while risk scoring is a separate context with its own model of the same transaction.
-- **Infrastructure project management**: in a system that tracks highway works, a *bill of quantities item*, a *measurement* and a *running-account bill* are distinct concepts with rules such as "measured quantity can't exceed BOQ quantity plus the approved variation". Modelling them with engineers' exact terms avoids costly misunderstandings between site staff and developers.
+- **Clinic and hospital booking**: a doctor's *slot*, an *appointment* and a *consultation* are distinct concepts with rules such as "a slot can't be double-booked" and "a follow-up within 7 days of a consultation is free". Modelling them with the clinic's exact terms (OPD, walk-in, follow-up) avoids costly misunderstandings between front-desk staff and developers.
+
 - **.NET reference application**: Microsoft's eShop sample uses an `Order` aggregate with private collections, value objects for addresses and domain events, in an ASP.NET Core service — a useful public example to read.
 
 ## Interview questions

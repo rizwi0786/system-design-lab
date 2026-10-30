@@ -874,7 +874,7 @@ Make the rates configurable via `IOptions<LateFeePolicy>` and pass the policy in
 :::
 
 :::exercise id=m07-testable-design-ex4 difficulty=intermediate kind=design title="Find the seams in a monthly report job"
-This class runs on the 1st of every month, builds a contractor-payments report for a road project and emails it to the project director:
+This class runs on the 1st of every month, builds a seller-payouts report for an online marketplace and emails it to the finance head:
 
 ```csharp
 public class MonthlyReportJob
@@ -885,9 +885,9 @@ public class MonthlyReportJob
         var cs = ConfigurationManager.AppSettings["Db"];
         var rows = new SqlReportReader(cs).Read(DateTime.Now.AddMonths(-1));
         var total = rows.Sum(r => r.Amount);
-        var html = $"<h1>Payments</h1><p>Total ₹{total:N2}</p>" + string.Join("", rows.Select(r => $"<tr><td>{r.Contractor}</td><td>{r.Amount}</td></tr>"));
+        var html = $"<h1>Payments</h1><p>Total ₹{total:N2}</p>" + string.Join("", rows.Select(r => $"<tr><td>{r.Seller}</td><td>{r.Amount}</td></tr>"));
         File.WriteAllText($@"C:\reports\{DateTime.Now:yyyyMM}.html", html);
-        new SmtpClient("smtp.office.local").Send("reports@corp", "pd@corp", "Monthly payments", html);
+        new SmtpClient("smtp.office.local").Send("reports@corp", "finance-head@corp", "Monthly seller payouts", html);
     }
 }
 ```
@@ -923,7 +923,7 @@ The pure part, `PaymentReportBuilder.Build(month, rows)`, returns a `PaymentRepo
     { "id": "Job", "name": "MonthlyPaymentReportJob", "kind": "class", "fields": ["-IPaymentRowSource rows", "-IReportArchive archive", "-IEmailSender email", "-TimeProvider clock", "-IOptions~ReportOptions~ options"], "methods": ["+Task RunAsync(CancellationToken ct)"], "responsibility": "Shell: picks last month, loads rows, builds, archives, emails" },
     { "id": "Builder", "name": "PaymentReportBuilder", "kind": "class", "fields": [], "methods": ["+PaymentReport Build(YearMonth month, IReadOnlyList~PaymentRow~ rows)"], "responsibility": "Pure: totals and HTML; no I/O" },
     { "id": "Report", "name": "PaymentReport", "kind": "record", "fields": ["+string Title", "+decimal Total", "+string Html"], "methods": [] },
-    { "id": "Row", "name": "PaymentRow", "kind": "record", "fields": ["+string Contractor", "+decimal Amount"], "methods": [] },
+    { "id": "Row", "name": "PaymentRow", "kind": "record", "fields": ["+string Seller", "+decimal Amount"], "methods": [] },
     { "id": "Src", "name": "IPaymentRowSource", "kind": "interface", "fields": [], "methods": ["+Task~IReadOnlyList~PaymentRow~~ ForMonthAsync(YearMonth m)"] },
     { "id": "Arc", "name": "IReportArchive", "kind": "interface", "fields": [], "methods": ["+Task SaveAsync(string name, string html)"] },
     { "id": "Mail", "name": "IEmailSender", "kind": "interface", "fields": [], "methods": ["+Task SendAsync(string to, string subject, string html)"] },
@@ -951,7 +951,7 @@ The pure part, `PaymentReportBuilder.Build(month, rows)`, returns a `PaymentRepo
 
 Hidden inputs → seams: `DateTime.Now` → `TimeProvider` (the job computes "last month" from it); `ConfigurationManager` → `IOptions<ReportOptions>` and a DI-configured data source; `new SqlReportReader` → `IPaymentRowSource`. Hidden outputs → seams: `File.WriteAllText` → `IReportArchive`; `new SmtpClient` → `IEmailSender`.
 
-The "is it the 1st?" check moved out completely. Scheduling belongs to the scheduler (a cron-style hosted service, a Kubernetes CronJob, or a cloud scheduler), which also makes it possible to re-run a failed month by hand. The builder has no interface: tests call it directly with three rows and check the total and the HTML. The HTML builder should also HTML-encode contractor names, a bug the original had.
+The "is it the 1st?" check moved out completely. Scheduling belongs to the scheduler (a cron-style hosted service, a Kubernetes CronJob, or a cloud scheduler), which also makes it possible to re-run a failed month by hand. The builder has no interface: tests call it directly with three rows and check the total and the HTML. The HTML builder should also HTML-encode seller names (sellers choose their own shop names, so this is an injection risk), a bug the original had.
 ::mistakes
 - Creating `IPaymentReportBuilder` just to mock it in the job's tests. Use the real pure builder.
 - Keeping `if (now.Day != 1) return;` inside the job, which makes manual re-runs impossible.
@@ -959,7 +959,7 @@ The "is it the 1st?" check moved out completely. Scheduling belongs to the sched
 :::
 
 :::exercise id=m07-testable-design-ex5 difficulty=advanced kind=code title="A retry helper you can test without sleeping"
-Calls to a state government's land-records API fail intermittently. Write `RetryExecutor.ExecuteAsync`, which retries transient failures with exponential backoff and jitter. It must be fully testable: no real waiting and no real randomness in tests.
+Calls to a courier partner's shipment-tracking API fail intermittently. Write `RetryExecutor.ExecuteAsync`, which retries transient failures with exponential backoff and jitter. It must be fully testable: no real waiting and no real randomness in tests.
 ::requirements
 - Constructor takes `RetryPolicy` (max attempts, base delay, max delay), a delay seam `Func<TimeSpan, CancellationToken, Task>` and a jitter seam `Func<double>` returning values in [0, 1).
 - Delay before retry *n* (n = 1, 2, …) = `min(maxDelay, baseDelay × 2^(n−1))`, then multiplied by `(0.5 + jitter × 0.5)`, so it lies between 50 % and 100 % of the backoff (sometimes called "equal jitter").
@@ -1225,7 +1225,7 @@ The test pyramid for this feature:
 - **ASP.NET Core** itself is built on seams: `ILogger<T>`, `IOptions<T>`, `IHttpClientFactory`, `TimeProvider`, `IHostEnvironment`. `WebApplicationFactory<T>` lets integration tests swap any registration.
 - **Payments and banking**: OTP expiry, settlement cut-off times (for example, a batch that closes at a fixed time of day) and interest accrual all depend on time, and all are tested with a controllable clock.
 - **Government portals** with grievance deadlines (an SLA of N working days) must handle holidays and weekends. A pure `WorkingDayCalculator` with a holiday list as input is easy to test against the official calendar.
-- **Construction and infrastructure software**: liquidated damages per day of delay, escalation formulas and measurement-book rules are pure calculations. Keeping them pure makes it practical to test them against worked examples from the contract.
+- **Food delivery and ride-hailing**: surge multipliers, late-delivery refunds and driver incentive slabs are pure calculations over time and distance. Keeping them pure makes it practical to test them against worked examples from the policy document.
 - **Mobile and IoT**: devices that sync on a schedule use injected clocks and fake network layers so tests can simulate "offline for 3 days".
 
 ## Interview questions

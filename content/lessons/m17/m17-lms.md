@@ -7,7 +7,7 @@ status: reviewed
 template: hld-case
 minutes: 100
 prerequisites: [m16-multi-tenancy, m14-multi-tenant-security, m11-cdn, m11-object-storage, m12-cache-patterns]
-related: [m17-video-streaming, m17-online-exam, m17-multi-tenant-pm, m09-partitioning-sharding, m03-background-services]
+related: [m17-video-streaming, m17-online-exam, m17-multi-tenant-pm, m17-job-scheduler, m09-partitioning-sharding, m03-background-services]
 tags: [hld, case-study, multi-tenancy, video, progress-tracking, assessments, cdn]
 patterns: []
 summary: Design a multi-tenant learning management system for hundreds of institutions — tenant resolution and isolation, enrolment and seat licences, signed video delivery through a CDN, progress tracking that coalesces heartbeats, assessments and certificates — with capacity maths, a progress-report SQL exercise and C# for the tenancy and progress core.
@@ -105,13 +105,13 @@ All figures are **estimates** for clear arithmetic.
 
 - Each DAU watches **40 minutes** of video a day. The player sends a heartbeat every **15 s**.
 - Heartbeats/day = 1.5 M × 40 × 60 ÷ 15 = **240 M**; average ≈ **2,800/s**; evening peak ×4 ≈ **11,000/s**.
-- If each heartbeat were a database `UPDATE`, that alone would be 11,000 writes/s, mostly overwriting the same rows. With **write-behind** (keep the latest per learner-lesson in a cache, flush every 60 s), database writes drop to at most one per active learner-lesson per minute: at peak, perhaps 300,000 concurrent viewers ÷ 60 s = **5,000 writes/s**, and far fewer when batched into multi-row upserts.
+- If each heartbeat were a database `UPDATE`, that alone would be 11,000 writes/s, mostly overwriting the same rows. With **write-behind** (keep the latest per learner-lesson in a cache, flush every 60 s), database writes drop to at most one per active learner-lesson per minute: at peak, 11,000 heartbeats/s × 15 s ≈ **165,000 concurrent viewers** (Little's law again), ÷ 60 s ≈ **2,750 row writes/s**, sent as a few dozen multi-row upserts per second instead of 11,000 single-row statements.
 
 ### Video
 
 - Watch minutes/day = 1.5 M × 40 = **60 M minutes**.
 - Average delivered bitrate: many learners watch at 480p or 720p on mobile data. Assume **1 Mbit/s** = 7.5 MB per minute.
-- Egress/day = 60 M × 7.5 MB = **450 TB/day**; average ≈ 450 × 10¹² × 8 ÷ 86,400 ≈ **42 Gbit/s**, evening peak ≈ **150 Gbit/s**, almost all from CDN edges.
+- Egress/day = 60 M × 7.5 MB = **450 TB/day**; average ≈ 450 × 10¹² × 8 ÷ 86,400 ≈ **42 Gbit/s**, evening peak ×4 ≈ **170 Gbit/s**, almost all from CDN edges. (Cross-check: 165,000 concurrent viewers × 1 Mbit/s ≈ 165 Gbit/s.)
 - Library: 200,000 hours of course video. An encoding ladder (240p to 1080p) sums to roughly 5 Mbit/s across renditions ≈ 2.25 GB per hour of video → **450 TB** in object storage.
 
 ### Other storage
@@ -157,7 +157,7 @@ The playback response:
 
 ```json
 {
-  "manifestUrl": "https://media.lms.example.com/gpu/videos/88213/master.m3u8?exp=1792420000&sig=Q2x2b0xL",
+  "manifestUrl": "https://media.lms.example.com/gpu/videos/88213/master.m3u8?t=gpu&exp=1792420000&sig=Q2x2b0xL",
   "resumeAt": 300,
   "expiresInSeconds": 14400
 }
@@ -254,7 +254,7 @@ CREATE POLICY tenant_isolation ON lesson_progress
 Why this shape:
 
 - **`tenant_id` leads every primary key.** All queries are tenant-scoped, so the composite keys make every index naturally tenant-local, and moving one tenant to a dedicated database is a filtered copy.
-- **RLS is the seatbelt, not the steering wheel.** The application always filters by tenant; the policy guarantees that a forgotten `WHERE` returns nothing instead of another college's data. The connection sets `app.tenant_id` per request (`SET LOCAL` inside the transaction, so pooled connections don't leak it).
+- **RLS is the seatbelt, not the steering wheel.** The application always filters by tenant; the policy guarantees that a forgotten `WHERE` returns nothing instead of another college's data. The connection sets `app.tenant_id` per request (`SET LOCAL` inside the transaction, so pooled connections don't leak it). Two traps: RLS does not apply to the table's owner or to roles with `BYPASSRLS`, so the application must connect as a separate, non-owner role (or the table needs `ALTER TABLE … FORCE ROW LEVEL SECURITY`); and every tenant table needs its own policy, not just `lesson_progress`.
 - **`course_version` is pinned on enrolment.** An instructor can publish version 3 while learners on version 2 finish the course they started; their progress keys still point at version 2's lessons.
 - **`UNIQUE (tenant_id, user_id, course_id)`** makes enrolment idempotent: a double click or a retried bulk import cannot create two enrolments.
 - **`lesson_progress` is list-partitioned by tenant** (large tenants get their own partition; small ones share a default partition), which keeps the biggest tenant's 180 M rows from bloating everyone's indexes and makes per-tenant export and deletion cheap.
@@ -540,6 +540,14 @@ public sealed class ProgressBuffer(TimeProvider clock)
         }
     }
 
+    /// <summary>Puts entries back on the dirty list after a failed flush, so the next flush retries them.</summary>
+    public void MarkDirty(IEnumerable<LessonProgress> batch)
+    {
+        foreach (var p in batch)
+            if (_entries.TryGetValue((p.TenantId, p.EnrolmentId, p.LessonId), out var entry))
+                lock (entry.Gate) entry.Dirty = true;
+    }
+
     /// <summary>Returns and clears the changed entries; the flusher writes them in one batch.</summary>
     public IReadOnlyList<LessonProgress> DrainDirty()
     {
@@ -620,8 +628,18 @@ public sealed class ProgressFlusher(ProgressBuffer buffer, IProgressRepository r
     {
         var batch = buffer.DrainDirty();
         if (batch.Count == 0) return;
-        repository.Upsert(batch);
-        logger.LogInformation("Flushed {Count} progress rows", batch.Count);
+        try
+        {
+            repository.Upsert(batch);
+            logger.LogInformation("Flushed {Count} progress rows", batch.Count);
+        }
+        catch (Exception ex)
+        {
+            // An unhandled exception would stop the BackgroundService (and, by default, the host).
+            // The upsert is idempotent and monotonic, so re-marking and retrying next tick is safe.
+            buffer.MarkDirty(batch);
+            logger.LogWarning(ex, "Progress flush of {Count} rows failed; will retry", batch.Count);
+        }
     }
 }
 ```
@@ -631,7 +649,7 @@ Completions are not left for the flusher: the ingest endpoint writes them straig
 ### 4. Enrolment, cohorts, licences and waitlists
 
 - **Idempotent**: `UNIQUE (tenant_id, user_id, course_id)`; a retry returns the existing enrolment.
-- **Seat licences**: a tenant on a 20,000-seat plan can't exceed 20,000 active learners. Count with a per-tenant counter row updated in the same transaction (`UPDATE tenant_usage SET active = active + 1 WHERE tenant_id = $1 AND active < seat_limit`), which is race-free; counting rows on every enrolment is slow and racy.
+- **Seat licences**: a tenant on a 20,000-seat plan can't exceed 20,000 active learners. Count with a per-tenant counter row updated in the same transaction (`UPDATE tenant_usage SET active = active + 1 WHERE tenant_id = $1 AND active < seat_limit`, where `tenant_usage` holds a copy of the plan's `seat_limit`), which is race-free; counting rows on every enrolment is slow and racy. A bulk import reserves seats per batch (`active = active + $n`) so a 50,000-row file doesn't take the hot counter row 50,000 times.
 - **Cohorts with capacity** (a lab batch of 60): when full, new requests join a **waitlist** in arrival order; a withdrawal promotes the first in line. Exercise 4 implements this.
 - **Bulk import**: the CSV is uploaded to object storage, a job validates every row, writes enrolments in batches of 1,000, and produces a result file of errors. It runs on the tenant's job queue so it can't starve other tenants.
 - **Course versions**: an enrolment pins `course_version`; a learner can be offered "switch to the new version" with progress mapped for lessons that still exist.
@@ -695,7 +713,7 @@ public sealed class EnrolmentService(ITenantContext tenant, InMemoryEnrolmentSto
 
 **Queues.**
 
-- **Per-tenant job queues** for bulk imports, report exports and certificate generation, with weighted fair scheduling across tenants.
+- **Per-tenant job queues** for bulk imports, report exports and certificate generation, with weighted fair scheduling across tenants (the [job scheduler](#/lesson/m17-job-scheduler) case study covers durable, fair job queues in depth).
 - **Event bus** for domain events (`LessonCompleted`, `QuizGraded`, `EnrolmentCreated`), consumed by completion rules, certificates, notifications and the warehouse loader. Consumers are idempotent (deduplicate by event id), because events are delivered at least once.
 - **Transcoding queue** for video uploads, with priority for small tenants' first uploads so a huge batch upload doesn't block them.
 
@@ -757,14 +775,14 @@ Every log line and trace carries `tenant_id` (the middleware's logging scope doe
 
 **Cost drivers** (relative, not quotes):
 
-1. **Video egress**: hundreds of TB per day. Levers: sensible default quality (480p on mobile data), a good low rung, high CDN hit ratio, and per-tenant reporting so pricing reflects usage.
+1. **Video egress**: hundreds of TB per day. At 450 TB/day, a month is about 13.5 PB. At an illustrative committed-volume CDN price of $0.01–0.02 per GB (an estimate; list prices are higher, large negotiated deals lower), that is roughly **$135,000–270,000 a month**, more than the rest of the platform combined. Levers: sensible default quality (480p on mobile data), a good low rung, high CDN hit ratio, and per-tenant reporting so pricing reflects usage.
 2. **Video storage and transcoding**: the encoding ladder multiplies storage; drop unused renditions for old courses.
 3. **Dedicated databases** for large tenants: priced into their plan.
 4. **Shared database and app tier**: modest, thanks to caching and write-behind.
 
 ### When a simpler design is enough
 
-A single engineering college with 4,000 students, or a company training 2,000 site engineers, should **run an existing open-source or hosted LMS** rather than build one. If you must build, one ASP.NET Core app, one PostgreSQL database, videos on a hosted video platform or object storage plus a CDN, and progress written directly (4,000 learners produce a few heartbeats per second) is plenty. Multi-tenancy, write-behind and per-tenant queues become worth it only when you serve many institutions.
+A single engineering college with 4,000 students, or a retail chain training 2,000 store staff, should **run an existing open-source or hosted LMS** rather than build one. If you must build, one ASP.NET Core app, one PostgreSQL database, videos on a hosted video platform or object storage plus a CDN, and progress written directly (4,000 learners produce a few heartbeats per second) is plenty. Multi-tenancy, write-behind and per-tenant queues become worth it only when you serve many institutions.
 
 ## Alternatives and trade-offs
 
@@ -795,7 +813,7 @@ builder.Services.AddSingleton(TimeProvider.System);
 var catalog = new InMemoryTenantCatalog();
 catalog.Add(new Tenant("gpu", "Government Polytechnic University", "gpu.lms.example.com", TenancyModel.Pooled, "india-central", 20_000),
     "learn.gpu.edu.in");
-catalog.Add(new Tenant("infra-academy", "Infra Academy", "academy.lms.example.com", TenancyModel.Dedicated, "india-south", 2_000));
+catalog.Add(new Tenant("retail-academy", "QuickCart Retail Academy", "academy.lms.example.com", TenancyModel.Dedicated, "india-south", 2_000));
 builder.Services.AddSingleton<ITenantCatalog>(catalog);
 builder.Services.AddScoped<TenantContext>();
 builder.Services.AddScoped<ITenantContext>(sp => sp.GetRequiredService<TenantContext>());
@@ -1402,7 +1420,7 @@ Promoted learners should get 48 hours to accept before the seat passes to the ne
 :::
 
 :::exercise id=m17-lms-ex5 difficulty=advanced kind=hld title="Design it yourself: a multi-tenant LMS for 300 institutions"
-Design the backend for the requirements in this lesson: 300 tenants (a few very large, most small), 10 M learners, 1.5 M DAU, ~4,200 API requests/s and ~11,000 heartbeats/s at peak, ~150 Gbit/s of evening video egress, custom domains and SSO per tenant, data residency for some tenants. Start from the starter graph. In your notes, state: the tenancy model and how a request finds the right database, how isolation is enforced (at least three layers), how progress writes are kept cheap without losing completions, how video is protected and delivered, and how one heavy tenant is kept from hurting the rest.
+Design the backend for the requirements in this lesson: 300 tenants (a few very large, most small), 10 M learners, 1.5 M DAU, ~4,200 API requests/s and ~11,000 heartbeats/s at peak, ~170 Gbit/s of evening video egress, custom domains and SSO per tenant, data residency for some tenants. Start from the starter graph. In your notes, state: the tenancy model and how a request finds the right database, how isolation is enforced (at least three layers), how progress writes are kept cheap without losing completions, how video is protected and delivered, and how one heavy tenant is kept from hurting the rest.
 ::acceptance
 - A gateway or middleware that resolves tenants from host names and applies per-tenant limits.
 - A tenant directory, a pooled database with RLS and at least one dedicated database.

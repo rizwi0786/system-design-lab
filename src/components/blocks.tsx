@@ -6,6 +6,7 @@ import { Markdown, CodeBlock } from './Markdown';
 import { Badge, Button, Icon, LevelBadge, cx, type IconName } from './ui';
 import { CSharpEditor, HldPlayground, LldPlayground, Lazy, SimulatorLab, SqlPlayground, parseJsonBlock, sqlBlock } from './playgrounds';
 import { buildProjectZip, downloadBlob } from '../lib/projectZip';
+import { VisualBlock } from './Visuals';
 
 // ---------------- callout ----------------
 const CALLOUT: Record<string, { label: string; cls: string; icon: IconName; tone: string }> = {
@@ -336,6 +337,7 @@ export function BlockView({ block, lessonId }: { block: Block; lessonId: string 
     case 'flashcards': return <FlashcardsBlock lessonId={lessonId} cards={block.cards} />;
     case 'interview': return <InterviewBlock questions={block.questions} />;
     case 'playground': return <PlaygroundBlock lessonId={lessonId} block={block} />;
+    case 'visual': return <VisualBlock kind={block.kind} attrs={block.attrs} body={block.body} />;
     default: return <CodeBlock code={(block as { body: string }).body} lang="plaintext" title="Unrecognised block" />;
   }
 }

@@ -149,7 +149,7 @@ Write the answers as a table. This is a lightweight form of Failure Mode and Eff
 | Component | Failure | Detection | User impact | Mitigation | Residual risk |
 |---|---|---|---|---|---|
 | API instance | Crash | LB health check fails within 10 s | Requests on that instance fail once, retried | N+1 instances across 2 zones, LB removes the instance | None noticeable |
-| Primary database | Node failure | Managed failover monitor | Writes fail for about 30–60 s during failover | Standby in another zone, clients retry with backoff | 30–60 s of failed holds |
+| Primary database | Node failure | Managed failover monitor | Writes fail for about 30–60 s during failover (an estimate; managed services typically quote 30–120 s, so measure yours in a drill) | Standby in another zone, clients retry with backoff | 30–60 s of failed holds |
 | Payment gateway | Slow (p99 8 s) | Latency SLO alert, circuit breaker | Checkout stalls | 3 s timeout, circuit breaker, "pending payment" state, reconcile later | Some users retry or abandon |
 | Cache cluster | Total loss | Error rate on cache calls | Search slower, DB load jumps 10× | DB sized for cache-down load at reduced rate, request coalescing, rate limit search | Search p95 rises from 80 ms to 400 ms |
 | Region | Full outage | Provider status, synthetic probes | Total outage | Backups in another region, documented restore | RTO 4 h, RPO 15 min (chosen for cost) |
@@ -168,8 +168,8 @@ Two ideas make failures smaller:
 In a review or interview, someone will challenge your design: "What if Redis goes down?", "Why not microservices?", "What if traffic grows 10×?". A good response has four steps:
 
 1. **Acknowledge** the risk honestly. "Yes, if the cache is lost, all search traffic hits PostgreSQL."
-2. **Quantify** it. "That is about 4,000 RPS against a database sized for 800 with cache misses."
-3. **Mitigate** or **accept with reason**. "We sized the read replicas to survive 2,000 RPS, rate-limit search to that level and show cached seat maps where we have them. The remaining risk is slower search for the few minutes a cache node takes to replace."
+2. **Quantify** it. "That is about 4,000 RPS against a read replica sized for about 1,500."
+3. **Mitigate** or **accept with reason**. "We rate-limit search to 1,500 RPS, serve the most popular routes from an in-process cache and show cached seat maps where we have them. The remaining risk is slower search for the few minutes a cache node takes to replace."
 4. **Name the trigger** that would change the design. "If cache incidents happen more than once a quarter, we will move to a replicated cache with automatic failover."
 
 Two anti-patterns: **defending everything** (no design is perfect, and refusing to admit a weakness destroys trust) and **flip-flopping** (abandoning a sound decision at the first question). If the challenger has found a real flaw, say so, thank them and adjust. That is a strength, not a weakness.
@@ -226,7 +226,7 @@ This is the same system during the 30–60 seconds of a database failover. The *
 
 ## Step-by-step example
 
-**Scenario.** An intercity bus-booking platform, similar to those used across India, sells seats for 3,000 operators. Assumed numbers: 2 million searches a day, rising to about 4,000 searches per second at festival peaks (Diwali, Chhath), 150,000 bookings a day, about 60 holds per second at peak. A seat hold lasts 10 minutes while the rider pays by UPI or card.
+**Scenario.** An intercity bus-booking platform, similar to those used across India, sells seats for 3,000 operators. Assumed numbers (all estimates): 2 million searches and 150,000 bookings on a normal day. Festival days (Diwali, Chhath) bring about 25 million searches and 360,000 bookings. If 20 % of a festival day's traffic arrives in the busiest hour, searches average 25 M × 0.2 ÷ 3,600 ≈ 1,400 per second in that hour, with minute-level bursts about 3× higher: **about 4,000 searches per second**. Bookings in the same hour: 360,000 × 0.2 ÷ 3,600 = 20 holds per second, bursting to **about 60 holds per second**. A seat hold lasts 10 minutes while the rider pays by UPI or card.
 
 ### Step 1 — Write the requirements that decide the trade-offs
 
@@ -268,7 +268,7 @@ The ranking says: spend effort on the payment gateway path first, then the notif
 
 ### Step 5 — Rehearse the challenges
 
-Before the review, answer the obvious challenges out loud with numbers. *"What if the cache dies at the Diwali peak?"* All 4,000 searches per second hit a read replica sized for about 1,200, so search is rate-limited to 1,500 per second, the most popular routes are served from an in-process cache, and the rest show "availability updating". Search degrades; booking is untouched because it never depended on the cache. Exercise 6 practises this skill in full.
+Before the review, answer the obvious challenges out loud with numbers. *"What if the cache dies at the Diwali peak?"* All 4,000 searches per second would hit a read replica sized for about 1,500, so search is rate-limited to 1,500 per second, the most popular routes are served from an in-process cache, and the rest show "availability updating". Search degrades; booking is untouched because it never depended on the cache. Exercise 6 practises this skill in full.
 
 ## Production-style C# implementation
 
@@ -441,7 +441,11 @@ public sealed class InMemorySeatStore(TimeProvider clock, int seatsPerTrip = 40)
         lock (_gate)
         {
             if (!_holds.TryGetValue(tripId, out var seats)) _holds[tripId] = seats = new Dictionary<string, string>();
-            return seats.TryAdd(seatNo, customerId); // like: UPDATE seats SET held_by = @c WHERE trip = @t AND seat = @s AND held_by IS NULL
+            // Idempotent for the same customer: a retry after a lost response must not report "taken".
+            // like: UPDATE seats SET held_by = @c WHERE trip = @t AND seat = @s AND (held_by IS NULL OR held_by = @c)
+            if (seats.TryGetValue(seatNo, out var holder)) return holder == customerId;
+            seats[seatNo] = customerId;
+            return true;
         }
     }
 
@@ -542,7 +546,7 @@ Engineers often pick a TTL by feel. The right owner of "how stale may search be?
 :::
 
 :::callout type=mistake title="Retrying writes without idempotency"
-"The client retries on 503" is only safe if the write is idempotent. A seat hold keyed by trip, seat and customer is naturally idempotent; a payment capture is not, unless it carries an idempotency key. See [Idempotency keys](#/lesson/m10-idempotency).
+"The client retries on 503" is only safe if the write is idempotent. A seat hold keyed by trip, seat and customer can be made naturally idempotent (the conditional update also succeeds when the seat is already held *by the same customer*, as `InMemorySeatStore` does); a payment capture is not, unless it carries an idempotency key. See [Idempotency keys](#/lesson/m10-idempotency).
 :::
 
 ## Practical playground

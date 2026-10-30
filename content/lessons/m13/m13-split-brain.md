@@ -249,7 +249,7 @@ Detection + promote: ≈ 30 s TTL + ≈ 5 s fencing + ≈ 5 s promotion ≈ 40 s
 Client reconnect:    proxy health check every 2 s → ≈ 45 s total (estimate)
 ```
 
-Well inside the 5-minute RTO, with plenty of margin over the 4-second pauses.
+Well inside the 5-minute RTO, with plenty of margin over the 4-second pauses. These happen to be Patroni's defaults (`ttl` 30 s, `loop_wait` 10 s, `retry_timeout` 10 s). Patroni's documentation asks for `loop_wait + 2 × retry_timeout ≤ ttl`, so the primary gives up and demotes before the key can expire and be taken by a standby. Shrinking the TTL to fail over faster without shrinking the other two breaks that guarantee.
 
 ### Step 3: provide a majority
 
@@ -768,7 +768,7 @@ Run a thought experiment with this detector: if `db-b` pauses for 6 seconds duri
 :::
 
 :::exercise id=m13-split-brain-ex2 difficulty=beginner kind=written title="Two nodes, one cable"
-A logistics company runs its shipment database on two servers in two buildings of one campus, active and passive, with a heartbeat over a dedicated fibre link. Failover is automatic after 3 missed heartbeats (1 s apart). A contractor cuts the fibre. Describe what happens minute by minute, what data problems appear, and propose a design that prevents split-brain while keeping automatic failover.
+A logistics company runs its shipment database on two servers in two buildings of one campus, active and passive, with a heartbeat over a dedicated fibre link. Failover is automatic after 3 missed heartbeats (1 s apart). During a tidy-up of the network cabinet, a technician unplugs the fibre patch cord by mistake. Describe what happens minute by minute, what data problems appear, and propose a design that prevents split-brain while keeping automatic failover.
 ::acceptance
 - Explains that each node sees the other as dead and the passive promotes itself while the active keeps serving.
 - Describes divergence (both accept writes) and the reconciliation problem.
@@ -781,7 +781,7 @@ Which applications are still connected to the active server?
 ::hint
 How many votes does each side have after the cut, if you add a small third voter?
 ::solution
-**Timeline.** At t = 0 the fibre is cut. By t ≈ 3 s both nodes have missed three heartbeats. The passive promotes itself and starts accepting connections; the active, seeing the passive as dead, carries on as primary. Application servers in building A still use the active; those that reconnect (or resolve DNS afresh) reach the new primary in building B. Both accept shipment updates. Over the next 40 minutes until someone notices, the same shipments get conflicting status updates and new shipments get IDs that may collide.
+**Timeline.** At t = 0 the fibre is unplugged. By t ≈ 3 s both nodes have missed three heartbeats. The passive promotes itself and starts accepting connections; the active, seeing the passive as dead, carries on as primary. Application servers in building A still use the active; those that reconnect (or resolve DNS afresh) reach the new primary in building B. Both accept shipment updates. Over the next 40 minutes until someone notices, the same shipments get conflicting status updates and new shipments get IDs that may collide.
 
 **Data problems.** Two divergent histories. Reconnecting them needs choosing a winner and replaying or merging the other side's transactions by hand, with business review.
 

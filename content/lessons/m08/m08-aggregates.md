@@ -24,9 +24,9 @@ references:
     url: https://learn.microsoft.com/ef/core/saving/concurrency
 ---
 
-The [previous lesson](#/lesson/m08-entities-value-objects) gave you the atoms: entities and value objects. This lesson is about molecules. In a real system an order has lines, a contract has milestones, an invoice has items, and some rules only make sense across the whole group: "the order total cannot exceed the sanctioned budget", "milestone shares add up to 100 %". An **aggregate** is the cluster of objects you treat as one unit so that those rules are always true, and the **aggregate root** is the one object through which the outside world is allowed to touch the cluster.
+The [previous lesson](#/lesson/m08-entities-value-objects) gave you the atoms: entities and value objects. This lesson is about molecules. In a real system an order has lines, a contract has milestones, an invoice has items, and some rules only make sense across the whole group: "the order total cannot exceed the approved budget", "milestone shares add up to 100 %". An **aggregate** is the cluster of objects you treat as one unit so that those rules are always true, and the **aggregate root** is the one object through which the outside world is allowed to touch the cluster.
 
-The example is a purchase order (PO) in a procurement system for construction projects: a site engineer drafts a PO against a project budget, adds lines for cement, steel and aggregates (the gravel kind), submits it, and a manager approves it. Two engineers editing the same PO at the same time is a daily event, so concurrency is part of the design, not an afterthought.
+The example is a purchase order (PO) in the procurement system of a cloud-kitchen chain (the kitchens that cook only for food-delivery apps). Each outlet's kitchen manager drafts a PO to a wholesale supplier against the outlet's monthly budget, adds lines for sunflower oil, basmati rice and paneer, submits it, and the area manager approves it. The morning-shift and evening-shift managers editing the same PO at the same time is a daily event, so concurrency is part of the design, not an afterthought.
 
 ## Learning objectives
 
@@ -49,9 +49,9 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Think of a purchase order as a **paper file in a folder**. The folder holds the cover sheet (vendor, project, budget) and the line sheets (40 tonnes of steel, 500 bags of cement). The site office has one rule written on the folder in red: *the total of all line sheets must not exceed the sanctioned budget on the cover sheet*.
+Think of a purchase order as a **paper file in a folder**. The folder holds the cover sheet (supplier, outlet, budget) and the line sheets (100 tins of sunflower oil, 20 bags of basmati rice). The kitchen office has one rule written on the folder in red: *the total of all line sheets must not exceed the budget on the cover sheet*.
 
-If anyone could grab a single line sheet from the folder and change "40 tonnes" to "400 tonnes", the red rule would break and nobody would notice until the accounts team found it. So the office has a procedure: **you hand your change to the clerk who owns the folder**. The clerk recalculates the total, refuses the change if it busts the budget, and only then updates the sheet.
+If anyone could grab a single line sheet from the folder and change "100 tins" to "1,000 tins", the red rule would break and nobody would notice until the accounts team found it. So the office has a procedure: **you hand your change to the clerk who owns the folder**. The clerk recalculates the total, refuses the change if it busts the budget, and only then updates the sheet.
 
 - The **folder** is the aggregate: the cover sheet plus its line sheets, which must stay consistent with each other.
 - The **clerk** is the aggregate root: the only way in. In code, the `PurchaseOrder` object owns the lines, and the lines have no public way to be changed except through it.
@@ -61,7 +61,7 @@ Two more parts of the analogy matter.
 
 **The folder does not contain the vendor's whole file.** It has the vendor's *code* written on the cover sheet. If you want to know the vendor's phone number, you look up their file in another cabinet. Copying the vendor's entire file into every PO folder would make every folder huge and every vendor address change a nightmare. In code: an aggregate references other aggregates **by id**, never by holding the object.
 
-**Two engineers cannot both edit the same folder at once.** In the paper world the folder is physically with one person. In software, two people can load the same PO on two screens. The fix is a **version number** stamped on the folder: each save says "I am updating version 7". If the stored version is already 8 because someone else saved first, the save is rejected and the second person must reload and look at what changed. That is optimistic concurrency.
+**Two managers cannot both edit the same folder at once.** In the paper world the folder is physically with one person. In software, two people can load the same PO on two screens. The fix is a **version number** stamped on the folder: each save says "I am updating version 7". If the stored version is already 8 because someone else saved first, the save is rejected and the second person must reload and look at what changed. That is optimistic concurrency.
 
 ## First-principles explanation
 
@@ -92,13 +92,13 @@ The aggregate is the answer: pick the group, pick one object to be its guardian,
 
 ### Why small aggregates
 
-Vernon's essays make the case with numbers that still hold. Imagine a `Project` aggregate holding every PO, invoice, document and team member of a three-year highway project, say 12,000 child objects.
+Vernon's essays make the case with numbers that still hold. Imagine an `Outlet` aggregate holding every PO, supplier invoice, hygiene-audit document and staff roster of one kitchen over three years, say 12,000 child objects.
 
 - **Load cost**: every change to one PO line loads 12,000 objects. Even at 50 µs per object that is 600 ms before you do anything, and tens of megabytes of memory per request.
-- **False conflicts**: with one version number on the whole project, an engineer adding a document and an accountant approving an invoice conflict with each other although their changes are unrelated. On a busy project the retry rate climbs until people give up.
+- **False conflicts**: with one version number on the whole outlet, a manager uploading a hygiene-audit photo and an accountant approving an invoice conflict with each other although their changes are unrelated. On a busy outlet the retry rate climbs until people give up.
 - **Lock contention**: with pessimistic locking instead, the same two people simply wait for each other.
 
-So: make the aggregate as small as the true invariants allow. The PO *must* include its lines because the budget invariant spans them. It must *not* include the vendor, the project, or the goods receipts, because no rule needs to be true across them at the same instant. When you are tempted to put two things in one aggregate, ask: *is there a rule that must be true across them after every single change?* If the honest answer is "it would be nice if they were in sync", that is eventual consistency and belongs between aggregates.
+So: make the aggregate as small as the true invariants allow. The PO *must* include its lines because the budget invariant spans them. It must *not* include the vendor, the outlet, or the goods receipts, because no rule needs to be true across them at the same instant. When you are tempted to put two things in one aggregate, ask: *is there a rule that must be true across them after every single change?* If the honest answer is "it would be nice if they were in sync", that is eventual consistency and belongs between aggregates.
 
 ### Referencing by id
 
@@ -114,7 +114,7 @@ Two users load PO version 7. User A adds a line and saves: the database row beco
 
 Why optimistic and not a database lock? Because a user may hold a PO open for twenty minutes over lunch. A pessimistic lock would block everyone else for that long. Optimistic concurrency costs nothing until a real conflict happens, and real conflicts on the *same* aggregate are rare precisely because aggregates are small.
 
-In PostgreSQL with EF Core you get this almost for free: Npgsql can use the hidden system column `xmin` as the concurrency token, or you add your own `version integer` column and mark it `.IsConcurrencyToken()`. With a hand-written repository you write the `WHERE version = @expected` yourself. In this lesson's in-memory repository we do exactly that.
+In PostgreSQL with EF Core you get this almost for free: Npgsql can map a `uint` property to the hidden system column `xmin` (configured with `.IsRowVersion()`), so PostgreSQL bumps it on every update for you, or you add your own `version integer` column and mark it `.IsConcurrencyToken()`. With a hand-written repository you write the `WHERE version = @expected` yourself. In this lesson's in-memory repository we do exactly that.
 
 ### Reconstitution: loading is not creating
 
@@ -122,7 +122,7 @@ When the repository loads a PO from the database, it should **not** call `AddLin
 
 ### When you do not need an aggregate
 
-- Pure CRUD screens with no cross-object rules (a list of project codes and names). An aggregate here is a class with one field and a lot of ceremony.
+- Pure CRUD screens with no cross-object rules (a list of outlet codes and names). An aggregate here is a class with one field and a lot of ceremony.
 - Reporting and read models. Queries do not change state, so they need no invariants and no root; they can join anything they like ([CQRS](#/lesson/m08-cqrs-fundamentals)).
 - Reference data loaded once at startup.
 
@@ -140,7 +140,7 @@ classDiagram
     }
     class PurchaseOrder {
         +VendorId VendorId
-        +string ProjectCode
+        +string OutletCode
         +Money BudgetCap
         +PurchaseOrderStatus Status
         +IReadOnlyList~PurchaseOrderLine~ Lines
@@ -187,7 +187,7 @@ Read the diagram as a map of territory. `PurchaseOrder` and its `PurchaseOrderLi
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Draft : create(vendorId, project, budgetCap)
+    [*] --> Draft : create(vendorId, outlet, budgetCap)
     Draft --> Draft : AddLine / ChangeLineQuantity / RemoveLine
     Draft --> Submitted : Submit() [at least one line]
     Submitted --> Approved : Approve()
@@ -200,12 +200,12 @@ stateDiagram-v2
 
 Lines can only be edited in `Draft`; this is a *state-dependent invariant*: the rule "lines are frozen" switches on at `Submit()`. An `Approved` PO cannot be cancelled here (a real system would route that through a change order with its own approvals). The guard in square brackets on `Submit` is a cross-line invariant: it needs the whole collection to evaluate.
 
-### Sequence diagram: two engineers, one PO
+### Sequence diagram: two managers, one PO
 
 ```mermaid
 sequenceDiagram
-    participant A as Engineer A
-    participant B as Engineer B
+    participant A as Manager A
+    participant B as Manager B
     participant API as PUT /purchase-orders/{id}/lines/{lineId}
     participant R as Repository
     participant DB as PostgreSQL
@@ -226,7 +226,7 @@ sequenceDiagram
     API-->>B: 409 Conflict, reload
 ```
 
-Both engineers started from version 7. A's update succeeded and bumped the stored version to 8. B's request carries `If-Match: 7`; the version has moved on, so the API refuses without even applying the change. If the two requests had raced more closely (both loaded version 7 *inside* the API), the `UPDATE ... WHERE version = 7` would catch it instead and the repository would throw `ConcurrencyException`. Two layers of defence, same outcome: no lost update.
+Both managers started from version 7. A's update succeeded and bumped the stored version to 8. B's request carries `If-Match: 7`; the version has moved on, so the API refuses without even applying the change. If the two requests had raced more closely (both loaded version 7 *inside* the API), the `UPDATE ... WHERE version = 7` would catch it instead and the repository would throw `ConcurrencyException`. Two layers of defence, same outcome: no lost update.
 
 ## Step-by-step example
 
@@ -357,7 +357,7 @@ public sealed record Money
     }
 }
 
-public enum UnitOfMeasure { Nos, Metre, CubicMetre, Kilogram, Tonne, Litre, Bag }
+public enum UnitOfMeasure { Nos, Kilogram, Litre, Packet, Tin, Bag }
 
 public sealed record Quantity
 {
@@ -367,7 +367,7 @@ public sealed record Quantity
     public Quantity(decimal value, UnitOfMeasure unit)
     {
         if (value <= 0) throw new DomainException("Quantity must be positive.");
-        if ((unit is UnitOfMeasure.Nos or UnitOfMeasure.Bag) && value != decimal.Truncate(value))
+        if ((unit is UnitOfMeasure.Nos or UnitOfMeasure.Packet or UnitOfMeasure.Tin or UnitOfMeasure.Bag) && value != decimal.Truncate(value))
             throw new DomainException($"A count in {unit} must be a whole number.");
         Value = value;
         Unit = unit;
@@ -430,26 +430,26 @@ public sealed class PurchaseOrder : AggregateRoot<PurchaseOrderId>
     private readonly List<PurchaseOrderLine> _lines = new();
 
     public VendorId VendorId { get; }
-    public string ProjectCode { get; }
+    public string OutletCode { get; }
     public Money BudgetCap { get; }
     public PurchaseOrderStatus Status { get; private set; }
     public string? CancellationReason { get; private set; }
     public IReadOnlyList<PurchaseOrderLine> Lines => _lines;
     public Money Total => _lines.Aggregate(Money.Zero(BudgetCap.Currency), (sum, l) => sum + l.LineTotal);
 
-    public PurchaseOrder(PurchaseOrderId id, VendorId vendorId, string projectCode, Money budgetCap)
-        : this(id, vendorId, projectCode, budgetCap, PurchaseOrderStatus.Draft, null, version: 0)
+    public PurchaseOrder(PurchaseOrderId id, VendorId vendorId, string outletCode, Money budgetCap)
+        : this(id, vendorId, outletCode, budgetCap, PurchaseOrderStatus.Draft, null, version: 0)
     {
         if (budgetCap.Amount <= 0) throw new DomainException("Budget cap must be positive.");
     }
 
     // Reconstitution constructor: trusts stored state, runs no creation rules.
-    private PurchaseOrder(PurchaseOrderId id, VendorId vendorId, string projectCode, Money budgetCap,
+    private PurchaseOrder(PurchaseOrderId id, VendorId vendorId, string outletCode, Money budgetCap,
                           PurchaseOrderStatus status, string? cancellationReason, int version) : base(id, version)
     {
         if (vendorId == default) throw new DomainException("Vendor is required.");
         VendorId = vendorId;
-        ProjectCode = string.IsNullOrWhiteSpace(projectCode) ? throw new DomainException("Project code is required.") : projectCode.Trim();
+        OutletCode = string.IsNullOrWhiteSpace(outletCode) ? throw new DomainException("Outlet code is required.") : outletCode.Trim();
         BudgetCap = budgetCap;
         Status = status;
         CancellationReason = cancellationReason;
@@ -530,12 +530,12 @@ public sealed class PurchaseOrder : AggregateRoot<PurchaseOrderId>
     // ---- Persistence boundary: snapshots in, snapshots out. No ORM attributes in the domain. ----
 
     public PurchaseOrderSnapshot ToSnapshot() => new(
-        Id.Value, VendorId.Value, ProjectCode, BudgetCap.Amount, BudgetCap.Currency, Status.ToString(), CancellationReason, Version,
+        Id.Value, VendorId.Value, OutletCode, BudgetCap.Amount, BudgetCap.Currency, Status.ToString(), CancellationReason, Version,
         _lines.Select(l => new PurchaseOrderLineSnapshot(l.Id.Value, l.ItemCode, l.Description, l.Quantity.Value, l.Quantity.Unit.ToString(), l.UnitPrice.Amount)).ToList());
 
     public static PurchaseOrder FromSnapshot(PurchaseOrderSnapshot s)
     {
-        var order = new PurchaseOrder(new PurchaseOrderId(s.Id), new VendorId(s.VendorId), s.ProjectCode,
+        var order = new PurchaseOrder(new PurchaseOrderId(s.Id), new VendorId(s.VendorId), s.OutletCode,
             new Money(s.BudgetCap, s.Currency), Enum.Parse<PurchaseOrderStatus>(s.Status), s.CancellationReason, s.Version);
         foreach (var l in s.Lines)
             order._lines.Add(new PurchaseOrderLine(new LineId(l.Id), l.ItemCode, l.Description,
@@ -559,7 +559,7 @@ namespace Procurement.Domain;
 public sealed record PurchaseOrderLineSnapshot(Guid Id, string ItemCode, string Description, decimal Quantity, string Unit, decimal UnitPrice);
 
 public sealed record PurchaseOrderSnapshot(
-    Guid Id, Guid VendorId, string ProjectCode, decimal BudgetCap, string Currency, string Status, string? CancellationReason,
+    Guid Id, Guid VendorId, string OutletCode, decimal BudgetCap, string Currency, string Status, string? CancellationReason,
     int Version, IReadOnlyList<PurchaseOrderLineSnapshot> Lines);
 ```
 
@@ -602,10 +602,13 @@ public sealed class InMemoryPurchaseOrderRepository : IPurchaseOrderRepository
     {
         if (!_store.TryGetValue(order.Id.Value, out var current))
             throw new ConcurrencyException($"Purchase order {order.Id} does not exist; use AddAsync.");
-        var next = order.ToSnapshot() with { Version = current.Version + 1 };
-        // Atomic compare-and-swap on the whole snapshot: succeeds only if nobody saved since we loaded.
-        if (!_store.TryUpdate(order.Id.Value, next, current) || current.Version != order.Version)
+        // Check the version BEFORE writing; a failed check must not leave a new snapshot behind.
+        if (current.Version != order.Version)
             throw new ConcurrencyException($"Purchase order {order.Id} was modified by someone else (stored version {current.Version}, yours {order.Version}).");
+        var next = order.ToSnapshot() with { Version = current.Version + 1 };
+        // Atomic compare-and-swap on the whole snapshot: succeeds only if nobody saved since we read `current`.
+        if (!_store.TryUpdate(order.Id.Value, next, current))
+            throw new ConcurrencyException($"Purchase order {order.Id} was modified concurrently. Reload and retry.");
         return Task.CompletedTask;
     }
 }
@@ -625,7 +628,7 @@ app.MapPost("/purchase-orders", async (CreatePurchaseOrderRequest req, IPurchase
 {
     try
     {
-        var po = new PurchaseOrder(PurchaseOrderId.New(), new VendorId(req.VendorId), req.ProjectCode, new Money(req.BudgetCap, req.Currency));
+        var po = new PurchaseOrder(PurchaseOrderId.New(), new VendorId(req.VendorId), req.OutletCode, new Money(req.BudgetCap, req.Currency));
         await repo.AddAsync(po, ct);
         return Results.Created($"/purchase-orders/{po.Id}", new { id = po.Id.Value, version = 1 });
     }
@@ -659,14 +662,14 @@ app.MapPost("/purchase-orders/{id:guid}/submit", async (Guid id, IPurchaseOrderR
 
 app.Run();
 
-public sealed record CreatePurchaseOrderRequest(Guid VendorId, string ProjectCode, decimal BudgetCap, string Currency);
+public sealed record CreatePurchaseOrderRequest(Guid VendorId, string OutletCode, decimal BudgetCap, string Currency);
 public sealed record AddLineRequest(string ItemCode, string Description, decimal Quantity, string Unit, decimal UnitPrice);
 ```
 
 The endpoints are doing orchestration that belongs in an [application service](#/lesson/m08-application-services); we leave it inline here to keep the focus on the aggregate. Note the status codes: `400` for malformed input, `422` for a valid request the business rules reject, `409` for a version conflict.
 
 :::callout type=tip title="The same aggregate with EF Core and PostgreSQL"
-With EF Core you keep the aggregate exactly as above (minus the snapshot methods) and configure it from the outside:
+With EF Core you keep the aggregate exactly as above (minus the snapshot methods) and configure it from the outside. (`OwnsOne` works for `Money`; on EF Core 8+ `ComplexProperty` is the lighter fit for small value objects without identity.)
 
 ```csharp
 // Infrastructure/PurchaseOrderConfiguration.cs — snippet, not compiled here
@@ -676,7 +679,7 @@ builder.Property(o => o.Id).HasConversion(id => id.Value, v => new PurchaseOrder
 builder.OwnsOne(o => o.BudgetCap, m => { m.Property(x => x.Amount).HasColumnName("budget_cap").HasColumnType("numeric(18,2)"); m.Property(x => x.Currency).HasColumnName("currency"); });
 builder.HasMany(o => o.Lines).WithOne().OnDelete(DeleteBehavior.Cascade);
 builder.Navigation(o => o.Lines).UsePropertyAccessMode(PropertyAccessMode.Field);   // write to _lines, not a setter
-builder.Property(o => o.Version).IsConcurrencyToken();                            // or Npgsql: builder.UseXminAsConcurrencyToken()
+builder.Property(o => o.Version).IsConcurrencyToken();                            // or Npgsql: map a uint property to xmin with .IsRowVersion()
 ```
 
 `SaveChangesAsync` then throws `DbUpdateConcurrencyException` when the `WHERE version = @p` update affects zero rows; map it to `409` in one exception handler. The domain project still has no EF Core reference.
@@ -684,11 +687,11 @@ builder.Property(o => o.Version).IsConcurrencyToken();                          
 
 ## Bad design vs good design
 
-**Bad: the giant `Project` aggregate.** One root holding every PO, invoice, document and daily progress report of a highway project. Real consequences we have seen in systems like this: loading a project to add one document took 4–6 seconds and 80 MB; every two users saving anything on the same project conflicted; and the team "fixed" it by removing the version check, which brought back lost updates.
+**Bad: the giant `Outlet` aggregate.** One root holding every PO, supplier invoice, document and daily sales report of a kitchen. Typical consequences in systems built like this: loading an outlet to add one document takes seconds and tens of megabytes; any two users saving anything on the same outlet conflict; and the team "fixed" it by removing the version check, which brought back lost updates.
 
 **Bad: no aggregate at all.** `PurchaseOrderLine` has its own repository and its own endpoint. Adding a line never sees the other lines, so the budget rule lives in a trigger, in a service, and in a nightly report that emails the exceptions.
 
-**Good: the implementation above.** The PO owns its lines and nothing else. The budget rule runs in one method on every change. Vendors, goods receipts and invoices are their own aggregates linked by id. Conflicts are detected per PO, so two engineers on two different POs never collide.
+**Good: the implementation above.** The PO owns its lines and nothing else. The budget rule runs in one method on every change. Vendors, goods receipts and invoices are their own aggregates linked by id. Conflicts are detected per PO, so two managers on two different POs never collide.
 
 **When "bad" is fine.** A master-data screen for unit-of-measure codes has no cross-row rules. A plain table with a plain CRUD service is the right design; wrapping it in an aggregate adds ceremony and nothing else.
 
@@ -702,7 +705,7 @@ Because the goods receipt note is a separate aggregate, "received quantity ≤ o
 
 ## Practical playground
 
-Run the program, then try to break the budget: change the second `AddLine` quantity to `60`, or add a third line with the item code `STEEL-TMT-12` again. Then move `Submit()` above the first `AddLine` and see which rule fires.
+Run the program, then try to break the budget: change the second `AddLine` quantity to `30`, or add a third line with the item code `OIL-SUN-15L` again. Then move `Submit()` above the first `AddLine` and see which rule fires.
 
 :::playground type=csharp title="A purchase order that guards its own rules"
 ```csharp file=Program.cs
@@ -757,13 +760,13 @@ public static class Program
 {
     public static void Main()
     {
-        var po = new PurchaseOrder(budgetCap: 3_000_000m);
-        po.AddLine("STEEL-TMT-12", 40m, 58_000m);     // 23,20,000
-        po.AddLine("CEMENT-OPC-53", 1000m, 380m);     // 3,80,000  -> total 27,00,000
+        var po = new PurchaseOrder(budgetCap: 300_000m);
+        po.AddLine("OIL-SUN-15L", 100m, 2_320m);      // 2,32,000
+        po.AddLine("RICE-BASMATI-25", 20m, 2_400m);   // 48,000  -> total 2,80,000
         Console.WriteLine($"Total {po.Total:N0} of cap {po.BudgetCap:N0}, status {po.Status}");
         po.Submit();
         Console.WriteLine($"Status {po.Status}");
-        try { po.AddLine("SAND-RIVER", 50m, 1_800m); }
+        try { po.AddLine("PANEER-1KG", 50m, 380m); }
         catch (DomainException ex) { Console.WriteLine($"Refused: {ex.Message}"); }
     }
 }
@@ -781,9 +784,9 @@ Implement `PurchaseOrder.AddLine` so that every invariant below is checked **bef
 - The running total (existing lines + the new line) must not exceed `BudgetCap`.
 - If any check fails, throw `DomainException` and leave `Lines` unchanged.
 ::acceptance
-- Adding 40 × 58,000 to a 30,00,000 cap succeeds; `Total` is 23,20,000.
-- Adding a second line that pushes the total to 30,00,001 throws and the line count stays at 1.
-- Adding `"steel-tmt-12"` when `"STEEL-TMT-12"` exists throws.
+- Adding 100 × ₹2,320 to a ₹3,00,000 cap succeeds; `Total` is ₹2,32,000.
+- Adding a second line that pushes the total above the cap (to ₹3,00,020) throws and the line count stays at 1.
+- Adding `"oil-sun-15l"` when `"OIL-SUN-15L"` exists throws.
 - The 51st line throws.
 - `AddLine` after `Submit()` throws.
 ::hint
@@ -871,20 +874,20 @@ public class PurchaseOrderTests
     [Fact]
     public void Adds_line_within_budget()
     {
-        var po = new PurchaseOrder(3_000_000m);
-        po.AddLine("STEEL-TMT-12", 40m, 58_000m);
+        var po = new PurchaseOrder(300_000m);
+        po.AddLine("OIL-SUN-15L", 100m, 2_320m);
         Assert.Single(po.Lines);
-        Assert.Equal(2_320_000m, po.Total);
+        Assert.Equal(232_000m, po.Total);
     }
 
     [Fact]
     public void Rejects_line_that_breaks_budget_and_leaves_state_unchanged()
     {
-        var po = new PurchaseOrder(3_000_000m);
-        po.AddLine("STEEL-TMT-12", 40m, 58_000m);
-        Assert.Throws<DomainException>(() => po.AddLine("CEMENT", 1_789m, 380.2m)); // 2,320,000 + 680,177.80 = 3,000,177.80 > cap
+        var po = new PurchaseOrder(300_000m);
+        po.AddLine("OIL-SUN-15L", 100m, 2_320m);
+        Assert.Throws<DomainException>(() => po.AddLine("PANEER-1KG", 179m, 380m)); // 232,000 + 68,020 = 300,020 > cap
         Assert.Single(po.Lines);
-        Assert.Equal(2_320_000m, po.Total);
+        Assert.Equal(232_000m, po.Total);
     }
 
     [Fact]
@@ -898,9 +901,9 @@ public class PurchaseOrderTests
     [Fact]
     public void Rejects_duplicate_item_code_case_insensitively()
     {
-        var po = new PurchaseOrder(3_000_000m);
-        po.AddLine("STEEL-TMT-12", 1m, 58_000m);
-        Assert.Throws<DomainException>(() => po.AddLine(" steel-tmt-12 ", 1m, 58_000m));
+        var po = new PurchaseOrder(300_000m);
+        po.AddLine("OIL-SUN-15L", 1m, 2_320m);
+        Assert.Throws<DomainException>(() => po.AddLine(" oil-sun-15l ", 1m, 2_320m));
     }
 
     [Fact]
@@ -1007,7 +1010,7 @@ public sealed class PurchaseOrder
 Every check happens before `_lines.Add`. The second test proves the point: after the rejected add, the count and total are exactly what they were.
 ::mistakes
 - Adding the line and then checking `Total > BudgetCap`, with a `_lines.Remove` in a `catch`. Works until someone adds a second exit path, then it leaks.
-- Comparing item codes with `==` on raw input; `"steel-tmt-12 "` slips through.
+- Comparing item codes with `==` on raw input; `"oil-sun-15l "` slips through.
 - Exposing `List<PurchaseOrderLine>` directly "for the mapper". The mapper gets a back door and so does everyone else.
 ::extensions
 Add `ChangeLineQuantity(Guid lineId, decimal newQuantity)` with the same budget check, computing the proposed total as `Total - old + new`.
@@ -1025,7 +1028,7 @@ Implement the state transitions on `PurchaseOrder`. Each method is a guarded tra
 - A draft with no lines cannot be submitted.
 - Draft → Approve throws; Submitted → Approve succeeds.
 - Approved → Cancel throws; the status remains `Approved`.
-- Cancel with `"  "` throws; cancel with `"vendor blacklisted"` stores that reason trimmed.
+- Cancel with `"  "` throws; cancel with `"supplier failed hygiene audit"` stores that reason trimmed.
 - Close from `Approved` succeeds; from `Submitted` throws.
 ::hint
 Each method is two or three lines: a guard on `Status`, maybe a guard on data, then the assignment.
@@ -1101,8 +1104,8 @@ public class PurchaseOrderLifecycleTests
 {
     private static PurchaseOrder DraftWithLine()
     {
-        var po = new PurchaseOrder(1_000_000m);
-        po.AddLine("CEMENT-OPC-53", 500m, 380m);
+        var po = new PurchaseOrder(300_000m);
+        po.AddLine("PANEER-1KG", 500m, 380m);
         return po;
     }
 
@@ -1148,9 +1151,9 @@ public class PurchaseOrderLifecycleTests
         var po = DraftWithLine();
         Assert.Throws<DomainException>(() => po.Cancel("   "));
         Assert.Equal(PurchaseOrderStatus.Draft, po.Status);
-        po.Cancel("  vendor blacklisted ");
+        po.Cancel("  supplier failed hygiene audit ");
         Assert.Equal(PurchaseOrderStatus.Cancelled, po.Status);
-        Assert.Equal("vendor blacklisted", po.CancellationReason);
+        Assert.Equal("supplier failed hygiene audit", po.CancellationReason);
     }
 
     [Fact]
@@ -1169,7 +1172,7 @@ public class PurchaseOrderLifecycleTests
     {
         var po = DraftWithLine();
         po.Submit();
-        Assert.Throws<DomainException>(() => po.AddLine("SAND", 1m, 1m));
+        Assert.Throws<DomainException>(() => po.AddLine("SUGAR-1KG", 1m, 1m));
     }
 }
 ```
@@ -1263,33 +1266,33 @@ With five states and a handful of transitions, guard clauses are the clearest op
 - Checking the reason *after* setting `Status = Cancelled`. The test for a blank reason catches exactly that.
 :::
 
-:::exercise id=m08-aggregates-ex3 difficulty=intermediate kind=design title="Split the giant Project aggregate"
-A legacy system has one `Project` aggregate root that holds everything about a highway project: purchase orders (with lines), goods receipt notes, contractor invoices, site documents, team members and daily progress reports. A typical project has roughly 400 POs, 1,200 GRNs, 900 invoices, 15,000 documents and 1,000 progress reports. Users complain that saving anything is slow and that "someone else changed this project" errors appear many times a day.
+:::exercise id=m08-aggregates-ex3 difficulty=intermediate kind=design title="Split the giant Outlet aggregate"
+A legacy system for a cloud-kitchen chain has one `Outlet` aggregate root that holds everything about a kitchen: purchase orders (with lines), goods receipt notes, supplier invoices, outlet documents (FSSAI food licence, hygiene-audit photos, pest-control certificates), staff assignments and daily sales reports. A three-year-old outlet has roughly 400 POs, 1,200 GRNs, 900 invoices, 15,000 documents and 1,000 daily sales reports. Users complain that saving anything is slow and that "someone else changed this outlet" errors appear many times a day.
 
 Redesign this as several small aggregates. For each, state its root, its true invariants, and how it refers to the others. Use the LLD designer; mark aggregate roots as `class` with "Aggregate root" in `responsibility`, and show id-only references as `association` relations labelled "by id".
 ::acceptance
 - At least five separate aggregates, each with a stated invariant that genuinely spans its children (or a note that it has none and is a single-entity aggregate).
 - `PurchaseOrder` contains its lines and nothing else.
 - No aggregate holds an object reference to another aggregate; all cross-aggregate links are ids.
-- `Project` shrinks to a small root (code, name, sanctioned budget, status) with at most one or two child collections.
+- `Outlet` shrinks to a small root (code, name, monthly budget, status) with at most one or two child collections.
 - A short note on which cross-aggregate rules become eventually consistent and how (events or snapshot-at-creation).
 ::hint
 List every rule the current system enforces. For each one, ask which objects it needs *at the same instant*. Group only those.
 ::hint
-"Total of all approved POs must not exceed the project's sanctioned budget" is a tempting invariant that would keep POs inside Project. Ask whether the business would accept a check that is a few seconds stale, or a reservation step, before paying the cost of a giant aggregate.
+"Total of all approved POs must not exceed the outlet's monthly budget" is a tempting invariant that would keep POs inside Outlet. Ask whether the business would accept a check that is a few seconds stale, or a reservation step, before paying the cost of a giant aggregate.
 ::hint
-Documents and progress reports typically have *no* cross-object rules at all. Each is its own tiny aggregate (or just a table).
+Documents and daily sales reports typically have *no* cross-object rules at all. Each is its own tiny aggregate (or just a table).
 ::hint
 A GRN needs the ordered quantities to validate receipts. Copy the needed figures in at creation (a snapshot) and reference the PO by id; do not hold the PO.
 ::starter
 ```json
 {
   "classes": [
-    { "id": "Project", "name": "Project", "kind": "class", "fields": ["-ProjectId Id", "-string Code", "-Money SanctionedBudget"], "methods": [], "responsibility": "Aggregate root. TODO: what stays inside?" },
-    { "id": "PurchaseOrder", "name": "PurchaseOrder", "kind": "class", "fields": ["-PurchaseOrderId Id", "-ProjectId ProjectId", "-VendorId VendorId", "-Money BudgetCap"], "methods": ["+LineId AddLine(...)", "+void Submit()"], "responsibility": "Aggregate root. Invariant: total <= BudgetCap" }
+    { "id": "Outlet", "name": "Outlet", "kind": "class", "fields": ["-OutletId Id", "-string Code", "-Money MonthlyBudget"], "methods": [], "responsibility": "Aggregate root. TODO: what stays inside?" },
+    { "id": "PurchaseOrder", "name": "PurchaseOrder", "kind": "class", "fields": ["-PurchaseOrderId Id", "-OutletId OutletId", "-VendorId VendorId", "-Money BudgetCap"], "methods": ["+LineId AddLine(...)", "+void Submit()"], "responsibility": "Aggregate root. Invariant: total <= BudgetCap" }
   ],
   "relations": [
-    { "from": "PurchaseOrder", "to": "Project", "kind": "association", "label": "by id" }
+    { "from": "PurchaseOrder", "to": "Outlet", "kind": "association", "label": "by id" }
   ]
 }
 ```
@@ -1297,13 +1300,13 @@ A GRN needs the ordered quantities to validate receipts. Copy the needed figures
 ```json
 {
   "classes": [
-    { "id": "Project", "name": "Project", "kind": "class",
-      "fields": ["-ProjectId Id", "-string Code", "-string Name", "-Money SanctionedBudget", "-Money CommittedBudget", "-ProjectStatus Status", "-List~TeamAssignment~ _team"],
-      "methods": ["+void Commit(Money amount)", "+void Release(Money amount)", "+void AssignEngineer(EmployeeId id, Role role)", "+void Close()"],
-      "responsibility": "Aggregate root. Invariants: CommittedBudget <= SanctionedBudget; no duplicate team assignment; cannot close with open commitments" },
-    { "id": "TeamAssignment", "name": "TeamAssignment", "kind": "record", "fields": ["+EmployeeId EmployeeId", "+Role Role", "+DateOnly From"], "methods": [], "responsibility": "Value inside Project" },
+    { "id": "Outlet", "name": "Outlet", "kind": "class",
+      "fields": ["-OutletId Id", "-string Code", "-string Name", "-Money MonthlyBudget", "-Money CommittedBudget", "-OutletStatus Status", "-List~TeamAssignment~ _team"],
+      "methods": ["+void Commit(Money amount)", "+void Release(Money amount)", "+void AssignStaff(EmployeeId id, Role role)", "+void Close()"],
+      "responsibility": "Aggregate root. Invariants: CommittedBudget <= MonthlyBudget; no duplicate team assignment; cannot close with open commitments" },
+    { "id": "TeamAssignment", "name": "TeamAssignment", "kind": "record", "fields": ["+EmployeeId EmployeeId", "+Role Role", "+DateOnly From"], "methods": [], "responsibility": "Value inside Outlet" },
     { "id": "PurchaseOrder", "name": "PurchaseOrder", "kind": "class",
-      "fields": ["-PurchaseOrderId Id", "-ProjectId ProjectId", "-VendorId VendorId", "-Money BudgetCap", "-PurchaseOrderStatus Status", "-List~PurchaseOrderLine~ _lines", "-int Version"],
+      "fields": ["-PurchaseOrderId Id", "-OutletId OutletId", "-VendorId VendorId", "-Money BudgetCap", "-PurchaseOrderStatus Status", "-List~PurchaseOrderLine~ _lines", "-int Version"],
       "methods": ["+LineId AddLine(...)", "+void ChangeLineQuantity(LineId, Quantity)", "+void Submit()", "+void Approve()"],
       "responsibility": "Aggregate root. Invariants: total <= BudgetCap; unique item codes; <= 50 lines; lines frozen after Submit" },
     { "id": "PurchaseOrderLine", "name": "PurchaseOrderLine", "kind": "class", "fields": ["-LineId Id", "-string ItemCode", "-Quantity Quantity", "-Money UnitPrice"], "methods": ["~void ChangeQuantity(Quantity)"], "responsibility": "Child entity of PurchaseOrder" },
@@ -1312,43 +1315,43 @@ A GRN needs the ordered quantities to validate receipts. Copy the needed figures
       "methods": ["+void Receive(LineId line, Quantity qty, DateOnly on)", "+bool IsComplete"],
       "responsibility": "Aggregate root. Invariant: cumulative received per line <= ordered (snapshot at creation) + 5 % tolerance" },
     { "id": "OrderedLine", "name": "OrderedLine", "kind": "record", "fields": ["+LineId LineId", "+Quantity Ordered"], "methods": [], "responsibility": "Snapshot of PO line copied at GRN creation" },
-    { "id": "ContractorInvoice", "name": "ContractorInvoice", "kind": "class",
+    { "id": "SupplierInvoice", "name": "SupplierInvoice", "kind": "class",
       "fields": ["-InvoiceId Id", "-PurchaseOrderId OrderId", "-VendorId VendorId", "-List~InvoiceItem~ _items", "-Money Total", "-InvoiceStatus Status"],
-      "methods": ["+void AddItem(...)", "+void Certify(EmployeeId by)", "+void MarkPaid(PaymentRef ref)"],
-      "responsibility": "Aggregate root. Invariants: items sum to Total; GST computed once per invoice; cannot pay before certify" },
-    { "id": "SiteDocument", "name": "SiteDocument", "kind": "class", "fields": ["-DocumentId Id", "-ProjectId ProjectId", "-string Title", "-Uri Location", "-DocumentVersion Version"], "methods": ["+void Supersede(Uri newLocation)"], "responsibility": "Aggregate root (single entity). Invariant: version increases monotonically" },
-    { "id": "DailyProgressReport", "name": "DailyProgressReport", "kind": "class", "fields": ["-DprId Id", "-ProjectId ProjectId", "-DateOnly Date", "-List~WorkItemProgress~ _items"], "methods": ["+void Record(WorkItemId, Quantity)"], "responsibility": "Aggregate root. Invariant: one report per project per date; progress per item is non-negative" },
+      "methods": ["+void AddItem(...)", "+void Verify(EmployeeId by)", "+void MarkPaid(PaymentRef ref)"],
+      "responsibility": "Aggregate root. Invariants: items sum to Total; GST computed once per invoice; cannot pay before verify" },
+    { "id": "OutletDocument", "name": "OutletDocument", "kind": "class", "fields": ["-DocumentId Id", "-OutletId OutletId", "-string Title", "-Uri Location", "-DocumentVersion Version"], "methods": ["+void Supersede(Uri newLocation)"], "responsibility": "Aggregate root (single entity). Invariant: version increases monotonically" },
+    { "id": "DailySalesReport", "name": "DailySalesReport", "kind": "class", "fields": ["-ReportId Id", "-OutletId OutletId", "-DateOnly Date", "-List~ChannelSales~ _channels"], "methods": ["+void Record(ChannelId, Money)"], "responsibility": "Aggregate root. Invariant: one report per outlet per date; sales per channel are non-negative" },
     { "id": "Vendor", "name": "Vendor", "kind": "class", "fields": ["-VendorId Id", "-string LegalName", "-Gstin Gstin", "-bool IsActive"], "methods": ["+void Deactivate()"], "responsibility": "Aggregate root (single entity)" }
   ],
   "relations": [
-    { "from": "Project", "to": "TeamAssignment", "kind": "composition", "multiplicity": "0..*" },
+    { "from": "Outlet", "to": "TeamAssignment", "kind": "composition", "multiplicity": "0..*" },
     { "from": "PurchaseOrder", "to": "PurchaseOrderLine", "kind": "composition", "multiplicity": "1..50" },
-    { "from": "PurchaseOrder", "to": "Project", "kind": "association", "label": "by id" },
+    { "from": "PurchaseOrder", "to": "Outlet", "kind": "association", "label": "by id" },
     { "from": "PurchaseOrder", "to": "Vendor", "kind": "association", "label": "by id" },
     { "from": "GoodsReceiptNote", "to": "OrderedLine", "kind": "composition" },
     { "from": "GoodsReceiptNote", "to": "PurchaseOrder", "kind": "association", "label": "by id" },
-    { "from": "ContractorInvoice", "to": "PurchaseOrder", "kind": "association", "label": "by id" },
-    { "from": "ContractorInvoice", "to": "Vendor", "kind": "association", "label": "by id" },
-    { "from": "SiteDocument", "to": "Project", "kind": "association", "label": "by id" },
-    { "from": "DailyProgressReport", "to": "Project", "kind": "association", "label": "by id" }
+    { "from": "SupplierInvoice", "to": "PurchaseOrder", "kind": "association", "label": "by id" },
+    { "from": "SupplierInvoice", "to": "Vendor", "kind": "association", "label": "by id" },
+    { "from": "OutletDocument", "to": "Outlet", "kind": "association", "label": "by id" },
+    { "from": "DailySalesReport", "to": "Outlet", "kind": "association", "label": "by id" }
   ]
 }
 ```
 
 The reasoning behind the cuts:
 
-- **Project** keeps only what has a project-wide rule: the sanctioned versus committed budget, and the team list (no duplicate assignments). It shrinks from ~18,000 children to a handful. `CommittedBudget` is updated by a handler when a PO is approved (`PurchaseOrderApproved` event, next-but-one lesson), so "committed ≤ sanctioned" is checked inside the Project aggregate, a moment after approval. If that moment is unacceptable, use a two-step reservation: the application service first calls `project.Commit(amount)` and saves, then approves the PO in a second transaction, compensating if the second step fails.
+- **Outlet** keeps only what has an outlet-wide rule: the monthly versus committed budget, and the staff list (no duplicate assignments). It shrinks from ~18,500 children to a handful. `CommittedBudget` is updated by a handler when a PO is approved (`PurchaseOrderApproved` event, next-but-one lesson), so "committed ≤ monthly budget" is checked inside the Outlet aggregate, a moment after approval. If that moment is unacceptable, use a two-step reservation: the application service first calls `outlet.Commit(amount)` and saves, then approves the PO in a second transaction, compensating if the second step fails.
 - **PurchaseOrder** is unchanged from the lesson. Its 400 instances are now 400 independent version counters instead of one.
 - **GoodsReceiptNote** copies the ordered quantities at creation. A later PO change is not reflected, which the business accepts because POs are frozen after submit anyway.
-- **ContractorInvoice** has its own money rules (items sum to total, GST once). It references the PO and vendor by id; matching invoice to GRN ("three-way match") is a domain service that reads all three.
-- **SiteDocument** and **DailyProgressReport** have almost no cross-object rules. They become tiny aggregates. 15,000 documents no longer load when someone adds a team member.
-- **Vendor** was never part of the project; it just had a navigation property. Now it is explicitly a separate aggregate referenced by id.
+- **SupplierInvoice** has its own money rules (items sum to total, GST once). It references the PO and vendor by id; matching invoice to GRN ("three-way match") is a domain service that reads all three.
+- **OutletDocument** and **DailySalesReport** have almost no cross-object rules. They become tiny aggregates. 15,000 documents no longer load when someone assigns a cook to a shift.
+- **Vendor** was never part of the outlet; it just had a navigation property. Now it is explicitly a separate aggregate referenced by id.
 
 Expected effect (estimate, not a benchmark): the save path for "add a document" goes from loading tens of thousands of rows to loading one, and version conflicts drop from "many per day" to "only when two people edit the same PO or the same invoice at the same time", which is rare.
 ::alternatives
-If the business insists that *no* PO may ever be approved beyond the sanctioned budget, even for a second, you can make `Project` the root for *approvals* only: `project.ApprovePurchaseOrder(poId, amount)` updates `CommittedBudget` and emits an event that moves the PO to Approved. The PO remains its own aggregate for everything else. This keeps the hard rule while still avoiding a giant aggregate.
+If the business insists that *no* PO may ever be approved beyond the monthly budget, even for a second, you can make `Outlet` the root for *approvals* only: `outlet.ApprovePurchaseOrder(poId, amount)` updates `CommittedBudget` and emits an event that moves the PO to Approved. The PO remains its own aggregate for everything else. This keeps the hard rule while still avoiding a giant aggregate.
 ::mistakes
-- Keeping `List<PurchaseOrder>` inside `Project` "so we can compute the committed budget". Compute it from a stored figure maintained by events, or from a query, not by loading 400 aggregates.
+- Keeping `List<PurchaseOrder>` inside `Outlet` "so we can compute the committed budget". Compute it from a stored figure maintained by events, or from a query, not by loading 400 aggregates.
 - Splitting *too* far: making `PurchaseOrderLine` its own aggregate breaks the budget invariant.
 :::
 
@@ -1485,8 +1488,8 @@ public class RepositoryTests
     private static async Task<(InMemoryPurchaseOrderRepository repo, Guid id)> SeedAsync()
     {
         var repo = new InMemoryPurchaseOrderRepository();
-        var po = new PurchaseOrder(1_000_000m);
-        po.AddLine("CEMENT", 100m, 380m);
+        var po = new PurchaseOrder(300_000m);
+        po.AddLine("PANEER", 100m, 380m);
         await repo.AddAsync(po);
         return (repo, po.Id);
     }
@@ -1524,20 +1527,20 @@ public class RepositoryTests
     public async Task Second_writer_loses()
     {
         var (repo, id) = await SeedAsync();
-        var engineerA = (await repo.GetAsync(id))!;
-        var engineerB = (await repo.GetAsync(id))!;
+        var managerA = (await repo.GetAsync(id))!;
+        var managerB = (await repo.GetAsync(id))!;
 
-        engineerA.AddLine("STEEL", 1m, 58_000m);
-        engineerB.AddLine("SAND", 10m, 1_800m);
+        managerA.AddLine("OIL", 1m, 2_320m);
+        managerB.AddLine("SUGAR", 10m, 45m);
 
-        await repo.SaveAsync(engineerA);
-        await Assert.ThrowsAsync<ConcurrencyException>(() => repo.SaveAsync(engineerB));
+        await repo.SaveAsync(managerA);
+        await Assert.ThrowsAsync<ConcurrencyException>(() => repo.SaveAsync(managerB));
 
         var stored = (await repo.GetAsync(id))!;
         Assert.Equal(2, stored.Version);
         Assert.Equal(2, stored.Lines.Count);
-        Assert.Contains(stored.Lines, l => l.ItemCode == "STEEL");
-        Assert.DoesNotContain(stored.Lines, l => l.ItemCode == "SAND");
+        Assert.Contains(stored.Lines, l => l.ItemCode == "OIL");
+        Assert.DoesNotContain(stored.Lines, l => l.ItemCode == "SUGAR");
     }
 
     [Fact]
@@ -1679,7 +1682,7 @@ public sealed class InMemoryPurchaseOrderRepository : IPurchaseOrderRepository
 
 The version check appears twice on purpose. The explicit `current.Version != order.Version` gives a clear message in the common case. The `TryUpdate(..., current)` closes the tiny window between reading `current` and writing `next` in which another thread could sneak in: it only swaps if the stored value is still *exactly* `current` (record equality), which is the in-memory twin of `UPDATE ... WHERE version = @expected`.
 ::mistakes
-- Storing the `PurchaseOrder` object itself. Both "engineers" then share one instance, the test for independent copies fails, and the concurrency problem is hidden rather than solved.
+- Storing the `PurchaseOrder` object itself. Both "managers" then share one instance, the test for independent copies fails, and the concurrency problem is hidden rather than solved.
 - Checking the version and then calling `_store[key] = next` (an unconditional write). Two threads can both pass the check.
 - Letting `SaveAsync` succeed for an order that was never added, silently creating it. Creation and update have different intent; keep them separate.
 :::
@@ -1754,11 +1757,11 @@ using Xunit;
 
 public class GoodsReceiptNoteTests
 {
-    private static readonly Guid Steel = Guid.NewGuid();
-    private static readonly Guid Cement = Guid.NewGuid();
+    private static readonly Guid Onions = Guid.NewGuid();
+    private static readonly Guid Rice = Guid.NewGuid();
 
     private static GoodsReceiptNote NewGrn() =>
-        new(Guid.NewGuid(), new[] { new OrderedLine(Steel, 40m), new OrderedLine(Cement, 500m) });
+        new(Guid.NewGuid(), new[] { new OrderedLine(Onions, 40m), new OrderedLine(Rice, 500m) });
 
     [Fact]
     public void Empty_order_lines_throw() =>
@@ -1766,16 +1769,16 @@ public class GoodsReceiptNoteTests
 
     [Fact]
     public void Non_positive_ordered_throws() =>
-        Assert.Throws<DomainException>(() => new GoodsReceiptNote(Guid.NewGuid(), new[] { new OrderedLine(Steel, 0m) }));
+        Assert.Throws<DomainException>(() => new GoodsReceiptNote(Guid.NewGuid(), new[] { new OrderedLine(Onions, 0m) }));
 
     [Fact]
     public void Partial_receipts_accumulate()
     {
         var grn = NewGrn();
-        grn.Receive(Steel, 20m);
-        grn.Receive(Steel, 20m);
-        Assert.Equal(40m, grn.Received(Steel));
-        Assert.Equal(0m, grn.Received(Cement));
+        grn.Receive(Onions, 20m);
+        grn.Receive(Onions, 20m);
+        Assert.Equal(40m, grn.Received(Onions));
+        Assert.Equal(0m, grn.Received(Rice));
         Assert.False(grn.IsComplete);
     }
 
@@ -1783,17 +1786,17 @@ public class GoodsReceiptNoteTests
     public void Within_tolerance_is_allowed()
     {
         var grn = NewGrn();
-        grn.Receive(Steel, 42m);
-        Assert.Equal(42m, grn.Received(Steel));
+        grn.Receive(Onions, 42m);
+        Assert.Equal(42m, grn.Received(Onions));
     }
 
     [Fact]
     public void Beyond_tolerance_throws_and_leaves_state()
     {
         var grn = NewGrn();
-        grn.Receive(Steel, 30m);
-        Assert.Throws<DomainException>(() => grn.Receive(Steel, 13m));   // 43 > 42
-        Assert.Equal(30m, grn.Received(Steel));
+        grn.Receive(Onions, 30m);
+        Assert.Throws<DomainException>(() => grn.Receive(Onions, 13m));   // 43 > 42
+        Assert.Equal(30m, grn.Received(Onions));
     }
 
     [Fact]
@@ -1807,19 +1810,19 @@ public class GoodsReceiptNoteTests
     public void Completes_when_all_lines_received_and_then_freezes()
     {
         var grn = NewGrn();
-        grn.Receive(Steel, 40m);
-        grn.Receive(Cement, 500m);
+        grn.Receive(Onions, 40m);
+        grn.Receive(Rice, 500m);
         Assert.True(grn.IsComplete);
         Assert.Equal(GrnStatus.Completed, grn.Status);
-        Assert.Throws<DomainException>(() => grn.Receive(Steel, 1m));
+        Assert.Throws<DomainException>(() => grn.Receive(Onions, 1m));
     }
 
     [Fact]
     public void Non_positive_receipt_throws()
     {
         var grn = NewGrn();
-        Assert.Throws<DomainException>(() => grn.Receive(Steel, 0m));
-        Assert.Throws<DomainException>(() => grn.Receive(Steel, -5m));
+        Assert.Throws<DomainException>(() => grn.Receive(Onions, 0m));
+        Assert.Throws<DomainException>(() => grn.Receive(Onions, -5m));
     }
 }
 ```
@@ -1883,7 +1886,7 @@ public sealed class GoodsReceiptNote
 
 What this demonstrates about boundaries: the GRN enforces "received ≤ ordered + 5 %" entirely from data it owns. It never loads the PO, so receiving goods never conflicts with someone editing the PO, and the two aggregates can live in different services or databases. The price is that the snapshot can go stale if the PO changes after the GRN is created; the business accepts this because POs are frozen after submission, and a change order creates a new GRN.
 ::alternatives
-If tolerance varies by item category (steel ±2 %, sand ±10 %), pass the tolerance in the `OrderedLine` snapshot too. If the business wants the PO to know its received quantities, publish a `GoodsReceived` event and let a handler update the PO (next-but-one lesson); do not reach into the PO from here.
+If tolerance varies by item category (packaged goods 0 %, fresh vegetables ±10 %), pass the tolerance in the `OrderedLine` snapshot too. If the business wants the PO to know its received quantities, publish a `GoodsReceived` event and let a handler update the PO (next-but-one lesson); do not reach into the PO from here.
 ::mistakes
 - Holding a `PurchaseOrder` field "just to read the quantities". The GRN now cannot be loaded without the PO, and two aggregates become one in practice.
 - Updating `_received` before the tolerance check. The "leaves state" test catches it.
@@ -1936,12 +1939,12 @@ Aggregates are tested as **black boxes through the root**: call public methods, 
 [Fact]
 public void Rejecting_a_line_leaves_the_order_as_it_was()
 {
-    var po = new PurchaseOrder(PurchaseOrderId.New(), new VendorId(Guid.NewGuid()), "NH-48-PKG3", Money.Inr(3_000_000m));
-    po.AddLine("STEEL-TMT-12", "TMT bars 12 mm", new Quantity(40m, UnitOfMeasure.Tonne), Money.Inr(58_000m));
+    var po = new PurchaseOrder(PurchaseOrderId.New(), new VendorId(Guid.NewGuid()), "BLR-KOR-01", Money.Inr(300_000m));
+    po.AddLine("OIL-SUN-15L", "Sunflower oil, 15 L tin", new Quantity(100m, UnitOfMeasure.Tin), Money.Inr(2_320m));
     var before = po.Total;
 
     Assert.Throws<DomainException>(() =>
-        po.AddLine("CEMENT-OPC-53", "OPC 53 grade", new Quantity(2_000m, UnitOfMeasure.Bag), Money.Inr(380m)));
+        po.AddLine("PANEER-1KG", "Fresh paneer", new Quantity(200m, UnitOfMeasure.Kilogram), Money.Inr(380m)));   // 2,32,000 + 76,000 > 3,00,000
 
     Assert.Single(po.Lines);
     Assert.Equal(before, po.Total);
@@ -1986,9 +1989,9 @@ How does optimistic concurrency protect an aggregate, and how is it exposed over
 ::a
 The aggregate carries a version number loaded from the store. On save, the repository issues `UPDATE ... WHERE id = ? AND version = ?` and increments the version. If zero rows are affected, someone else saved first, and a `ConcurrencyException` (EF Core: `DbUpdateConcurrencyException`) is raised and mapped to `409 Conflict`. Over HTTP the version travels as an `ETag` on reads and an `If-Match` header on writes so the server can reject stale edits before touching the domain. It is cheap because conflicts are rare on small aggregates, and it never blocks a user who holds a screen open.
 ::q advanced
-A team has a `Project` aggregate with thousands of children and constant version conflicts. Walk through how you would split it and what becomes eventually consistent.
+A team has an `Outlet` aggregate with thousands of children and constant version conflicts. Walk through how you would split it and what becomes eventually consistent.
 ::a
-List every rule and ask which objects it needs at the same instant. Rules confined to a PO (total ≤ cap, unique items) make `PurchaseOrder` its own aggregate; the same for invoices, GRNs, documents and daily reports. `Project` keeps only project-wide facts: sanctioned and committed budget, team. "Committed ≤ sanctioned" is maintained by a handler for `PurchaseOrderApproved` that calls `project.Commit(amount)` in its own transaction, so it is eventually consistent by a few hundred milliseconds. If the business cannot tolerate that, make `Project` the root for *approval* only (`project.ApprovePurchaseOrder(id, amount)`) and let an event move the PO's status, or use a reservation step. Measure the result: loads shrink from thousands of rows to tens, and conflicts drop to the genuinely concurrent edits of the same PO.
+List every rule and ask which objects it needs at the same instant. Rules confined to a PO (total ≤ cap, unique items) make `PurchaseOrder` its own aggregate; the same for invoices, GRNs, documents and daily reports. `Outlet` keeps only outlet-wide facts: monthly and committed budget, staff. "Committed ≤ monthly budget" is maintained by a handler for `PurchaseOrderApproved` that calls `outlet.Commit(amount)` in its own transaction, so it is eventually consistent by a few hundred milliseconds. If the business cannot tolerate that, make `Outlet` the root for *approval* only (`outlet.ApprovePurchaseOrder(id, amount)`) and let an event move the PO's status, or use a reservation step. Measure the result: loads shrink from thousands of rows to tens, and conflicts drop to the genuinely concurrent edits of the same PO.
 ::q advanced
 Why should loading an aggregate from the database not go through its normal creation and mutation methods?
 ::a
@@ -2035,9 +2038,9 @@ A: Atomic invariants for that aggregate with minimal locking; cross-aggregate co
 Which of these is a genuine invariant of the `PurchaseOrder` aggregate?
 - [ ] The vendor must be active.
 - [x] The total of all lines must not exceed the budget cap.
-- [ ] The project's committed budget must not exceed its sanctioned budget.
+- [ ] The outlet's committed spend must not exceed its monthly budget.
 - [ ] The goods received must not exceed the ordered quantity.
-> Only the second rule can be checked using data the PO owns, after every PO operation. The others need the vendor, the project, or the GRN, which are separate aggregates.
+> Only the second rule can be checked using data the PO owns, after every PO operation. The others need the vendor, the outlet, or the GRN, which are separate aggregates.
 ::q single
 `AddLine` adds the line to `_lines`, then checks the total and throws if over budget. What is wrong?
 - [ ] Nothing; the exception prevents the save.
@@ -2053,7 +2056,7 @@ Which are good reasons to keep aggregates small? (Select all that apply.)
 - [x] Each aggregate can be stored and scaled independently.
 > Small aggregates still have invariants; that is their whole point. The other three are the practical benefits.
 ::q single
-Engineer A and Engineer B both load PO version 7. A saves first. What happens to B's save with optimistic concurrency?
+Manager A and Manager B both load PO version 7. A saves first. What happens to B's save with optimistic concurrency?
 - [ ] It succeeds and overwrites A's change.
 - [ ] It waits until A finishes.
 - [x] The `UPDATE ... WHERE version = 7` affects zero rows, a concurrency exception is raised, and the API returns 409.

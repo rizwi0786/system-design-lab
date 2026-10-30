@@ -1,43 +1,43 @@
 ---
 id: m17-multi-tenant-pm
-title: Multi-tenant enterprise project management system
+title: Multi-tenant SaaS project management (Jira-style)
 module: m17
 level: advanced
 status: reviewed
 template: hld-case
 minutes: 120
 prerequisites: [m16-multi-tenancy, m14-rbac-pbac, m14-multi-tenant-security, m14-least-privilege-audit, m11-object-storage]
-related: [m16-multi-region, m16-workflow-engines, m16-cqrs, m12-outbox, m09-partitioning-sharding, m18-leave-workflow, m17-file-storage]
-tags: [multi-tenancy, rbac, abac, documents, approvals, workflow, audit, reporting, data-residency, infrastructure-projects]
-patterns: [Pool with Row-Level Security, Tenant Context, Policy-Based Authorization, Approval Workflow State Machine, Append-Only Audit Log, Valet Key, Transactional Outbox, Read Model]
-summary: Design a SaaS platform where hundreds of organisations manage infrastructure projects — roads, metro lines, water schemes — with strict isolation, role-and-attribute permissions, versioned documents, multi-step approvals, cross-project reporting, a tamper-evident audit trail and per-tenant data residency.
+related: [m16-multi-region, m16-search-architecture, m10-rate-limiting, m12-outbox, m09-partitioning-sharding, m14-oauth-oidc, m17-unique-id-generator, m17-job-scheduler, m17-notification-platform, m17-scaling-journey]
+tags: [multi-tenancy, saas, rbac, abac, row-level-security, noisy-neighbour, sso, scim, audit, data-residency]
+patterns: [Pool with Row-Level Security, Cell-Based Architecture, Tenant Context, Policy-Based Authorization, Per-Tenant Rate Limiting, Approval Workflow State Machine, Append-Only Audit Log, Valet Key, Transactional Outbox, Read Model]
+summary: Design a Jira/Asana-style SaaS where thousands of companies run projects, boards, sprints and issues on shared infrastructure, with tenant isolation through PostgreSQL row-level security, role-and-attribute permissions, per-tenant limits that tame noisy neighbours, enterprise SSO and SCIM, a tamper-evident audit trail and per-tenant data residency.
 references:
   - title: "PostgreSQL 17 documentation — Row security policies"
     url: https://www.postgresql.org/docs/17/ddl-rowsecurity.html
   - title: "Microsoft Learn — Policy-based authorization in ASP.NET Core"
     url: https://learn.microsoft.com/aspnet/core/security/authorization/policies
+  - title: "Microsoft Learn — Rate limiting middleware in ASP.NET Core"
+    url: https://learn.microsoft.com/aspnet/core/performance/rate-limit
   - title: "Microsoft Learn — Architect multitenant solutions on Azure: tenancy models"
     url: https://learn.microsoft.com/azure/architecture/guide/multitenant/considerations/tenancy-models
-  - title: "Microsoft Learn — Valet Key pattern"
-    url: https://learn.microsoft.com/azure/architecture/patterns/valet-key
-  - title: "PostgreSQL 17 documentation — Table partitioning"
-    url: https://www.postgresql.org/docs/17/ddl-partitioning.html
+  - title: "RFC 7644 — System for Cross-domain Identity Management (SCIM): Protocol"
+    url: https://www.rfc-editor.org/rfc/rfc7644
 ---
 
-An infrastructure project is a long argument between organisations. An authority awards a highway package; a project-management consultant supervises; a contractor builds; a lender wants monthly progress; an auditor wants to know who approved the variation order and when. A project management platform for this world is not a to-do list. It is a system of record for money and accountability across organisations that do not fully trust one another, and it is sold to hundreds of them at once. This case study designs that platform, which we will call **Setu**, from tenancy to audit.
+A project-management tool for one team is a weekend project: a table of tasks, a board with three columns, a login page. The same tool sold to five thousand companies at once is a different system. Every company expects to be alone in it: nobody else may ever see its issues, one customer's import script must not slow everybody else down, the bank among the customers wants its own SSO, its own audit trail and its data kept in its own region. This case study designs such a platform, a system like Jira or Asana, which we will call **Trackly**. We reason from public engineering principles, not from any company's internal design.
 
 ## Learning objectives
 
 By the end of this lesson you will be able to:
 
-1. Choose a tenancy model for an enterprise SaaS where tenants are organisations with thousands of users and projects involve several organisations at once.
-2. Combine role-based access (what a project manager may do) with attribute-based rules (only on projects they belong to, only for documents at or below their clearance) and implement it as ASP.NET Core authorization policies.
-3. Design versioned document storage on object storage with signed URLs, checksums and per-tenant storage prefixes.
-4. Model multi-step approval workflows (sequential, parallel, quorum, delegation, SLA) as a state machine stored in PostgreSQL.
-5. Separate transactional data from reporting with read models and a warehouse, without breaking tenant isolation.
-6. Build a tamper-evident, append-only audit log that satisfies auditors and survives database administrators.
-7. Place each tenant's data in its home region and prove it from the architecture diagram.
-8. Estimate capacity and cost with arithmetic, and say which part breaks first.
+1. Choose a tenancy model for a SaaS with thousands of mostly small tenants and a few very large ones, and explain why a cell-based pool with row-level security fits.
+2. Enforce tenant isolation in PostgreSQL 17 with row-level security, and name the gotchas (table owners, empty settings, views, unique constraints, connection pools).
+3. Combine roles (what a project admin may do) with attributes (only in projects they belong to, only issues at or below their security level) as ASP.NET Core authorization policies.
+4. Protect tenants from each other's load with per-tenant rate limits, quotas, fair job queues and the ability to move a hot tenant to its own database.
+5. Design enterprise SSO (SAML or OpenID Connect per tenant) and SCIM provisioning so that a deactivated employee loses access within minutes.
+6. Build issue keys, optimistic concurrency, permission-aware search and real-time boards on top of that foundation.
+7. Keep a tamper-evident audit log and place each tenant's data in its home region, and prove both.
+8. Estimate capacity and cost with arithmetic, and say what breaks first.
 
 ## Prerequisites
 
@@ -49,555 +49,763 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Think of a large office building where 400 companies rent floors. Each company's staff can only enter their own floor (that is **tenancy**: one building, many separate tenants). Inside a company, the receptionist, the engineers and the finance head each have different keys (**roles**). But a key alone is not enough: an engineer can open the drawing cabinet only for the projects she is assigned to, and only drawers marked at or below her clearance (**attributes**). Some rooms are shared project rooms where the company invites people from a partner company for one project only; those guests get a badge that works for that one room and nothing else.
+Picture a large co-working building. Five thousand companies rent desks in it: a two-person design studio, a 300-person online grocery company, a bank with 25,000 staff. They share the lifts, the electricity and the reception, but each company's rooms open only with that company's key card. That is **multi-tenancy**: one building, many separate tenants.
 
-Every drawing in the cabinet is kept with all its earlier versions, each stamped with who filed it and a fingerprint that proves it has not been altered (**versioned documents with checksums**). When a contractor asks for extra payment, the request travels along a chain of desks: site engineer, then team leader, then project manager, then two people in finance who must both sign (**approval workflow**). If a desk is empty for three days, the request is escalated (**SLA**). Every door opened, every drawing filed, every signature given is written into a bound ledger with numbered pages where nothing can be erased (**audit log**). And the ledger and cabinets for a German company's projects physically sit in Germany, because their law says so (**data residency**).
+Inside each company, people work the way most teams do: a wall of sticky notes. Each note is a piece of work (an **issue**: "Fix the checkout button on Android"). Notes move across columns on the wall from *To do* to *In progress* to *Done* (a **board** with a **workflow**). Every two weeks the team picks which notes to finish next (a **sprint**). Each note gets a short label such as `MOB-142` so people can talk about it (an **issue key**).
 
-Setu is that building, in software, for infrastructure projects: highways, metro lines, water supply schemes, power substations.
+Not everyone in a company may touch every wall. The finance team's wall is closed to the marketing interns. A manager can rearrange the whole wall; a visitor from an outside agency can only read the notes on the one wall they were invited to (**roles** and **attributes**). Some notes are marked "security sensitive" and only a few people may read them (**issue security levels**).
+
+The building has rules so that tenants do not hurt each other. If one company starts moving 50,000 boxes through the lift at once, the building manager makes them use the goods lift at night, so other tenants can still get to work (**per-tenant limits** and **noisy-neighbour protection**). Big companies want their own badge system: staff swipe in with the company's own ID card, and when someone leaves, HR deactivates the card and the building door stops opening for them within minutes (**enterprise SSO** and **SCIM provisioning**). Every key-card change and every export of files is written in a bound logbook with numbered pages (**audit log**). A German customer insists that its rooms be in the Frankfurt building, not the Mumbai one (**data residency**).
+
+Trackly is that building, in software.
 
 ## Requirements
 
 ### Functional
 
-- **Tenants**: an organisation (authority, consultancy, contractor, lender) signs up as a tenant with its own users, branding, single sign-on and settings.
-- **Projects**: a tenant owns projects. A project has packages (sections of work), milestones, a bill of quantities, a schedule and a team.
-- **Cross-organisation participation**: the owning tenant invites users from other tenants (or external people) as **project guests** with a role limited to that project.
-- **RBAC + ABAC**: roles per tenant (Tenant Admin, Portfolio Manager, Project Manager, Engineer, Finance, Viewer) and per project (Project Lead, Member, Guest). Rules such as "Finance may approve payment certificates only for projects in their portfolio and only up to ₹5 crore" and "documents classified `Restricted` are visible only to users with `Restricted` clearance".
-- **Documents**: upload drawings, reports, photos, contracts; versions; check-in/check-out; folder structure per project; full-text search over metadata; retention per tenant policy.
-- **Approvals**: configurable workflows per tenant and per document or request type: sequential steps, parallel steps with "any one" or "all" rules, delegation, SLA with escalation, comments, and a final immutable decision.
-- **Reporting**: project dashboards (physical and financial progress, delays, pending approvals), portfolio dashboards across projects, tenant-wide exports, and authority-level views across tenants that have granted visibility.
-- **Audit**: every create/update/delete/approve/download recorded with who, what, when, from where, before/after; exportable; tamper-evident.
-- **Data residency**: tenants choose a home region at sign-up (India, EU, Middle East); all their data, documents, backups and logs with personal data stay there.
+- **Tenants**: a company signs up as a tenant (an *organisation*) with a subdomain (`quickcart.trackly.example`), a plan, settings and an administrator. Users have one global login and can belong to several organisations (a freelancer working for two clients).
+- **Projects**: an organisation has projects with a short key (`MOB`, `WEB`), members and a visibility (`OPEN` to every member of the organisation, or `PRIVATE` to project members).
+- **Issues**: create, edit, assign, comment, attach files, link issues, watch. Each issue has a type (story, bug, task, change request), status, priority, assignee, reporter, due date, custom fields defined per project, and a human-friendly key (`MOB-142`) that is unique within the organisation.
+- **Boards and sprints**: Kanban and Scrum boards over a saved filter; sprints with start and end dates; backlog ordering by drag and drop; burndown and velocity reports.
+- **Workflows**: each project has a status workflow (allowed transitions, such as *In review → Done* only by a reviewer). Change-request issues need approvals: sequential groups, "any one" or "all" approvers, delegation and an SLA.
+- **Permissions**: organisation roles (Org Admin, Member, Guest) and project roles (Project Admin, Member, Viewer); issue security levels; guests see only projects they are invited to.
+- **Search**: a filter language (project, status, assignee, text, labels, dates) over issues the user is allowed to see.
+- **Real-time**: boards update live when a teammate moves a card.
+- **Integrations**: a public REST API with personal and app tokens, outgoing webhooks, and an automation engine ("when an issue moves to Done, notify the release channel").
+- **Enterprise features**: SAML 2.0 or OpenID Connect single sign-on per organisation, verified e-mail domains, SCIM user and group provisioning, a tamper-evident audit log of security and admin events, data residency (India or EU), and per-plan limits.
 
 ### Non-functional
 
-- 400 tenants in year three; the largest tenant has 8,000 users and 900 projects; the median tenant has 40 users and 6 projects.
-- Availability 99.9 % for the application; 99.95 % for document download (field teams depend on it).
-- Interactive pages p95 under 500 ms; document upload of 50 MB completes in under 30 s on a 20 Mbit/s site connection.
-- Audit records are written synchronously with the action they describe and are never lost.
+- 5,000 organisations in year three; 400,000 registered users; the largest organisation has 25,000 users and 1,200 projects; the median has 25 users and 4 projects.
+- Availability 99.9 % for Standard plans, 99.95 % for Enterprise.
+- Board and issue pages p95 under 300 ms; search p95 under 800 ms; a card move appears on teammates' boards within 2 s.
+- One tenant may not degrade another: per-tenant limits and isolation of heavy work.
+- A deactivated user loses access within 10 minutes.
+- Audit rows for security events are written in the same transaction as the change and never lost.
 - RTO 1 hour, RPO 5 minutes per region.
-- Cost target: under ₹120 per active user per month at year three, all-in (estimate).
+- Cost target: under ₹120 of infrastructure per registered user per month at year three (estimate).
 
 ### Out of scope
 
-Scheduling engines (critical path), BIM model viewing, payments to contractors.
+Billing and invoicing, a marketplace for third-party apps, wiki pages, time tracking and the mobile app's offline mode.
 
 ## Capacity estimation
 
-**Users and requests.** 400 tenants; total registered users ≈ 60,000 (one very large tenant with 8,000, a handful with 1,000–3,000, most under 100). Daily active users ≈ 25 % ≈ 15,000. Each active user makes about 150 requests a day (page loads, API calls from the SPA, dashboard refreshes). 15,000 × 150 = 2.25 M requests/day ÷ 86,400 ≈ 26 req/s average. Activity concentrates in a 9-hour working day and peaks at month-end: use ×4 for the daily peak ≈ 105 req/s, and ×8 for month-end report runs ≈ 210 req/s. This is a small API load; the design is driven by isolation, documents and reporting, not by request rate.
+All numbers below are **estimates** for planning, not measurements.
 
-**Documents.** A mid-sized highway package produces around 3,000 documents a year (drawings, RFIs, test reports, site photos, correspondence). 6,000 active projects × 3,000 ≈ 18 M documents a year, but photos dominate the count. Average size, weighted: 4 MB (photos 2–3 MB, drawings 10–30 MB, reports 1 MB). Storage growth ≈ 18 M × 4 MB ≈ 72 TB a year, plus versions (×1.3) ≈ 94 TB a year. Three years retained: around 280 TB. Object storage at roughly ₹1.7–2 per GB-month (estimate for a hot tier in an Indian region) puts year-three storage at about ₹5–6 lakh a month, the single largest infrastructure line. Uploads per day ≈ 18 M ÷ 250 working days ≈ 72,000 ÷ 32,400 working seconds ≈ 2.2 uploads/s average, maybe 10/s at peak. Download traffic ≈ 5× uploads by count: 50/s at peak, ≈ 200 MB/s ≈ 1.6 Gbit/s at peak from object storage via CDN, mostly within India.
+**Users and requests.** 400,000 registered users. A work tool is used daily by about half its users: DAU ≈ 200,000. A single-page app makes many small calls (board load, card details, comments, typeahead, notifications): about 300 API calls per active user per day. 200,000 × 300 = 60 M calls/day ÷ 86,400 ≈ **694 req/s** averaged over the whole day.
 
-**Approvals.** Each project runs perhaps 40 approval requests a month with 4 steps each: 6,000 × 40 × 4 ÷ 22 working days ≈ 44,000 step decisions a day ≈ 1.4/s during working hours. Trivial for the database; the design question is correctness and SLAs, not throughput.
+That average hides two things. First, each region is its own deployment: about 60 % of users are homed in India and 40 % in the EU. Second, people work about 9 hours a day. For India: 60 M × 0.6 = 36 M calls/day ÷ (9 × 3,600 = 32,400 s) ≈ **1,110 req/s** during working hours, and about **2× that, ≈ 2,200 req/s**, at the Monday-morning peak when every team opens its board for sprint planning. For the EU: 24 M ÷ 32,400 ≈ 740 req/s, peak ≈ 1,500 req/s.
 
-**Audit.** Every write and every download produces an audit row. Writes ≈ 15 % of requests ≈ 340,000 a day; downloads ≈ 300,000 a day; approvals 44,000: about 700,000 audit rows a day, around 1 KB each with before/after JSON ≈ 0.7 GB a day ≈ 250 GB a year. Partition by month; keep 7 years for regulated tenants (about 1.8 TB, cheap in cold partitions or archive).
+**Writes.** About 10 % of calls change something (edit a field, move a card, comment): India peak ≈ 220 writes/s. Each write touches about four rows (the issue, a changelog row, an outbox row, sometimes an audit row): ≈ 900 row changes/s. One modern PostgreSQL primary handles this comfortably; write throughput does not force sharding.
 
-**Database.** Transactional data excluding audit and documents: projects, BoQ lines (a highway package can have 5,000 lines), milestones, tasks, approvals, document metadata (18 M rows a year at ~500 bytes ≈ 9 GB a year). Total hot transactional data in year three: under 200 GB. One PostgreSQL primary per region with two replicas handles it; the largest tenant is the only candidate for a dedicated database.
+**Live boards.** About 40 % of India's 120,000 DAU are online at the peak: ≈ 48,000 WebSocket connections. At a conservative 20,000 connections per gateway instance, that is 3 instances plus one spare.
 
-**Summary table**
+**Search.** Board, backlog and filter views are about a quarter of reads: India peak reads ≈ 1,980/s × 0.25 ≈ **500 search queries/s**.
 
-| Item | Average | Peak | Yearly growth |
+**Data (all regions, after three years, 250 working days a year).**
+
+| Data | Rate | Size per item | Three-year total |
 |---|---|---|---|
-| API requests | 26/s | 210/s | — |
-| Document uploads | 2.2/s | 10/s | 18 M files, 94 TB |
-| Document downloads | 11/s | 50/s (1.6 Gbit/s) | — |
-| Approval decisions | 0.5/s | 1.4/s | 12 M rows |
-| Audit rows | 8/s | 60/s | 250 GB |
+| Issues | 0.5 per DAU per day = 100,000/day → 75 M | ≈ 2 KB (fields, custom fields as JSON, description) | ≈ 150 GB |
+| Changelog (field history) | 15 per DAU per day = 3 M/day → 2.25 B rows | ≈ 250 bytes | ≈ 560 GB |
+| Comments | 2 per DAU per day = 400,000/day → 300 M | ≈ 1 KB | ≈ 300 GB |
+| Security/admin audit | 3 per DAU per day = 600,000/day → 450 M | ≈ 500 bytes | ≈ 225 GB |
+| Attachments (object storage) | 0.2 per DAU per day = 40,000/day × 1.5 MB = 60 GB/day | 1.5 MB | ≈ 45 TB |
 
-**What breaks first**: not the API. In order: (1) the month-end reporting queries on the transactional database, which scan BoQ and progress tables across hundreds of projects; (2) object storage cost and egress; (3) the audit table's write volume on a single primary during peak. Each has a specific answer below.
+Table data in PostgreSQL ≈ 1.25 TB, about 1.8 TB with indexes; India's share (60 %) ≈ 1.1 TB. Attachments at roughly ₹2 per GB-month (estimate for a hot object-storage tier) cost about 45,000 GB × ₹2 ≈ ₹90,000 a month across both regions: real, but not the largest line.
+
+**Summary for the India region at year three (estimates)**
+
+| Item | Average (working hours) | Peak | Notes |
+|---|---|---|---|
+| API requests | 1,110/s | 2,200/s | 90 % reads |
+| Writes | 110/s | 220/s | ≈ 900 row changes/s at peak |
+| Search queries | 250/s | 500/s | permission-filtered |
+| WebSocket connections | — | 48,000 | 3 + 1 gateway instances |
+| Hot database | — | ≈ 1.1 TB | split across cells |
+| Attachments | 36 GB/day | — | ≈ 27 TB after three years |
+
+**What breaks first.** Not raw throughput. In order: (1) **noisy neighbours**: one tenant's integration script, bulk edit of 40,000 issues or runaway automation rule saturates the shared database's CPU or connection pool and every tenant on it slows down; (2) **permission-aware search** for large tenants, where a user can see 1,200 projects and the filter is expensive; (3) the **connection count** on a pooled database (16 API instances × 50 connections each is 800 connections, far past what PostgreSQL likes). Each has a specific answer below.
 
 ## API design
 
-The API is tenant-scoped by host name (`nhai-pmc.setu.app`) or by a tenant claim in the token for API clients; never by a tenant id in the URL or body. All identifiers are ULIDs (time-ordered, globally unique, safe to generate at the client for idempotent creates).
+The tenant comes from the host name (`quickcart.trackly.example`) for browser traffic, and from a verified token claim for API clients; never from a tenant id in the URL path, query string or body. Internal identifiers are UUIDv7 values (time-ordered, so B-tree inserts stay at the right edge of the index; `Guid.CreateVersion7()` in .NET 9 and later). Issue keys such as `MOB-142` are for humans and are resolved to ids by the API; see [unique ID generation](#/lesson/m17-unique-id-generator) for the trade-offs between these id styles.
 
 | Method and path | Purpose | Notes |
 |---|---|---|
-| `POST /projects` | Create a project | Body: name, code, package list; idempotency key header |
-| `GET /projects/{id}` | Project summary | Authorisation: project member or tenant portfolio role |
-| `POST /projects/{id}/members` | Add a member or guest | Guest invitations create a cross-tenant membership scoped to the project |
-| `POST /projects/{id}/documents` | Begin an upload | Returns a signed upload URL and a document id; client uploads directly to object storage |
-| `POST /documents/{id}/versions/{v}/complete` | Finish an upload | Server verifies the object exists, records size and checksum, and emits `DocumentVersionAdded` |
-| `GET /documents/{id}/download?version=` | Get a signed download URL | Checks classification against clearance; writes an audit row before returning |
-| `POST /approvals` | Start a workflow | Body: subject (document or request), workflow template id |
-| `POST /approvals/{id}/steps/{step}/decide` | Approve, reject or delegate | Idempotent on `(approval id, step, decision id)` |
-| `GET /approvals/inbox` | My pending steps | Read model |
-| `GET /reports/projects/{id}/progress` | Project progress | Served from read model |
-| `GET /reports/portfolio` | Cross-project dashboard | Served from warehouse, tenant-filtered |
-| `GET /audit?from=&to=&actor=&entity=` | Audit search | Tenant Admin and Auditor roles only; itself audited |
+| `POST /projects` | Create a project | Body: key, name, visibility; `Idempotency-Key` header |
+| `POST /projects/{key}/issues` | Create an issue | Returns `201` with the new key, `Location` and `ETag` |
+| `GET /issues/{key}` | Issue details | `404` if the caller cannot see it, never `403` (see below) |
+| `PATCH /issues/{key}` | Edit fields | Requires `If-Match: <etag>`; `412 Precondition Failed` on a stale version |
+| `POST /issues/{key}/transitions` | Move to another status | Body: transition id; the workflow decides if it is allowed |
+| `POST /issues/{key}/attachments` | Begin an upload | Returns a signed upload URL; the client uploads directly to object storage |
+| `POST /attachments/{id}/complete` | Finish an upload | Server verifies size and checksum; the file is downloadable only after a malware scan |
+| `GET /search?q=&cursor=` | Filter issues | Cursor pagination; the server injects tenant and permission filters |
+| `GET /boards/{id}` | Board columns and cards | Served from the read path; live updates over WebSocket |
+| `POST /approvals/{id}/steps/{step}/decide` | Approve, reject or delegate | Idempotent on a client-generated decision id |
+| `POST /bulk/issues` | Bulk edit | Returns `202` and a job id; runs on the tenant's job queue |
+| `GET /audit?from=&to=&actor=&action=` | Audit search | Org Admin and Auditor only; the read itself is audited |
+| `/scim/v2/Users`, `/scim/v2/Groups` | SCIM provisioning | Called by the customer's identity provider with a per-tenant bearer token |
 
-Error contract: `403` distinguishes "no such permission" from "no such project" only for users who are members of the project; for everyone else a project they cannot see returns `404`, so project existence does not leak across tenants.
+Rate-limited calls return `429 Too Many Requests` with a `Retry-After` header. Errors use RFC 9457 problem details.
+
+**Why `404` rather than `403`.** If `GET /issues/FIN-7` returned `403` to someone outside the finance project, it would confirm that `FIN-7` exists and is interesting. Trackly returns `404` when the caller cannot see the project or the issue's security level, and `403` only when the caller can see the issue but may not perform this particular action (for example, a Viewer trying to edit).
 
 ## Data model
 
-Setu uses the **pool model with row-level security** (one database per region, shared tables, `tenant_id` on every row) for most tenants, plus the **bridge** option of a dedicated database for the largest tenant or any tenant whose contract requires it. A tenant directory records each tenant's region and database.
+Trackly uses a **pool model with row-level security**: shared tables, `tenant_id` on every row, a PostgreSQL policy that filters by the tenant of the current transaction. The pool is split into **cells**: each cell is a complete PostgreSQL cluster (primary, replica, connection pooler) holding about 1,000 tenants. A few very large or contract-bound tenants get a **dedicated cell** that runs the same schema with one tenant in it. A global **tenant directory** maps each tenant to its region and cell.
 
 ```sql
--- One database per region. Every tenant-owned table carries tenant_id and is protected by RLS.
+-- Global tenant directory (replicated per region; holds no issue data).
 CREATE TABLE tenant (
-  tenant_id     text PRIMARY KEY,          -- ULID
-  name          text NOT NULL,
-  home_region   text NOT NULL,             -- 'in-central', 'eu-west', 'me-central'
-  plan          text NOT NULL,
-  created_at    timestamptz NOT NULL DEFAULT now()
+  tenant_id     uuid PRIMARY KEY,
+  slug          text NOT NULL UNIQUE,         -- 'quickcart' -> quickcart.trackly.example
+  home_region   text NOT NULL,                -- 'in-west', 'eu-central'
+  cell          text NOT NULL,                -- 'in-west-c2' or 'in-west-ded-citycare'
+  plan          text NOT NULL,                -- FREE | STANDARD | PREMIUM | ENTERPRISE
+  status        text NOT NULL DEFAULT 'ACTIVE' -- ACTIVE | MOVING | SUSPENDED
 );
+```
 
-CREATE TABLE app_user (
-  tenant_id     text NOT NULL REFERENCES tenant,
-  user_id       text NOT NULL,
+Inside every cell:
+
+```sql
+CREATE TABLE tenant_member (
+  tenant_id     uuid NOT NULL,
+  user_id       uuid NOT NULL,                -- global identity id
+  display_name  text NOT NULL,
   email         text NOT NULL,
-  full_name     text NOT NULL,
-  clearance     smallint NOT NULL DEFAULT 0,   -- 0 Public, 1 Internal, 2 Confidential, 3 Restricted
+  kind          text NOT NULL,                -- MEMBER | GUEST
+  org_role      text NOT NULL DEFAULT 'MEMBER', -- ORG_ADMIN | MEMBER | GUEST
+  clearance     smallint NOT NULL DEFAULT 0,  -- highest issue security level the user may see
+  status        text NOT NULL DEFAULT 'ACTIVE', -- ACTIVE | DEACTIVATED
+  scim_external_id text,
   PRIMARY KEY (tenant_id, user_id),
   UNIQUE (tenant_id, email)
 );
 
 CREATE TABLE project (
-  tenant_id     text NOT NULL,
-  project_id    text NOT NULL,
-  code          text NOT NULL,
+  tenant_id     uuid NOT NULL,
+  project_id    uuid NOT NULL,
+  key           text NOT NULL,                -- 'MOB'
   name          text NOT NULL,
-  portfolio_id  text,
-  status        text NOT NULL DEFAULT 'ACTIVE',
+  visibility    text NOT NULL DEFAULT 'PRIVATE', -- OPEN | PRIVATE
+  next_issue_no int  NOT NULL DEFAULT 1,
   PRIMARY KEY (tenant_id, project_id),
-  UNIQUE (tenant_id, code)
+  UNIQUE (tenant_id, key)
 );
 
--- Membership: tenant users and cross-tenant guests. A guest row carries the guest's home tenant.
 CREATE TABLE project_member (
-  tenant_id       text NOT NULL,            -- owning tenant of the project
-  project_id      text NOT NULL,
-  member_tenant   text NOT NULL,            -- tenant the user belongs to (same as tenant_id for staff)
-  member_user     text NOT NULL,
-  project_role    text NOT NULL,            -- LEAD | MEMBER | GUEST
-  PRIMARY KEY (tenant_id, project_id, member_tenant, member_user),
+  tenant_id     uuid NOT NULL,
+  project_id    uuid NOT NULL,
+  user_id       uuid NOT NULL,
+  project_role  text NOT NULL,                -- ADMIN | MEMBER | VIEWER
+  PRIMARY KEY (tenant_id, project_id, user_id),
+  FOREIGN KEY (tenant_id, project_id) REFERENCES project,
+  FOREIGN KEY (tenant_id, user_id) REFERENCES tenant_member
+);
+
+CREATE TABLE sprint (
+  tenant_id     uuid NOT NULL,
+  sprint_id     uuid NOT NULL,
+  project_id    uuid NOT NULL,
+  name          text NOT NULL,
+  state         text NOT NULL,                -- FUTURE | ACTIVE | CLOSED
+  starts_at     timestamptz,
+  ends_at       timestamptz,
+  PRIMARY KEY (tenant_id, sprint_id),
   FOREIGN KEY (tenant_id, project_id) REFERENCES project
 );
 
-CREATE TABLE document (
-  tenant_id       text NOT NULL,
-  document_id     text NOT NULL,
-  project_id      text NOT NULL,
-  folder_path     text NOT NULL,
-  title           text NOT NULL,
-  classification  smallint NOT NULL DEFAULT 1,
-  current_version int NOT NULL DEFAULT 0,
-  checked_out_by  text,
-  PRIMARY KEY (tenant_id, document_id),
-  FOREIGN KEY (tenant_id, project_id) REFERENCES project
+CREATE TABLE issue (
+  tenant_id       uuid NOT NULL,
+  issue_id        uuid NOT NULL,              -- UUIDv7, generated by the application
+  project_id      uuid NOT NULL,
+  issue_no        int  NOT NULL,              -- MOB-142 -> project key + issue_no
+  issue_type      text NOT NULL,              -- STORY | BUG | TASK | CHANGE_REQUEST
+  summary         text NOT NULL,
+  description     text,
+  status          text NOT NULL,              -- per-project workflow status, e.g. 'In review'
+  status_category text NOT NULL,              -- TODO | IN_PROGRESS | DONE (for reports)
+  priority        text NOT NULL,
+  assignee_user   uuid,
+  reporter_user   uuid NOT NULL,
+  sprint_id       uuid,
+  rank            text NOT NULL,              -- lexicographic rank for drag-and-drop ordering
+  security_level  smallint NOT NULL DEFAULT 0,
+  due_at          timestamptz,
+  custom_fields   jsonb NOT NULL DEFAULT '{}',
+  version         int  NOT NULL DEFAULT 1,    -- optimistic concurrency, exposed as ETag
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, issue_id),
+  UNIQUE (tenant_id, project_id, issue_no),
+  FOREIGN KEY (tenant_id, project_id) REFERENCES project,
+  FOREIGN KEY (tenant_id, sprint_id) REFERENCES sprint
 );
 
-CREATE TABLE document_version (
-  tenant_id     text NOT NULL,
-  document_id   text NOT NULL,
-  version       int  NOT NULL,
-  object_key    text NOT NULL,              -- '<region>/<tenant_id>/<project_id>/<document_id>/v<version>'
+-- Field history shown on the issue page. High volume, so partitioned by month; not hash-chained.
+CREATE TABLE issue_changelog (
+  tenant_id   uuid NOT NULL,
+  issue_id    uuid NOT NULL,
+  changed_at  timestamptz NOT NULL,
+  actor_user  uuid NOT NULL,
+  field       text NOT NULL,
+  old_value   text,
+  new_value   text,
+  PRIMARY KEY (tenant_id, issue_id, changed_at, field)
+) PARTITION BY RANGE (changed_at);
+
+CREATE TABLE attachment (
+  tenant_id     uuid NOT NULL,
+  attachment_id uuid NOT NULL,
+  issue_id      uuid NOT NULL,
+  object_key    text NOT NULL,                -- '<tenant_id>/<issue_id>/<attachment_id>'
+  file_name     text NOT NULL,
   size_bytes    bigint NOT NULL,
-  sha256        bytea NOT NULL,
-  uploaded_by   text NOT NULL,
-  uploaded_at   timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (tenant_id, document_id, version),
-  FOREIGN KEY (tenant_id, document_id) REFERENCES document
+  sha256        bytea,
+  scan_status   text NOT NULL DEFAULT 'PENDING', -- PENDING | CLEAN | INFECTED
+  PRIMARY KEY (tenant_id, attachment_id),
+  FOREIGN KEY (tenant_id, issue_id) REFERENCES issue
 );
 
-CREATE TABLE approval_request (
-  tenant_id     text NOT NULL,
-  approval_id   text NOT NULL,
-  project_id    text NOT NULL,
-  subject_type  text NOT NULL,              -- DOCUMENT | PAYMENT_CERT | VARIATION | RFI
-  subject_id    text NOT NULL,
-  template_id   text NOT NULL,
-  status        text NOT NULL,              -- IN_PROGRESS | APPROVED | REJECTED | CANCELLED
-  amount        numeric(18,2),              -- for ABAC limits on financial approvals
-  started_by    text NOT NULL,
-  started_at    timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (tenant_id, approval_id)
-);
-
+-- Change-request approvals.
 CREATE TABLE approval_step (
-  tenant_id     text NOT NULL,
-  approval_id   text NOT NULL,
-  step_no       int  NOT NULL,              -- steps with the same step_no run in parallel
-  rule          text NOT NULL,              -- ALL | ANY
-  assignee_user text NOT NULL,
-  status        text NOT NULL,              -- WAITING | PENDING | APPROVED | REJECTED | DELEGATED | SKIPPED
-  delegated_to  text,
+  tenant_id     uuid NOT NULL,
+  issue_id      uuid NOT NULL,
+  step_no       int  NOT NULL,                -- steps with the same step_no run in parallel
+  rule          text NOT NULL,                -- ALL | ANY
+  assignee_user uuid NOT NULL,
+  status        text NOT NULL,                -- WAITING | PENDING | APPROVED | REJECTED | DELEGATED | SKIPPED
+  delegated_to  uuid,
   due_at        timestamptz,
-  decided_at    timestamptz,
-  comment       text,
-  PRIMARY KEY (tenant_id, approval_id, step_no, assignee_user),
-  FOREIGN KEY (tenant_id, approval_id) REFERENCES approval_request
+  PRIMARY KEY (tenant_id, issue_id, step_no, assignee_user)
 );
 
--- Append-only, partitioned by month, hash-chained per tenant.
+-- Security and admin events: append-only, hash-chained per tenant, partitioned by month.
 CREATE TABLE audit_log (
-  tenant_id     text NOT NULL,
-  seq           bigint NOT NULL,            -- per-tenant sequence, assigned by the application in order
+  tenant_id     uuid NOT NULL,
+  seq           bigint NOT NULL,              -- per-tenant sequence, assigned under a per-tenant lock
   occurred_at   timestamptz NOT NULL,
-  actor_user    text NOT NULL,
+  actor_user    uuid,
   actor_ip      inet,
-  action        text NOT NULL,              -- document.download, approval.decide, project.member.add ...
+  action        text NOT NULL,                -- member.role.change, sso.config.update, export.create ...
   entity_type   text NOT NULL,
   entity_id     text NOT NULL,
   before        jsonb,
   after         jsonb,
   prev_hash     bytea NOT NULL,
-  hash          bytea NOT NULL,             -- sha256(prev_hash || canonical json of this row)
+  hash          bytea NOT NULL,               -- sha256(prev_hash || canonical row)
   PRIMARY KEY (tenant_id, seq, occurred_at)
 ) PARTITION BY RANGE (occurred_at);
-
-CREATE TABLE audit_log_2026_10 PARTITION OF audit_log FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');
 ```
 
-**Row-level security** on every tenant table, with the tenant id supplied per transaction:
+Every unique constraint and every foreign key includes `tenant_id`. That is not decoration: a foreign key `(tenant_id, project_id)` makes it impossible for an issue of one tenant to point at another tenant's project, even through a bug.
+
+**Row-level security** on every tenant table, with the tenant supplied per transaction:
 
 ```sql
-ALTER TABLE project ENABLE ROW LEVEL SECURITY;
-ALTER TABLE project FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON project
-  USING (tenant_id = current_setting('app.tenant_id', true))
-  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+ALTER TABLE issue ENABLE ROW LEVEL SECURITY;
+ALTER TABLE issue FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON issue
+  USING      (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 
--- Audit is append-only even for the application role: no UPDATE or DELETE policy exists,
--- and the role has no UPDATE/DELETE privilege on the table.
+-- The application role is an ordinary role: not a superuser, not BYPASSRLS, not the table owner.
+GRANT SELECT, INSERT, UPDATE, DELETE ON issue TO trackly_app;
+
+-- Audit is append-only: no UPDATE or DELETE privilege, no UPDATE or DELETE policy.
 ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
-CREATE POLICY audit_read   ON audit_log FOR SELECT USING (tenant_id = current_setting('app.tenant_id', true));
-CREATE POLICY audit_insert ON audit_log FOR INSERT WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
-REVOKE UPDATE, DELETE ON audit_log FROM setu_app;
+ALTER TABLE audit_log FORCE ROW LEVEL SECURITY;
+CREATE POLICY audit_read   ON audit_log FOR SELECT USING      (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+CREATE POLICY audit_insert ON audit_log FOR INSERT WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+GRANT SELECT, INSERT ON audit_log TO trackly_app;
 ```
 
-Why `FORCE ROW LEVEL SECURITY`: without it, the table owner bypasses policies, and migrations often run as the owner. Why `current_setting(..., true)`: with the second argument the function returns NULL instead of throwing when the setting is absent, and NULL compares false, so a request that forgot to set the tenant sees **nothing** rather than everything.
+The details matter:
 
-**Indexes that matter**: `(tenant_id, project_id, folder_path)` on `document`; `(tenant_id, assignee_user, status) WHERE status = 'PENDING'` on `approval_step` for inboxes (a partial index keeps it small); `(tenant_id, occurred_at)` and `(tenant_id, entity_type, entity_id)` on each audit partition; `(tenant_id, project_id, status)` on `approval_request`.
+- **`FORCE ROW LEVEL SECURITY`**: without it the table owner bypasses policies, and migrations or a misconfigured service often run as the owner. Superusers and roles with `BYPASSRLS` always bypass RLS, so the application must never connect as one.
+- **`current_setting('app.tenant_id', true)`**: the second argument makes it return NULL instead of throwing when the setting was never defined. On a pooled connection that has used the setting in an earlier transaction, it returns an empty string instead. `NULLIF(..., '')` turns both into NULL, and `tenant_id = NULL` is never true, so a request that forgot to set its tenant sees **no rows**, not every row. The policy fails closed.
+- **Set the tenant with `set_config`, not `SET LOCAL`**: `SET LOCAL app.tenant_id = ...` cannot take a bind parameter, which tempts people into string concatenation. `SELECT set_config('app.tenant_id', @tenant, true)` is parameterised, and the `true` makes it transaction-local, so it resets at commit and is safe behind a transaction-mode pooler such as PgBouncer.
+- **Views**: a view runs with its owner's rights by default, which can bypass RLS. Create views `WITH (security_invoker = true)` (PostgreSQL 15 and later).
+- **Constraints leak existence**: a unique violation or foreign-key check is evaluated against all rows, not just visible ones. Including `tenant_id` in every unique key means one tenant's `MOB` project key never collides with another's, so the error cannot reveal anything.
+- **Indexes lead with `tenant_id`**: the policy adds `tenant_id = $x` to every query, so `(tenant_id, project_id, status_category)`, `(tenant_id, sprint_id)`, `(tenant_id, assignee_user) WHERE status_category <> 'DONE'` and `(tenant_id, project_id, rank)` serve boards, backlogs and "my open issues".
 
-**Cross-tenant guests** are the subtle part. A guest's identity lives in their home tenant's `app_user` row (or an external identity provider), and their membership lives in the owning tenant's `project_member` row with `member_tenant` set to the home tenant. The guest's session carries *two* tenant ids: the home tenant (for their profile) and the acting tenant (the project owner, for RLS). The application sets `app.tenant_id` to the acting tenant only after verifying the membership row exists; everything the guest can see is then bounded by the project filter in the authorisation layer, not by RLS alone.
+**Issue keys.** `MOB-142` needs a per-project counter without gaps that confuse humans. Inside the create transaction: `UPDATE project SET next_issue_no = next_issue_no + 1 WHERE tenant_id = @t AND project_id = @p RETURNING next_issue_no - 1`. The row lock serialises issue creation per project, which is fine at a few creations per second per project. A bulk import of 40,000 issues reserves numbers in blocks (`+ 1000`) instead of locking 40,000 times. If a transaction rolls back after taking a number, the number is lost; small gaps are acceptable, duplicates are not.
+
+**Optimistic concurrency.** Two people edit the same issue. `PATCH` carries `If-Match: "7"`; the update is `... SET ..., version = version + 1 WHERE tenant_id = @t AND issue_id = @i AND version = 7`. Zero rows updated means someone else saved first: return `412` and let the client re-fetch and merge. Card moves on a board touch only `status` and `rank`, so the client retries them automatically.
+
+**Guests.** Identity is global (one login, many organisations), but membership is per tenant. A guest has a `tenant_member` row with `kind = 'GUEST'` and `project_member` rows only for the projects they were invited to. RLS keeps them inside the tenant; the authorisation layer keeps them inside their projects (a guest never sees `OPEN` projects, which are open to members only).
 
 ## High-level architecture
 
 ```mermaid
 flowchart LR
-    U["Browsers, mobile app, API clients"] --> CDN["CDN + WAF"]
-    CDN --> GW["API gateway: host to tenant, per-tenant rate limits, auth"]
-    GW --> DIR["Tenant directory (region, database, plan, SSO)"]
-    GW --> API["Setu API (ASP.NET Core modular monolith)"]
-    API --> AUTHZ["Authorization service (RBAC + ABAC policies, cached)"]
-    API --> PG["PostgreSQL primary (pool, RLS)"]
-    PG --> RR["Read replicas (inbox, project pages)"]
-    API --> RR
-    API --> DED["Dedicated DB (largest tenant)"]
-    API --> REDIS["Redis: sessions, policy cache, inbox counters"]
-    API --> OBX["Outbox relay"]
-    OBX --> BUS["Event stream (DocumentVersionAdded, ApprovalDecided, AuditRecorded)"]
-    BUS --> WF["Workflow engine workers (steps, SLAs, escalation)"]
+    U["Browsers, desktop app, API clients"] --> CDN["CDN + WAF"]
+    CDN --> GW["API gateway: host to tenant, token check, per-tenant rate limits"]
+    GW --> DIR["Tenant directory: region, cell, plan, SSO config"]
+    GW --> API["Trackly API (ASP.NET Core modular monolith)"]
+    GW --> WS["WebSocket gateway (live boards)"]
+    IDB["Identity broker: SAML/OIDC per tenant, SCIM"] --> GW
+    API --> PGB["PgBouncer per cell"]
+    PGB --> PG1["Cell 1 PostgreSQL (about 1,000 tenants, RLS)"]
+    PGB --> PG2["Cell 2 PostgreSQL"]
+    PGB --> DED["Dedicated cell (largest tenant)"]
+    PG1 --> RR["Read replica per cell"]
+    API --> REDIS["Redis: principals, board cache, rate-limit counters"]
+    API --> SRCH["Search cluster (issue index, permission fields)"]
+    PG1 --> OBX["Outbox relay"]
+    OBX --> BUS["Event stream (IssueChanged, MemberChanged, ApprovalDecided)"]
     BUS --> IDX["Search indexer"]
-    BUS --> WH["Reporting warehouse (per-tenant partitions)"]
-    BUS --> NOTIF["Notification workers"]
-    WF --> PG
-    IDX --> SRCH["Search cluster (document metadata)"]
-    U -- "signed URL" --> OBJ["Object storage (per-region, per-tenant prefix, versioned)"]
+    BUS --> RM["Read models: burndown, velocity"]
+    BUS --> AUTO["Automation and webhook workers (per-tenant budgets)"]
+    BUS --> NOTIF["Notification service"]
+    BUS --> WS
+    IDX --> SRCH
+    API --> JOBS["Per-tenant job queues: bulk edits, imports, exports"]
+    U -- "signed URL" --> OBJ["Object storage (per region, tenant prefix)"]
     API -- "sign upload/download" --> OBJ
-    OBJ -- "virus scan, thumbnails" --> SCAN["Scan workers"]
-    API --> AUD["Audit writer (same transaction, hash chain)"]
-    AUD --> PG
-    SCHED["Scheduler: SLA checks, retention, archive"] --> WF
-    MON["Monitoring: per-tenant SLOs, isolation canaries"] -.-> API
+    OBJ --> SCAN["Scan workers"]
+    SCHED["Scheduler: approval SLAs, retention, audit chain checks"] --> API
+    MON["Monitoring: per-tenant SLOs, noisy-neighbour detection, isolation canaries"] -.-> API
 ```
 
-Walk through the arrows. Users reach a CDN and web application firewall, then the **gateway**, which resolves the tenant from the host name (or token), enforces per-tenant rate limits so one large tenant's month-end export cannot starve 399 others, and validates the identity token. It consults the **tenant directory** to learn the tenant's region and database; a request for an EU tenant arriving at the Indian gateway is redirected to the EU deployment (see [multi-region](#/lesson/m16-multi-region)). The **API** is a modular monolith (projects, documents, approvals, reporting, audit, admin modules) because one deployable per region is simpler to operate and the load is modest. The **authorization service** is a module that evaluates RBAC and ABAC policies against the request, with the user's roles and memberships cached in Redis for the session. Writes go to the **PostgreSQL primary** with RLS; inbox and project pages read from **replicas**. The largest tenant lives in a **dedicated database** chosen by the directory. Every state change writes a row to the **outbox** in the same transaction; the relay publishes to the **event stream**, which feeds the **workflow engine** (which advances steps, assigns the next approvers and schedules SLA timers), the **search indexer**, the **reporting warehouse** and **notifications**. Documents never pass through the API: the API **signs** an upload or download URL and the browser talks to **object storage** directly; **scan workers** check new objects for malware and generate thumbnails. The **audit writer** runs in the same database transaction as the action, chaining each row to the previous by hash. The **scheduler** fires SLA checks and retention jobs. **Monitoring** includes isolation canaries: synthetic users in two tenants who continuously try to read each other's projects and page the team if they ever succeed.
+Walk through the arrows. Users reach a **CDN and web application firewall**, then the **API gateway**. The gateway reads the host name, looks the slug up in the **tenant directory** (cached for 30 s), validates the access token, checks that the token's tenant matches the host, and applies a **per-tenant token bucket** sized by plan. Login is delegated to an **identity broker**: it talks SAML or OpenID Connect to each enterprise tenant's own identity provider, receives SCIM calls from those providers, and issues Trackly's own short-lived tokens, so the API only ever validates one kind of token.
 
-### Sequence: a document upload with classification and audit
+The **API** is a modular monolith (projects, issues, boards, search, approvals, admin, audit modules). One deployable per region is simpler to operate than a dozen services, and the load does not need more. It reaches the right **cell** through a **PgBouncer** pooler per cell, which collapses 800 application connections into about 100 server connections. Every transaction begins by setting `app.tenant_id`; RLS does the rest. Board and search pages that tolerate a second of staleness read from the cell's **replica**. The largest tenant lives in a **dedicated cell** behind exactly the same code; the directory, not an `if` statement, decides.
+
+Every change writes an **outbox** row in the same transaction. The relay publishes to the **event stream**, which feeds the **search indexer**, the **read models** for burndown and velocity charts, the **automation and webhook workers** (each tenant with its own execution budget), the [notification service](#/lesson/m17-notification-platform) for e-mail and push, and the **WebSocket gateway**, which pushes "card moved" messages to everyone viewing that board. Heavy operations (bulk edits, CSV imports, exports) go to **per-tenant job queues** with fair scheduling. Attachments never pass through the API: it **signs** an upload or download URL and the browser talks to **object storage** directly; **scan workers** check new files for malware. A durable **scheduler** (see the [job scheduler](#/lesson/m17-job-scheduler) case study) fires approval SLA checks, retention jobs and the nightly audit-chain verification. **Monitoring** tracks per-tenant SLOs, spots tenants that consume a disproportionate share of a cell, and runs **isolation canaries**: synthetic users in two test tenants who continuously try to read each other's issues and page the on-call engineer if they ever succeed.
+
+### Sequence: creating an issue in a pooled cell
 
 ```mermaid
 sequenceDiagram
-    participant B as Browser
+    participant B as Browser (quickcart.trackly.example)
     participant GW as Gateway
-    participant API as Setu API
-    participant AZ as Authorization
-    participant DB as PostgreSQL
-    participant OBJ as Object storage
+    participant API as Trackly API
+    participant DB as Cell 2 PostgreSQL
+    participant R as Outbox relay
     participant BUS as Event stream
-    B->>GW: POST /projects/P1/documents (title, classification=2)
-    GW->>API: + tenant=nhai-pmc, user=U7
-    API->>AZ: can U7 create document in P1 at classification 2?
-    AZ-->>API: allow (member of P1, clearance 3)
-    API->>DB: BEGIN, SET LOCAL app.tenant_id
-    API->>DB: INSERT document (version 0), INSERT audit_log (document.create), INSERT outbox
+    participant WS as WebSocket gateway
+    B->>GW: POST /projects/MOB/issues (Idempotency-Key K1)
+    GW->>GW: slug quickcart = tenant T42 in cell 2, token tenant matches, bucket has tokens
+    GW->>API: request + tenant T42, user U7
+    API->>API: authorize issue.create in MOB (U7 is project Member)
+    API->>DB: BEGIN, then SELECT set_config('app.tenant_id', T42, true)
+    API->>DB: UPDATE project SET next_issue_no = next_issue_no + 1 RETURNING 142
+    API->>DB: INSERT issue (MOB-142), INSERT issue_changelog, INSERT outbox, INSERT idempotency K1
     API->>DB: COMMIT
-    API-->>B: 201 { documentId, version 1, uploadUrl (signed, 15 min, PUT, max 50 MB) }
-    B->>OBJ: PUT bytes to uploadUrl
-    OBJ-->>B: 200
-    B->>API: POST /documents/D9/versions/1/complete { sha256 }
-    API->>OBJ: HEAD object (size, server-side checksum)
-    OBJ-->>API: 48.2 MB, checksum matches
-    API->>DB: INSERT document_version, UPDATE document.current_version, audit, outbox
-    API-->>B: 200
-    DB-->>BUS: relay publishes DocumentVersionAdded
-    BUS-->>OBJ: scan worker checks object, writes thumbnail
+    API-->>B: 201 Created, Location /issues/MOB-142, ETag "1"
+    R->>DB: poll outbox
+    R->>BUS: IssueChanged(T42, MOB-142, created)
+    BUS-->>WS: deliver
+    WS-->>B: push to everyone on the MOB board
 ```
 
-The upload never touches the API's memory or bandwidth. The signed URL is bound to a specific object key under the tenant's prefix, a method (`PUT`), a size limit and an expiry, so it cannot be reused for another document or tenant (the Valet Key pattern). The `complete` call makes the version real only after the server confirms the object exists with the expected checksum; an abandoned upload leaves no version. Both the `create` and `complete` steps write audit rows inside the same transaction as their data changes, so there is no window in which a document exists without a record of who created it.
+The gateway rejects the request with `429` before any database work if the tenant's bucket is empty, which is what keeps one tenant's script from reaching the shared cell. The API sets the tenant with a parameterised `set_config` at the start of the transaction; every statement after that is filtered by RLS. The key allocation, the issue, its first changelog row, the outbox event and the idempotency record commit together, so a retried request with the same `Idempotency-Key` returns the same `MOB-142` instead of creating `MOB-143`. Live updates are asynchronous: the board on a teammate's screen typically refreshes within a second, and if the WebSocket is down the browser falls back to polling every 30 s.
 
-### Sequence: an approval step with ABAC and SLA
+### Sequence: enterprise SSO login and SCIM deactivation
 
 ```mermaid
 sequenceDiagram
-    participant F as Finance user (limit 5 crore)
-    participant API as Setu API
-    participant AZ as Authorization
-    participant DB as PostgreSQL
-    participant WF as Workflow worker
-    participant SCH as Scheduler
-    F->>API: POST /approvals/A3/steps/3/decide { APPROVE }
-    API->>AZ: can F decide step 3 of A3 (PAYMENT_CERT, amount 7.2 crore)?
-    AZ-->>API: deny (amount exceeds approver limit, rule FinanceLimitRule)
-    API-->>F: 403 { reason: "approval limit 5 crore" }
-    Note over F,API: F delegates to the Finance Head instead
-    F->>API: POST .../decide { DELEGATE, to: FH }
-    API->>DB: UPDATE step 3 (F) to DELEGATED, INSERT step 3 (FH) PENDING, audit, outbox
-    DB-->>WF: ApprovalStepAssigned(FH, due in 3 days)
-    WF->>SCH: schedule SLA check for A3 step 3 at due_at
-    SCH->>WF: due_at reached, step still PENDING
-    WF->>DB: mark step ESCALATED flag, notify FH's manager, audit
+    participant E as Employee browser
+    participant IB as Identity broker
+    participant IDP as Bank's identity provider
+    participant API as Trackly API
+    participant RD as Redis principal cache
+    E->>IB: login with priya@bank.example
+    IB->>IB: domain bank.example verified for tenant CityBank, SSO enforced
+    IB->>IDP: SAML AuthnRequest or OIDC authorize
+    IDP-->>IB: signed assertion (user, groups)
+    IB-->>E: Trackly access token (10 min) + refresh token
+    E->>API: GET /boards/12 with access token
+    API->>RD: load principal (roles, projects, clearance)
+    Note over IDP,API: Next day Priya leaves the bank
+    IDP->>IB: SCIM PATCH /Users/{id} active=false
+    IB->>API: MemberDeactivated(CityBank, Priya)
+    API->>API: tenant_member.status = DEACTIVATED, revoke refresh tokens, audit
+    API->>RD: delete principal, add user to deny list for 10 min
+    E->>API: next request with old access token
+    API-->>E: 401 (deny list hit)
 ```
 
-Authorisation is evaluated at decision time against the request's attributes (type, amount) and the user's attributes (role, limit, portfolio). The denial is explained, because an unexplained 403 in an approval system generates support tickets. Delegation creates a new pending step row for the delegate while recording the delegator's action, so the audit trail shows the full chain. The SLA timer is owned by the workflow engine, not by a client, and it is durable: if the worker restarts, the scheduler still fires.
+Home-realm discovery uses the e-mail domain: once the bank has proved it owns `bank.example` (a DNS TXT record), anyone logging in with that domain is sent to the bank's identity provider, and password login is refused if the tenant enforces SSO. The broker turns the provider's assertion into a short-lived Trackly token. Deactivation arrives through SCIM, the standard API that identity providers use to create, update and deactivate accounts in SaaS apps. The API marks the membership deactivated, revokes refresh tokens, drops the cached principal and puts the user on a short deny list that covers the remaining lifetime of any access token already issued. That is how "lose access within 10 minutes" becomes a guarantee rather than a hope.
 
 ## Deep dives
 
-### 1. Tenancy model and tenant resolution
+### 1. Tenancy model: pool, cells and dedicated databases
 
-Three candidate models, evaluated against Setu's requirements:
-
-| Model | Isolation | Cost at 400 tenants | Cross-tenant guests | Residency |
+| Model | Isolation | Cost at 5,000 tenants | Operations | Fits |
 |---|---|---|---|---|
-| Silo (database per tenant) | Strongest | 400 databases: expensive, slow migrations | Hard: a guest's membership must be copied into the owner's database | Easy per database |
-| Pool (shared tables + RLS) | Strong if RLS is enforced everywhere | One database per region | Natural: membership rows reference other tenants | Per region, with a directory |
-| Bridge (pool + dedicated for some) | Pool plus silo for the few | A few extra databases | Same as pool | Same as pool |
+| Silo (database per tenant) | Strongest | 5,000 databases, most nearly empty | Migrations across 5,000 databases; monitoring 5,000 of everything | A few dozen large customers |
+| Schema per tenant | Medium | One cluster, 5,000 schemas × 40 tables = 200,000 tables | Catalog bloat, slow migrations, connection pools per schema | Hundreds of tenants at most |
+| Pool (shared tables + RLS) | Strong if enforced everywhere | A few clusters | One migration per cell | Many small tenants |
+| Cells of pools + dedicated cells | Pool, plus a blast-radius limit, plus silo for the few | Five pooled cells and three dedicated ones across two regions | Same code everywhere; tenant moves between cells | Trackly |
 
-Setu chooses **bridge**: pooled with RLS by default, dedicated databases for the largest tenant and for any tenant paying for it. Tenant resolution happens exactly once, at the gateway, from the host name or a verified token claim, and is carried as a scoped `TenantContext`. The data layer opens every transaction with `SET LOCAL app.tenant_id = @tenant`, and a **connection-level canary** asserts on each pooled connection checkout that no `app.tenant_id` is lingering from a previous transaction (`SET LOCAL` is reset at commit, but belt-and-braces is cheap).
+Trackly chooses **pooled cells with dedicated cells for the few**. Why cells at all, when the capacity estimate showed one cluster per region could hold the data? Because size is not the only reason to split:
 
-The guest problem deserves a precise rule. A guest from tenant G acting on tenant O's project P:
+- **Blast radius**: a bad migration, a runaway query or a failover affects one cell's 1,000 tenants, not all 3,000 in the region.
+- **Noisy neighbours**: when one tenant grows heavy, there are other cells to move its neighbours to, or a dedicated cell to move it to.
+- **Safe rollout**: schema migrations and new releases go to a canary cell first.
+- **Maintenance**: vacuuming a 330 GB cell, taking its backup and restoring it in a drill are all faster than for a 1.1 TB cluster.
 
-1. Authenticates with G's identity provider (or Setu's external-user flow).
-2. The gateway resolves the *acting* tenant O from the host name (`nhai-pmc.setu.app`).
-3. The API looks up `project_member (O, P, G, user)`; if absent, `404`.
-4. `app.tenant_id` is set to O for the transaction. The guest's authorisation context contains `ProjectIds = {P}` and nothing else of O's.
-5. Every query in the request is filtered by `project_id IN (user's project ids)` in the authorisation layer in addition to RLS.
+Cells cost something: more clusters to run and a directory that must always be right. At 50 tenants, one database is the right answer; cells start paying off in the thousands.
 
-RLS stops tenant leakage; the project filter stops a guest from seeing the owner's other projects. Both are needed.
+**Moving a tenant between cells** happens when a tenant outgrows its neighbours or signs an Enterprise contract. The steps: copy the tenant's rows to the target cell (logical replication filtered by `tenant_id`, or a bulk copy followed by replaying the outbox), wait for lag near zero, mark the tenant `MOVING` in the directory so the gateway briefly queues or rejects its writes (seconds, announced in advance), verify row counts and checksums, flip the directory entry to the new cell, resume writes, and delete the old rows after a quarantine period. Because every key includes `tenant_id` and ids are globally unique UUIDs, rows move without renumbering.
 
-### 2. RBAC + ABAC
+### 2. Tenant resolution and isolation layers
 
-Pure RBAC fails here because roles are not enough: "Project Manager" says what a user may *do*; it cannot say *on which projects* or *up to what amount*. Pure ABAC (every rule is an expression over attributes) is flexible but opaque to administrators. Setu uses **roles for capabilities and attributes for scope**:
+Tenant resolution happens exactly once, at the gateway, from the host name or a verified token claim. If a token issued for tenant A is presented at `b.trackly.example`, the gateway rejects it. The resolved tenant travels as a scoped `TenantContext` in the API, and the data layer opens every transaction with `set_config('app.tenant_id', @tenant, true)`.
 
-- Roles grant **permissions** (`document.create`, `approval.decide`, `report.portfolio.read`).
-- Attribute rules **constrain** a permission: `ProjectMembership` (the project must be in the user's memberships, unless the user has a tenant-wide portfolio role), `Clearance` (document classification ≤ user clearance), `ApprovalLimit` (amount ≤ user's limit for financial subjects), `Portfolio` (project's portfolio in the user's portfolios).
+Isolation is layered, because any single layer will one day have a bug:
 
-In ASP.NET Core this maps to **policy-based authorization**: a requirement per rule, a handler per requirement, a resource passed to `IAuthorizationService.AuthorizeAsync(user, resource, policy)`. The user's roles, memberships, clearance and limits are loaded once per session into a compact `Principal` cached in Redis (TTL 5 minutes, invalidated on role change by publishing `PrincipalChanged`). Evaluation is in-process and takes microseconds; the cache miss costs one query.
+1. Tenant from the host or the token only, never from user input.
+2. A scoped `TenantContext` that can be set once per request.
+3. Authorisation that limits the user to their projects and security levels.
+4. RLS with `FORCE` on every tenant table; the application role cannot bypass it.
+5. Tenant-prefixed keys everywhere outside the database: object storage (`<tenant_id>/...`), Redis (`t:{tenant}:...`), search documents (a `tenant_id` field and a mandatory filter), event payloads.
+6. A residency guard that refuses to write a tenant's data in the wrong region.
+7. Isolation canaries in production and an integration test in CI that runs a query without setting the tenant and asserts it returns zero rows.
 
-Administrators see roles and a short list of named rules. Developers see requirements and handlers. Auditors see, in each audit row for a denied or allowed sensitive action, *which rule* decided it.
+### 3. Permissions: roles for capability, attributes for scope
 
-### 3. Documents
+Pure role-based access control (RBAC) cannot say "Member, *but only in the projects I belong to*". Pure attribute-based control (ABAC) can say anything, but administrators cannot read it. Trackly uses **roles for capabilities and attributes for scope**:
 
-Objects live in a per-region bucket under the prefix `<tenant>/<project>/<document>/v<n>`. The prefix is part of the signed URL, so a URL can never address another tenant's objects. The bucket has versioning off (Setu manages versions itself, so that the metadata row is the source of truth) and object lock on for tenants with legal-hold requirements. Checksums are computed by the client on upload and verified against the storage service's server-side checksum on `complete`. Check-out sets `checked_out_by` and blocks other users' new versions until check-in or an admin override (audited). Retention is a per-tenant policy executed by the scheduler: expired versions are moved to an archive tier, never deleted while any legal hold exists.
+- Roles grant **permissions**: `issue.read`, `issue.create`, `issue.edit`, `issue.delete`, `issue.bulk-edit`, `project.admin`.
+- The **effective project role** is the user's explicit project role if they are a member; `Admin` if they are an Org Admin; `Viewer` if the project is `OPEN` and the user is a regular member (not a guest); otherwise none, and the project is invisible.
+- Attribute rules **constrain** a permission: issue `security_level ≤ user clearance`; `issue.delete` only by the reporter or a project admin; bulk edits up to a plan-defined count.
 
-Search covers metadata and extracted text (for PDFs and Office files) in a search cluster with **one index per tenant** for the large tenants and a shared index with a tenant filter for the rest; the query layer always injects the tenant filter and the user's project filter.
+In ASP.NET Core this maps to **policy-based authorization**: a requirement per rule, a handler per requirement, a resource passed to `IAuthorizationService.AuthorizeAsync(user, resource, policy)`. The user's memberships, roles and clearance are loaded once into a compact principal and cached in Redis for 5 minutes, invalidated immediately on a membership change by a `MemberChanged` event. Evaluation is in memory and takes microseconds.
 
-### 4. Approval workflows
+### 4. Noisy neighbours and per-tenant limits
 
-A workflow template is a list of steps; each step has a `step_no`, a rule (`ALL` or `ANY`), and assignees resolved from roles or named users at start time (so a later role change does not silently change who must approve a running request). Steps with the same `step_no` run in parallel. The engine's rules:
+A noisy neighbour is a tenant whose load hurts other tenants on shared resources. In a project tool the usual culprits, in rough order of how often they cause incidents, are:
 
-- Starting a request creates all step rows with status `WAITING`, then marks `step_no = 1` as `PENDING` and sets `due_at = now + SLA`.
-- A decision on a `PENDING` step by its assignee (or a delegate) records it. For `ALL`, the step completes when every assignee has approved; for `ANY`, when one has. A rejection by any assignee rejects the request and marks remaining steps `SKIPPED`.
-- When a step completes, the next `step_no` becomes `PENDING`. When the last completes, the request is `APPROVED`.
-- Delegation marks the delegator's row `DELEGATED` and inserts a `PENDING` row for the delegate with the same `due_at`.
-- SLA breach does not change the decision state; it sets an escalation flag and notifies, so humans decide, and the breach is in the audit trail.
-- Decisions are idempotent on a client-generated decision id; a retried `decide` returns the original result.
+| Source | Example | Control |
+|---|---|---|
+| API scripts and integrations | A CI pipeline polls `GET /search` 200 times a second | Per-tenant and per-token token buckets by plan; `429` with `Retry-After`; webhooks recommended instead of polling |
+| Bulk operations | "Move 40,000 issues to the new sprint" | `202 Accepted` and a job on the tenant's own queue; one or two concurrent jobs per tenant; batches of 500 rows per transaction |
+| Automation rules | A rule triggered by "issue updated" updates the issue, which triggers itself | Monthly execution budget per plan; loop detection (a rule may not trigger itself more than 10 levels deep); per-tenant worker concurrency |
+| Expensive searches | Free-text search across 1,200 projects with sorting by a custom field | Query cost limits and timeouts in the search tier; cursor pagination capped at 100 per page |
+| Database hotspots | A dashboard query scanning a large tenant's changelog | `statement_timeout` for the application role, read models instead of ad-hoc scans, and moving the tenant to a dedicated cell |
+| Storage | One tenant uploads 2 TB of build artefacts | Plan quotas on attachment bytes, checked when the upload begins |
 
-All of this is ordinary rows and transactions in PostgreSQL. A general workflow engine ([workflow engines and feature flags](#/lesson/m16-workflow-engines)) becomes worth it when templates need loops, conditional branches on arbitrary data, or long-running external waits; approvals rarely do.
+**Where to enforce rate limits.** The gateway is the first line, because it rejects traffic before it reaches the cell. ASP.NET Core's built-in rate limiter (`Microsoft.AspNetCore.RateLimiting`) gives a second line inside the API with a **partitioned limiter keyed by tenant**. An in-process limiter counts per instance, so with 16 instances the effective limit is up to 16 times the configured value; either divide the plan's limit by the instance count (simple, approximate) or keep the counters in Redis (exact, one extra round trip). Trackly uses Redis counters at the gateway for the contractual plan limit and an in-process limiter as a cheap safety net. The [rate limiting](#/lesson/m10-rate-limiting) and [rate limiter](#/lesson/m17-rate-limiter) lessons cover the algorithms.
 
-### 5. Reporting
+Plan limits (estimates a product team would tune):
 
-Reports are the first thing that breaks. A portfolio dashboard across 900 projects joins BoQ lines, progress entries and approvals; on the primary it would hold locks and burn CPU during month-end. Setu separates three tiers:
+| Plan | API requests per tenant | Burst | Concurrent bulk jobs | Automation runs per month | Attachment storage |
+|---|---|---|---|---|---|
+| Free | 10/s | 20 | 1 | 100 | 2 GB |
+| Standard | 100/s | 200 | 1 | 1,000 + 10 per user | 250 GB |
+| Premium | 300/s | 600 | 2 | 1,000 + 100 per user | 1 TB |
+| Enterprise | 1,000/s (contract) | 2,000 | 4 | Contract | Contract |
 
-- **Inbox and project pages**: read replicas, with the API retrying on the primary if replication lag exceeds 2 s for a user who just wrote (read-your-writes).
-- **Project and portfolio dashboards**: **read models** maintained from events (`ProgressRecorded`, `ApprovalDecided`): a `project_progress_summary` table updated incrementally, so the dashboard is a single-row read.
-- **Cross-project analysis and exports**: the **warehouse**, loaded from the event stream, partitioned by tenant, with the same RLS policy pattern (tenant id from the session) and per-tenant query quotas. Authority-level views across tenants are a *grant* stored in the directory (tenant A allows authority tenant B to see projects tagged with B's programme), evaluated in the warehouse query layer.
+Check against reality: the largest tenant has 12,500 daily active users; 12,500 × 300 calls ÷ 32,400 s ≈ 116 req/s on average, about 230 at peak, well inside its 1,000/s Enterprise limit. A 500-person Standard tenant generates about 2.3 req/s from humans. The limits are not there to ration people; they stop scripts.
 
-### 6. Audit
+**Fair queues.** Bulk jobs, imports and exports go to a queue per tenant, and workers pick tenants round-robin. Without that, one tenant's 50,000-row import queued first delays every other tenant's 20-row bulk edit for half an hour.
 
-Requirements from auditors: complete (every sensitive action), attributable (who, from where), ordered (sequence), immutable (nobody, including a DBA, can alter without detection), and retained (7 years for some tenants). Design:
+### 5. Permission-aware search
 
-- Written **in the same transaction** as the action it describes, so either both commit or neither.
-- **Append-only** by privilege: the application role has `INSERT` and `SELECT` only; there is no update path in the code either.
-- **Hash-chained per tenant**: each row stores `prev_hash` and `hash = SHA-256(prev_hash || canonical row)`. A nightly job re-walks each tenant's chain and compares the final hash with a copy stored in a separate, write-once location (object storage with object lock in the tenant's region). A DBA who edits a row breaks the chain; a DBA who deletes a row leaves a gap in `seq`.
-- Per-tenant sequence assigned under a per-tenant advisory lock in the transaction, so concurrent writers never produce the same `seq` and the chain is linear.
-- Partitioned by month; old partitions detached and archived to cold storage in the tenant's region.
+Search is where isolation and performance collide. The index stores, for each issue, `tenant_id`, `project_id`, `security_level`, status, assignee, labels, dates, custom fields and text. The query layer translates the user's filter into a search query and **always adds**: `tenant_id = T`, `project_id IN (projects the user can see)`, `security_level <= clearance`. The user's visible project list comes from the cached principal.
 
-### 7. Data residency
+Two approaches were considered:
 
-The tenant directory holds `home_region`. Each region is a complete deployment: gateway, API, database, object storage bucket, search, warehouse partitions, logging. The gateway in region X redirects any request for a tenant homed elsewhere. A `ResidencyGuard` in the data layer refuses to persist rows for a tenant whose region differs from the process's region. Logs with personal data are shipped to a per-region logging workspace; global telemetry carries only tenant ids and counts. Backups are region-local. This is the same pattern as [multi-region](#/lesson/m16-multi-region), applied per tenant.
+- **Pre-filter** (inject permissions into the query): correct counts and pagination; the project list can be long (1,200 ids for an Org Admin), which search engines handle well as a terms filter.
+- **Post-filter** (search, then drop hits the user may not see): simple, but pages come back short or empty, total counts leak the existence of hidden issues, and deep pagination becomes expensive.
+
+Trackly pre-filters. Large tenants get their own index (or routing key) so their 20 million issues do not slow down queries for small tenants; small tenants share indexes with a mandatory tenant filter. The index is eventually consistent (about 1–2 s behind), so the issue page itself always reads from PostgreSQL, and a user who just created an issue sees it via a read-your-writes merge on the board. The [search architecture](#/lesson/m16-search-architecture) lesson explains indexing pipelines in depth.
+
+### 6. Workflows and change-request approvals
+
+Each project has a **status workflow**: statuses (`To do`, `In progress`, `In review`, `Done`) mapped to three categories (`TODO`, `IN_PROGRESS`, `DONE`) that reports use, plus allowed transitions with conditions ("only a member of the QA group may move to *Done*"). A transition is one transaction: check the transition is allowed from the current status, check conditions, update the issue with the version check, write changelog and outbox.
+
+**Change requests** (for example "deploy the new payment gateway on Friday") add approvals. A template lists step groups; each group has a `step_no`, a rule (`ALL` or `ANY`) and assignees resolved when the request starts, so a later group change does not silently change who must approve a running request. The engine's rules:
+
+- Starting a request creates all step rows as `WAITING`, then marks the lowest `step_no` `PENDING` with `due_at = now + SLA`.
+- For `ALL`, a group completes when every non-delegated assignee has approved; for `ANY`, when one has. A rejection by anyone rejects the request and skips the rest.
+- When a group completes, the next `step_no` becomes `PENDING`. When the last completes, the request is approved and the issue may transition to `Approved`.
+- Delegation marks the delegator's row `DELEGATED` and inserts a `PENDING` row for the delegate with the same `due_at`, so delegation does not reset the clock.
+- An SLA breach does not decide anything: it sets an escalation flag, notifies the approver's manager and is recorded.
+- Decisions are idempotent on a client-generated decision id; a retried click returns the original result.
+
+These are ordinary rows and transactions. A general workflow engine ([workflow engines](#/lesson/m16-workflow-engines)) becomes worth it when templates need loops, branches on arbitrary data or long waits on external systems; approvals rarely do.
+
+### 7. Reporting
+
+Burndown, velocity and cumulative-flow charts are the reports teams look at every day. Computing them from the changelog on each page load would scan millions of rows for a large tenant. Instead, **read models** updated from events keep a small table per sprint (`sprint_burndown(tenant_id, sprint_id, day, remaining_points)`), so the chart is a 14-row read. Cross-project dashboards for the largest tenants ("open bugs by priority across 1,200 projects") run from a regional **analytics store** loaded from the event stream, partitioned by tenant, with per-tenant query concurrency limits. Exports are jobs on the tenant's queue that write a file to object storage and send a signed link.
+
+### 8. Audit
+
+Trackly distinguishes two histories:
+
+- The **changelog** ("Meera changed priority from Medium to High") is product data: high volume, shown on every issue, partitioned by month, not hash-chained.
+- The **audit log** records security and admin events: logins, SSO configuration, role and membership changes, permission scheme edits, exports, API token creation, audit reads, data deletion. It must be complete, attributable, ordered, immutable and retained (seven years for some customers).
+
+The audit design:
+
+- Written **in the same transaction** as the change it describes, so both commit or neither does.
+- **Append-only** by privilege: the application role has `INSERT` and `SELECT` only.
+- **Hash-chained per tenant**: each row stores `prev_hash` and `hash = SHA-256(prev_hash || canonical row)`, and a per-tenant `seq` is assigned under a per-tenant advisory lock (`pg_advisory_xact_lock`) so the chain is linear. A nightly job re-walks each tenant's chain and compares the final hash with a copy kept in write-once object storage in the tenant's region. Editing a row breaks the chain; deleting one leaves a gap in `seq`.
+- The lock serialises audit writes per tenant. That is acceptable because audit events are about 3 per active user per day (a few per second even for the largest tenant). Issue edits, at 15 per user per day and bursty, stay in the changelog; chaining them would make the lock a bottleneck for exactly the tenants who can least afford it.
+- Partitioned by month; old partitions detached and archived in the tenant's region.
+
+### 9. Enterprise SSO and SCIM
+
+- **Per-tenant identity configuration**: SAML 2.0 metadata or OpenID Connect issuer, client id and secret, stored encrypted in the directory and loaded by the identity broker per tenant. The API never handles SAML; it validates the broker's JWTs.
+- **Domain verification** (DNS TXT record) before SSO can be enforced for a domain, so a tenant cannot claim `gmail.com`.
+- **Just-in-time provisioning** creates a member on first login; **SCIM** creates, updates and deactivates members and syncs groups ahead of time. Groups map to project roles ("IdP group `mobile-devs` = Member of `MOB`").
+- **Deprovisioning** is the security-critical path: 10-minute access tokens, refresh-token revocation, principal cache eviction and a deny list, as in the sequence above.
+- **Break-glass**: one tenant-designated admin account with a hardware key can log in without SSO, so a broken identity provider does not lock the company out; every use is audited and alerts.
+
+### 10. Data residency
+
+The tenant directory holds `home_region`. Each region is a complete deployment: gateway, API, cells, object storage, search, analytics store, logs and backups. The gateway in one region redirects requests for tenants homed elsewhere. A residency guard in the data layer refuses to write a tenant's rows if the process's region differs from the tenant's. Logs with personal data go to a per-region logging workspace; global telemetry carries only tenant ids and counts.
+
+The honest exception is **identity**: a global login means the e-mail address must be findable before we know the region. Trackly keeps a global index of `hash(email) → home region` and stores the profile itself (name, e-mail, avatar) in the region of the user's primary organisation; residency commitments are written for product data (issues, comments, attachments, audit) and name this exception explicitly. This is the same pattern as [multi-region](#/lesson/m16-multi-region), applied per tenant.
 
 ### Production-style C# implementation
 
-The pieces that benefit from code: the tenant context, policy-based authorisation with resource-aware handlers, the approval step state transition, and the hash-chained audit writer. Persistence is behind interfaces with in-memory implementations so the set compiles offline.
+The pieces that benefit from code: the tenant context, the per-tenant rate limiter, policy-based authorisation with resource-aware handlers, the approval state machine and the hash-chained audit writer. Persistence is behind interfaces with in-memory implementations so that the set compiles offline. With Npgsql, the start of every transaction looks like this (not compiled here):
 
-```csharp file=Setu/Tenancy/TenantContext.cs
-namespace Setu.Tenancy;
+```csharp
+await using var tx = await conn.BeginTransactionAsync(ct);
+await using (var cmd = new NpgsqlCommand("SELECT set_config('app.tenant_id', @t, true)", conn, tx))
+{
+    cmd.Parameters.AddWithValue("t", tenant.TenantId);   // parameterised; transaction-local
+    await cmd.ExecuteNonQueryAsync(ct);
+}
+// ... every statement in this transaction is now filtered by RLS ...
+await tx.CommitAsync(ct);
+```
 
-/// <summary>Resolved once per request by the gateway or middleware; scoped lifetime.</summary>
+```csharp file=Trackly/Tenancy/TenantContext.cs
+namespace Trackly.Tenancy;
+
+/// <summary>Resolved once per request; scoped lifetime. Never populated from the URL, query string or body.</summary>
 public sealed class TenantContext
 {
-    public string ActingTenantId { get; private set; } = "";
-    public string HomeTenantId { get; private set; } = "";
-    public bool IsGuest => ActingTenantId != HomeTenantId;
-    public bool IsResolved => ActingTenantId.Length > 0;
+    public string TenantId { get; private set; } = "";
+    public string Plan { get; private set; } = "FREE";
+    public bool IsResolved => TenantId.Length > 0;
 
-    public void Set(string actingTenantId, string homeTenantId)
+    public void Set(string tenantId, string plan)
     {
         if (IsResolved) throw new InvalidOperationException("Tenant already resolved for this request.");
-        ActingTenantId = actingTenantId;
-        HomeTenantId = homeTenantId;
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+        TenantId = tenantId;
+        Plan = plan;
     }
+}
+
+public interface ITenantDirectory
+{
+    /// <summary>Maps a host slug (quickcart) to a tenant id and plan, or null if unknown.</summary>
+    (string TenantId, string Plan)? FindBySlug(string slug);
+}
+
+public sealed class InMemoryTenantDirectory : ITenantDirectory
+{
+    private readonly Dictionary<string, (string, string)> _bySlug = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["quickcart"] = ("t-quickcart", "STANDARD"),
+        ["citycare"] = ("t-citycare", "ENTERPRISE"),
+    };
+
+    public (string TenantId, string Plan)? FindBySlug(string slug) =>
+        _bySlug.TryGetValue(slug, out var t) ? t : null;
 }
 
 public sealed class TenantResolutionMiddleware(RequestDelegate next)
 {
-    public async Task InvokeAsync(HttpContext ctx, TenantContext tenant)
+    public async Task InvokeAsync(HttpContext ctx, TenantContext tenant, ITenantDirectory directory)
     {
-        // The gateway sets X-Acting-Tenant from the host name and X-Home-Tenant from the verified token.
-        var acting = ctx.Request.Headers["X-Acting-Tenant"].ToString();
-        var home = ctx.Request.Headers["X-Home-Tenant"].ToString();
-        if (string.IsNullOrEmpty(acting) || string.IsNullOrEmpty(home))
+        // quickcart.trackly.example -> "quickcart". Health checks and SCIM use other routes in production.
+        var host = ctx.Request.Host.Host;
+        var slug = host.Split('.')[0];
+        var found = directory.FindBySlug(slug);
+        if (found is null)
         {
-            ctx.Response.StatusCode = StatusCodes.Status404NotFound;   // unknown host: do not reveal anything
+            ctx.Response.StatusCode = StatusCodes.Status404NotFound;   // unknown tenant: reveal nothing
             return;
         }
-        tenant.Set(acting, home);
+
+        // A token issued for one tenant must not be used on another tenant's host.
+        var tokenTenant = ctx.User.FindFirst("tid")?.Value;
+        if (tokenTenant is not null && tokenTenant != found.Value.TenantId)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            return;
+        }
+
+        tenant.Set(found.Value.TenantId, found.Value.Plan);
         await next(ctx);
     }
 }
 ```
 
-```csharp file=Setu/Authorization/Principal.cs
-namespace Setu.Authorization;
+```csharp file=Trackly/Limits/TenantRateLimiting.cs
+using System.Threading.RateLimiting;
+using Trackly.Tenancy;
 
-public sealed record SetuPrincipal(
+namespace Trackly.Limits;
+
+public sealed record PlanLimits(int RequestsPerSecond, int Burst);
+
+public static class PlanCatalog
+{
+    public static PlanLimits For(string plan) => plan switch
+    {
+        "ENTERPRISE" => new PlanLimits(1_000, 2_000),
+        "PREMIUM" => new PlanLimits(300, 600),
+        "STANDARD" => new PlanLimits(100, 200),
+        _ => new PlanLimits(10, 20),
+    };
+}
+
+/// <summary>
+/// One token bucket per tenant, sized by plan. Counts are per API instance, so the configured
+/// figures are divided by the instance count; exact global limits live in Redis at the gateway.
+/// </summary>
+public static class TenantRateLimiter
+{
+    public static PartitionedRateLimiter<HttpContext> Create(int instanceCount) =>
+        PartitionedRateLimiter.Create<HttpContext, string>(ctx =>
+        {
+            var tenant = ctx.RequestServices.GetRequiredService<TenantContext>();
+            if (!tenant.IsResolved)
+                return RateLimitPartition.GetNoLimiter("unresolved");   // the middleware has already returned 404
+
+            var limits = PlanCatalog.For(tenant.Plan);
+            var perInstance = Math.Max(1, limits.RequestsPerSecond / instanceCount);
+            var burst = Math.Max(perInstance, limits.Burst / instanceCount);
+            // The plan is part of the key, so an upgrade takes effect on the next request.
+            return RateLimitPartition.GetTokenBucketLimiter($"{tenant.TenantId}:{tenant.Plan}", _ => new TokenBucketRateLimiterOptions
+            {
+                TokenLimit = burst,
+                TokensPerPeriod = perInstance,
+                ReplenishmentPeriod = TimeSpan.FromSeconds(1),
+                QueueLimit = 0,                 // reject immediately; queuing hides overload
+                AutoReplenishment = true,
+            });
+        });
+}
+```
+
+```csharp file=Trackly/Authorization/Principal.cs
+namespace Trackly.Authorization;
+
+public sealed record TracklyPrincipal(
     string TenantId,
     string UserId,
-    IReadOnlySet<string> Roles,
-    IReadOnlySet<string> ProjectIds,
-    IReadOnlySet<string> PortfolioIds,
-    int Clearance,
-    decimal ApprovalLimit);
+    bool IsOrgAdmin,
+    bool IsGuest,
+    IReadOnlyDictionary<string, string> ProjectRoles,   // projectId -> Admin | Member | Viewer
+    int Clearance);
 
-public sealed record ProjectResource(string ProjectId, string? PortfolioId);
-public sealed record DocumentResource(string ProjectId, string? PortfolioId, int Classification);
-public sealed record ApprovalResource(string ProjectId, string? PortfolioId, string SubjectType, decimal? Amount, string AssigneeUserId);
+public sealed record ProjectResource(string ProjectId, bool IsOpen);
+public sealed record IssueResource(string ProjectId, bool ProjectIsOpen, int SecurityLevel, string ReporterUserId);
 
-/// <summary>Maps roles to permissions. In production this is tenant-configurable and cached.</summary>
+/// <summary>Maps project roles to permissions. In production this is a per-project permission scheme, cached.</summary>
 public static class RolePermissions
 {
     private static readonly Dictionary<string, HashSet<string>> Map = new()
     {
-        ["TenantAdmin"] = ["*"],
-        ["PortfolioManager"] = ["project.read", "document.read", "document.create", "approval.decide", "report.portfolio.read"],
-        ["ProjectManager"] = ["project.read", "document.read", "document.create", "approval.start", "approval.decide"],
-        ["Engineer"] = ["project.read", "document.read", "document.create", "approval.start"],
-        ["Finance"] = ["project.read", "document.read", "approval.decide"],
-        ["Viewer"] = ["project.read", "document.read"],
-        ["Guest"] = ["project.read", "document.read"],
+        ["Admin"] = ["project.read", "project.admin", "issue.read", "issue.create", "issue.edit", "issue.delete", "issue.bulk-edit"],
+        ["Member"] = ["project.read", "issue.read", "issue.create", "issue.edit", "issue.delete", "issue.bulk-edit"],
+        ["Viewer"] = ["project.read", "issue.read"],
     };
 
-    public static bool Grants(IReadOnlySet<string> roles, string permission) =>
-        roles.Any(r => Map.TryGetValue(r, out var perms) && (perms.Contains("*") || perms.Contains(permission)));
+    /// <summary>Explicit membership wins; Org Admins act as Admin; open projects give members Viewer; guests get nothing implicit.</summary>
+    public static string? EffectiveRole(TracklyPrincipal p, string projectId, bool projectIsOpen)
+    {
+        if (p.ProjectRoles.TryGetValue(projectId, out var role)) return role;
+        if (p.IsOrgAdmin) return "Admin";
+        if (projectIsOpen && !p.IsGuest) return "Viewer";
+        return null;
+    }
+
+    public static bool Grants(string? role, string permission) =>
+        role is not null && Map.TryGetValue(role, out var perms) && perms.Contains(permission);
 }
 ```
 
-```csharp file=Setu/Authorization/Requirements.cs
+```csharp file=Trackly/Authorization/Requirements.cs
 using Microsoft.AspNetCore.Authorization;
 
-namespace Setu.Authorization;
+namespace Trackly.Authorization;
 
-public sealed class PermissionRequirement(string permission) : IAuthorizationRequirement
+public sealed class ProjectPermissionRequirement(string permission) : IAuthorizationRequirement
 {
     public string Permission { get; } = permission;
 }
 
-public sealed class ProjectMembershipRequirement : IAuthorizationRequirement;
-public sealed class ClearanceRequirement : IAuthorizationRequirement;
-public sealed class ApprovalLimitRequirement : IAuthorizationRequirement;
+public sealed class SecurityLevelRequirement : IAuthorizationRequirement;
+public sealed class ReporterOrAdminRequirement : IAuthorizationRequirement;
 
 public interface IPrincipalProvider
 {
-    SetuPrincipal? Current { get; }
+    TracklyPrincipal? Current { get; }
 }
 
-/// <summary>Role grants the capability.</summary>
-public sealed class PermissionHandler(IPrincipalProvider principals) : AuthorizationHandler<PermissionRequirement>
+/// <summary>Scope and capability: the user's effective role in the resource's project grants the permission.</summary>
+public sealed class ProjectPermissionHandler(IPrincipalProvider principals) : AuthorizationHandler<ProjectPermissionRequirement>
 {
-    protected override Task HandleRequirementAsync(AuthorizationHandlerContext context, PermissionRequirement requirement)
+    protected override Task HandleRequirementAsync(AuthorizationHandlerContext context, ProjectPermissionRequirement requirement)
     {
         var p = principals.Current;
-        if (p is not null && RolePermissions.Grants(p.Roles, requirement.Permission)) context.Succeed(requirement);
-        return Task.CompletedTask;
-    }
-}
-
-/// <summary>Attribute: the project must be in the user's memberships, or its portfolio in the user's portfolios.</summary>
-public sealed class ProjectMembershipHandler(IPrincipalProvider principals) : AuthorizationHandler<ProjectMembershipRequirement>
-{
-    protected override Task HandleRequirementAsync(AuthorizationHandlerContext context, ProjectMembershipRequirement requirement)
-    {
-        var p = principals.Current;
-        var (projectId, portfolioId) = context.Resource switch
+        var (projectId, isOpen) = context.Resource switch
         {
-            ProjectResource r => (r.ProjectId, r.PortfolioId),
-            DocumentResource d => (d.ProjectId, d.PortfolioId),
-            ApprovalResource a => (a.ProjectId, a.PortfolioId),
-            _ => (null, null),
+            ProjectResource r => (r.ProjectId, r.IsOpen),
+            IssueResource i => (i.ProjectId, i.ProjectIsOpen),
+            _ => ((string?)null, false),
         };
         if (p is null || projectId is null) return Task.CompletedTask;
-        if (p.Roles.Contains("TenantAdmin") || p.ProjectIds.Contains(projectId) ||
-            (portfolioId is not null && p.PortfolioIds.Contains(portfolioId)))
+
+        var role = RolePermissions.EffectiveRole(p, projectId, isOpen);
+        if (role is null)
+            context.Fail(new AuthorizationFailureReason(this, "not-visible"));   // the API maps this to 404
+        else if (RolePermissions.Grants(role, requirement.Permission))
             context.Succeed(requirement);
+        else
+            context.Fail(new AuthorizationFailureReason(this, $"Role {role} lacks {requirement.Permission}."));
         return Task.CompletedTask;
     }
 }
 
-/// <summary>Attribute: document classification must not exceed the user's clearance.</summary>
-public sealed class ClearanceHandler(IPrincipalProvider principals) : AuthorizationHandler<ClearanceRequirement>
+/// <summary>Attribute: an issue's security level must not exceed the user's clearance. Hidden issues look absent.</summary>
+public sealed class SecurityLevelHandler(IPrincipalProvider principals) : AuthorizationHandler<SecurityLevelRequirement>
 {
-    protected override Task HandleRequirementAsync(AuthorizationHandlerContext context, ClearanceRequirement requirement)
+    protected override Task HandleRequirementAsync(AuthorizationHandlerContext context, SecurityLevelRequirement requirement)
     {
         var p = principals.Current;
-        if (p is not null && context.Resource is DocumentResource d && d.Classification <= p.Clearance) context.Succeed(requirement);
+        if (p is null || context.Resource is not IssueResource i) return Task.CompletedTask;
+        if (i.SecurityLevel <= p.Clearance) context.Succeed(requirement);
+        else context.Fail(new AuthorizationFailureReason(this, "not-visible"));
         return Task.CompletedTask;
     }
 }
 
-/// <summary>Attribute: financial approvals are limited by amount; non-financial subjects have no limit.</summary>
-public sealed class ApprovalLimitHandler(IPrincipalProvider principals) : AuthorizationHandler<ApprovalLimitRequirement>
+/// <summary>Attribute: only the reporter or a project admin may delete an issue.</summary>
+public sealed class ReporterOrAdminHandler(IPrincipalProvider principals) : AuthorizationHandler<ReporterOrAdminRequirement>
 {
-    protected override Task HandleRequirementAsync(AuthorizationHandlerContext context, ApprovalLimitRequirement requirement)
+    protected override Task HandleRequirementAsync(AuthorizationHandlerContext context, ReporterOrAdminRequirement requirement)
     {
         var p = principals.Current;
-        if (p is null || context.Resource is not ApprovalResource a) return Task.CompletedTask;
-        if (a.AssigneeUserId != p.UserId) { context.Fail(new AuthorizationFailureReason(this, "Not the assignee of this step.")); return Task.CompletedTask; }
-        if (a.Amount is decimal amount && amount > p.ApprovalLimit)
-        {
-            context.Fail(new AuthorizationFailureReason(this, $"Amount {amount:N0} exceeds approval limit {p.ApprovalLimit:N0}."));
-            return Task.CompletedTask;
-        }
-        context.Succeed(requirement);
+        if (p is null || context.Resource is not IssueResource i) return Task.CompletedTask;
+        var role = RolePermissions.EffectiveRole(p, i.ProjectId, i.ProjectIsOpen);
+        if (i.ReporterUserId == p.UserId || role == "Admin") context.Succeed(requirement);
+        else context.Fail(new AuthorizationFailureReason(this, "Only the reporter or a project admin can delete this issue."));
         return Task.CompletedTask;
     }
 }
 ```
 
-The handlers are small and independently testable. `context.Fail` with a reason is what lets the API return an explained 403; a plain non-success is an unexplained denial. Policies compose them: `DocumentRead` = permission `document.read` + membership + clearance; `ApprovalDecide` = permission `approval.decide` + membership + limit.
+The handlers are small and independently testable. `context.Fail` with a reason lets the API tell two cases apart: a `"not-visible"` failure becomes `404` (the user must not learn the issue exists), any other failure becomes `403` with an explanation. Policies compose them: `IssueRead` = `issue.read` + security level; `IssueDelete` = `issue.delete` + security level + reporter-or-admin.
 
-```csharp file=Setu/Approvals/ApprovalStep.cs
-namespace Setu.Approvals;
+```csharp file=Trackly/Approvals/ApprovalStep.cs
+namespace Trackly.Approvals;
 
 public enum StepStatus { Waiting, Pending, Approved, Rejected, Delegated, Skipped }
 public enum StepRule { All, Any }
@@ -614,22 +822,22 @@ public sealed class ApprovalStep(int stepNo, StepRule rule, string assignee)
     public DateTimeOffset? DecidedAt { get; internal set; }
 }
 
-/// <summary>Aggregate holding the state machine for one request. Persistence maps it to approval_request + approval_step.</summary>
+/// <summary>State machine for the approvals on one change-request issue. Persistence maps it to approval_step rows.</summary>
 public sealed class ApprovalRequest
 {
     private readonly List<ApprovalStep> _steps;
     private readonly TimeSpan _sla;
 
-    public ApprovalRequest(string approvalId, IEnumerable<ApprovalStep> steps, TimeSpan sla, DateTimeOffset now)
+    public ApprovalRequest(string issueKey, IEnumerable<ApprovalStep> steps, TimeSpan sla, DateTimeOffset now)
     {
-        ApprovalId = approvalId;
+        IssueKey = issueKey;
         _steps = steps.OrderBy(s => s.StepNo).ToList();
-        if (_steps.Count == 0) throw new ArgumentException("A workflow needs at least one step.");
+        if (_steps.Count == 0) throw new ArgumentException("An approval needs at least one step.");
         _sla = sla;
         Activate(_steps[0].StepNo, now);
     }
 
-    public string ApprovalId { get; }
+    public string IssueKey { get; }
     public RequestStatus Status { get; private set; } = RequestStatus.InProgress;
     public IReadOnlyList<ApprovalStep> Steps => _steps;
 
@@ -685,19 +893,19 @@ public sealed class ApprovalRequest
     {
         if (Status != RequestStatus.InProgress) throw new InvalidOperationException($"Request is {Status}.");
         return _steps.FirstOrDefault(s => s.Status == StepStatus.Pending && s.Assignee == userId)
-            ?? throw new InvalidOperationException($"{userId} has no pending step on {ApprovalId}.");
+            ?? throw new InvalidOperationException($"{userId} has no pending step on {IssueKey}.");
     }
 }
 ```
 
-The aggregate enforces the rules in one place; the API layer handles authorisation (is this user allowed to decide at all, given the amount?) before calling it. The two concerns stay apart: the aggregate does not know about clearance or limits, and the handlers do not know about step ordering.
+The aggregate enforces the approval rules in one place; the API layer handles authorisation before calling it. The aggregate does not know about roles or security levels, and the handlers do not know about step ordering.
 
-```csharp file=Setu/Audit/AuditWriter.cs
+```csharp file=Trackly/Audit/AuditWriter.cs
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
-namespace Setu.Audit;
+namespace Trackly.Audit;
 
 public sealed record AuditEntry(string TenantId, long Seq, DateTimeOffset OccurredAt, string ActorUserId, string Action,
     string EntityType, string EntityId, JsonElement? Before, JsonElement? After, byte[] PrevHash, byte[] Hash);
@@ -761,186 +969,231 @@ public sealed class AuditWriter(IAuditStore store, TimeProvider time)
 public sealed class InMemoryAuditStore : IAuditStore
 {
     private readonly Dictionary<string, List<AuditEntry>> _byTenant = new();
-    public Task<AuditEntry?> LockAndGetLastAsync(string tenantId, CancellationToken ct) =>
-        Task.FromResult(_byTenant.TryGetValue(tenantId, out var l) && l.Count > 0 ? l[^1] : null);
+    private readonly Lock _gate = new();
+
+    public Task<AuditEntry?> LockAndGetLastAsync(string tenantId, CancellationToken ct)
+    {
+        lock (_gate)
+            return Task.FromResult(_byTenant.TryGetValue(tenantId, out var l) && l.Count > 0 ? l[^1] : null);
+    }
+
     public Task AppendAsync(AuditEntry entry, CancellationToken ct)
     {
-        if (!_byTenant.TryGetValue(entry.TenantId, out var l)) _byTenant[entry.TenantId] = l = new List<AuditEntry>();
-        l.Add(entry);
+        lock (_gate)
+        {
+            if (!_byTenant.TryGetValue(entry.TenantId, out var l)) _byTenant[entry.TenantId] = l = new List<AuditEntry>();
+            l.Add(entry);
+        }
         return Task.CompletedTask;
     }
-    public IReadOnlyList<AuditEntry> For(string tenantId) => _byTenant.GetValueOrDefault(tenantId) ?? new List<AuditEntry>();
+
+    public IReadOnlyList<AuditEntry> For(string tenantId)
+    {
+        lock (_gate) return _byTenant.GetValueOrDefault(tenantId)?.ToList() ?? new List<AuditEntry>();
+    }
 }
 ```
 
-In PostgreSQL, `LockAndGetLastAsync` is `SELECT pg_advisory_xact_lock(hashtext(@tenant)); SELECT ... ORDER BY seq DESC LIMIT 1;` inside the caller's transaction, so two concurrent writers for the same tenant serialise on the chain. `Verify` runs nightly per tenant and compares the final hash with the copy in write-once storage.
+In PostgreSQL, `LockAndGetLastAsync` is `SELECT pg_advisory_xact_lock(hashtextextended(@tenant::text, 0)); SELECT ... ORDER BY seq DESC LIMIT 1;` inside the caller's transaction, so two concurrent writers for the same tenant serialise on the chain and the lock is released at commit. The in-memory store is only a stand-in: its lock protects the list, not the read-then-append sequence, which is why the real store holds a transaction-scoped lock. `Verify` runs nightly per tenant and compares the final hash with the copy in write-once storage.
 
 ```csharp file=Program.cs
 using Microsoft.AspNetCore.Authorization;
-using Setu.Approvals;
-using Setu.Audit;
-using Setu.Authorization;
-using Setu.Tenancy;
+using Trackly.Audit;
+using Trackly.Authorization;
+using Trackly.Limits;
+using Trackly.Tenancy;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<ITenantDirectory, InMemoryTenantDirectory>();
 builder.Services.AddScoped<TenantContext>();
 builder.Services.AddScoped<IPrincipalProvider, HeaderPrincipalProvider>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<IAuditStore, InMemoryAuditStore>();
 builder.Services.AddSingleton<AuditWriter>();
 
+var instanceCount = builder.Configuration.GetValue("Api:InstanceCount", 16);
+builder.Services.AddRateLimiter(o =>
+{
+    o.GlobalLimiter = TenantRateLimiter.Create(instanceCount);
+    o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    o.OnRejected = (ctx, _) =>
+    {
+        ctx.HttpContext.Response.Headers.RetryAfter = "1";
+        return ValueTask.CompletedTask;
+    };
+});
+
 builder.Services.AddAuthorization(o =>
 {
-    o.AddPolicy("DocumentRead", p => p.AddRequirements(new PermissionRequirement("document.read"), new ProjectMembershipRequirement(), new ClearanceRequirement()));
-    o.AddPolicy("ApprovalDecide", p => p.AddRequirements(new PermissionRequirement("approval.decide"), new ProjectMembershipRequirement(), new ApprovalLimitRequirement()));
+    o.AddPolicy("IssueRead", p => p.AddRequirements(new ProjectPermissionRequirement("issue.read"), new SecurityLevelRequirement()));
+    o.AddPolicy("IssueDelete", p => p.AddRequirements(
+        new ProjectPermissionRequirement("issue.delete"), new SecurityLevelRequirement(), new ReporterOrAdminRequirement()));
 });
-builder.Services.AddScoped<IAuthorizationHandler, PermissionHandler>();
-builder.Services.AddScoped<IAuthorizationHandler, ProjectMembershipHandler>();
-builder.Services.AddScoped<IAuthorizationHandler, ClearanceHandler>();
-builder.Services.AddScoped<IAuthorizationHandler, ApprovalLimitHandler>();
+builder.Services.AddScoped<IAuthorizationHandler, ProjectPermissionHandler>();
+builder.Services.AddScoped<IAuthorizationHandler, SecurityLevelHandler>();
+builder.Services.AddScoped<IAuthorizationHandler, ReporterOrAdminHandler>();
 
 var app = builder.Build();
-app.UseMiddleware<TenantResolutionMiddleware>();
+app.UseMiddleware<TenantResolutionMiddleware>();   // tenant first: the limiter partitions by it
+app.UseRateLimiter();
 
-app.MapGet("/documents/{id}/download", async (string id, IAuthorizationService authz, IPrincipalProvider principals, AuditWriter audit, TenantContext tenant, HttpContext ctx) =>
+app.MapGet("/issues/{key}", async (string key, IAuthorizationService authz, HttpContext ctx) =>
 {
-    var doc = new DocumentResource(ProjectId: "P1", PortfolioId: "PF-NORTH", Classification: 2);   // loaded from the database in reality
-    var result = await authz.AuthorizeAsync(ctx.User, doc, "DocumentRead");
-    if (!result.Succeeded) return Results.StatusCode(StatusCodes.Status403Forbidden);
-    await audit.RecordAsync(tenant.ActingTenantId, principals.Current!.UserId, "document.download", "document", id, null, null, ctx.RequestAborted);
-    return Results.Ok(new { url = $"https://objects.example/{tenant.ActingTenantId}/P1/{id}?sig=..." });
+    var issue = new IssueResource(ProjectId: "MOB", ProjectIsOpen: false, SecurityLevel: 0, ReporterUserId: "u-meera"); // loaded under RLS in reality
+    var result = await authz.AuthorizeAsync(ctx.User, issue, "IssueRead");
+    return result.Succeeded ? Results.Ok(new { key, summary = "Checkout button unresponsive on Android" }) : Deny(result);
 });
 
-app.MapPost("/approvals/{id}/steps/{step:int}/decide", async (string id, int step, DecideRequest body, IAuthorizationService authz, HttpContext ctx) =>
+app.MapDelete("/issues/{key}", async (string key, IAuthorizationService authz, IPrincipalProvider principals, AuditWriter audit,
+    TenantContext tenant, HttpContext ctx) =>
 {
-    var resource = new ApprovalResource("P1", "PF-NORTH", "PAYMENT_CERT", 72_000_000m, body.AssigneeUserId);
-    var result = await authz.AuthorizeAsync(ctx.User, resource, "ApprovalDecide");
-    if (!result.Succeeded)
-        return Results.Json(new { reason = string.Join("; ", result.Failure?.FailureReasons.Select(r => r.Message) ?? Enumerable.Empty<string>()) }, statusCode: 403);
-    return Results.Ok(new { id, step, body.Decision });
+    var issue = new IssueResource("MOB", false, 0, "u-meera");
+    var result = await authz.AuthorizeAsync(ctx.User, issue, "IssueDelete");
+    if (!result.Succeeded) return Deny(result);
+    // Same transaction as the delete in reality: soft-delete the issue, then record the audit row.
+    await audit.RecordAsync(tenant.TenantId, principals.Current!.UserId, "issue.delete", "issue", key, null, null, ctx.RequestAborted);
+    return Results.NoContent();
 });
 
 app.Run();
 
-public sealed record DecideRequest(string Decision, string AssigneeUserId, string? DelegateTo);
+static IResult Deny(AuthorizationResult result)
+{
+    var reasons = result.Failure?.FailureReasons.Select(r => r.Message).ToList() ?? [];
+    if (reasons.Count == 0 || reasons.Contains("not-visible")) return Results.NotFound();   // never confirm existence
+    return Results.Json(new { reason = string.Join("; ", reasons) }, statusCode: StatusCodes.Status403Forbidden);
+}
 
 /// <summary>Demo provider reading a principal from headers; production loads it from the cached session.</summary>
 public sealed class HeaderPrincipalProvider(IHttpContextAccessor accessor, TenantContext tenant) : IPrincipalProvider
 {
-    public SetuPrincipal? Current
+    public TracklyPrincipal? Current
     {
         get
         {
             var h = accessor.HttpContext?.Request.Headers;
             if (h is null || !tenant.IsResolved) return null;
-            return new SetuPrincipal(tenant.ActingTenantId, h["X-User"].ToString(),
-                new HashSet<string>(h["X-Roles"].ToString().Split(',', StringSplitOptions.RemoveEmptyEntries)),
-                new HashSet<string>(h["X-Projects"].ToString().Split(',', StringSplitOptions.RemoveEmptyEntries)),
-                new HashSet<string>(), int.TryParse(h["X-Clearance"].ToString(), out var c) ? c : 0,
-                decimal.TryParse(h["X-Limit"].ToString(), out var l) ? l : 0m);
+            // X-Project-Roles: "MOB:Member,WEB:Viewer"
+            var roles = h["X-Project-Roles"].ToString().Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(pair => pair.Split(':'))
+                .Where(parts => parts.Length == 2)
+                .GroupBy(parts => parts[0])
+                .ToDictionary(g => g.Key, g => g.Last()[1]);
+            return new TracklyPrincipal(tenant.TenantId, h["X-User"].ToString(),
+                IsOrgAdmin: h["X-Org-Admin"] == "true", IsGuest: h["X-Guest"] == "true", roles,
+                int.TryParse(h["X-Clearance"].ToString(), out var c) ? c : 0);
         }
     }
 }
 ```
 
+Note the middleware order: tenant resolution runs before the rate limiter, because the limiter partitions by tenant. The header-based principal provider is a stand-in for a principal loaded from Redis after validating the access token; never trust such headers from the internet in production.
+
 ## Caching, queues and scaling
 
-- **Principal cache** (Redis, 5-minute TTL, invalidated on change): roles, project memberships, clearance, limits. Avoids four queries per request. Keyed by `tenant:user`.
-- **Project page cache**: project header and tree in Redis for 60 s, keyed by tenant and project; invalidated by events.
-- **Inbox counters**: per-user pending count kept in Redis, updated by the workflow worker, so the badge in the header does not query `approval_step` on every page.
-- **Queues and events**: the outbox relay publishes domain events; consumers are the workflow engine (assign next step, schedule SLA), search indexer, read-model updater, warehouse loader and notifications. Per-tenant **job queues** with fair scheduling for exports and bulk imports, so one tenant's 50,000-document import does not delay others' notifications.
-- **Scaling**: the API is stateless and scales horizontally behind the gateway; the database scales by read replicas, partitioning (`audit_log`, `document_version` by month for the largest tenants) and moving heavy tenants to dedicated databases. Object storage and the CDN scale without design effort; cost is the constraint.
-- **Month-end**: pre-compute read models continuously rather than on demand; warehouse queries get per-tenant concurrency limits; exports run as jobs with progress, not as HTTP requests.
+- **Principal cache** (Redis, 5-minute TTL, evicted on `MemberChanged`): org role, project roles, clearance, guest flag. Avoids three or four queries per request. Key `t:{tenant}:principal:{user}`.
+- **Board cache**: the column layout and card order for a board in Redis for 30 s, keyed by tenant and board, invalidated by `IssueChanged` events for that board's project. Card details are fetched lazily.
+- **Tenant directory cache** at the gateway: 30 s TTL, with immediate invalidation when a tenant moves cells (the old cell also rejects writes for a `MOVING` tenant, so a stale cache cannot write to the wrong place).
+- **Rate-limit counters** in Redis per tenant and per API token.
+- **Events**: the outbox relay publishes `IssueChanged`, `MemberChanged`, `ApprovalDecided`; consumers are the search indexer, read models, automation, webhooks, notifications and the WebSocket gateway. All consumers are idempotent on the event id.
+- **Per-tenant job queues** with round-robin workers for bulk edits, imports and exports; automation runs on per-tenant budgets.
+- **Scaling**: the API and WebSocket gateways are stateless and scale horizontally; each cell scales vertically and with a replica; when a region's cells reach about 1,000 tenants or about 60 % CPU at peak, a new cell is added and new sign-ups go there; heavy tenants move to dedicated cells. Object storage and the CDN scale without design effort.
 
 ## Failure handling
 
 | Failure | Effect | Mitigation |
 |---|---|---|
-| A developer forgets `SET LOCAL app.tenant_id` | Query returns no rows (not all rows) because the policy compares against NULL | RLS with `current_setting(..., true)`; integration test that asserts an unscoped query returns zero rows; isolation canaries in production |
-| Object storage unreachable | Uploads and downloads fail; metadata operations continue | 99.95 % target met by multi-zone storage; download URLs fall back to a replica bucket in the same region; uploads can be retried by the client with the same document id |
-| Workflow worker crashes mid-step | Step assignment or SLA timer lost | Outbox guarantees the event is redelivered; handlers are idempotent on `(approval id, step, assignee)`; timers are persisted by the scheduler |
-| Replica lag at month-end | Users see stale inboxes | Read-your-writes: after a write, the session reads from the primary for 5 s; lag alerting at 2 s |
-| Audit insert fails | The whole transaction fails | Correct by design: an action without its audit row must not happen; alert on audit failures because they indicate a real problem |
-| Heavy tenant export | Primary CPU spikes | Exports run from the warehouse via per-tenant job queue with concurrency 1 |
-| Region outage | Tenants homed there are down | Per-region active-passive standby; RTO 1 h, RPO 5 min; drills quarterly |
-| Signed URL leaked | Anyone with the URL can download for its lifetime | Short expiry (5 min for downloads, 15 for uploads), bound to object key, IP-bound where the client supports it, every issuance audited |
+| A developer forgets to set `app.tenant_id` | Query returns no rows, not all rows | RLS with `NULLIF(current_setting(..., true), '')`; CI test that an unscoped query returns zero rows; isolation canaries |
+| A tenant's script floods the API | Shared cell CPU climbs; other tenants slow | Per-tenant token bucket at the gateway returns `429`; API-level limiter as a backstop; alert on top tenants by request share |
+| A bulk edit of 40,000 issues | Long transactions, lock waits on the board | Job queue per tenant; batches of 500 rows; one or two concurrent jobs per tenant |
+| An automation rule loops | Thousands of updates per minute from one tenant | Loop depth limit, monthly budget, automatic rule disable with a notice to the tenant admin |
+| A cell's primary fails | That cell's tenants see errors for about a minute | Multi-AZ failover; other cells unaffected (the point of cells); clients retry idempotent writes |
+| Search cluster degraded | Filters and boards slow or fail | Boards fall back to PostgreSQL queries for small projects; search shows "results may be incomplete"; the issue page never depends on search |
+| WebSocket gateway down | Boards stop updating live | Client falls back to polling every 30 s; no data loss because the database is the source of truth |
+| Identity provider of a tenant is down | That tenant's users cannot log in | Existing sessions continue until refresh; break-glass admin; other tenants unaffected |
+| SCIM deactivation delayed | A departed employee keeps access | 10-minute access tokens bound the window; deny list on deactivation; daily SCIM reconciliation report |
+| Audit insert fails | The whole transaction fails | Correct by design: a security change without its audit row must not happen; alert, because it signals a real bug |
+| Region outage | Tenants homed there are down | Warm standby in a second zone of the same jurisdiction; RTO 1 h, RPO 5 min; quarterly failover drills |
+| Signed URL leaked | Anyone with it can fetch that one file until expiry | 5-minute download expiry, bound to one object key; every issuance audited for Enterprise tenants |
 
 :::callout type=warning title="Never resolve the tenant from user input"
-The tenant comes from the host name or a verified token claim, resolved once at the edge. A tenant id in a query string, body or cookie is an invitation to try someone else's id. This single rule removes the most common class of multi-tenant breaches.
+The tenant comes from the host name or a verified token claim, resolved once at the edge, and the two must agree. A tenant id in a query string, body, header from the client or cookie is an invitation to try someone else's id. This single rule removes the most common class of multi-tenant breaches.
 :::
 
 ## Security
 
-- **Identity**: per-tenant SSO (OpenID Connect with the tenant's provider) or Setu-managed accounts with MFA; guest accounts are invited by email and verified; tokens carry the home tenant.
-- **Isolation layers**: edge tenant resolution; scoped `TenantContext`; RLS with `FORCE`; tenant-prefixed object keys and cache keys; per-tenant search index or filter; residency guard; canaries.
-- **Authorisation**: policy-based, resource-aware, explained denials, cached principals with fast invalidation. Privileged actions (role changes, retention overrides, check-out overrides) require a second administrator for regulated tenants (four-eyes).
-- **Documents**: malware scanning before a version becomes downloadable; content-type verification; signed URLs with short expiry; encryption at rest with per-tenant keys for tenants who require it (key in the tenant's region).
-- **Audit**: append-only privileges, hash chain, external anchor, audited access to the audit log itself.
-- **OWASP basics**: parameterised queries everywhere, output encoding in the SPA, CSRF tokens for cookie sessions, SSRF protection on any URL the server fetches (such as webhook targets), rate limits per tenant and per user.
-- **Secrets**: per-region vaults; no shared global secret store (it is a residency and an availability problem).
+- **Identity**: an identity broker federates to each enterprise tenant's SAML or OIDC provider; others use Trackly accounts with MFA. Access tokens live 10 minutes and carry the tenant id (`tid`); refresh tokens are revocable. Personal and app API tokens are scoped to one tenant and a set of permissions, shown once, stored hashed.
+- **Isolation layers**: edge resolution with a host-token check; scoped `TenantContext`; project and security-level authorisation; RLS with `FORCE` and a non-owner, non-`BYPASSRLS` application role; tenant-prefixed object, cache and search keys; residency guard; canaries.
+- **Authorisation**: policy-based, resource-aware, `404` for invisible resources, explained `403` for visible ones; privileged admin actions (enforcing SSO, changing the audit retention) require a second admin for Enterprise tenants.
+- **Attachments**: malware scanning before a file is downloadable; served from a separate download domain with `Content-Disposition: attachment` so an uploaded HTML file cannot run scripts on the app's origin; short-lived signed URLs; per-tenant encryption keys for Enterprise tenants who require them.
+- **Integrations**: outgoing webhooks are signed (HMAC) and their target URLs are checked against private IP ranges to prevent server-side request forgery; automation rules run with the permissions of their owner, not with system rights.
+- **OWASP basics**: parameterised queries everywhere (including `set_config`), output encoding of issue descriptions rendered from Markdown, CSRF protection for cookie sessions, per-tenant and per-user rate limits on login.
+- **Secrets**: per-region vaults; SSO client secrets and SCIM tokens encrypted at rest and rotatable by the tenant admin.
 
 ## Observability
 
-- **Per-tenant SLOs**: availability and p95 latency labelled by tenant, so a problem affecting one tenant is visible even when the global average is fine.
-- **Isolation canaries**: synthetic users in two canary tenants continuously attempt cross-tenant reads; any success pages immediately and freezes deploys.
-- **Workflow metrics**: pending steps by age, SLA breaches per tenant, time-to-decision distribution. These are also product metrics customers ask for.
-- **Document pipeline**: upload completion rate, scan backlog, time from upload to searchable.
-- **Audit health**: audit rows per minute versus writes per minute (a divergence means a code path is missing its audit); nightly chain verification results.
-- **Tracing**: every request carries tenant id and correlation id through the API, outbox, workers and warehouse loads. Logs containing personal data stay in the tenant's region.
+- **Per-tenant SLOs**: availability and p95 latency per tenant computed from logs and traces (which carry the tenant id), so a problem affecting one tenant is visible even when the global average is fine. Avoid putting the tenant id as a label on every metric: 5,000 tenants × many metrics is a high-cardinality bill. Use plan tier and cell as metric labels, and the tenant id in logs, traces and a usage-metering pipeline.
+- **Noisy-neighbour detection**: per cell, the top 10 tenants by request share, database time and job time; an alert when one tenant exceeds, say, 30 % of a cell's database time for 15 minutes.
+- **Isolation canaries**: synthetic users in two canary tenants continuously attempt cross-tenant reads through the API, search and attachment download; any success pages immediately and freezes deploys.
+- **Identity health**: SSO login success rate per tenant, SCIM error rate, time from SCIM deactivation to token denial.
+- **Workflow and product metrics**: approval steps by age, SLA breaches per tenant, search index lag, WebSocket delivery delay.
+- **Audit health**: audit rows per minute versus security-relevant writes per minute (a divergence means a code path skipped its audit); nightly chain verification results.
+- **Tracing**: every request carries tenant id and correlation id through the gateway, API, outbox, workers and search indexing. Logs containing personal data stay in the tenant's region.
 
 ## Deployment and cost
 
-Each region (India, EU, Middle East) is a complete deployment from one pipeline, differing only in configuration. India is the largest.
+Each region (India, EU) is a complete deployment from one pipeline, differing only in configuration. Releases go to a canary cell first (internal tenants and a few volunteers), then to the other cells over a day. Database migrations use expand/contract (add a nullable column, backfill in batches per tenant, switch reads, drop later) and run cell by cell. RLS policies are part of migrations and are tested in CI against a seeded database with two tenants.
 
-Estimated monthly cost for the Indian region at year three (estimates for a managed-services deployment; prices vary):
+Estimated monthly infrastructure cost for the India region at year three (estimates for a managed-services deployment; real prices vary by provider and commitment):
 
 | Item | Estimate |
 |---|---|
-| API and worker compute (12 app instances, 8 workers, autoscaled) | ₹1.8 lakh |
-| PostgreSQL primary (multi-AZ) + 2 replicas | ₹2.2 lakh |
-| Dedicated database for the largest tenant | ₹0.8 lakh |
-| Object storage (~200 TB hot, ~80 TB archive) + CDN egress | ₹5.5 lakh |
-| Redis, event stream, queues | ₹0.9 lakh |
-| Search cluster | ₹0.7 lakh |
-| Warehouse | ₹1.0 lakh |
-| Monitoring, logging (region-local), vault, WAF | ₹0.9 lakh |
-| Warm standby region (database replica + 2 app instances) | ₹1.6 lakh |
-| **Total** | **≈ ₹15.4 lakh** |
+| API compute (16 instances of 8 vCPU, autoscaled) | ₹3.5 lakh |
+| Workers: relay, indexer, automation, jobs, scan (10 instances) | ₹2.2 lakh |
+| WebSocket gateways (4 instances) | ₹0.9 lakh |
+| PostgreSQL: 3 pooled cells (multi-AZ primary + 1 replica each) | ₹6.8 lakh |
+| PostgreSQL: 2 dedicated cells for the largest Indian tenants | ₹1.6 lakh |
+| Search cluster | ₹2.5 lakh |
+| Redis and event stream | ₹1.8 lakh |
+| Object storage (≈ 27 TB) and CDN egress | ₹1.2 lakh |
+| Observability, WAF, vault, identity broker | ₹2.0 lakh |
+| Warm standby (replica of every cell, minimal compute) | ₹3.0 lakh |
+| **Total** | **≈ ₹25.5 lakh** |
 
-With roughly 13,000 Indian active users that is about ₹118 per active user per month, inside the ₹120 target, and object storage is 36 % of it. The levers: tiering versions older than a year to cold storage, image compression for site photos (often 60–70 % savings), and charging large tenants for storage above a quota.
-
-Deployment: blue-green for the API, with database migrations in expand/contract form; workers drain before upgrade; RLS policies are part of migrations and tested in CI against a seeded database with two tenants.
+India has about 240,000 registered users (60 % of 400,000), so that is about ₹25,50,000 ÷ 240,000 ≈ **₹106 per registered user per month**, inside the ₹120 target. Databases are the largest line: ₹8.4 lakh, about a third of the bill, before counting their share of the standby. The levers: right-size cells (most of the 3,000 pooled tenants are tiny), keep older changelog partitions on cheaper storage, move dashboards to read models so replicas stay small, and buy committed-use pricing for the steady base.
 
 ## Alternatives and trade-offs
 
-- **Silo per tenant** would give the strongest isolation and simplest residency, at the cost of 400 databases, slow fleet-wide migrations and awkward cross-tenant guests. Right for a platform with 20 very large government tenants; wrong for 400 mixed-size ones.
-- **A general workflow engine** (durable execution) instead of the approval aggregate: more flexible, more to operate. Choose it when templates need branches, loops and waits on external systems. For approvals, rows and transitions are enough.
-- **Storing documents in the database** (bytea or large objects): simpler transactions, catastrophic for backup size and cost at 280 TB. Object storage with metadata in the database is the standard answer.
-- **Pure ABAC** with a policy language (such as a Rego-style engine): powerful, auditable rules, but administrators struggle to read them and evaluation needs a sidecar. Roles for capability plus a short list of attribute rules covers Setu's needs and stays explainable.
-- **Audit via database triggers** instead of application code: catches every change including ad-hoc SQL, but cannot record *why* or the business action name, and triggers on hot tables add latency. Setu uses application-level audit for business actions and database-level logging (pgAudit-style) for DBA activity; the two together satisfy auditors.
-- **Event sourcing** for approvals: a natural fit (the decision history is the state), but it adds projection complexity for a modest gain over the explicit step rows, which already form a complete history.
-- **When a simpler design is enough**: a single-tenant deployment for one authority with 200 users needs none of the tenancy machinery, no warehouse and no dedicated databases: one API, one database, one bucket, RLS off. Build that first if there is one customer, but keep `tenant_id` on the tables and ULID identifiers so that the multi-tenant version is a migration, not a rewrite.
+- **Silo per tenant** would give the strongest isolation and the simplest residency and deletion story, at the cost of 5,000 mostly idle databases and fleet-wide migrations that take days. Right for a product sold to 30 large banks; wrong for 5,000 mixed-size companies. Trackly offers it as the dedicated cell for the few who pay for it.
+- **Schema per tenant** looks like a middle ground but multiplies catalog size (200,000 tables), slows migrations and complicates connection pooling, while giving little extra isolation over RLS.
+- **One giant pool per region without cells**: simpler directory, but every incident and every migration touches every tenant. Fine below a few hundred tenants.
+- **Microservices per domain** (issues, boards, search, identity as separate deployables): useful when separate teams need to deploy independently. At this load a modular monolith with clear modules is cheaper and easier; the identity broker and search are already separate because they are different kinds of system.
+- **Pure ABAC with a policy language** (a Rego-style engine): powerful and auditable, but tenant admins cannot read it and evaluation adds a sidecar hop to every request. Roles plus a short list of attribute rules covers project-tool permissions and stays explainable.
+- **Audit via database triggers**: catches every change including ad-hoc SQL, but cannot record *why* or the business action name. Trackly uses application-level audit for business and security events and database-level session logging (pgAudit-style) for administrator activity.
+- **Event sourcing for issues**: the changelog already looks like an event log, and event sourcing would make history first-class. It adds projections and replay complexity for a modest gain; the explicit issue row plus changelog serves the product.
+- **When a simpler design is enough**: a project tool for 50 companies needs one PostgreSQL database with RLS, one API deployment, one bucket and no cells, no search cluster (PostgreSQL full-text search is enough), no identity broker (OIDC login with a couple of providers) and no automation budgets. Build that first, but keep `tenant_id` on every table and in every key from day one; adding it later is the most expensive migration in SaaS. The [scaling journey](#/lesson/m17-scaling-journey) case study shows that same "grow in stages" discipline for a delivery platform.
 
 ## Practical playground
 
-The starting graph is a single-tenant project tool: one API that streams files itself, one database, no audit or workflow separation. Evolve it in the HLD canvas into Setu for one region.
+The starting graph is a single-tenant project tool: one API that also serves attachments, one database. Evolve it in the HLD canvas into Trackly for one region.
 
-1. Put an `api-gateway` in front that resolves the tenant and applies per-tenant limits; add a `service-registry` as the tenant directory.
-2. Move file bytes out of the API: add `object-storage` and a `cdn`, and label the edge from the client with "signed URL".
-3. Add a `queue` or `stream` fed by an outbox, and `worker` nodes for workflow, indexing and scanning.
-4. Add a `read-replica` for inboxes and a second `database` as the reporting warehouse. Which reports go where?
-5. Add `monitoring` with isolation canaries. Then set the client `rps` to 210 (month-end) and ask which node you would scale first.
+1. Put an `api-gateway` in front that resolves the tenant from the host and applies per-tenant limits; add a `service-registry` as the tenant directory and a `rate-limiter` backed by a `cache`.
+2. Split the database into two pooled cells and one dedicated cell. Which tenants go where, and who decides?
+3. Move attachments out of the API: add `object-storage` and a `cdn`, and label the client edge "signed URL".
+4. Add a `stream` fed by an outbox, with `worker` nodes for search indexing, automation and notifications, and a `websocket-gateway` for live boards.
+5. Add a `search` node and a `queue` for per-tenant bulk jobs.
+6. Add `monitoring` with isolation canaries. Then set the client `rps` to 2,200 and decide which node you would scale first.
 
-:::playground type=hld title="From a single-tenant project tool to Setu"
+:::playground type=hld title="From a single-tenant project tool to Trackly"
 ```json
 {
   "nodes": [
-    { "id": "c", "type": "client", "label": "Users (one organisation)", "props": { "rps": 30 } },
+    { "id": "c", "type": "client", "label": "Users (one company)", "props": { "rps": 40 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
-    { "id": "api", "type": "app-server", "label": "Project API (serves files too)", "props": { "instances": 2 } },
-    { "id": "db", "type": "database", "label": "PostgreSQL (projects, approvals, documents as bytea)" }
+    { "id": "api", "type": "app-server", "label": "Project API (serves attachments too)", "props": { "instances": 2 } },
+    { "id": "db", "type": "database", "label": "PostgreSQL (projects, issues, attachments as bytea)" }
   ],
   "edges": [
     { "from": "c", "to": "lb", "kind": "sync" },
@@ -953,184 +1206,185 @@ The starting graph is a single-tenant project tool: one API that streams files i
 
 ## Exercises
 
-:::exercise id=m17-multi-tenant-pm-ex1 difficulty=beginner kind=written title="Size the document store and the audit log"
-A state-level water-supply programme adopts Setu: 1 authority tenant and 85 contractor and consultant tenants, 1,100 schemes (projects), 9,000 users with 30 % daily active, 120 requests per active user per day. Each scheme produces 1,800 documents a year averaging 3 MB; 20 % of documents get a second version. Every write (12 % of requests) and every download (2 per active user per day) produces a 900-byte audit row. Estimate: average and peak (×4) API RPS, documents and storage per year, uploads per working second (250 working days, 9-hour days), audit rows and audit storage per year, and the storage cost at ₹2 per GB-month after three years. Say which number drives cost and name one lever.
+:::exercise id=m17-multi-tenant-pm-ex1 difficulty=beginner kind=written title="Size a new EU cell"
+Trackly's EU region is adding a cell for 1,200 new tenants with 60,000 users in total, 50 % daily active. Each active user makes 250 API calls per day, 12 field changes per day (one 250-byte changelog row each), 0.25 attachment uploads per day averaging 1.2 MB (add 10 % for thumbnails and previews), and generates 3 security/admin audit events per day of 600 bytes. Use a 9-hour working day for the request rate, 2× the working-hours average for the peak, and 250 working days a year. Estimate: working-hours average and peak API RPS; changelog rows and storage per year; attachment storage per year and its monthly cost after three years at ₹2 per GB-month; audit storage per year. Then answer: does this cell exist because of data volume? If not, why does it exist?
 ::acceptance
 - Every figure shows the arithmetic and units.
-- Peak uses the ×4 factor on the daily average.
-- Versions are included in storage.
-- A cost judgement with a specific lever.
+- The peak is 2× the working-hours average, not 2× the 24-hour average.
+- Thumbnails are included in attachment storage.
+- The judgement names the real reason for a new cell (tenant count and blast radius), not data size.
 ::hint
-DAU = 9,000 × 0.3. Requests/day = DAU × 120; divide by 86,400 for average RPS.
+DAU = 60,000 × 0.5. Calls/day = DAU × 250; divide by 9 × 3,600 for the working-hours rate.
 ::hint
-Documents/year = 1,100 × 1,800; storage = documents × 3 MB × 1.2 for versions.
+Changelog rows/year = DAU × 12 × 250. Multiply by 250 bytes.
 ::hint
-Uploads per working second = documents per year ÷ (250 × 9 × 3,600).
+Attachments/year = DAU × 0.25 × 1.2 MB × 1.1 × 250. After three years multiply by 3, convert to GB and multiply by ₹2.
 ::hint
-Audit rows/day = writes (DAU × 120 × 0.12) + downloads (DAU × 2). Multiply by 365 and by 900 bytes.
+Compare the database growth per year with the 300+ GB a typical cell already holds. Then reread the deep dive on why cells exist.
 ::solution
-- DAU = 9,000 × 0.3 = **2,700**. Requests/day = 2,700 × 120 = 324,000 → average ≈ 324,000 ÷ 86,400 ≈ **3.75 RPS**; peak ≈ **15 RPS**. Tiny: the API is not the problem.
-- Documents/year = 1,100 × 1,800 = **1.98 M**. Storage/year = 1.98 M × 3 MB × 1.2 = 7.13 M MB ≈ **7.1 TB** (7,130 GB).
-- Uploads per working second = 1.98 M ÷ (250 × 9 × 3,600 = 8.1 M s) ≈ **0.24/s**; peak perhaps 1/s.
-- Audit rows/day = writes 2,700 × 120 × 0.12 = 38,880 + downloads 2,700 × 2 = 5,400 → **≈ 44,300/day** ≈ 16.2 M/year × 900 B ≈ **14.6 GB/year**.
-- Storage after three years ≈ 21.4 TB ≈ 21,400 GB × ₹2 ≈ **₹42,800 per month** for documents; audit storage is negligible (about ₹90).
+- DAU = 60,000 × 0.5 = **30,000**. Calls/day = 30,000 × 250 = 7.5 M. Working-hours average = 7.5 M ÷ 32,400 s ≈ **231 req/s**; peak ≈ **463 req/s**. (The 24-hour average, 7.5 M ÷ 86,400 ≈ 87 req/s, would understate the working-day load by almost 3×.)
+- Changelog rows/year = 30,000 × 12 × 250 = **90 M** rows × 250 B = **22.5 GB/year**.
+- Attachments/year = 30,000 × 0.25 = 7,500 uploads/day × 1.2 MB = 9 GB/day × 1.1 = 9.9 GB/day × 250 = **2.475 TB/year**. After three years ≈ 7.4 TB ≈ 7,425 GB × ₹2 ≈ **₹14,850 per month**.
+- Audit rows/year = 30,000 × 3 × 250 = 22.5 M × 600 B = **13.5 GB/year**.
 
-**Judgement**: documents dominate, and within documents, volume not throughput. Lever: tier versions and documents older than 12 months to an archive class (typically a quarter of the hot price, estimate), and compress site photos on upload. Database and API can run on a single modest tier.
+**Judgement**: the database grows by roughly 36 GB a year before indexes, plus issues and comments; that is small. Data volume does not justify a cell; a single EU cluster could hold it. The cell exists because the existing EU cells already hold about 1,000 tenants each, and the cell policy caps tenants per cell to limit the **blast radius** of a failover, a bad migration or a noisy neighbour, and to keep backups and restores fast. Peak load of about 460 req/s, 90 % reads, is comfortable for one primary and one replica.
 ::mistakes
-- Treating all 9,000 users as daily active.
-- Forgetting the 1.2 version multiplier.
-- Dividing uploads by calendar seconds (86,400 × 365) rather than working seconds, which understates the working-hour rate by about 4×.
-- Spending design effort on API scaling when storage is the only material cost.
+- Using the 24-hour average as the working-day rate.
+- Applying the peak factor to the 24-hour average.
+- Forgetting the 10 % thumbnail overhead or the three-year multiplier.
+- Concluding that a new cell is needed "because the database is full" when the numbers say it is not.
 :::
 
-:::exercise id=m17-multi-tenant-pm-ex2 difficulty=beginner kind=sql ordered=true title="Overdue approval steps for a tenant"
-Tenant `nhai-pmc` wants its SLA breach report as of `2026-10-19 09:00+05:30`. For every approval step in that tenant that is `PENDING` and whose `due_at` is before that moment, return `project_code`, `subject_type`, `assignee` (the assignee's `full_name`), `step_no`, `days_overdue` (whole days between `due_at` and the report time, rounded down) and `amount`. Only include requests whose status is `IN_PROGRESS`. Order by `days_overdue` descending, then `project_code`, then `step_no`.
+:::exercise id=m17-multi-tenant-pm-ex2 difficulty=beginner kind=sql ordered=true title="Overdue issues in active sprints for one tenant"
+Tenant `quickcart` wants a list of overdue work as of `2026-10-19 09:00+05:30`. Return every issue in tenant `quickcart` that is in an `ACTIVE` sprint, whose `status_category` is not `DONE`, and whose `due_at` is before that moment. Columns: `issue_key` (project key, a hyphen, and the issue number, for example `MOB-101`), `assignee` (the assignee's `display_name`, or `Unassigned` when there is no assignee), `priority`, and `days_overdue` (whole days between `due_at` and the report time, rounded down). Order by `days_overdue` descending, then `issue_key`.
 ::setup
 ```sql
-CREATE TABLE app_user (
-  tenant_id text NOT NULL,
-  user_id   text NOT NULL,
-  full_name text NOT NULL,
+CREATE TABLE tenant_member (
+  tenant_id    text NOT NULL,
+  user_id      text NOT NULL,
+  display_name text NOT NULL,
   PRIMARY KEY (tenant_id, user_id)
 );
 CREATE TABLE project (
   tenant_id  text NOT NULL,
   project_id text NOT NULL,
-  code       text NOT NULL,
+  key        text NOT NULL,
   PRIMARY KEY (tenant_id, project_id)
 );
-CREATE TABLE approval_request (
-  tenant_id    text NOT NULL,
-  approval_id  text NOT NULL,
-  project_id   text NOT NULL,
-  subject_type text NOT NULL,
-  status       text NOT NULL,
-  amount       numeric(18,2),
-  PRIMARY KEY (tenant_id, approval_id)
+CREATE TABLE sprint (
+  tenant_id  text NOT NULL,
+  sprint_id  text NOT NULL,
+  project_id text NOT NULL,
+  state      text NOT NULL,
+  PRIMARY KEY (tenant_id, sprint_id)
 );
-CREATE TABLE approval_step (
-  tenant_id     text NOT NULL,
-  approval_id   text NOT NULL,
-  step_no       int  NOT NULL,
-  assignee_user text NOT NULL,
-  status        text NOT NULL,
-  due_at        timestamptz,
-  PRIMARY KEY (tenant_id, approval_id, step_no, assignee_user)
+CREATE TABLE issue (
+  tenant_id       text NOT NULL,
+  issue_id        text NOT NULL,
+  project_id      text NOT NULL,
+  issue_no        int  NOT NULL,
+  sprint_id       text,
+  assignee_user   text,
+  status_category text NOT NULL,
+  priority        text NOT NULL,
+  due_at          timestamptz,
+  PRIMARY KEY (tenant_id, issue_id)
 );
-INSERT INTO app_user VALUES
-  ('nhai-pmc', 'u1', 'Meera Nair'),
-  ('nhai-pmc', 'u2', 'Arjun Mehta'),
-  ('nhai-pmc', 'u3', 'Sunita Rao'),
-  ('nhai-pmc', 'u4', 'Karan Gill'),
-  ('lt-infra',  'u1', 'Other Tenant User');
+INSERT INTO tenant_member VALUES
+  ('quickcart', 'u1', 'Meera Nair'),
+  ('quickcart', 'u2', 'Arjun Mehta'),
+  ('quickcart', 'u3', 'Sunita Rao'),
+  ('citycare',  'u1', 'Other Tenant User');
 INSERT INTO project VALUES
-  ('nhai-pmc', 'p1', 'NH-48-PKG3'),
-  ('nhai-pmc', 'p2', 'NH-44-PKG7'),
-  ('lt-infra',  'p1', 'LT-METRO-1');
-INSERT INTO approval_request VALUES
-  ('nhai-pmc', 'a1', 'p1', 'PAYMENT_CERT', 'IN_PROGRESS', 72000000.00),
-  ('nhai-pmc', 'a2', 'p1', 'VARIATION',    'IN_PROGRESS', 4500000.00),
-  ('nhai-pmc', 'a3', 'p2', 'DOCUMENT',     'IN_PROGRESS', NULL),
-  ('nhai-pmc', 'a4', 'p2', 'PAYMENT_CERT', 'REJECTED',    12000000.00),
-  ('lt-infra',  'a1', 'p1', 'PAYMENT_CERT', 'IN_PROGRESS', 9900000.00);
-INSERT INTO approval_step VALUES
-  ('nhai-pmc', 'a1', 1, 'u1', 'APPROVED', '2026-10-05 09:00+05:30'),
-  ('nhai-pmc', 'a1', 2, 'u2', 'PENDING',  '2026-10-10 09:00+05:30'),
-  ('nhai-pmc', 'a1', 2, 'u3', 'PENDING',  '2026-10-10 09:00+05:30'),
-  ('nhai-pmc', 'a2', 1, 'u4', 'PENDING',  '2026-10-17 18:00+05:30'),
-  ('nhai-pmc', 'a2', 2, 'u2', 'WAITING',  NULL),
-  ('nhai-pmc', 'a3', 1, 'u1', 'PENDING',  '2026-10-21 09:00+05:30'),
-  ('nhai-pmc', 'a4', 1, 'u3', 'PENDING',  '2026-10-01 09:00+05:30'),
-  ('lt-infra',  'a1', 1, 'u1', 'PENDING',  '2026-10-01 09:00+05:30');
+  ('quickcart', 'p1', 'MOB'),
+  ('quickcart', 'p2', 'WEB'),
+  ('citycare',  'p1', 'OPD');
+INSERT INTO sprint VALUES
+  ('quickcart', 's1', 'p1', 'ACTIVE'),
+  ('quickcart', 's2', 'p1', 'CLOSED'),
+  ('quickcart', 's3', 'p2', 'ACTIVE'),
+  ('citycare',  's1', 'p1', 'ACTIVE');
+INSERT INTO issue VALUES
+  ('quickcart', 'i1', 'p1', 101, 's1', 'u1', 'IN_PROGRESS', 'HIGH',    '2026-10-10 18:00+05:30'),
+  ('quickcart', 'i2', 'p1', 102, 's1', 'u2', 'TODO',        'MEDIUM',  '2026-10-17 18:00+05:30'),
+  ('quickcart', 'i3', 'p1', 103, 's1', 'u1', 'DONE',        'HIGH',    '2026-10-05 09:00+05:30'),
+  ('quickcart', 'i4', 'p1', 90,  's2', 'u3', 'IN_PROGRESS', 'HIGH',    '2026-10-01 09:00+05:30'),
+  ('quickcart', 'i5', 'p2', 7,   's3', NULL, 'TODO',        'HIGHEST', '2026-10-10 09:00+05:30'),
+  ('quickcart', 'i6', 'p2', 8,   's3', 'u3', 'IN_PROGRESS', 'LOW',     '2026-10-21 09:00+05:30'),
+  ('quickcart', 'i7', 'p2', 9,   's3', 'u2', 'TODO',        'MEDIUM',  NULL),
+  ('quickcart', 'i8', 'p2', 10,  NULL, 'u2', 'TODO',        'HIGH',    '2026-10-01 09:00+05:30'),
+  ('citycare',  'i1', 'p1', 101, 's1', 'u1', 'TODO',        'HIGH',    '2026-10-01 09:00+05:30');
 ```
 ::check
 ```sql
-SELECT p.code AS project_code,
-       r.subject_type,
-       u.full_name AS assignee,
-       s.step_no,
-       FLOOR(EXTRACT(EPOCH FROM (timestamptz '2026-10-19 09:00+05:30' - s.due_at)) / 86400)::int AS days_overdue,
-       r.amount
-FROM approval_step s
-JOIN approval_request r ON r.tenant_id = s.tenant_id AND r.approval_id = s.approval_id
-JOIN project p          ON p.tenant_id = r.tenant_id AND p.project_id = r.project_id
-JOIN app_user u         ON u.tenant_id = s.tenant_id AND u.user_id = s.assignee_user
-WHERE s.tenant_id = 'nhai-pmc'
-  AND s.status = 'PENDING'
-  AND r.status = 'IN_PROGRESS'
-  AND s.due_at < timestamptz '2026-10-19 09:00+05:30'
-ORDER BY days_overdue DESC, p.code, s.step_no;
+SELECT p.key || '-' || i.issue_no AS issue_key,
+       COALESCE(m.display_name, 'Unassigned') AS assignee,
+       i.priority,
+       FLOOR(EXTRACT(EPOCH FROM (timestamptz '2026-10-19 09:00+05:30' - i.due_at)) / 86400)::int AS days_overdue
+FROM issue i
+JOIN project p ON p.tenant_id = i.tenant_id AND p.project_id = i.project_id
+JOIN sprint s  ON s.tenant_id = i.tenant_id AND s.sprint_id = i.sprint_id
+LEFT JOIN tenant_member m ON m.tenant_id = i.tenant_id AND m.user_id = i.assignee_user
+WHERE i.tenant_id = 'quickcart'
+  AND s.state = 'ACTIVE'
+  AND i.status_category <> 'DONE'
+  AND i.due_at < timestamptz '2026-10-19 09:00+05:30'
+ORDER BY days_overdue DESC, issue_key;
 ```
 ::acceptance
-- Three rows: two parallel approvers on `a1` step 2 (9 days overdue) and one on `a2` (1 day overdue).
-- `a3` is not overdue, `a4` is rejected, and the `lt-infra` row never appears although its ids collide.
-- `days_overdue` is a whole number of days, rounded down.
-- Every join includes `tenant_id`.
+- Three rows: `WEB-7` (Unassigned, 9 days), `MOB-101` (Meera Nair, 8 days), `MOB-102` (Arjun Mehta, 1 day).
+- The done issue, the closed-sprint issue, the backlog issue, the issue without a due date and the not-yet-due issue are excluded.
+- The `citycare` rows never appear even though their ids collide with `quickcart` ids.
+- Every join includes `tenant_id`; the unassigned issue is kept with a `LEFT JOIN`.
 ::hint
-Start from `approval_step`, join the request, project and user. Filter on the step status, the request status, the tenant and the due time.
+Start from `issue`, join `project` for the key and `sprint` for the state. The assignee may be missing, so that join must not drop rows.
 ::hint
-Join on **both** `tenant_id` and the id column every time; user ids and project ids repeat across tenants.
+Join on **both** `tenant_id` and the id column every time; user ids, project ids and sprint ids repeat across tenants.
 ::hint
-Days overdue: subtract the two timestamps to get an interval, take `EXTRACT(EPOCH FROM ...)` to get seconds, divide by 86,400 and `FLOOR`.
+Days overdue: subtract the two timestamps to get an interval, take `EXTRACT(EPOCH FROM ...)` to get seconds, divide by 86,400 and `FLOOR`. Build the key with `p.key || '-' || i.issue_no`.
 ::hint
-`a2`'s step is due 17 Oct 18:00; at 19 Oct 09:00 that is 1.625 days → 1.
+`MOB-101` is due 10 Oct 18:00; at 19 Oct 09:00 that is 8 days 15 hours → 8. `WEB-7` is due 10 Oct 09:00 → exactly 9.
 ::solution
 ```sql
-SELECT p.code AS project_code,
-       r.subject_type,
-       u.full_name AS assignee,
-       s.step_no,
-       FLOOR(EXTRACT(EPOCH FROM (timestamptz '2026-10-19 09:00+05:30' - s.due_at)) / 86400)::int AS days_overdue,
-       r.amount
-FROM approval_step s
-JOIN approval_request r ON r.tenant_id = s.tenant_id AND r.approval_id = s.approval_id
-JOIN project p          ON p.tenant_id = r.tenant_id AND p.project_id = r.project_id
-JOIN app_user u         ON u.tenant_id = s.tenant_id AND u.user_id = s.assignee_user
-WHERE s.tenant_id = 'nhai-pmc'
-  AND s.status = 'PENDING'
-  AND r.status = 'IN_PROGRESS'
-  AND s.due_at < timestamptz '2026-10-19 09:00+05:30'
-ORDER BY days_overdue DESC, p.code, s.step_no;
+SELECT p.key || '-' || i.issue_no AS issue_key,
+       COALESCE(m.display_name, 'Unassigned') AS assignee,
+       i.priority,
+       FLOOR(EXTRACT(EPOCH FROM (timestamptz '2026-10-19 09:00+05:30' - i.due_at)) / 86400)::int AS days_overdue
+FROM issue i
+JOIN project p ON p.tenant_id = i.tenant_id AND p.project_id = i.project_id
+JOIN sprint s  ON s.tenant_id = i.tenant_id AND s.sprint_id = i.sprint_id
+LEFT JOIN tenant_member m ON m.tenant_id = i.tenant_id AND m.user_id = i.assignee_user
+WHERE i.tenant_id = 'quickcart'
+  AND s.state = 'ACTIVE'
+  AND i.status_category <> 'DONE'
+  AND i.due_at < timestamptz '2026-10-19 09:00+05:30'
+ORDER BY days_overdue DESC, issue_key;
 ```
 
-| project_code | subject_type | assignee | step_no | days_overdue | amount |
-|---|---|---|---|---|---|
-| NH-48-PKG3 | PAYMENT_CERT | Arjun Mehta | 2 | 9 | 72000000.00 |
-| NH-48-PKG3 | PAYMENT_CERT | Sunita Rao | 2 | 9 | 72000000.00 |
-| NH-48-PKG3 | VARIATION | Karan Gill | 1 | 1 | 4500000.00 |
+| issue_key | assignee | priority | days_overdue |
+|---|---|---|---|
+| WEB-7 | Unassigned | HIGHEST | 9 |
+| MOB-101 | Meera Nair | HIGH | 8 |
+| MOB-102 | Arjun Mehta | MEDIUM | 1 |
 
-Both parallel approvers on `a1` appear because each has their own pending row. In production `tenant_id = 'nhai-pmc'` comes from RLS rather than the query text, and this report is served from a replica; the partial index on `(tenant_id, assignee_user, status) WHERE status = 'PENDING'` keeps it fast.
+The inner join to `sprint` drops backlog issues (no sprint) and the `ACTIVE` filter drops the closed sprint. `due_at < ...` is false for NULL, so the issue without a due date disappears without a special case. In production `tenant_id = 'quickcart'` comes from RLS rather than the query text, and the partial index `(tenant_id, sprint_id) WHERE status_category <> 'DONE'` keeps the query fast.
 ::mistakes
-- Joining `app_user` on `user_id` alone, which pulls in the other tenant's `u1`.
-- Forgetting the request status, which includes the rejected `a4` step still marked `PENDING`.
-- Using `AGE()` or date subtraction that rounds rather than floors.
-- Ordering by `due_at` instead of the computed days, which gives the same order here but not in general when the tie-break matters.
+- Joining `tenant_member` or `sprint` on the id alone, which pulls in `citycare`'s `u1` or `s1`.
+- Using an inner join to `tenant_member`, which silently drops the unassigned `WEB-7`, often the most urgent row.
+- Forgetting the sprint state and including `MOB-90` from the closed sprint.
+- Rounding instead of flooring the days.
 :::
 
 :::exercise id=m17-multi-tenant-pm-ex3 difficulty=intermediate kind=code title="An RBAC + ABAC access evaluator"
-Implement `AccessEvaluator.Evaluate` that combines role permissions with attribute rules and returns an explained decision.
+Implement `AccessEvaluator.Evaluate` that combines project roles with attribute rules and returns an explained decision, as Trackly's API does before touching data.
 ::requirements
-- Roles grant permissions through the provided `RolePermissions` map (`"*"` grants everything).
-- `document.read` requires: permission, project scope (user is a member of the project, or the project's portfolio is in the user's portfolios, or the user is `TenantAdmin`), and `document.Classification <= user.Clearance`.
-- `approval.decide` requires: permission, project scope, the user is the step's assignee, and if `Amount` is not null, `Amount <= user.ApprovalLimit`.
-- Any other permission requires only the permission and project scope (when the resource has a project).
-- Return `Decision(true, "ok")` when allowed; otherwise `Decision(false, reason)` with the **first** failing rule in this order: permission, scope, assignee, clearance, limit. Reasons: `"missing permission <perm>"`, `"not in project scope"`, `"not the assignee"`, `"classification <c> exceeds clearance <cl>"`, `"amount <a> exceeds limit <l>"` (amounts formatted with `ToString("0")`).
+- The **effective role** in a project: the user's explicit project role if present; otherwise `Admin` if `IsOrgAdmin`; otherwise `Viewer` if the project is open and the user is not a guest; otherwise none.
+- Permissions come from the provided `RolePermissions.Map` for the effective role.
+- Check, in this order, and return the **first** failing rule:
+  1. Scope: no effective role → `"not in project scope"`.
+  2. Permission: the role does not grant it → `"missing permission <perm>"`.
+  3. Reporter (only for `issue.delete`): the user is not the reporter and the effective role is not `Admin` → `"not the reporter"`.
+  4. Security level (when `SecurityLevel` is set): `SecurityLevel > Clearance` → `"security level <s> exceeds clearance <c>"`.
+  5. Bulk limit (only for `issue.bulk-edit`, when `Count` is set): `Count > BulkEditLimit` → `"bulk edit of <n> issues exceeds limit <l>"`.
+- Otherwise return `Decision(true, "ok")`.
 ::acceptance
-- An Engineer who is a member of P1 with clearance 1 can read a classification-1 document in P1 but not a classification-2 one.
-- A PortfolioManager with portfolio PF-N can read documents in a P2 that is in PF-N without being a member.
-- Finance with limit 50,000,000 cannot decide a 72,000,000 step even as the assignee; the reason names both amounts.
-- A Viewer trying to decide gets "missing permission approval.decide".
-- TenantAdmin passes scope for any project but still fails clearance.
+- A Member of MOB with clearance 1 can read a level-1 issue in MOB but not a level-2 one.
+- A regular member can read issues in an open project they have not joined; a guest cannot.
+- A Member can delete an issue they reported but not someone else's; a project Admin can delete either.
+- A bulk edit of 5,000 issues with a limit of 1,000 is denied with both numbers in the reason; 800 is allowed.
+- A Viewer trying to edit gets `"missing permission issue.edit"`.
+- An Org Admin is in scope for any project but still respects security levels.
 ::hint
-Write small private helpers: `HasPermission`, `InScope`, then branch on the permission string for the extra rules.
+Write a private `EffectiveRole` helper first; scope and permission both depend on it.
 ::hint
-Order matters for the reason text: check permission first, scope second, and only then the permission-specific rules.
+Order matters for the reason text: scope, then permission, then the permission-specific rules.
 ::hint
-Scope check: `TenantAdmin` role, or `ProjectIds.Contains`, or `PortfolioId is not null && PortfolioIds.Contains`.
+Security level applies to any permission when the resource has one; reporter and bulk rules apply only to their own permission strings.
 ::hint
 ```csharp
-if (!HasPermission(user, permission)) return new Decision(false, $"missing permission {permission}");
-if (!InScope(user, resource)) return new Decision(false, "not in project scope");
+var role = EffectiveRole(user, resource);
+if (role is null) return new Decision(false, "not in project scope");
+if (!RolePermissions.Map[role].Contains(permission)) return new Decision(false, $"missing permission {permission}");
 ```
 ::starter
 ```csharp file=AccessEvaluator.cs
@@ -1138,20 +1392,17 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public sealed record User(string UserId, IReadOnlySet<string> Roles, IReadOnlySet<string> ProjectIds, IReadOnlySet<string> PortfolioIds, int Clearance, decimal ApprovalLimit);
-public sealed record Resource(string ProjectId, string? PortfolioId, int? Classification = null, string? AssigneeUserId = null, decimal? Amount = null);
+public sealed record User(string UserId, bool IsOrgAdmin, bool IsGuest, IReadOnlyDictionary<string, string> ProjectRoles, int Clearance, int BulkEditLimit);
+public sealed record Resource(string ProjectId, bool ProjectIsOpen, int? SecurityLevel = null, string? ReporterUserId = null, int? Count = null);
 public sealed record Decision(bool Allowed, string Reason);
 
 public static class RolePermissions
 {
     public static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> Map = new Dictionary<string, IReadOnlySet<string>>
     {
-        ["TenantAdmin"] = new HashSet<string> { "*" },
-        ["PortfolioManager"] = new HashSet<string> { "project.read", "document.read", "approval.decide", "report.portfolio.read" },
-        ["ProjectManager"] = new HashSet<string> { "project.read", "document.read", "document.create", "approval.start", "approval.decide" },
-        ["Engineer"] = new HashSet<string> { "project.read", "document.read", "document.create", "approval.start" },
-        ["Finance"] = new HashSet<string> { "project.read", "document.read", "approval.decide" },
-        ["Viewer"] = new HashSet<string> { "project.read", "document.read" },
+        ["Admin"] = new HashSet<string> { "project.read", "project.admin", "issue.read", "issue.create", "issue.edit", "issue.delete", "issue.bulk-edit" },
+        ["Member"] = new HashSet<string> { "project.read", "issue.read", "issue.create", "issue.edit", "issue.delete", "issue.bulk-edit" },
+        ["Viewer"] = new HashSet<string> { "project.read", "issue.read" },
     };
 }
 
@@ -1167,73 +1418,71 @@ using Xunit;
 
 public class AccessEvaluatorTests
 {
-    private static User U(string role, int clearance = 1, decimal limit = 0, string[]? projects = null, string[]? portfolios = null) =>
-        new("me", new HashSet<string> { role }, new HashSet<string>(projects ?? new[] { "P1" }), new HashSet<string>(portfolios ?? new string[0]), clearance, limit);
+    private static User U(string? mobRole = "Member", int clearance = 1, int bulkLimit = 1000, bool orgAdmin = false, bool guest = false)
+    {
+        var roles = new Dictionary<string, string>();
+        if (mobRole is not null) roles["MOB"] = mobRole;
+        return new User("me", orgAdmin, guest, roles, clearance, bulkLimit);
+    }
 
     [Fact]
-    public void Engineer_reads_document_within_clearance()
+    public void Member_reads_issue_within_clearance()
     {
-        var d = AccessEvaluator.Evaluate(U("Engineer", clearance: 1), "document.read", new Resource("P1", null, Classification: 1));
+        var d = AccessEvaluator.Evaluate(U(clearance: 1), "issue.read", new Resource("MOB", false, SecurityLevel: 1));
         Assert.True(d.Allowed);
         Assert.Equal("ok", d.Reason);
     }
 
     [Fact]
-    public void Engineer_blocked_by_clearance()
+    public void Member_blocked_by_security_level()
     {
-        var d = AccessEvaluator.Evaluate(U("Engineer", clearance: 1), "document.read", new Resource("P1", null, Classification: 2));
+        var d = AccessEvaluator.Evaluate(U(clearance: 1), "issue.read", new Resource("MOB", false, SecurityLevel: 2));
         Assert.False(d.Allowed);
-        Assert.Equal("classification 2 exceeds clearance 1", d.Reason);
+        Assert.Equal("security level 2 exceeds clearance 1", d.Reason);
     }
 
     [Fact]
-    public void Portfolio_manager_in_scope_via_portfolio()
+    public void Open_project_is_visible_to_members_but_not_guests()
     {
-        var u = U("PortfolioManager", clearance: 2, projects: new string[0], portfolios: new[] { "PF-N" });
-        var d = AccessEvaluator.Evaluate(u, "document.read", new Resource("P2", "PF-N", Classification: 2));
-        Assert.True(d.Allowed);
+        Assert.True(AccessEvaluator.Evaluate(U(), "issue.read", new Resource("WEB", true, SecurityLevel: 0)).Allowed);
+        var guest = AccessEvaluator.Evaluate(U(guest: true), "issue.read", new Resource("WEB", true, SecurityLevel: 0));
+        Assert.Equal("not in project scope", guest.Reason);
+        var privateProject = AccessEvaluator.Evaluate(U(), "issue.read", new Resource("FIN", false));
+        Assert.Equal("not in project scope", privateProject.Reason);
     }
 
     [Fact]
-    public void Member_of_other_project_is_out_of_scope()
+    public void Bulk_limit_is_enforced_with_explained_reason()
     {
-        var d = AccessEvaluator.Evaluate(U("Engineer"), "document.read", new Resource("P9", "PF-S", Classification: 0));
+        var d = AccessEvaluator.Evaluate(U(bulkLimit: 1000), "issue.bulk-edit", new Resource("MOB", false, Count: 5000));
         Assert.False(d.Allowed);
-        Assert.Equal("not in project scope", d.Reason);
+        Assert.Equal("bulk edit of 5000 issues exceeds limit 1000", d.Reason);
+        Assert.True(AccessEvaluator.Evaluate(U(bulkLimit: 1000), "issue.bulk-edit", new Resource("MOB", false, Count: 800)).Allowed);
     }
 
     [Fact]
-    public void Finance_limit_is_enforced_with_explained_reason()
+    public void Only_reporter_or_admin_can_delete()
     {
-        var u = U("Finance", limit: 50_000_000m);
-        var d = AccessEvaluator.Evaluate(u, "approval.decide", new Resource("P1", null, AssigneeUserId: "me", Amount: 72_000_000m));
-        Assert.False(d.Allowed);
-        Assert.Equal("amount 72000000 exceeds limit 50000000", d.Reason);
-        var ok = AccessEvaluator.Evaluate(u, "approval.decide", new Resource("P1", null, AssigneeUserId: "me", Amount: 40_000_000m));
-        Assert.True(ok.Allowed);
-    }
-
-    [Fact]
-    public void Non_assignee_cannot_decide()
-    {
-        var d = AccessEvaluator.Evaluate(U("Finance", limit: 1m), "approval.decide", new Resource("P1", null, AssigneeUserId: "someone-else", Amount: null));
-        Assert.Equal("not the assignee", d.Reason);
+        var other = new Resource("MOB", false, SecurityLevel: 0, ReporterUserId: "someone-else");
+        Assert.Equal("not the reporter", AccessEvaluator.Evaluate(U("Member"), "issue.delete", other).Reason);
+        Assert.True(AccessEvaluator.Evaluate(U("Member"), "issue.delete", other with { ReporterUserId = "me" }).Allowed);
+        Assert.True(AccessEvaluator.Evaluate(U("Admin"), "issue.delete", other).Allowed);
     }
 
     [Fact]
     public void Viewer_lacks_permission()
     {
-        var d = AccessEvaluator.Evaluate(U("Viewer"), "approval.decide", new Resource("P1", null, AssigneeUserId: "me"));
-        Assert.Equal("missing permission approval.decide", d.Reason);
+        var d = AccessEvaluator.Evaluate(U("Viewer"), "issue.edit", new Resource("MOB", false, SecurityLevel: 0));
+        Assert.Equal("missing permission issue.edit", d.Reason);
     }
 
     [Fact]
-    public void Tenant_admin_passes_scope_but_not_clearance()
+    public void Org_admin_passes_scope_but_not_security_level()
     {
-        var u = U("TenantAdmin", clearance: 0, projects: new string[0]);
-        var d = AccessEvaluator.Evaluate(u, "document.read", new Resource("P7", null, Classification: 3));
-        Assert.Equal("classification 3 exceeds clearance 0", d.Reason);
-        Assert.True(AccessEvaluator.Evaluate(u, "project.read", new Resource("P7", null)).Allowed);
+        var admin = U(mobRole: null, clearance: 0, orgAdmin: true);
+        var d = AccessEvaluator.Evaluate(admin, "issue.read", new Resource("FIN", false, SecurityLevel: 3));
+        Assert.Equal("security level 3 exceeds clearance 0", d.Reason);
+        Assert.True(AccessEvaluator.Evaluate(admin, "project.admin", new Resource("FIN", false)).Allowed);
     }
 }
 ```
@@ -1243,20 +1492,17 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public sealed record User(string UserId, IReadOnlySet<string> Roles, IReadOnlySet<string> ProjectIds, IReadOnlySet<string> PortfolioIds, int Clearance, decimal ApprovalLimit);
-public sealed record Resource(string ProjectId, string? PortfolioId, int? Classification = null, string? AssigneeUserId = null, decimal? Amount = null);
+public sealed record User(string UserId, bool IsOrgAdmin, bool IsGuest, IReadOnlyDictionary<string, string> ProjectRoles, int Clearance, int BulkEditLimit);
+public sealed record Resource(string ProjectId, bool ProjectIsOpen, int? SecurityLevel = null, string? ReporterUserId = null, int? Count = null);
 public sealed record Decision(bool Allowed, string Reason);
 
 public static class RolePermissions
 {
     public static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> Map = new Dictionary<string, IReadOnlySet<string>>
     {
-        ["TenantAdmin"] = new HashSet<string> { "*" },
-        ["PortfolioManager"] = new HashSet<string> { "project.read", "document.read", "approval.decide", "report.portfolio.read" },
-        ["ProjectManager"] = new HashSet<string> { "project.read", "document.read", "document.create", "approval.start", "approval.decide" },
-        ["Engineer"] = new HashSet<string> { "project.read", "document.read", "document.create", "approval.start" },
-        ["Finance"] = new HashSet<string> { "project.read", "document.read", "approval.decide" },
-        ["Viewer"] = new HashSet<string> { "project.read", "document.read" },
+        ["Admin"] = new HashSet<string> { "project.read", "project.admin", "issue.read", "issue.create", "issue.edit", "issue.delete", "issue.bulk-edit" },
+        ["Member"] = new HashSet<string> { "project.read", "issue.read", "issue.create", "issue.edit", "issue.delete", "issue.bulk-edit" },
+        ["Viewer"] = new HashSet<string> { "project.read", "issue.read" },
     };
 }
 
@@ -1264,53 +1510,54 @@ public static class AccessEvaluator
 {
     public static Decision Evaluate(User user, string permission, Resource resource)
     {
-        if (!HasPermission(user, permission)) return new Decision(false, $"missing permission {permission}");
-        if (!InScope(user, resource)) return new Decision(false, "not in project scope");
+        var role = EffectiveRole(user, resource);
+        if (role is null) return new Decision(false, "not in project scope");
+        if (!RolePermissions.Map.TryGetValue(role, out var perms) || !perms.Contains(permission))
+            return new Decision(false, $"missing permission {permission}");
 
-        switch (permission)
-        {
-            case "document.read":
-                if (resource.Classification is int c && c > user.Clearance)
-                    return new Decision(false, $"classification {c} exceeds clearance {user.Clearance}");
-                break;
-            case "approval.decide":
-                if (resource.AssigneeUserId != user.UserId) return new Decision(false, "not the assignee");
-                if (resource.Amount is decimal a && a > user.ApprovalLimit)
-                    return new Decision(false, $"amount {a.ToString("0")} exceeds limit {user.ApprovalLimit.ToString("0")}");
-                break;
-        }
+        if (permission == "issue.delete" && resource.ReporterUserId != user.UserId && role != "Admin")
+            return new Decision(false, "not the reporter");
+
+        if (resource.SecurityLevel is int s && s > user.Clearance)
+            return new Decision(false, $"security level {s} exceeds clearance {user.Clearance}");
+
+        if (permission == "issue.bulk-edit" && resource.Count is int n && n > user.BulkEditLimit)
+            return new Decision(false, $"bulk edit of {n} issues exceeds limit {user.BulkEditLimit}");
+
         return new Decision(true, "ok");
     }
 
-    private static bool HasPermission(User u, string permission) =>
-        u.Roles.Any(r => RolePermissions.Map.TryGetValue(r, out var perms) && (perms.Contains("*") || perms.Contains(permission)));
-
-    private static bool InScope(User u, Resource r) =>
-        u.Roles.Contains("TenantAdmin") || u.ProjectIds.Contains(r.ProjectId) ||
-        (r.PortfolioId is not null && u.PortfolioIds.Contains(r.PortfolioId));
+    private static string? EffectiveRole(User u, Resource r)
+    {
+        if (u.ProjectRoles.TryGetValue(r.ProjectId, out var role)) return role;
+        if (u.IsOrgAdmin) return "Admin";
+        if (r.ProjectIsOpen && !u.IsGuest) return "Viewer";
+        return null;
+    }
 }
 ```
 
-Roles answer "may this kind of user do this kind of thing"; attributes answer "to this particular thing". Keeping the evaluation order fixed makes denials predictable for support staff and for the audit log, which records the reason string.
+Roles answer "may this kind of user do this kind of thing"; attributes answer "to this particular thing". Keeping the evaluation order fixed makes denials predictable for support staff and for the audit log. In the API, a scope or security-level failure becomes `404` (the user must not learn the issue exists) and the other failures become an explained `403`.
 ::alternatives
-In ASP.NET Core the same rules become `IAuthorizationRequirement` + `AuthorizationHandler<T>` pairs composed into named policies, as in the lesson body. The pure evaluator here is easier to unit-test and can be called from workers that have no `HttpContext`.
+In ASP.NET Core the same rules become `IAuthorizationRequirement` + `AuthorizationHandler<T>` pairs composed into named policies, as in the lesson body. The pure evaluator here is easier to unit-test and can be called from workers (automation, exports) that have no `HttpContext`.
 ::mistakes
-- Checking clearance before scope, so a user learns a document's classification for a project they cannot see.
-- Treating `Amount == null` as zero and failing non-financial approvals for users with a zero limit.
-- Granting scope by portfolio even when the resource has no portfolio (`null` must not match).
+- Checking the security level before scope, so the reason text tells an outsider that a hidden issue in a private project is "level 3".
+- Giving guests implicit Viewer access to open projects.
+- Letting an Org Admin's implicit `Admin` role bypass security levels.
+- Treating a missing `Count` as zero or a missing `SecurityLevel` as a failure.
 :::
 
-:::exercise id=m17-multi-tenant-pm-ex4 difficulty=intermediate kind=code title="Approval workflow with parallel steps, delegation and SLA"
-Implement the `Workflow` aggregate: sequential step groups, `ALL`/`ANY` rules within a group, rejection, delegation and overdue detection.
+:::exercise id=m17-multi-tenant-pm-ex4 difficulty=intermediate kind=code title="Change-request approvals with parallel steps, delegation and SLA"
+A change-request issue ("deploy the new payment gateway on Friday") needs approvals before it can move to *Approved*. Implement the `Workflow` aggregate: sequential step groups, `ALL`/`ANY` rules within a group, rejection, delegation and overdue detection.
 ::requirements
-- Construction activates the lowest `StepNo` group: its steps become `Pending` with `DueAt = now + sla`.
+- The constructor activates the lowest `StepNo` group: its steps become `Pending` with `DueAt = now + sla`.
 - `Approve(user, now)`: the user's pending step becomes `Approved`. The group completes when (`ANY`) one step is approved or (`ALL`) every non-delegated step is approved. On completion, remaining `Pending` steps in the group become `Skipped`, and the next group is activated; if none, `Status = Approved`.
 - `Reject(user, now)`: the step becomes `Rejected`; every `Pending` or `Waiting` step becomes `Skipped`; `Status = Rejected`.
 - `Delegate(from, to, now)`: the delegator's step becomes `Delegated` with `DelegatedTo = to`; a new `Pending` step for `to` is added in the same group with the same `DueAt` and rule. Delegating to yourself throws `InvalidOperationException`.
 - Acting on a request that is not `InProgress`, or by a user with no pending step, throws `InvalidOperationException`.
 - `Overdue(now)` returns pending steps with `DueAt < now`.
 ::acceptance
-- Two-group workflow: group 1 `ANY` (u1, u2), group 2 `ALL` (u3, u4). u1 approves → u2 skipped, u3 and u4 pending. u3 approves → still in progress. u4 approves → `Approved`.
+- Two-group workflow: group 1 `ANY` (u1, u2: the two team leads), group 2 `ALL` (u3, u4: security and the release manager). u1 approves → u2 skipped, u3 and u4 pending. u3 approves → still in progress. u4 approves → `Approved`.
 - u4 delegates to u5; u3 and u5 approve → `Approved`; u4's step shows `Delegated` with `DelegatedTo = u5`.
 - A rejection by u3 after group 1 completes sets `Rejected` and skips u4.
 - `Overdue` reports only pending steps past their due time.
@@ -1555,45 +1802,43 @@ public sealed class Workflow
 }
 ```
 
-The aggregate is deliberately unaware of authorisation (that happened before the call) and of persistence (a repository maps steps to rows). That separation is what keeps it testable in milliseconds and keeps the rules in one place: when the business adds "a delegate may not re-delegate", it is one line here and nowhere else.
+The aggregate is deliberately unaware of authorisation (that happened before the call) and of persistence (a repository maps steps to `approval_step` rows). That separation keeps it testable in milliseconds and keeps the rules in one place: when the business adds "a delegate may not re-delegate", it is one line here and nowhere else.
 ::alternatives
-Model each decision as an event (`StepApproved`, `StepDelegated`) and rebuild state from events; the audit trail and the state then share one source. Worth it when regulators ask for the full decision history as a first-class query; otherwise the explicit rows already serve as history.
+Model each decision as an event (`StepApproved`, `StepDelegated`) and rebuild state from events; the audit trail and the state then share one source. Worth it when auditors ask for the decision history as a first-class query; otherwise the explicit rows already serve as history.
 ::mistakes
 - Counting a `Delegated` step as outstanding in an `ALL` group, so delegation deadlocks the request.
 - Activating the next group before checking that the current one really completed.
-- Mutating `Status` to `Approved` while later groups still exist.
+- Setting `Status` to `Approved` while later groups still exist.
 - Forgetting to carry `DueAt` to the delegate, which resets the SLA clock.
 :::
 
-:::exercise id=m17-multi-tenant-pm-ex5 difficulty=advanced kind=hld title="Design it yourself: Setu for 400 tenants in two regions"
-Design the full platform for the requirements in this lesson: 400 tenants in India and the EU with residency, 15,000 DAU, 210 req/s at month-end, 10 uploads/s and 1.6 Gbit/s of downloads at peak, cross-tenant guests, RBAC + ABAC, versioned documents, approval workflows with SLAs, portfolio reporting, a tamper-evident audit trail, RTO 1 h and RPO 5 min. Start from the starter graph. In your notes state: the tenancy model and how a request finds its database; the isolation layers; how documents are uploaded and protected; how approvals and SLAs are made durable; where each class of report runs; how the audit log is made tamper-evident; and how residency is visible in the graph.
+:::exercise id=m17-multi-tenant-pm-ex5 difficulty=advanced kind=hld title="Design it yourself: Trackly for 5,000 tenants in two regions"
+Design the platform for the requirements in this lesson: 5,000 tenants homed in India or the EU, 200,000 DAU, about 2,200 req/s at the India peak, 48,000 live board connections, permission-aware search at 500 queries/s, per-tenant limits, enterprise SSO and SCIM, attachments on object storage, change-request approvals with SLAs, a tamper-evident audit log, RTO 1 h and RPO 5 min. Start from the starter graph and draw the India region. In your notes state: the tenancy model and how a request finds its cell; the isolation layers; how noisy neighbours are contained; how a deactivated employee loses access within 10 minutes; how attachments are uploaded and protected; how the audit log is made tamper-evident; and how residency is visible in the graph.
 ::acceptance
-- Gateway with tenant resolution and per-tenant limits; a tenant directory; pooled PostgreSQL with RLS plus at least one dedicated database.
-- Object storage with signed URLs and a CDN; scan workers; no file bytes through the API.
-- Outbox/event stream feeding workflow, indexing, read models or warehouse, and notifications; a scheduler for SLAs.
-- Read replica for interactive reads and a warehouse for cross-project reports.
-- Audit written in-transaction, hash-chained, with an external anchor in write-once storage.
-- Two residency zones with no tenant-data edge crossing; a warm standby per zone.
-- Monitoring with isolation canaries and per-tenant SLOs.
+- Gateway with host-based tenant resolution and per-tenant rate limits; a tenant directory; pooled PostgreSQL cells with RLS plus at least one dedicated cell; a connection pooler.
+- An identity broker for SAML/OIDC and SCIM, with short-lived tokens and a revocation path.
+- Object storage with signed URLs, a CDN and scan workers; no attachment bytes through the API.
+- Outbox and event stream feeding search indexing, read models, automation/webhooks, notifications and the WebSocket gateway; per-tenant job queues; a durable scheduler for SLAs.
+- Audit written in-transaction, hash-chained, anchored in write-once storage.
+- The EU region is a disjoint copy with no tenant-data edges between regions; a warm standby per region.
+- Monitoring with per-tenant SLOs, noisy-neighbour detection and isolation canaries.
 ::hint
-Which single lookup tells a request where its tenant's data lives? Put it near the gateway.
+Which single lookup tells a request which cell holds its tenant? Put it next to the gateway.
 ::hint
-List isolation from edge to row: host, context, authorisation filters, RLS, storage prefixes, canaries.
+List isolation from edge to row: host and token agree, tenant context, project and security-level authorisation, RLS, prefixed keys, residency guard, canaries.
 ::hint
-Documents: the API signs, the browser uploads, a worker scans, and only then is the version downloadable. Draw those four arrows.
+Noisy neighbours: limits at the gateway, heavy work on per-tenant queues, budgets for automation, and a dedicated cell as the last resort. Which nodes represent each of those?
 ::hint
-Approvals: what makes a timer survive a worker crash? A scheduler with persisted jobs fed from the event stream.
-::hint
-Shape per zone: client → CDN/WAF → gateway (directory) → API → pooled DB (RLS) / dedicated DB; API → replica; API → Redis; API → outbox → stream → workflow, indexer, read models, warehouse, notifier; client → object storage (signed) ← scanner; audit anchor → write-once storage; standby region with replica. Duplicate per zone; nothing crosses.
+Shape per region: client → CDN/WAF → gateway (directory, rate limiter) → API → PgBouncer → pooled cells / dedicated cell; cells → replicas; API → Redis, search, job queues; cells → outbox relay → stream → indexer, read models, automation, notifications, WebSocket gateway; client → object storage (signed) → scanner; identity broker → gateway; scheduler → API; audit anchor → write-once storage; standby replicas in a second zone.
 ::starter
 ```json
 {
   "nodes": [
-    { "id": "c", "type": "client", "label": "Users of 400 organisations (IN + EU)", "props": { "rps": 210 } },
+    { "id": "c", "type": "client", "label": "Users of 3,000 Indian tenants", "props": { "rps": 2200 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
-    { "id": "api", "type": "app-server", "label": "Setu API", "props": { "instances": 4 } },
-    { "id": "db", "type": "database", "label": "PostgreSQL" },
-    { "id": "obj", "type": "object-storage", "label": "Documents" }
+    { "id": "api", "type": "app-server", "label": "Trackly API", "props": { "instances": 4 } },
+    { "id": "db", "type": "database", "label": "PostgreSQL (all tenants)" },
+    { "id": "obj", "type": "object-storage", "label": "Attachments" }
   ],
   "edges": [
     { "from": "c", "to": "lb", "kind": "sync" },
@@ -1604,221 +1849,234 @@ Shape per zone: client → CDN/WAF → gateway (directory) → API → pooled DB
 }
 ```
 ::solution
-Reference architecture for the Indian zone; the EU zone is a copy with its own nodes and no edges to these.
+Reference architecture for the India region; the EU region is a copy with its own nodes and no tenant-data edges to these.
 
 ```json
 {
   "nodes": [
-    { "id": "c", "type": "client", "label": "Users: staff, guests, API clients", "props": { "rps": 210 } },
-    { "id": "edge", "type": "cdn", "label": "CDN + WAF (SPA assets, document cache)" },
-    { "id": "gw", "type": "api-gateway", "label": "Gateway: host to tenant, token check, per-tenant limits", "props": { "multiAz": true } },
-    { "id": "dir", "type": "service-registry", "label": "Tenant directory: region, database, plan, SSO" },
-    { "id": "api", "type": "app-server", "label": "Setu API modular monolith (projects, documents, approvals, audit, reporting)", "props": { "instances": 12, "region": "in-central" } },
-    { "id": "authz", "type": "cache", "label": "Redis: principals (roles, memberships, clearance, limits), inbox counters", "props": { "ttlSeconds": 300 } },
-    { "id": "pg", "type": "database", "label": "PostgreSQL primary: pool with RLS, audit partitioned by month", "props": { "multiAz": true, "region": "in-central" } },
-    { "id": "rr", "type": "read-replica", "label": "Replicas: inboxes, project pages (read-your-writes guard)", "props": { "replicas": 2 } },
-    { "id": "ded", "type": "database", "label": "Dedicated DB: largest tenant (8,000 users)", "props": { "region": "in-central" } },
-    { "id": "relay", "type": "worker", "label": "Outbox relay", "props": { "instances": 2 } },
-    { "id": "bus", "type": "stream", "label": "Event stream: DocumentVersionAdded, ApprovalDecided, ProgressRecorded" },
-    { "id": "wf", "type": "worker", "label": "Workflow engine: activate steps, delegation, escalation", "props": { "instances": 4 } },
-    { "id": "sched", "type": "scheduler", "label": "Durable scheduler: SLA timers, retention, chain verification" },
-    { "id": "idx", "type": "worker", "label": "Search indexer (tenant filter injected)" },
-    { "id": "srch", "type": "search", "label": "Search cluster: per-tenant index for large tenants" },
-    { "id": "rm", "type": "worker", "label": "Read-model updater: project_progress_summary" },
-    { "id": "wh", "type": "database", "label": "Reporting warehouse: tenant partitions, per-tenant quotas, grants for authority views" },
-    { "id": "notif", "type": "worker", "label": "Notifications: email, push, webhooks" },
-    { "id": "obj", "type": "object-storage", "label": "Object storage: in-central bucket, prefix tenant/project/document/v", "props": { "region": "in-central" } },
-    { "id": "scan", "type": "worker", "label": "Scan workers: malware, thumbnails, text extraction" },
+    { "id": "c", "type": "client", "label": "Members, guests, API clients", "props": { "rps": 2200 } },
+    { "id": "edge", "type": "cdn", "label": "CDN + WAF (SPA assets, attachment downloads)" },
+    { "id": "gw", "type": "api-gateway", "label": "Gateway: host to tenant, host-token check", "props": { "multiAz": true } },
+    { "id": "rl", "type": "rate-limiter", "label": "Per-tenant and per-token token buckets by plan" },
+    { "id": "dir", "type": "service-registry", "label": "Tenant directory: region, cell, plan, SSO config" },
+    { "id": "idb", "type": "external", "label": "Identity broker: SAML/OIDC per tenant, SCIM, 10-min tokens" },
+    { "id": "api", "type": "app-server", "label": "Trackly API modular monolith", "props": { "instances": 16, "region": "in-west" } },
+    { "id": "ws", "type": "websocket-gateway", "label": "WebSocket gateway: live boards (48k connections)", "props": { "instances": 4 } },
+    { "id": "redis", "type": "cache", "label": "Redis: principals, board cache, rate counters, deny list", "props": { "ttlSeconds": 300 } },
+    { "id": "pgb", "type": "load-balancer", "label": "PgBouncer per cell (transaction pooling)" },
+    { "id": "cell1", "type": "database", "label": "Pooled cell 1 (~1,000 tenants, RLS)", "props": { "multiAz": true, "region": "in-west" } },
+    { "id": "cell2", "type": "database", "label": "Pooled cell 2", "props": { "multiAz": true, "region": "in-west" } },
+    { "id": "cell3", "type": "database", "label": "Pooled cell 3 (canary cell)", "props": { "multiAz": true, "region": "in-west" } },
+    { "id": "ded", "type": "database", "label": "Dedicated cell: largest tenant (25,000 users)", "props": { "multiAz": true, "region": "in-west" } },
+    { "id": "rr", "type": "read-replica", "label": "Replica per cell: boards, backlogs", "props": { "replicas": 4 } },
+    { "id": "relay", "type": "worker", "label": "Outbox relay per cell", "props": { "instances": 2 } },
+    { "id": "bus", "type": "stream", "label": "Event stream: IssueChanged, MemberChanged, ApprovalDecided" },
+    { "id": "idx", "type": "worker", "label": "Search indexer (tenant, project, security level fields)" },
+    { "id": "srch", "type": "search", "label": "Search: own index for large tenants, shared with mandatory filter for small" },
+    { "id": "rm", "type": "worker", "label": "Read models: burndown, velocity" },
+    { "id": "auto", "type": "worker", "label": "Automation + webhooks: per-tenant budgets, loop limits" },
+    { "id": "notif", "type": "worker", "label": "Notification service" },
+    { "id": "jobs", "type": "queue", "label": "Per-tenant job queues: bulk edits, imports, exports (round robin)" },
+    { "id": "jw", "type": "worker", "label": "Job workers: 500-row batches" },
+    { "id": "sched", "type": "scheduler", "label": "Durable scheduler: approval SLAs, retention, audit chain checks" },
+    { "id": "obj", "type": "object-storage", "label": "Object storage (in-west), prefix tenant/issue/attachment", "props": { "region": "in-west" } },
+    { "id": "scan", "type": "worker", "label": "Scan workers: malware, previews" },
     { "id": "anchor", "type": "object-storage", "label": "Write-once storage: nightly audit chain anchors" },
-    { "id": "jobs", "type": "queue", "label": "Per-tenant job queues: exports, bulk imports (fair scheduling)" },
-    { "id": "sby_app", "type": "app-server", "label": "Warm standby API (in-south)", "props": { "instances": 2, "region": "in-south" } },
-    { "id": "sby_db", "type": "read-replica", "label": "Standby replica (in-south), RPO 5 min", "props": { "region": "in-south" } },
-    { "id": "mon", "type": "monitoring", "label": "Per-tenant SLOs, isolation canaries, audit-rate divergence, chain checks" }
+    { "id": "sby", "type": "read-replica", "label": "Warm standby replicas of every cell (in-south), RPO 5 min", "props": { "region": "in-south" } },
+    { "id": "mon", "type": "monitoring", "label": "Per-tenant SLOs, top tenants per cell, isolation canaries" }
   ],
   "edges": [
     { "from": "c", "to": "edge", "kind": "sync" },
     { "from": "edge", "to": "gw", "kind": "sync" },
-    { "from": "gw", "to": "dir", "kind": "sync", "label": "tenant -> region, database (cached 30 s)" },
-    { "from": "gw", "to": "api", "kind": "sync", "label": "X-Acting-Tenant, X-Home-Tenant" },
-    { "from": "api", "to": "authz", "kind": "sync", "label": "principal cache" },
-    { "from": "api", "to": "pg", "kind": "sync", "label": "SET LOCAL app.tenant_id; data + audit + outbox in one tx" },
-    { "from": "api", "to": "ded", "kind": "sync", "label": "largest tenant" },
-    { "from": "api", "to": "rr", "kind": "sync", "label": "inbox, project pages" },
-    { "from": "pg", "to": "rr", "kind": "async", "label": "streaming replication" },
-    { "from": "pg", "to": "sby_db", "kind": "async", "label": "cross-region replication inside IN" },
-    { "from": "sby_app", "to": "sby_db", "kind": "sync", "label": "promoted on failover" },
-    { "from": "relay", "to": "pg", "kind": "sync", "label": "poll outbox" },
+    { "from": "c", "to": "idb", "kind": "sync", "label": "login, SSO redirect" },
+    { "from": "idb", "to": "gw", "kind": "sync", "label": "issues tokens with tid; SCIM deactivations" },
+    { "from": "gw", "to": "dir", "kind": "sync", "label": "slug -> tenant, cell, plan (cached 30 s)" },
+    { "from": "gw", "to": "rl", "kind": "sync", "label": "429 before any cell work" },
+    { "from": "rl", "to": "redis", "kind": "sync" },
+    { "from": "gw", "to": "api", "kind": "sync", "label": "tenant, user, cell" },
+    { "from": "gw", "to": "ws", "kind": "sync", "label": "board subscriptions" },
+    { "from": "api", "to": "redis", "kind": "sync", "label": "principal, deny list" },
+    { "from": "api", "to": "pgb", "kind": "sync", "label": "set_config(app.tenant_id); data + changelog + audit + outbox in one tx" },
+    { "from": "pgb", "to": "cell1", "kind": "sync" },
+    { "from": "pgb", "to": "cell2", "kind": "sync" },
+    { "from": "pgb", "to": "cell3", "kind": "sync" },
+    { "from": "pgb", "to": "ded", "kind": "sync" },
+    { "from": "api", "to": "rr", "kind": "sync", "label": "board and backlog reads" },
+    { "from": "cell1", "to": "rr", "kind": "async", "label": "streaming replication" },
+    { "from": "cell1", "to": "sby", "kind": "async", "label": "replication to second zone" },
+    { "from": "relay", "to": "cell1", "kind": "sync", "label": "poll outbox" },
     { "from": "relay", "to": "bus", "kind": "async" },
-    { "from": "bus", "to": "wf", "kind": "async" },
-    { "from": "wf", "to": "pg", "kind": "sync", "label": "advance steps (idempotent)" },
-    { "from": "wf", "to": "sched", "kind": "async", "label": "schedule SLA at due_at" },
-    { "from": "sched", "to": "wf", "kind": "async", "label": "fire escalation" },
     { "from": "bus", "to": "idx", "kind": "async" },
     { "from": "idx", "to": "srch", "kind": "sync" },
-    { "from": "api", "to": "srch", "kind": "sync", "label": "query with tenant + project filter" },
+    { "from": "api", "to": "srch", "kind": "sync", "label": "query + tenant, project, security filters" },
     { "from": "bus", "to": "rm", "kind": "async" },
-    { "from": "rm", "to": "pg", "kind": "sync", "label": "upsert summaries" },
-    { "from": "bus", "to": "wh", "kind": "async", "label": "load per tenant" },
-    { "from": "api", "to": "wh", "kind": "sync", "label": "portfolio and authority reports" },
+    { "from": "bus", "to": "auto", "kind": "async" },
     { "from": "bus", "to": "notif", "kind": "async" },
-    { "from": "api", "to": "obj", "kind": "sync", "label": "sign upload/download URL; HEAD on complete" },
-    { "from": "c", "to": "obj", "kind": "sync", "label": "PUT/GET with signed URL (via CDN for GET)" },
+    { "from": "bus", "to": "ws", "kind": "async", "label": "card moved" },
+    { "from": "api", "to": "jobs", "kind": "async", "label": "202 + job id" },
+    { "from": "jobs", "to": "jw", "kind": "async" },
+    { "from": "jw", "to": "pgb", "kind": "sync", "label": "batched updates" },
+    { "from": "sched", "to": "api", "kind": "async", "label": "SLA escalation, retention" },
+    { "from": "sched", "to": "anchor", "kind": "sync", "label": "nightly final hash per tenant" },
+    { "from": "api", "to": "obj", "kind": "sync", "label": "sign URL; HEAD on complete" },
+    { "from": "c", "to": "obj", "kind": "sync", "label": "PUT/GET with signed URL" },
     { "from": "obj", "to": "scan", "kind": "async", "label": "new object" },
-    { "from": "scan", "to": "pg", "kind": "sync", "label": "mark version scanned" },
-    { "from": "sched", "to": "anchor", "kind": "sync", "label": "nightly: final hash per tenant" },
-    { "from": "api", "to": "jobs", "kind": "async", "label": "exports, imports" },
-    { "from": "jobs", "to": "wh", "kind": "sync", "label": "export workers read" },
-    { "from": "mon", "to": "api", "kind": "async", "label": "canary tenants attempt cross-tenant reads" },
-    { "from": "mon", "to": "pg", "kind": "async", "label": "audit rows vs writes" }
+    { "from": "scan", "to": "pgb", "kind": "sync", "label": "mark CLEAN or INFECTED" },
+    { "from": "mon", "to": "api", "kind": "async", "label": "canaries attempt cross-tenant reads" },
+    { "from": "mon", "to": "cell1", "kind": "async", "label": "DB time per tenant" }
   ]
 }
 ```
 
 Reasoning:
 
-- **Tenancy**: bridge. The gateway resolves the tenant from the host name, the directory says which region and database, and the API opens every transaction with `SET LOCAL app.tenant_id`. The largest tenant has a dedicated database behind the same code.
-- **Isolation layers**: (1) tenant from host or verified token only; (2) scoped `TenantContext` and guest membership check; (3) authorisation filters by project; (4) RLS with `FORCE`; (5) tenant-prefixed object keys, cache keys and search filters; (6) residency guard; (7) canaries that page on any cross-tenant success.
-- **Documents**: the API signs a URL bound to the tenant prefix, method, size and expiry; the browser uploads directly; `complete` verifies the checksum; the scan worker clears the version for download; downloads are signed, short-lived and audited.
-- **Approvals**: state lives in `approval_request` and `approval_step`; decisions are idempotent; events via the outbox drive the workflow worker; SLA timers are persisted by the scheduler so a crash cannot lose an escalation.
-- **Reports**: inboxes and project pages on replicas; dashboards from read models updated by events; cross-project and authority views from the warehouse with tenant partitions, quotas and explicit visibility grants.
-- **Audit**: written in the same transaction as the change, append-only by privilege, hash-chained per tenant under an advisory lock, anchored nightly to write-once storage, verified by the scheduler and watched by monitoring for rate divergence.
-- **Residency**: every node carries its region; the EU zone is a disjoint copy of this graph. The only cross-zone components are global DNS and the tenant directory's replicated index of tenant-to-region mappings, which contains no customer data.
-- **Availability**: warm standby in a second Indian region with a 5-minute replication lag budget and quarterly failover drills.
+- **Tenancy**: pooled cells of about 1,000 tenants with RLS, plus dedicated cells for the largest and contract-bound tenants. The gateway resolves the slug, the directory names the cell, PgBouncer routes to it, and every transaction sets `app.tenant_id` with a parameterised `set_config`. The same code serves all cells. New releases and migrations land on the canary cell first.
+- **Isolation layers**: (1) host and token tenant must agree; (2) scoped `TenantContext`; (3) project roles, open/private visibility and security levels, with `404` for invisible issues; (4) RLS with `FORCE`, a non-owner application role and `NULLIF(current_setting(...), '')`; (5) tenant-prefixed object, cache and search keys with mandatory search filters; (6) residency guard; (7) canaries.
+- **Noisy neighbours**: per-tenant token buckets at the gateway; bulk work as jobs on per-tenant queues in 500-row batches; automation budgets and loop limits; search query timeouts; per-cell top-tenant monitoring; a dedicated cell for any tenant that still dominates.
+- **Deactivation within 10 minutes**: SCIM from the tenant's identity provider reaches the broker; the API marks the member deactivated, revokes refresh tokens, evicts the principal and adds the user to a deny list that outlives any 10-minute access token already issued.
+- **Attachments**: the API checks the quota and signs a URL bound to one object key under the tenant prefix, a method, a size limit and an expiry; the browser uploads directly; `complete` verifies size and checksum; the scanner marks the file clean before it can be downloaded; downloads are short-lived signed URLs from a separate domain.
+- **Audit**: security and admin events written in the same transaction, append-only by privilege, hash-chained per tenant under an advisory lock, anchored nightly in write-once storage, verified by the scheduler.
+- **Residency**: every node carries its region; the EU region is a disjoint copy. Only DNS, the tenant directory's tenant-to-region index and the hashed-email login index are global, and they hold no issue data.
+- **Availability**: multi-AZ cells, warm standby replicas in a second Indian zone with a 5-minute lag budget, quarterly failover drills.
 ::mistakes
-- Streaming document bytes through the API, which makes the API the bandwidth bottleneck and doubles egress.
-- Relying on RLS alone for guests, who must also be bounded by project membership.
-- Audit written asynchronously after the transaction, which loses rows on crash and lets an action exist without a record.
-- Running portfolio reports on the primary.
-- A single global object storage bucket, which breaks residency.
-- SLA timers held in worker memory.
+- Streaming attachment bytes through the API, which makes the API a bandwidth bottleneck and doubles egress.
+- One shared database for every tenant in the region, so every incident and migration affects all 3,000.
+- Rate limits only per user, so an integration with 50 tokens still floods the cell.
+- Relying on long-lived access tokens, so SCIM deactivation does not take effect for hours.
+- Permission filtering after search, which leaks counts and returns empty pages.
+- A single global bucket or search cluster, which breaks residency.
 ::extensions
-A lender tenant wants read access to progress and payment certificates across 60 projects owned by 14 different contractor tenants, each of which must consent. Design the grant model, the query path and the audit implications without copying data between tenants.
+A customer with 25,000 users asks for "bring your own key" encryption and a guaranteed maintenance window. Design the key hierarchy (per-tenant data keys wrapped by the customer's key), what happens when the customer revokes the key, and how their dedicated cell is patched without affecting the pooled cells.
 :::
 
 ## Interview questions
 
 :::interview
 ::q beginner
-What is the difference between RBAC and ABAC, and why does an enterprise project platform need both?
+What is the difference between RBAC and ABAC, and why does a project-management SaaS need both?
 ::a
-RBAC grants permissions by role: a Project Manager may approve. ABAC decides by attributes of the user, resource and context: only on projects they belong to, only for documents at or below their clearance, only up to an amount. Roles alone cannot express scope, and attribute rules alone are hard for administrators to read. Use roles for capability and a short list of attribute rules for scope, implemented as composable authorization policies with explained denials.
+RBAC grants permissions by role: a project Member may edit issues. ABAC decides by attributes of the user, the resource and the context: only in projects the user belongs to, only issues at or below their security level, only bulk edits up to a limit. Roles alone cannot express scope, and attribute rules alone are hard for tenant admins to read. Use roles for capability and a short list of attribute rules for scope, implemented as composable authorization policies, returning `404` for things the user must not know exist and an explained `403` otherwise.
 ::q beginner
-Why should the API never stream document bytes itself?
+Why must the tenant never come from a URL parameter or request body?
 ::a
-At 1.6 Gbit/s of peak downloads, the API tier would need to be sized for bandwidth rather than logic, every byte would be billed twice (storage to API, API to client), and a large upload would hold an API worker for the whole transfer. Instead the API signs a short-lived URL bound to one object key under the tenant's prefix, and the client talks to object storage directly, with a CDN in front for downloads. The API still authorises, audits and verifies the checksum on completion.
+Anything in the URL or body is chosen by the caller, so a tenant id there invites the caller to try someone else's id. Resolve the tenant once at the edge from the host name (`quickcart.trackly.example`) or from a claim in a token the platform signed, check that the two agree, and carry it in a scoped context. Then defend in depth: RLS in the database, tenant-prefixed keys in caches, object storage and search, and canaries that try cross-tenant reads.
 ::q intermediate
-How do cross-tenant guests work without breaking isolation?
+One tenant's integration polls the search API 200 times a second and other tenants on the same database complain. Walk through your response, now and long term.
 ::a
-A guest authenticates with their home tenant's identity, but acts in the owning tenant's context, resolved from the host name. The API verifies a membership row `(owner tenant, project, guest tenant, guest user)` before setting `app.tenant_id` to the owner for the transaction, and the authorisation context for the guest contains only that project. RLS stops tenant leakage; the project filter stops the guest from seeing the owner's other projects. Both layers are needed, and the membership itself is audited when granted or revoked.
+Now: the per-tenant token bucket at the gateway should already return `429` with `Retry-After`; if limits were too loose, lower that tenant's limit and contact its admin. Long term: enforce plan limits per tenant and per token at the gateway with shared counters in Redis, keep an in-process limiter as a backstop, recommend webhooks instead of polling, cap search page sizes and add query timeouts, move bulk work to per-tenant queues, and monitor the top tenants by share of each cell's database time. If one tenant still dominates legitimately, move it to a dedicated cell; the directory makes that a data migration, not a code change.
 ::q intermediate
-Design the audit log so that a database administrator cannot silently alter it.
+How do you make search permission-aware without leaking hidden issues?
 ::a
-Write each audit row in the same transaction as the action; give the application role insert and select only; chain rows per tenant with `hash = SHA-256(prev_hash || canonical row)` and a per-tenant sequence assigned under an advisory lock; store the final hash nightly in write-once storage in the tenant's region; re-verify the chain nightly and alert on any break or sequence gap. An edit breaks hashes; a deletion leaves a gap; a replaced tail disagrees with the external anchor. Pair it with database-level logging of DBA sessions to cover ad-hoc SQL.
+Index each issue with `tenant_id`, `project_id` and `security_level` alongside its fields. At query time the server, never the client, adds `tenant_id = T`, `project_id IN (projects the user can see)` and `security_level <= clearance` to the query. Pre-filtering keeps counts and pagination correct; post-filtering leaks counts and returns short pages. Large tenants get their own index or routing key. Because the index lags by a second or two, the issue page itself reads from PostgreSQL.
+::q intermediate
+An enterprise customer says "when we deactivate someone in our identity provider, they must lose access within 10 minutes". How do you guarantee it?
+::a
+Support SCIM so the provider pushes the deactivation instead of waiting for the next login. On deactivation, mark the membership inactive, revoke refresh tokens, evict the cached principal and add the user to a deny list checked on every request for as long as an access token could still be valid. Keep access tokens short (10 minutes). Measure the time from SCIM call to first denied request, and send a daily reconciliation report in case SCIM calls fail.
 ::q advanced
-Month-end reporting is slowing down everything. Walk through the fix.
+A tenant on a pooled cell has grown to 30 % of the cell's database time. Move it to its own database with minimal downtime.
 ::a
-Classify the reads. Inboxes and project pages go to read replicas with a read-your-writes guard. Dashboards become read models (`project_progress_summary`) updated incrementally from events, so the page reads one row. Cross-project and authority views move to a warehouse loaded from the event stream, partitioned by tenant, with per-tenant query quotas and exports run as jobs from per-tenant queues with concurrency limits. Keep RLS-equivalent filtering in the warehouse. Then measure: primary CPU at month-end should fall to transactional load only; if one tenant still dominates, move it to a dedicated database. Alert on replica lag and on warehouse load lag so staleness is visible.
+Provision a dedicated cell with the same schema and RLS. Copy the tenant's rows with logical replication filtered by `tenant_id` (or a bulk copy plus outbox replay) and let it catch up. Announce a short write pause. Set the tenant to `MOVING` in the directory so the gateway briefly holds or rejects its writes, wait for replication lag to reach zero, verify row counts and checksums per table, flip the directory entry to the new cell, resume writes, then invalidate directory caches. Keep the old rows read-only for a quarantine period before deleting them. This works only because every key includes `tenant_id`, ids are globally unique, and object storage keys are already tenant-prefixed, so nothing needs renumbering.
 ::q advanced
 A regulator asks you to prove that no EU tenant's data has ever been stored in India. What in your design lets you answer?
 ::a
-The tenant directory records each tenant's home region from sign-up; every region is a disjoint deployment (database, object storage, search, warehouse, logs, backups) and the architecture graph shows no tenant-data edge between zones. The gateway redirects misrouted requests, and a residency guard in the data layer throws if a process in one zone tries to persist another zone's tenant. Audit rows record the region of every write. Evidence for the regulator: the directory entry, the per-region deployment inventory, the guard's test and alert history, and a query over the EU audit log showing all writes carry the EU region. The honest caveat is that side channels (support exports, global telemetry) must be shown to be region-scoped too, which is why logs with personal data are kept per region.
+The directory records each tenant's home region from sign-up; every region is a disjoint deployment (cells, object storage, search, analytics, logs, backups) and the architecture shows no tenant-data path between them. The gateway redirects misrouted requests, and a residency guard throws if a process tries to persist another region's tenant; its tests and alert history are evidence. The audit log records the region of every security event. Be honest about global components: DNS, the tenant-to-region index and the hashed-email login index are global and hold no product data, and that exception is written into the residency commitment. Support exports and telemetry must also be shown to be region-scoped.
 :::
 
 ## Summary and revision
 
 **Key takeaways**
 
-- Tenancy: bridge model (pool with RLS, dedicated databases for the few), tenant resolved once at the edge, never from user input; guests are bounded by membership plus RLS.
-- Authorisation: roles grant capabilities, attributes constrain scope; policy-based handlers with explained denials; principals cached with fast invalidation.
-- Documents: metadata in PostgreSQL, bytes in per-region object storage under tenant prefixes, signed URLs, checksums, scanning before availability.
-- Approvals: step rows and a small state machine; parallel groups with `ALL`/`ANY`; delegation; durable SLA timers; idempotent decisions.
-- Reporting: replicas for interactive reads, read models for dashboards, a tenant-partitioned warehouse for cross-project views; never the primary at month-end.
-- Audit: in-transaction, append-only, hash-chained per tenant, externally anchored, monitored for rate divergence.
-- Residency: one complete deployment per zone; prove it from the graph.
-- What breaks first: reporting queries, then storage cost, then audit write volume; the API itself is small.
+- Tenancy: pooled cells of about 1,000 tenants with RLS, dedicated cells for the few; the directory maps tenants to cells; cells exist for blast radius and rebalancing, not because the data is large.
+- Tenant resolution: once at the edge, from host or signed token, and the two must agree; never from user input.
+- RLS done right: `FORCE`, a non-owner non-`BYPASSRLS` role, `NULLIF(current_setting(..., true), '')`, parameterised `set_config(..., true)`, `security_invoker` views, `tenant_id` in every key and index.
+- Permissions: roles for capability, attributes for scope; `404` for invisible, explained `403` for forbidden.
+- Noisy neighbours: per-tenant rate limits by plan, jobs on per-tenant queues, automation budgets, search limits, top-tenant monitoring, and moving heavy tenants.
+- Enterprise identity: an identity broker for SAML/OIDC, SCIM for provisioning, short tokens plus a deny list for fast deprovisioning.
+- Issues: per-project keys from a locked counter, UUIDv7 internal ids, optimistic concurrency with ETags, changelog separate from the hash-chained audit log.
+- What breaks first: noisy neighbours, then permission-aware search for large tenants, then connection counts; raw request rate is modest.
 
-**Terminology**: tenant, pool, bridge, RLS, `FORCE ROW LEVEL SECURITY`, tenant context, guest membership, RBAC, ABAC, policy, requirement, handler, clearance, approval limit, signed URL (valet key), checksum, check-out, step group, `ALL`/`ANY` rule, delegation, SLA escalation, outbox, read model, warehouse, hash chain, anchor, residency guard, isolation canary.
+**Terminology**: tenant, pool, cell, dedicated cell, tenant directory, RLS, `FORCE ROW LEVEL SECURITY`, `set_config`, tenant context, guest, effective role, issue security level, RBAC, ABAC, policy, requirement, handler, noisy neighbour, token bucket, fair queue, SAML, OIDC, SCIM, home-realm discovery, deny list, issue key, optimistic concurrency, changelog, hash chain, anchor, residency guard, isolation canary.
 
 :::flashcards
 Q: Where does the tenant id come from, and where must it never come from?
-A: From the host name or a verified token claim, resolved once at the edge. Never from a query string, body or cookie.
-Q: What does `current_setting('app.tenant_id', true)` do when the setting is missing?
-A: Returns NULL instead of throwing, so the RLS policy compares false and the query returns no rows rather than all rows.
+A: From the host name or a verified token claim, resolved once at the edge, and the two must agree. Never from a query string, body, client header or cookie.
+Q: Why `NULLIF(current_setting('app.tenant_id', true), '')` in the RLS policy?
+A: The setting is NULL in a fresh session and an empty string on a pooled connection that used it before. NULLIF turns both into NULL, so the policy matches no rows and fails closed.
+Q: Why `set_config('app.tenant_id', @t, true)` instead of `SET LOCAL`?
+A: `SET LOCAL` cannot take a bind parameter; `set_config` can, and `true` makes it transaction-local, safe behind a transaction-mode pooler.
+Q: Why split a pool into cells if one database could hold the data?
+A: To limit blast radius, give room to move noisy tenants, roll out migrations to a canary cell first, and keep backups and restores fast.
 Q: Roles versus attributes in one line?
-A: Roles say what kind of action a user may perform; attributes say on which resources and within what limits.
-Q: Why is the audit row written in the same transaction as the action?
-A: So the action and its record either both commit or neither; an asynchronous audit can lose rows and leave actions unrecorded.
-Q: What makes the audit log tamper-evident?
-A: Per-tenant hash chain with sequence numbers, append-only privileges, and a nightly anchor of the final hash in write-once storage.
-Q: How is an approval SLA made durable?
-A: The workflow worker schedules a persisted timer in a scheduler at `due_at`; a worker crash does not lose it.
-Q: Which reads go to replicas, read models and the warehouse?
-A: Replicas: inboxes and project pages. Read models: project dashboards. Warehouse: cross-project, portfolio and authority views, and exports.
-Q: How do you bound a cross-tenant guest?
-A: Verify the membership row, set the acting tenant for RLS, and restrict the authorisation context to that one project.
-Q: What is the largest cost line at year three?
-A: Object storage for documents (about a third of the bill); levers are tiering, photo compression and storage quotas.
+A: Roles say what kind of action a user may perform; attributes say on which projects and issues and within what limits.
+Q: How do you contain a noisy neighbour?
+A: Per-tenant token buckets by plan, heavy work on per-tenant queues, automation budgets, search limits, top-tenant monitoring, and a dedicated cell as the last resort.
+Q: How does a deactivated employee lose access within 10 minutes?
+A: SCIM deactivation, refresh-token revocation, principal cache eviction, a deny list, and access tokens that live only 10 minutes.
+Q: Changelog versus audit log?
+A: The changelog is high-volume issue field history shown in the product; the audit log is security and admin events, append-only and hash-chained per tenant.
+Q: Why return 404 instead of 403 for an issue in a private project?
+A: A 403 confirms the issue exists; a 404 reveals nothing to someone who should not know about it.
 :::
 
 ## Knowledge check
 
 :::quiz pass=70
 ::q single
-A developer adds a new reporting endpoint and forgets to set `app.tenant_id` for the transaction. With the lesson's RLS policy, what does the query return?
+A developer adds a new reporting endpoint and forgets to set `app.tenant_id` for the transaction. The connection comes from a pool and has served other tenants before. With the lesson's RLS policy, what does the query return?
 - [ ] All tenants' rows.
 - [x] No rows.
-- [ ] Only the developer's tenant's rows.
+- [ ] The rows of the tenant that last used the connection.
 - [ ] An error, because the setting is required.
-> `current_setting(..., true)` returns NULL when unset; `tenant_id = NULL` is never true, so the policy filters everything. Failing closed is the point.
+> The transaction-local setting was reset at the previous commit, so `current_setting(..., true)` returns an empty string; `NULLIF` turns it into NULL and `tenant_id = NULL` is never true. Failing closed is the point.
 ::q single
-Finance user F (approval limit ₹5 crore) is the assignee on a ₹7.2 crore payment certificate step. What should the system do when F clicks Approve?
-- [ ] Approve, because F is the assignee.
-- [x] Deny with an explained reason (amount exceeds limit) and allow F to delegate to someone with a higher limit.
-- [ ] Silently route the step to the Finance Head.
-- [ ] Approve but flag the request for review.
-> Assignment and authority are different things. ABAC enforces the limit at decision time; the explained denial avoids a support ticket; delegation keeps the audit chain intact.
+A Standard-plan tenant's CI pipeline sends 400 search requests a second. What should happen?
+- [ ] The cell's PostgreSQL slows down for everyone until the pipeline finishes.
+- [x] The gateway's per-tenant token bucket returns `429` with `Retry-After` for that tenant, and other tenants are unaffected.
+- [ ] The API queues the requests in memory until capacity frees up.
+- [ ] The tenant is suspended automatically.
+> Limits at the edge stop the excess before it reaches shared resources. Queuing in memory hides overload and grows latency; suspension is an over-reaction to a misconfigured script.
 ::q multi
 Which of these are necessary for a tamper-evident audit log? (Select all that apply.)
 - [x] Rows written in the same transaction as the action they record.
 - [x] A per-tenant hash chain with sequence numbers.
 - [ ] Storing audit rows as CSV files on the API server.
 - [x] An external, write-once anchor of the latest hash.
-- [ ] Allowing administrators to correct mistaken entries.
-> Correction is exactly what must be impossible; a mistaken entry gets a new compensating entry. Files on the API server are neither durable nor protected.
+- [ ] Allowing admins to correct mistaken entries.
+> Correction is exactly what must be impossible; a mistake gets a new compensating entry. Files on the API server are neither durable nor protected.
 ::q single
-A guest from contractor tenant G is invited to project P of authority tenant O. Which combination bounds what the guest can see?
-- [ ] RLS alone with `app.tenant_id = G`.
-- [ ] RLS alone with `app.tenant_id = O`.
-- [x] RLS with `app.tenant_id = O` plus an authorisation context limited to project P after verifying the membership row.
-- [ ] No RLS, because guests are trusted.
-> RLS with the owner's tenant stops cross-tenant leakage, but inside O the guest must be limited to P by the authorisation layer.
+An agency designer is invited as a guest to project `WEB` of tenant `quickcart`. Project `MOB` is `OPEN` to all members. Which statement is true?
+- [ ] The guest can read `MOB` because open projects are visible to everyone in the tenant.
+- [x] RLS keeps the guest inside `quickcart`, and the authorisation layer limits them to `WEB`; open projects are open to members, not guests.
+- [ ] RLS alone is enough to limit the guest to `WEB`.
+- [ ] Guests should get their own tenant so RLS can isolate them.
+> RLS isolates tenants, not projects. Inside the tenant, the effective-role rule gives guests access only where they have an explicit project role.
 ::q single
-Where should a portfolio dashboard across 900 projects run at month-end?
-- [ ] On the PostgreSQL primary, with a bigger instance.
-- [ ] In the browser, by fetching every project.
-- [x] From read models updated by events, or from the tenant-partitioned warehouse.
-- [ ] From the audit log.
-> The primary is for transactions. Pre-computed summaries make the dashboard a single-row read; the warehouse handles arbitrary cross-project analysis.
+A velocity chart across 1,200 projects is slow for the largest tenant. Where should it come from?
+- [ ] A bigger PostgreSQL primary.
+- [ ] The browser, by fetching every issue.
+- [x] Read models updated from events, or the regional analytics store for ad-hoc cross-project queries.
+- [ ] The audit log.
+> Pre-computed per-sprint summaries make the chart a small read; the analytics store handles arbitrary cross-project questions without touching the transactional cell.
 ::q single
-A signed upload URL is issued for document D in project P of tenant T. What must the signature bind so that it cannot be misused?
-- [ ] Only the expiry time.
-- [x] The exact object key under T's prefix, the HTTP method, a size limit and an expiry.
-- [ ] The user's password hash.
-- [ ] The project name.
-> Binding the key and method means the URL cannot write anywhere else or read; the size limit and expiry bound the damage of a leaked URL.
+A bank deactivates an employee in its identity provider at 10:00. Which combination ensures the employee is locked out of Trackly by 10:10?
+- [ ] Nightly user sync and 24-hour access tokens.
+- [ ] Asking the bank's admin to also remove the user in Trackly.
+- [x] SCIM deactivation, refresh-token revocation, principal cache eviction and a deny list, with 10-minute access tokens.
+- [ ] Changing the bank's SSO certificate.
+> SCIM pushes the change immediately; revocation and the deny list cover tokens already issued; the short token lifetime bounds the worst case.
 ::q single
-In an `ALL` step group, u4 delegates to u5. When is the group complete?
+In an `ALL` approval group, u4 delegates to u5. When is the group complete?
 - [ ] When u4 approves.
 - [x] When every non-delegated step and the delegate's step are approved (u3 and u5).
 - [ ] When u5 approves, regardless of u3.
 - [ ] Never; delegation cancels the group.
-> Delegation moves the obligation to u5; u4's row is marked Delegated and is ignored for completion. u3 must still approve.
+> Delegation moves the obligation to u5; u4's row is marked Delegated and ignored for completion. u3 must still approve.
 ::q single
-An EU council signs up. Which design element guarantees its documents are not stored in the Indian bucket?
+An EU company signs up. Which design element guarantees its attachments are not stored in the Indian bucket?
 - [ ] The CDN's geo-routing.
-- [ ] A note in the contract.
-- [x] A tenant directory with the home region, a gateway that redirects to that region's deployment, and a residency guard in the data layer that refuses to persist out of zone.
-- [ ] Encrypting the documents.
+- [ ] A clause in the contract.
+- [x] A directory with the home region, a gateway that routes to that region's deployment, and a residency guard that refuses to persist out of region.
+- [ ] Encrypting the attachments.
 > Residency is a routing and enforcement problem. Encryption does not change where bytes live.
 :::
 
@@ -1829,5 +2087,6 @@ You have finished this lesson when you can:
 - [ ] Score at least 70 % on the knowledge check.
 - [ ] Complete exercise 2 in the SQL playground and exercises 3 and 4; your downloaded projects' `dotnet test` should pass.
 - [ ] Complete exercise 5 in the HLD canvas and list the seven isolation layers in your notes.
-- [ ] Explain, in under three minutes, why audit rows are written in-transaction and how the hash chain is verified.
-- [ ] Give the three things that break first under load and the fix for each.
+- [ ] Explain, in under three minutes, the RLS gotchas (owner bypass, empty setting, `SET LOCAL` parameters, views, constraints).
+- [ ] Describe how you would contain a noisy neighbour and when you would move it to a dedicated cell.
+- [ ] Give the three things that break first and the fix for each.

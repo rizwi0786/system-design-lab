@@ -1524,7 +1524,7 @@ Edge cases worth a test: holding 0 or 11 seats, duplicate seats (`E7`, `e7 `), a
 
 - **Ticketing and travel.** Cinema, airline and railway booking systems all hold inventory for a short window, then confirm or release. The "late payment after expiry → automatic refund" path is a normal part of any system like this, not an edge case.
 - **Payments.** Card payments follow authorize → capture → refund, with void as the escape hatch. UPI collect requests have their own expiry window, after which the request can no longer be approved.
-- **Infrastructure project platforms.** A measurement book entry or a running-account bill typically moves Draft → Submitted → Verified → Approved → Paid, with rejection paths back to Draft. Each move is usually tied to a role, and the audit history is a contractual requirement.
+- **Hospitals and clinics.** An appointment typically moves Booked → CheckedIn → InConsultation → Completed, with Cancelled and NoShow as terminal escape paths and a time-based transition (no check-in 15 minutes after the slot → NoShow). Each move is tied to a role (receptionist, doctor), and the audit history matters for billing and medical records.
 - **.NET itself.** `HttpClient` handlers, `DbContext`, `Stream` and `CancellationTokenSource` all implement `IDisposable`. ASP.NET Core disposes scoped services at the end of each request, which is why a `DbContext` must never be captured by a singleton.
 
 ## Interview questions
@@ -1649,5 +1649,5 @@ You have finished this lesson when you can:
 - [ ] Score at least 70 % on the knowledge check.
 - [ ] Complete exercises 1 and 2 with all tests passing.
 - [ ] Complete exercise 3 or 5, and the design exercise 4, and compare with the solutions.
-- [ ] Draw the lifecycle of an object from your own work (an invoice, a tender, a leave request) with guards and terminal states, in under five minutes.
+- [ ] Draw the lifecycle of an object from your own work (an invoice, a food order, a leave request) with guards and terminal states, in under five minutes.
 - [ ] Explain who disposes a scoped service and why a singleton must not hold one.

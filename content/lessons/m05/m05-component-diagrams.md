@@ -22,7 +22,7 @@ references:
     url: https://learn.microsoft.com/dotnet/architecture/modern-web-apps-azure/common-web-application-architectures
 ---
 
-A class diagram shows dozens of small boxes. Past a certain size, nobody can see the shape of the system any more. A component diagram zooms out: each box is a **replaceable part** of the system with a clear job, and the lines show which **interfaces** each part offers and which it needs from others. It's the diagram you use to answer "if we replace the payment provider, what else changes?" or "can the evaluation team work without waiting for the bids team?". This lesson teaches the notation, how to draw it in Mermaid, and how to make .NET enforce it so the diagram stays true.
+A class diagram shows dozens of small boxes. Past a certain size, nobody can see the shape of the system any more. A component diagram zooms out: each box is a **replaceable part** of the system with a clear job, and the lines show which **interfaces** each part offers and which it needs from others. It's the diagram you use to answer "if we replace the payment provider, what else changes?" or "can the merit-list team work without waiting for the applications team?". This lesson teaches the notation, how to draw it in Mermaid, and how to make .NET enforce it so the diagram stays true.
 
 ## Learning objectives
 
@@ -56,16 +56,16 @@ A component diagram draws software the same way:
 
 The value is in the swap. Because the TV only depends on "HDMI", you can replace the set-top box without opening up the TV. Software components work the same way when their interfaces are designed well.
 
-### Our example: an e-procurement portal
+### Our example: a college admissions portal
 
-A state public works department runs an online tendering portal. Contractors download tender documents, upload bids with a digital signature, pay an earnest money deposit (EMD), and after the deadline, a committee evaluates bids and picks the lowest qualified bidder (often called **L1**). The system is built as a [modular monolith](#/lesson/m02-modular-monolith) in ASP.NET Core with these parts:
+An engineering college in Pune runs an online admissions portal. Applicants pick a programme (B.Tech Computer Science, say), upload their Class 12 marksheet, pay a ₹1,500 application fee by UPI, and after the deadline the admissions office publishes a **merit list** ranked by entrance-exam score. The marksheet is a PDF from DigiLocker, digitally signed by the school board, so the portal can check it hasn't been edited. About 40,000 applications arrive in a three-week window, a quarter of them on the last two days. The system is built as a [modular monolith](#/lesson/m02-modular-monolith) in ASP.NET Core with these parts:
 
-- **Tendering**: publishes tenders and answers "is this tender open, and what EMD does it need?".
-- **Bid Submission**: accepts bids, checks the signature and EMD, stores documents.
-- **Evaluation**: after closing, ranks bids and finds L1.
+- **Programmes**: publishes programmes and answers "is this programme open, and what application fee does it need?".
+- **Applications**: accepts applications, checks the marksheet signature and the fee, stores documents.
+- **Merit List**: after closing, ranks applications and finds rank 1.
 - **Document Store**: keeps uploaded PDFs (local disk today, object storage tomorrow).
-- **EMD Verification**: confirms payment with the bank.
-- **Signature Verification**: validates digital signature certificates (DSC).
+- **Fee Verification**: confirms payment with the payment gateway.
+- **Signature Verification**: validates the board's digital signature on the marksheet.
 
 The question the team wants answered: *which parts can we change, test or hand to another team independently?* A component diagram answers it.
 
@@ -75,7 +75,7 @@ The question the team wants answered: *which parts can we change, test or hand t
 
 In UML, a **component** is a modular, replaceable part of a system that **encapsulates** its contents and exposes its behaviour only through **interfaces**. Three ideas are packed into that sentence:
 
-1. **Modular**: it has one clear responsibility ("bid submission"), not a technical layer ("all the repositories").
+1. **Modular**: it has one clear responsibility ("application intake"), not a technical layer ("all the repositories").
 2. **Replaceable**: another part that provides the same interfaces could take its place.
 3. **Encapsulated**: other parts can't reach inside. They use its interfaces only.
 
@@ -85,21 +85,21 @@ A component is drawn as a rectangle with the keyword `«component»` or a small 
 
 ### Provided and required interfaces
 
-- A **provided interface** is a set of operations the component offers. Notation: a **lollipop** (a line ending in a full circle) attached to the component, labelled with the interface name, such as `ITenderCatalog`. Formally it's a *realization*: the component implements the interface.
+- A **provided interface** is a set of operations the component offers. Notation: a **lollipop** (a line ending in a full circle) attached to the component, labelled with the interface name, such as `IProgrammeCatalog`. Formally it's a *realization*: the component implements the interface.
 - A **required interface** is a set of operations the component needs from its environment. Notation: a **socket** (a line ending in a half-circle). Formally it's a *dependency*: the component uses the interface.
-- An alternative notation, useful in tools that can't draw lollipops, is a class-like box `«interface» ITenderCatalog` with a dashed realization arrow from the provider and a dashed dependency arrow from the consumer.
+- An alternative notation, useful in tools that can't draw lollipops, is a class-like box `«interface» IProgrammeCatalog` with a dashed realization arrow from the provider and a dashed dependency arrow from the consumer.
 
 An interface here is not only a C# `interface`. It's a **contract**: the operations, the data types they use (DTOs), and the rules (errors, ordering, performance expectations). An HTTP API, a message schema on a queue, or a set of database views can all be interfaces in the UML sense.
 
 ### Connectors
 
-- An **assembly connector** joins a required interface (socket) to a matching provided interface (lollipop): "Bid Submission's need for `ITenderCatalog` is satisfied by Tendering". Drawn as the lollipop sitting inside the socket ("ball and socket").
-- A **dependency** (dashed arrow) between components is the simpler, less precise version: "Bid Submission depends on Tendering". Use it on high-level diagrams.
+- An **assembly connector** joins a required interface (socket) to a matching provided interface (lollipop): "Applications' need for `IProgrammeCatalog` is satisfied by Programmes". Drawn as the lollipop sitting inside the socket ("ball and socket").
+- A **dependency** (dashed arrow) between components is the simpler, less precise version: "Applications depends on Programmes". Use it on high-level diagrams.
 - A **delegation connector** links an interface on a component's outside to the internal part that implements it, when you draw what's inside.
 
 ### Ports
 
-A **port** is a small square on the component's border: a named point of interaction that groups interfaces. For example, Bid Submission might have a `contractor` port (providing `IBidSubmission`) and an `evaluation` port (providing `IBidQuery`). Ports are useful when a component has different faces for different clients. In .NET terms, a port often maps to a separate API surface: a public HTTP endpoint group versus an internal C# interface.
+A **port** is a small square on the component's border: a named point of interaction that groups interfaces. For example, Applications might have an `applicant` port (providing `IApplicationSubmission`) and an `admissions office` port (providing `IApplicationQuery`). Ports are useful when a component has different faces for different clients. In .NET terms, a port often maps to a separate API surface: a public HTTP endpoint group versus an internal C# interface.
 
 ### Inside a component
 
@@ -111,19 +111,19 @@ This is the most important design question in a component diagram, and it's the 
 
 | Style | Who defines the interface | Example | Good when |
 |---|---|---|---|
-| **Provider-owned contract** | the component that implements it | Tendering publishes `ITenderCatalog` in `Tendering.Contracts` | many consumers use one stable service |
-| **Consumer-owned port** | the component that needs it | Bid Submission defines `IDocumentStore` with exactly the two operations it uses; an adapter implements it | the provider is infrastructure or an external system you want to swap |
+| **Provider-owned contract** | the component that implements it | Programmes publishes `IProgrammeCatalog` in `Programmes.Contracts` | many consumers use one stable service |
+| **Consumer-owned port** | the component that needs it | Applications defines `IDocumentStore` with exactly the two operations it uses; an adapter implements it | the provider is infrastructure or an external system you want to swap |
 
-Rule of thumb: **business components publish contracts; infrastructure is reached through ports owned by the business component.** Bid Submission shouldn't depend on the bank's SDK. It declares "I require an `IEmdVerifier`", and an adapter component plugs the bank in. Swapping banks then touches only the adapter.
+Rule of thumb: **business components publish contracts; infrastructure is reached through ports owned by the business component.** Applications shouldn't depend on the payment gateway's SDK. It declares "I require an `IFeeVerifier`", and an adapter component plugs the bank in. Swapping payment gateways then touches only the adapter.
 
 ### Good components: cohesion and coupling
 
 The [coupling and cohesion](#/lesson/m02-coupling-cohesion) rules apply directly:
 
-- **High cohesion**: everything inside a component changes for the same business reason. "Bids" is cohesive; "Utilities" is not.
+- **High cohesion**: everything inside a component changes for the same business reason. "Applications" is cohesive; "Utilities" is not.
 - **Low coupling**: few, small, stable interfaces between components. Count the lines on your diagram: each line is a reason two teams must coordinate.
 - **No cycles**: if A requires B and B requires A, neither can be built, tested or replaced alone. They are really one component. (In .NET, two projects that reference each other won't even build, which is why splitting into projects is such a good enforcement tool.)
-- **Stable dependencies**: depend in the direction of stability. Evaluation (changes every time the procurement rules change) may depend on Bids' query contract, which changes rarely, not the other way round.
+- **Stable dependencies**: depend in the direction of stability. Merit List (changes every time the admission rules or reservation policy change) may depend on Applications' query contract, which changes rarely, not the other way round.
 
 ### Component diagram or C4 component diagram?
 
@@ -137,35 +137,35 @@ Mermaid has no `componentDiagram` type. Two approaches work well.
 
 ```text
 flowchart LR
-    tendering["«component»<br/>Tendering"]
-    bids["«component»<br/>Bid Submission"]
-    iTender(("ITenderCatalog"))
-    tendering --- iTender
-    bids -.->|"requires"| iTender
+    programmes["«component»<br/>Programmes"]
+    apps["«component»<br/>Applications"]
+    iProg(("IProgrammeCatalog"))
+    programmes --- iProg
+    apps -.->|"requires"| iProg
 ```
 
 - `(("text"))` draws a circle: the lollipop's head.
 - `---` is a line with no arrowhead: "provides".
 - `-.->` is a dashed arrow: "requires" (a dependency).
 - `<br/>` breaks a label over two lines. `«component»` is just text; you can also write `<<component>>` inside quotes.
-- Use `subgraph` to group components into a container or layer: `subgraph app["EProc.Web (ASP.NET Core)"] ... end`.
-- `classDef iface fill:#fff,stroke:#555` and `class iTender,iBids iface` style all interfaces the same way.
+- Use `subgraph` to group components into a container or layer: `subgraph app["Admissions.Web (ASP.NET Core)"] ... end`.
+- `classDef iface fill:#fff,stroke:#555` and `class iProg,iSubmit iface` style all interfaces the same way.
 
 **Approach 2: class diagram with lollipops.** Mermaid's `classDiagram` has a real lollipop notation:
 
 ```text
 classDiagram
-    class Tendering {
+    class Programmes {
         <<component>>
     }
-    class Bids {
+    class Applications {
         <<component>>
     }
-    ITenderCatalog ()-- Tendering
-    Bids ..> ITenderCatalog : requires
+    IProgrammeCatalog ()-- Programmes
+    Applications ..> IProgrammeCatalog : requires
 ```
 
-`ITenderCatalog ()-- Tendering` draws a lollipop named `ITenderCatalog` on `Tendering`. The `<<component>>` annotation labels the box. This is closer to UML, but layout control is weaker. Use it for small diagrams.
+`IProgrammeCatalog ()-- Programmes` draws a lollipop named `IProgrammeCatalog` on `Programmes`. The `<<component>>` annotation labels the box. This is closer to UML, but layout control is weaker. Use it for small diagrams.
 
 **Approach 3: runtime view with a sequence diagram.** A component diagram is static. To show how a request flows *through* the interfaces, pair it with a [sequence diagram](#/lesson/m05-sequence-diagrams) whose participants are components. In Mermaid sequence diagrams, keep message text free of semicolons, which end a statement.
 
@@ -175,47 +175,47 @@ Common Mermaid mistakes: forgetting quotes around labels with `«»`, `<br/>`, b
 
 | Diagram element | .NET mapping |
 |---|---|
-| Component | a project (assembly), for example `EProc.Bids` |
-| Provided interface (contract) | public interfaces and DTO records in a small `EProc.Bids.Contracts` project, or a `Contracts` folder that is the only `public` part |
+| Component | a project (assembly), for example `Admissions.Applications` |
+| Provided interface (contract) | public interfaces and DTO records in a small `Admissions.Applications.Contracts` project, or a `Contracts` folder that is the only `public` part |
 | Implementation inside the component | `internal sealed class` types, invisible to other projects |
 | Required interface (consumer-owned port) | a public interface in the consumer's contracts, such as `IDocumentStore`, implemented by an adapter component |
-| Assembly connector | a DI registration: `services.AddScoped<ITenderCatalog, TenderCatalog>()` |
-| The component's "plug-in point" | an extension method `services.AddBids()` that registers its internals and declares what it provides |
+| Assembly connector | a DI registration: `services.AddScoped<IProgrammeCatalog, ProgrammeCatalog>()` |
+| The component's "plug-in point" | an extension method `services.AddApplications()` that registers its internals and declares what it provides |
 | Dependency between components | a `<ProjectReference>`, ideally only to the other component's `Contracts` project |
 | No cycles | the compiler refuses circular project references |
-| Port | a group of endpoints (`app.MapGroup("/api/bids")`) or a separate interface per client |
+| Port | a group of endpoints (`app.MapGroup("/api/applications")`) or a separate interface per client |
 | Required interface must be satisfied | `ValidateOnBuild = true`: the app fails at startup if any registered service has an unresolvable dependency |
 
 In a real solution, the folder layout looks like this:
 
 ```text
 src/
-  EProc.Web/                    // composition root: Program.cs, endpoints
-  Tendering/
-    EProc.Tendering.Contracts/  // public: ITenderCatalog, TenderSummary
-    EProc.Tendering/            // internal implementation + AddTendering()
-  Bids/
-    EProc.Bids.Contracts/       // public: IBidSubmission, IBidQuery, required ports
-    EProc.Bids/                 // internal implementation + AddBids()
-  Evaluation/
-    EProc.Evaluation/
+  Admissions.Web/                    // composition root: Program.cs, endpoints
+  Programmes/
+    Admissions.Programmes.Contracts/  // public: IProgrammeCatalog, ProgrammeSummary
+    Admissions.Programmes/            // internal implementation + AddProgrammes()
+  Applications/
+    Admissions.Applications.Contracts/       // public: IApplicationSubmission, IApplicationQuery, required ports
+    Admissions.Applications/                 // internal implementation + AddApplications()
+  MeritList/
+    Admissions.MeritList/
   Adapters/
-    EProc.Adapters.Storage/     // implements IDocumentStore (disk, S3, Azure Blob)
-    EProc.Adapters.Bank/        // implements IEmdVerifier
+    Admissions.Adapters.Storage/     // implements IDocumentStore (disk, S3, Azure Blob)
+    Admissions.Adapters.Payments/        // implements IFeeVerifier
 ```
 
 And the project references *are* the arrows of the diagram:
 
 ```xml
-<!-- EProc.Bids.csproj -->
+<!-- Admissions.Applications.csproj -->
 <ItemGroup>
-  <ProjectReference Include="..\EProc.Bids.Contracts\EProc.Bids.Contracts.csproj" />
-  <ProjectReference Include="..\..\Tendering\EProc.Tendering.Contracts\EProc.Tendering.Contracts.csproj" />
-  <!-- No reference to EProc.Tendering itself: Bids sees only the contract. -->
+  <ProjectReference Include="..\Admissions.Applications.Contracts\Admissions.Applications.Contracts.csproj" />
+  <ProjectReference Include="..\..\Programmes\Admissions.Programmes.Contracts\Admissions.Programmes.Contracts.csproj" />
+  <!-- No reference to Admissions.Programmes itself: Applications sees only the contract. -->
 </ItemGroup>
 ```
 
-If a developer tries to use Tendering's internal `TenderCatalog` class from Bids, the build fails. That is the strongest possible guarantee that the diagram and the code agree.
+If a developer tries to use Programmes's internal `ProgrammeCatalog` class from Applications, the build fails. That is the strongest possible guarantee that the diagram and the code agree.
 
 ### When a component diagram isn't worth it
 
@@ -225,85 +225,85 @@ If a developer tries to use Tendering's internal `TenderCatalog` class from Bids
 
 ## Visual explanation
 
-### The e-procurement components
+### The admissions portal components
 
 ```mermaid
 flowchart LR
-    subgraph web["EProc.Web (ASP.NET Core host)"]
+    subgraph web["Admissions.Web (ASP.NET Core host)"]
         api["«component»<br/>Web API endpoints"]
     end
     subgraph modules["Business components"]
-        tendering["«component»<br/>Tendering"]
-        bids["«component»<br/>Bid Submission"]
-        evaluation["«component»<br/>Evaluation"]
+        programmes["«component»<br/>Programmes"]
+        apps["«component»<br/>Applications"]
+        merit["«component»<br/>Merit List"]
     end
     subgraph adapters["Adapter components"]
         storage["«component»<br/>File storage adapter"]
-        bank["«component»<br/>Bank EMD adapter"]
-        dsc["«component»<br/>DSC verification adapter"]
+        gateway["«component»<br/>Payment gateway adapter"]
+        digilocker["«component»<br/>DigiLocker signature adapter"]
     end
-    iTender(("ITenderCatalog"))
-    iSubmit(("IBidSubmission"))
-    iQuery(("IBidQuery"))
+    iProg(("IProgrammeCatalog"))
+    iSubmit(("IApplicationSubmission"))
+    iQuery(("IApplicationQuery"))
     iDocs(("IDocumentStore"))
-    iEmd(("IEmdVerifier"))
+    iFee(("IFeeVerifier"))
     iSig(("ISignatureVerifier"))
-    iEval(("IEvaluation"))
-    tendering --- iTender
-    bids --- iSubmit
-    bids --- iQuery
-    evaluation --- iEval
+    iMerit(("IMeritList"))
+    programmes --- iProg
+    apps --- iSubmit
+    apps --- iQuery
+    merit --- iMerit
     storage --- iDocs
-    bank --- iEmd
-    dsc --- iSig
-    bids -.->|"requires"| iTender
-    bids -.->|"requires"| iDocs
-    bids -.->|"requires"| iEmd
-    bids -.->|"requires"| iSig
-    evaluation -.->|"requires"| iQuery
-    evaluation -.->|"requires"| iTender
+    gateway --- iFee
+    digilocker --- iSig
+    apps -.->|"requires"| iProg
+    apps -.->|"requires"| iDocs
+    apps -.->|"requires"| iFee
+    apps -.->|"requires"| iSig
+    merit -.->|"requires"| iQuery
+    merit -.->|"requires"| iProg
     api -.->|"requires"| iSubmit
-    api -.->|"requires"| iEval
+    api -.->|"requires"| iMerit
     classDef iface fill:#ffffff,stroke:#555555
-    class iTender,iSubmit,iQuery,iDocs,iEmd,iSig,iEval iface
+    class iProg,iSubmit,iQuery,iDocs,iFee,iSig,iMerit iface
 ```
 
 How to read it:
 
 - Each rectangle is a **component**; the circles are **interfaces**. A solid line from a component to a circle means the component **provides** that interface (it's the lollipop). A dashed "requires" arrow into a circle means the component **needs** it (the socket). A circle with both is an assembly connector.
-- **Bid Submission** provides two interfaces, `IBidSubmission` for contractors (through the API) and `IBidQuery` for Evaluation. These are its two ports in practice: different clients, different operations.
-- Bid Submission **requires** four interfaces. `ITenderCatalog` is a provider-owned contract from Tendering. `IDocumentStore`, `IEmdVerifier` and `ISignatureVerifier` are **consumer-owned ports**: Bids defined them, and adapters implement them. Swapping local disk for object storage changes only the storage adapter.
-- **Evaluation** needs only `IBidQuery` and `ITenderCatalog`. It never touches Bids' internals or the document store directly, so the evaluation team can work against fakes of two small interfaces.
-- The **arrows never form a cycle**. Tendering requires nothing; adapters require nothing from business components. You could build and test the components from the bottom up.
+- **Applications** provides two interfaces, `IApplicationSubmission` for applicants (through the API) and `IApplicationQuery` for Merit List. These are its two ports in practice: different clients, different operations.
+- Applications **requires** four interfaces. `IProgrammeCatalog` is a provider-owned contract from Programmes. `IDocumentStore`, `IFeeVerifier` and `ISignatureVerifier` are **consumer-owned ports**: Applications defined them, and adapters implement them. Swapping local disk for object storage changes only the storage adapter.
+- **Merit List** needs only `IApplicationQuery` and `IProgrammeCatalog`. It never touches Applications' internals or the document store directly, so the merit-list team can work against fakes of two small interfaces.
+- The **arrows never form a cycle**. Programmes requires nothing; adapters require nothing from business components. You could build and test the components from the bottom up.
 - The subgraphs group components by kind and show that everything runs inside one host. That's a logical grouping; *where* it runs is a deployment question.
 
-### One bid flowing through the interfaces
+### One application flowing through the interfaces
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant API as Web API
-    participant B as Bid Submission
-    participant T as Tendering
-    participant S as DSC adapter
-    participant E as Bank EMD adapter
+    participant B as Applications
+    participant P as Programmes
+    participant S as DigiLocker adapter
+    participant F as Payment gateway adapter
     participant D as Storage adapter
-    API->>B: SubmitAsync(command) via IBidSubmission
-    B->>T: FindOpenAsync(tenderId) via ITenderCatalog
-    T-->>B: TenderSummary with closing time and EMD amount
+    API->>B: SubmitAsync(command) via IApplicationSubmission
+    B->>P: FindOpenAsync(programmeId) via IProgrammeCatalog
+    P-->>B: ProgrammeSummary with closing time and fee
     par signature and payment checks
         B->>S: VerifyAsync(signedHash, certificate)
         S-->>B: valid
     and
-        B->>E: IsPaidAsync(emdReference, amount)
-        E-->>B: paid
+        B->>F: IsPaidAsync(paymentReference, amount)
+        F-->>B: paid
     end
-    B->>D: SaveAsync(bid PDF)
+    B->>D: SaveAsync(marksheet PDF)
     D-->>B: document id
-    B-->>API: BidReceipt with receipt number
+    B-->>API: ApplicationReceipt with receipt number
 ```
 
-The sequence diagram is the runtime partner of the component diagram. Every arrow passes through an interface the component diagram promised: the API never calls the storage adapter directly, and Bids reaches the bank only through `IEmdVerifier`. The `par` block shows the signature and EMD checks running at the same time, which the C# below does with `Task.WhenAll`. If a sequence diagram ever shows a call that isn't backed by an interface on the component diagram, one of the two diagrams is wrong.
+The sequence diagram is the runtime partner of the component diagram. Every arrow passes through an interface the component diagram promised: the API never calls the storage adapter directly, and Applications reaches the payment gateway only through `IFeeVerifier`. The `par` block shows the signature and fee checks running at the same time, which the C# below does with `Task.WhenAll`. If a sequence diagram ever shows a call that isn't backed by an interface on the component diagram, one of the two diagrams is wrong.
 
 ## Step-by-step example
 
@@ -311,23 +311,23 @@ How do you find the components and draw the diagram? Six steps.
 
 ### Step 1 — list business capabilities, not layers
 
-Ask "what are the big jobs this system does?": publish tenders, receive bids, evaluate bids. Each is a candidate business component. Avoid "Controllers", "Services", "Repositories" as components: they are layers that cut across every capability.
+Ask "what are the big jobs this system does?": publish programmes, receive applications, rank applicants. Each is a candidate business component. Avoid "Controllers", "Services", "Repositories" as components: they are layers that cut across every capability.
 
 ### Step 2 — list external systems and infrastructure
 
-Bank, DSC certificate authority, file storage, SMS gateway. Each becomes an adapter component behind a port, so business components don't depend on vendor SDKs.
+Payment gateway, DigiLocker (the board's signing certificates), file storage, SMS gateway. Each becomes an adapter component behind a port, so business components don't depend on vendor SDKs.
 
 ### Step 3 — for each component, write what it offers and what it needs
 
-Write interface names and two or three operations each. Keep them small and named after the client's need: `IBidQuery.ListForTenderAsync(tenderId)`, not `IBidRepository` with twenty methods. This is the [Interface Segregation Principle](#/lesson/m04-isp) at component scale.
+Write interface names and two or three operations each. Keep them small and named after the client's need: `IApplicationQuery.ListForProgrammeAsync(programmeId)`, not `IApplicationRepository` with twenty methods. This is the [Interface Segregation Principle](#/lesson/m04-isp) at component scale.
 
 ### Step 4 — decide who owns each interface
 
-Business-to-business: provider-owned contract (Tendering owns `ITenderCatalog`). Business-to-infrastructure: consumer-owned port (Bids owns `IDocumentStore`).
+Business-to-business: provider-owned contract (Programmes owns `IProgrammeCatalog`). Business-to-infrastructure: consumer-owned port (Applications owns `IDocumentStore`).
 
 ### Step 5 — draw it and check the shape
 
-Look for cycles, components with many incoming dependencies (they must be very stable), and components with many outgoing dependencies (they're hard to test). Bid Submission has four requirements, which is acceptable because three are tiny ports.
+Look for cycles, components with many incoming dependencies (they must be very stable), and components with many outgoing dependencies (they're hard to test). Applications has four requirements, which is acceptable because three are tiny ports.
 
 ### Step 6 — make the build enforce it
 
@@ -337,90 +337,92 @@ Create one project per component (or at least one `Contracts` project per compon
 
 The checker compiles this lesson's code as one project, so the components are separated by **namespaces** and `internal` here. In a real solution each `namespace` group below is its own project, and `internal` then really hides implementations from other components. The structure, the DI wiring and the contracts are exactly what you'd ship.
 
-```csharp file=Tendering/TenderingContracts.cs
-namespace EProc.Tendering.Contracts;
+```csharp file=Programmes/ProgrammesContracts.cs
+namespace Admissions.Programmes.Contracts;
 
-/// <summary>Provided interface of the Tendering component (provider-owned contract).</summary>
-public interface ITenderCatalog
+/// <summary>Provided interface of the Programmes component (provider-owned contract).</summary>
+public interface IProgrammeCatalog
 {
-    Task<TenderSummary?> FindOpenAsync(string tenderId, CancellationToken ct);
+    Task<ProgrammeSummary?> FindOpenAsync(string programmeId, CancellationToken ct);
 }
 
-public sealed record TenderSummary(string TenderId, string Title, DateTimeOffset ClosesAt, decimal EmdAmount);
+public sealed record ProgrammeSummary(string ProgrammeId, string Title, DateTimeOffset ClosesAt, decimal ApplicationFee);
 ```
 
-```csharp file=Tendering/TenderingComponent.cs
+```csharp file=Programmes/ProgrammesComponent.cs
 using System.Collections.Concurrent;
-using EProc.Tendering.Contracts;
+using Admissions.Programmes.Contracts;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace EProc.Tendering;
+namespace Admissions.Programmes;
 
-/// <summary>Internal implementation: other components can only see ITenderCatalog.</summary>
-internal sealed class TenderCatalog(TimeProvider clock) : ITenderCatalog
+/// <summary>Internal implementation: other components can only see IProgrammeCatalog.</summary>
+internal sealed class ProgrammeCatalog(TimeProvider clock) : IProgrammeCatalog
 {
-    private readonly ConcurrentDictionary<string, TenderSummary> _tenders = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, ProgrammeSummary> _programmes = new(StringComparer.OrdinalIgnoreCase);
 
-    public void Publish(TenderSummary tender) => _tenders[tender.TenderId] = tender;
+    public void Publish(ProgrammeSummary programme) => _programmes[programme.ProgrammeId] = programme;
 
-    public Task<TenderSummary?> FindOpenAsync(string tenderId, CancellationToken ct)
+    public Task<ProgrammeSummary?> FindOpenAsync(string programmeId, CancellationToken ct)
     {
-        var found = _tenders.GetValueOrDefault(tenderId);
+        var found = _programmes.GetValueOrDefault(programmeId);
         return Task.FromResult(found is not null && found.ClosesAt > clock.GetUtcNow() ? found : null);
     }
 }
 
-public static class TenderingComponent
+public static class ProgrammesComponent
 {
     /// <summary>The component's plug: registers its internals and its provided interface.</summary>
-    public static IServiceCollection AddTendering(this IServiceCollection services, params TenderSummary[] seed)
+    public static IServiceCollection AddProgrammes(this IServiceCollection services, params ProgrammeSummary[] seed)
     {
         services.AddSingleton(sp =>
         {
-            var catalog = new TenderCatalog(sp.GetRequiredService<TimeProvider>());
-            foreach (var t in seed) catalog.Publish(t);
+            var catalog = new ProgrammeCatalog(sp.GetRequiredService<TimeProvider>());
+            foreach (var p in seed) catalog.Publish(p);
             return catalog;
         });
-        services.AddSingleton<ITenderCatalog>(sp => sp.GetRequiredService<TenderCatalog>());
+        services.AddSingleton<IProgrammeCatalog>(sp => sp.GetRequiredService<ProgrammeCatalog>());
         return services;
     }
 }
 ```
 
-```csharp file=Bids/BidsContracts.cs
-namespace EProc.Bids.Contracts;
+```csharp file=Applications/ApplicationsContracts.cs
+namespace Admissions.Applications.Contracts;
 
-// ----- Provided interfaces (two "ports": contractors and evaluation) -----
+// ----- Provided interfaces (two "ports": applicants and the admissions office) -----
 
-public interface IBidSubmission
+public interface IApplicationSubmission
 {
-    Task<BidReceipt> SubmitAsync(SubmitBid command, CancellationToken ct);
+    Task<ApplicationReceipt> SubmitAsync(SubmitApplication command, CancellationToken ct);
 }
 
-public interface IBidQuery
+public interface IApplicationQuery
 {
-    Task<IReadOnlyList<BidSummary>> ListForTenderAsync(string tenderId, CancellationToken ct);
+    Task<IReadOnlyList<ApplicationSummary>> ListForProgrammeAsync(string programmeId, CancellationToken ct);
 }
 
-public sealed record SubmitBid(string TenderId, string ContractorId, decimal QuotedAmount,
-    byte[] Document, string SignedHash, string CertificateSerial, string EmdReference);
+/// <param name="EntranceScore">Entrance-exam percentile, 0 to 100.</param>
+/// <param name="Document">The marksheet PDF, digitally signed by the issuing board.</param>
+public sealed record SubmitApplication(string ProgrammeId, string ApplicantId, decimal EntranceScore,
+    byte[] Document, string SignedHash, string CertificateSerial, string PaymentReference);
 
-public sealed record BidReceipt(string ReceiptNumber, string TenderId, DateTimeOffset ReceivedAt);
+public sealed record ApplicationReceipt(string ReceiptNumber, string ProgrammeId, DateTimeOffset ReceivedAt);
 
-public sealed record BidSummary(string ReceiptNumber, string ContractorId, decimal QuotedAmount);
+public sealed record ApplicationSummary(string ReceiptNumber, string ApplicantId, decimal EntranceScore);
 
-public sealed class BidRejectedException(string reason) : Exception(reason);
+public sealed class ApplicationRejectedException(string reason) : Exception(reason);
 
-// ----- Required interfaces (consumer-owned ports: Bids defines exactly what it needs) -----
+// ----- Required interfaces (consumer-owned ports: Applications defines exactly what it needs) -----
 
 public interface IDocumentStore
 {
     Task<string> SaveAsync(string folder, byte[] content, CancellationToken ct);
 }
 
-public interface IEmdVerifier
+public interface IFeeVerifier
 {
-    Task<bool> IsPaidAsync(string emdReference, decimal amount, CancellationToken ct);
+    Task<bool> IsPaidAsync(string paymentReference, decimal amount, CancellationToken ct);
 }
 
 public interface ISignatureVerifier
@@ -429,107 +431,121 @@ public interface ISignatureVerifier
 }
 ```
 
-```csharp file=Bids/BidsComponent.cs
+```csharp file=Applications/ApplicationsComponent.cs
 using System.Collections.Concurrent;
-using EProc.Bids.Contracts;
-using EProc.Tendering.Contracts;
+using Admissions.Applications.Contracts;
+using Admissions.Programmes.Contracts;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace EProc.Bids;
+namespace Admissions.Applications;
 
-/// <summary>Internal implementation of both provided interfaces. Its constructor lists the
-/// required interfaces: exactly the sockets on the component diagram.</summary>
-internal sealed class BidService(
-    ITenderCatalog tenders,
-    IDocumentStore documents,
-    IEmdVerifier emd,
-    ISignatureVerifier signatures,
-    TimeProvider clock) : IBidSubmission, IBidQuery
+/// <summary>The component's own data. In production this is its PostgreSQL schema; here it is an in-memory singleton.</summary>
+internal sealed class ApplicationLedger
 {
-    private static readonly ConcurrentDictionary<string, ConcurrentBag<BidSummary>> Bids = new(StringComparer.OrdinalIgnoreCase);
-    private static int _sequence;
+    private readonly ConcurrentDictionary<string, ConcurrentBag<ApplicationSummary>> _byProgramme = new(StringComparer.OrdinalIgnoreCase);
+    private int _sequence;
 
-    public async Task<BidReceipt> SubmitAsync(SubmitBid c, CancellationToken ct)
+    public string NextReceipt(string programmeId) => $"{programmeId}-{Interlocked.Increment(ref _sequence):D5}";
+
+    public void Add(string programmeId, ApplicationSummary summary) =>
+        _byProgramme.GetOrAdd(programmeId, _ => new()).Add(summary);
+
+    public IReadOnlyList<ApplicationSummary> For(string programmeId) =>
+        _byProgramme.TryGetValue(programmeId, out var bag) ? bag.OrderBy(a => a.ReceiptNumber).ToList() : new List<ApplicationSummary>();
+}
+
+/// <summary>Internal implementation of both provided interfaces. Apart from its own ledger and the clock,
+/// its constructor lists the required interfaces: exactly the sockets on the component diagram.</summary>
+internal sealed class ApplicationService(
+    IProgrammeCatalog programmes,
+    IDocumentStore documents,
+    IFeeVerifier fees,
+    ISignatureVerifier signatures,
+    ApplicationLedger ledger,
+    TimeProvider clock) : IApplicationSubmission, IApplicationQuery
+{
+    public async Task<ApplicationReceipt> SubmitAsync(SubmitApplication c, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(c);
-        if (c.QuotedAmount <= 0) throw new BidRejectedException("Quoted amount must be positive.");
-        if (c.Document.Length == 0) throw new BidRejectedException("Bid document is empty.");
+        if (c.EntranceScore is < 0 or > 100) throw new ApplicationRejectedException("Entrance score must be between 0 and 100.");
+        if (c.Document.Length == 0) throw new ApplicationRejectedException("Marksheet document is empty.");
 
-        var tender = await tenders.FindOpenAsync(c.TenderId, ct)
-                     ?? throw new BidRejectedException($"Tender {c.TenderId} is not open for bids.");
+        var programme = await programmes.FindOpenAsync(c.ProgrammeId, ct)
+                        ?? throw new ApplicationRejectedException($"Programme {c.ProgrammeId} is not open for applications.");
 
         // Independent checks through two required interfaces, run together.
         var signatureTask = signatures.VerifyAsync(c.SignedHash, c.CertificateSerial, ct);
-        var emdTask = emd.IsPaidAsync(c.EmdReference, tender.EmdAmount, ct);
-        await Task.WhenAll(signatureTask, emdTask);
-        if (!await signatureTask) throw new BidRejectedException("Digital signature could not be verified.");
-        if (!await emdTask) throw new BidRejectedException($"EMD of {tender.EmdAmount:N0} not received.");
+        var feeTask = fees.IsPaidAsync(c.PaymentReference, programme.ApplicationFee, ct);
+        await Task.WhenAll(signatureTask, feeTask);
+        if (!await signatureTask) throw new ApplicationRejectedException("The marksheet's digital signature could not be verified.");
+        if (!await feeTask) throw new ApplicationRejectedException($"Application fee of {programme.ApplicationFee:N0} not received.");
 
-        await documents.SaveAsync($"tenders/{tender.TenderId}/{c.ContractorId}", c.Document, ct);
+        await documents.SaveAsync($"programmes/{programme.ProgrammeId}/{c.ApplicantId}", c.Document, ct);
 
-        var receipt = $"{tender.TenderId}-{Interlocked.Increment(ref _sequence):D5}";
-        Bids.GetOrAdd(tender.TenderId, _ => new()).Add(new BidSummary(receipt, c.ContractorId, c.QuotedAmount));
-        return new BidReceipt(receipt, tender.TenderId, clock.GetUtcNow());
+        var receipt = ledger.NextReceipt(programme.ProgrammeId);
+        ledger.Add(programme.ProgrammeId, new ApplicationSummary(receipt, c.ApplicantId, c.EntranceScore));
+        return new ApplicationReceipt(receipt, programme.ProgrammeId, clock.GetUtcNow());
     }
 
-    public Task<IReadOnlyList<BidSummary>> ListForTenderAsync(string tenderId, CancellationToken ct) =>
-        Task.FromResult<IReadOnlyList<BidSummary>>(
-            Bids.TryGetValue(tenderId, out var bag) ? bag.OrderBy(b => b.ReceiptNumber).ToList() : new List<BidSummary>());
+    public Task<IReadOnlyList<ApplicationSummary>> ListForProgrammeAsync(string programmeId, CancellationToken ct) =>
+        Task.FromResult(ledger.For(programmeId));
 }
 
-public static class BidsComponent
+public static class ApplicationsComponent
 {
-    /// <summary>Registers Bid Submission. It does NOT register its required interfaces:
+    /// <summary>Registers Applications. It does NOT register its required interfaces:
     /// the host must plug in adapters, and ValidateOnBuild catches a missing one at startup.</summary>
-    public static IServiceCollection AddBids(this IServiceCollection services)
+    public static IServiceCollection AddApplications(this IServiceCollection services)
     {
-        services.AddScoped<BidService>();
-        services.AddScoped<IBidSubmission>(sp => sp.GetRequiredService<BidService>());
-        services.AddScoped<IBidQuery>(sp => sp.GetRequiredService<BidService>());
+        services.AddSingleton<ApplicationLedger>();
+        services.AddScoped<ApplicationService>();
+        services.AddScoped<IApplicationSubmission>(sp => sp.GetRequiredService<ApplicationService>());
+        services.AddScoped<IApplicationQuery>(sp => sp.GetRequiredService<ApplicationService>());
         return services;
     }
 }
 ```
 
-```csharp file=Evaluation/EvaluationComponent.cs
-using EProc.Bids.Contracts;
+```csharp file=MeritList/MeritListComponent.cs
+using Admissions.Applications.Contracts;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace EProc.Evaluation;
+namespace Admissions.MeritList;
 
-public interface IEvaluation
+public interface IMeritList
 {
-    Task<EvaluationResult> RankAsync(string tenderId, CancellationToken ct);
+    Task<MeritListResult> RankAsync(string programmeId, CancellationToken ct);
 }
 
-public sealed record EvaluationResult(string TenderId, IReadOnlyList<BidSummary> Ranked, BidSummary? L1);
+public sealed record MeritListResult(string ProgrammeId, IReadOnlyList<ApplicationSummary> Ranked, ApplicationSummary? RankOne);
 
-/// <summary>Requires only IBidQuery. It cannot see BidService, documents or the bank.</summary>
-internal sealed class LowestPriceEvaluation(IBidQuery bids) : IEvaluation
+/// <summary>Requires only IApplicationQuery. It cannot see ApplicationService, documents or payments.</summary>
+internal sealed class ScoreMeritList(IApplicationQuery applications) : IMeritList
 {
-    public async Task<EvaluationResult> RankAsync(string tenderId, CancellationToken ct)
+    public async Task<MeritListResult> RankAsync(string programmeId, CancellationToken ct)
     {
-        var ranked = (await bids.ListForTenderAsync(tenderId, ct))
-            .OrderBy(b => b.QuotedAmount).ThenBy(b => b.ReceiptNumber).ToList();
-        return new EvaluationResult(tenderId, ranked, ranked.FirstOrDefault());
+        // Highest score first. Ties go to the earlier application here; real rules often use subject marks or age.
+        var ranked = (await applications.ListForProgrammeAsync(programmeId, ct))
+            .OrderByDescending(a => a.EntranceScore).ThenBy(a => a.ReceiptNumber).ToList();
+        return new MeritListResult(programmeId, ranked, ranked.FirstOrDefault());
     }
 }
 
-public static class EvaluationComponent
+public static class MeritListComponent
 {
-    public static IServiceCollection AddEvaluation(this IServiceCollection services) =>
-        services.AddScoped<IEvaluation, LowestPriceEvaluation>();
+    public static IServiceCollection AddMeritList(this IServiceCollection services) =>
+        services.AddScoped<IMeritList, ScoreMeritList>();
 }
 ```
 
 ```csharp file=Adapters/Adapters.cs
 using System.Collections.Concurrent;
-using EProc.Bids.Contracts;
+using Admissions.Applications.Contracts;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace EProc.Adapters;
+namespace Admissions.Adapters;
 
-/// <summary>Storage adapter: provides IDocumentStore. Swap for object storage without touching Bids.</summary>
+/// <summary>Storage adapter: provides IDocumentStore. Swap for object storage without touching Applications.</summary>
 internal sealed class InMemoryDocumentStore : IDocumentStore
 {
     private readonly ConcurrentDictionary<string, byte[]> _files = new();
@@ -542,14 +558,15 @@ internal sealed class InMemoryDocumentStore : IDocumentStore
     }
 }
 
-/// <summary>Bank adapter stand-in: references starting with "UTR" and a positive amount are treated as paid.</summary>
-internal sealed class FakeBankEmdVerifier : IEmdVerifier
+/// <summary>Payment gateway stand-in: references starting with "UPI" and a positive amount are treated as paid.
+/// A real adapter asks the gateway for the payment status and checks the amount, never trusting the browser.</summary>
+internal sealed class FakeGatewayFeeVerifier : IFeeVerifier
 {
-    public Task<bool> IsPaidAsync(string emdReference, decimal amount, CancellationToken ct) =>
-        Task.FromResult(emdReference.StartsWith("UTR", StringComparison.OrdinalIgnoreCase) && amount > 0);
+    public Task<bool> IsPaidAsync(string paymentReference, decimal amount, CancellationToken ct) =>
+        Task.FromResult(paymentReference.StartsWith("UPI", StringComparison.OrdinalIgnoreCase) && amount > 0);
 }
 
-/// <summary>DSC adapter stand-in: a real one validates the certificate chain and revocation status.</summary>
+/// <summary>Signature adapter stand-in: a real one validates the board's certificate chain and revocation status.</summary>
 internal sealed class FakeSignatureVerifier : ISignatureVerifier
 {
     public Task<bool> VerifyAsync(string signedHash, string certificateSerial, CancellationToken ct) =>
@@ -561,7 +578,7 @@ public static class AdapterComponents
     public static IServiceCollection AddDevelopmentAdapters(this IServiceCollection services)
     {
         services.AddSingleton<IDocumentStore, InMemoryDocumentStore>();
-        services.AddSingleton<IEmdVerifier, FakeBankEmdVerifier>();
+        services.AddSingleton<IFeeVerifier, FakeGatewayFeeVerifier>();
         services.AddSingleton<ISignatureVerifier, FakeSignatureVerifier>();
         return services;
     }
@@ -569,12 +586,12 @@ public static class AdapterComponents
 ```
 
 ```csharp file=Program.cs
-using EProc.Adapters;
-using EProc.Bids;
-using EProc.Bids.Contracts;
-using EProc.Evaluation;
-using EProc.Tendering;
-using EProc.Tendering.Contracts;
+using Admissions.Adapters;
+using Admissions.Applications;
+using Admissions.Applications.Contracts;
+using Admissions.MeritList;
+using Admissions.Programmes;
+using Admissions.Programmes.Contracts;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -585,36 +602,37 @@ builder.Services.AddSingleton(TimeProvider.System);
 
 // The composition root: this is where the component diagram's connectors are made.
 builder.Services
-    .AddTendering(new TenderSummary("PWD-2026-0141", "Two-lane bridge over Mahanadi canal, km 14.2",
-        DateTimeOffset.UtcNow.AddDays(10), EmdAmount: 4_50_000m))
-    .AddBids()
-    .AddEvaluation()
-    .AddDevelopmentAdapters();      // production: AddObjectStorage(), AddBankGateway(), AddDscService()
+    .AddProgrammes(new ProgrammeSummary("BTECH-CSE-2026", "B.Tech Computer Science, 2026 intake",
+        DateTimeOffset.UtcNow.AddDays(10), ApplicationFee: 1_500m))
+    .AddApplications()
+    .AddMeritList()
+    .AddDevelopmentAdapters();      // production: AddObjectStorage(), AddPaymentGateway(), AddDigiLockerVerification()
 
 var app = builder.Build();
 
-var bids = app.MapGroup("/api/bids");          // "contractor" port
-bids.MapPost("/", async (SubmitBid cmd, IBidSubmission submission, CancellationToken ct) =>
+var applications = app.MapGroup("/api/applications");   // "applicant" port
+applications.MapPost("/", async (SubmitApplication cmd, IApplicationSubmission submission, CancellationToken ct) =>
 {
     try { return Results.Ok(await submission.SubmitAsync(cmd, ct)); }
-    catch (BidRejectedException ex) { return Results.Problem(ex.Message, statusCode: 422); }
+    catch (ApplicationRejectedException ex) { return Results.Problem(ex.Message, statusCode: 422); }
 });
 
-var evaluation = app.MapGroup("/api/evaluation");   // "committee" port
-evaluation.MapGet("/{tenderId}", async (string tenderId, IEvaluation eval, CancellationToken ct) =>
-    Results.Ok(await eval.RankAsync(tenderId, ct)));
+var meritList = app.MapGroup("/api/merit-list");        // "admissions office" port
+meritList.MapGet("/{programmeId}", async (string programmeId, IMeritList merit, CancellationToken ct) =>
+    Results.Ok(await merit.RankAsync(programmeId, ct)));
 
 app.Run();
 ```
 
 What to notice:
 
-- **Constructors are the sockets.** `BidService`'s constructor lists exactly the required interfaces on the diagram. If a new dependency appears in a pull request, the diagram must change too, and a reviewer can see it.
-- **`AddX()` methods are the plugs.** Each component registers its internals and its provided interfaces, and nothing else. `AddBids()` deliberately does *not* register a document store, because that's the host's choice.
+- **Constructors are the sockets.** `ApplicationService`'s constructor lists the required interfaces on the diagram (plus its own ledger and the clock, which are not other components). If a new component dependency appears in a pull request, the diagram must change too, and a reviewer can see it.
+- **`AddX()` methods are the plugs.** Each component registers its internals and its provided interfaces, and nothing else. `AddApplications()` deliberately does *not* register a document store, because that's the host's choice.
 - **`Program.cs` is the assembly of the diagram.** It is the only place that knows which adapter satisfies which port. Swapping the in-memory store for object storage is a one-line change here.
-- **`ValidateOnBuild` enforces "every socket is filled".** Comment out `AddDevelopmentAdapters()` and the app refuses to start, with an error naming `IDocumentStore`, instead of failing on the first bid at 4:55 pm on closing day.
-- **`internal` implementations.** In a multi-project solution, `TenderCatalog`, `BidService` and `LowestPriceEvaluation` are invisible outside their projects, so nobody can bypass the interfaces.
-- **The two port groups.** `/api/bids` and `/api/evaluation` are separate endpoint groups. You could later protect them with different authorization policies or move evaluation to an internal-only host.
+- **`ValidateOnBuild` enforces "every socket is filled".** Comment out `AddDevelopmentAdapters()` and the app refuses to start, with an error naming `IDocumentStore`, instead of failing on the first application at 11:55 p.m. on the last day.
+- **`internal` implementations.** In a multi-project solution, `ProgrammeCatalog`, `ApplicationService` and `ScoreMeritList` are invisible outside their projects, so nobody can bypass the interfaces.
+- **The two port groups.** `/api/applications` and `/api/merit-list` are separate endpoint groups. You could later protect them with different authorization policies (applicants versus admissions staff) or move the merit list to an internal-only host.
+- **What the demo leaves out.** A real submission endpoint needs an idempotency key (an applicant on a flaky connection presses Submit twice), a size limit on the uploaded PDF, and a malware scan before the file reaches storage. None of these change the diagram; they live inside Applications or its adapters.
 
 :::callout type=tradeoff title="Projects per component: how many?"
 One project per component plus one `Contracts` project each gives the strongest enforcement, but a 10-component system then has 20+ projects, slower builds and more ceremony. A common middle ground: one project per component, with a `Contracts` folder that holds the only `public` types, and an architecture test that fails if anything else is public or if one component references another's internals. Start there, and split out `Contracts` projects when a component gets a second consumer team.
@@ -638,21 +656,21 @@ flowchart LR
 
 What's wrong:
 
-- **These aren't replaceable parts.** You can't replace "Services" without replacing everything. Every feature (tenders, bids, evaluation) is smeared across all four boxes, so every feature change touches every box.
+- **These aren't replaceable parts.** You can't replace "Services" without replacing everything. Every feature (programmes, applications, merit list) is smeared across all four boxes, so every feature change touches every box.
 - **No interfaces.** The arrows say "depends on" but not *on what*. You can't tell which operations matter.
 - **A cycle**: `Services → Utilities → Services`. Neither can be built or tested alone.
 - **"Common Utilities"** is a magnet for unrelated code. Everything depends on it, so it can never change safely.
 
 ### The good version
 
-The e-procurement diagram in the visual section: components are business capabilities and adapters; every dependency goes through a named, small interface; infrastructure is behind consumer-owned ports; there are no cycles; and the composition happens in one place.
+The admissions diagram in the visual section: components are business capabilities and adapters; every dependency goes through a named, small interface; infrastructure is behind consumer-owned ports; there are no cycles; and the composition happens in one place.
 
 ### Is splitting always better?
 
 No. Each extra component adds an interface to design, version and test. If two "components" always change together, are always deployed together and are owned by one team, they're one component. Merge them. A useful test: can you describe what the component does in one sentence without "and"? Can you write a test for it using fakes of its required interfaces only? If yes to both, it's a good component.
 
 :::callout type=mistake title="Interfaces that leak internals"
-`IBidQuery.GetDbContext()` or a method returning `IQueryable<BidEntity>` hands the consumer the component's insides. The consumer can now query any table, and the component can never change its schema. Provided interfaces should return **DTOs designed for the consumer** (`BidSummary`), not entities or database handles.
+`IApplicationQuery.GetDbContext()` or a method returning `IQueryable<ApplicationEntity>` hands the consumer the component's insides. The consumer can now query any table, and the component can never change its schema. Provided interfaces should return **DTOs designed for the consumer** (`ApplicationSummary`), not entities or database handles.
 :::
 
 ## Practical playground
@@ -673,30 +691,30 @@ using Microsoft.Extensions.DependencyInjection;
 
 // ----- Contracts -----
 public interface ISmsGateway { Task SendAsync(string phone, string text, CancellationToken ct); }          // required by Reminders
-public interface ITenderDeadlines { IReadOnlyList<(string TenderId, DateTime ClosesAt)> ClosingSoon(); } // required by Reminders
+public interface IProgrammeDeadlines { IReadOnlyList<(string ProgrammeId, DateTime ClosesAt)> ClosingSoon(); } // required by Reminders
 public interface IReminderRun { Task<int> RunAsync(CancellationToken ct); }                             // provided by Reminders
 
 // ----- Components -----
-internal sealed class ReminderComponent(ITenderDeadlines deadlines, ISmsGateway sms) : IReminderRun
+internal sealed class ReminderComponent(IProgrammeDeadlines deadlines, ISmsGateway sms) : IReminderRun
 {
     public async Task<int> RunAsync(CancellationToken ct)
     {
         var sent = 0;
         foreach (var (id, closes) in deadlines.ClosingSoon())
         {
-            await sms.SendAsync("+91-90000-11111", $"Tender {id} closes {closes:dd MMM HH:mm}", ct);
+            await sms.SendAsync("+91-90000-11111", $"Applications for {id} close {closes:dd MMM HH:mm}", ct);
             sent++;
         }
         return sent;
     }
 }
 
-internal sealed class StaticDeadlines : ITenderDeadlines
+internal sealed class StaticDeadlines : IProgrammeDeadlines
 {
-    public IReadOnlyList<(string TenderId, DateTime ClosesAt)> ClosingSoon() => new List<(string TenderId, DateTime ClosesAt)>
+    public IReadOnlyList<(string ProgrammeId, DateTime ClosesAt)> ClosingSoon() => new List<(string ProgrammeId, DateTime ClosesAt)>
     {
-        ("PWD-2026-0141", new DateTime(2026, 11, 3, 15, 0, 0)),
-        ("PWD-2026-0152", new DateTime(2026, 11, 4, 17, 30, 0)),
+        ("BTECH-CSE-2026", new DateTime(2026, 11, 3, 23, 59, 0)),
+        ("MBA-2026", new DateTime(2026, 11, 4, 17, 30, 0)),
     };
 }
 
@@ -714,7 +732,7 @@ public static class Program
     public static async Task Main()
     {
         var services = new ServiceCollection();
-        services.AddSingleton<ITenderDeadlines, StaticDeadlines>();
+        services.AddSingleton<IProgrammeDeadlines, StaticDeadlines>();
         services.AddSingleton<ISmsGateway, ConsoleSmsGateway>();      // try commenting this out
         services.AddSingleton<IReminderRun, ReminderComponent>();
 
@@ -891,12 +909,12 @@ public class RemindersTests
     public async Task Sends_due_reminders_once()
     {
         var (svc, clock, sender) = Build();
-        await svc.ScheduleAsync("+91-98000-00001", "Pre-bid meeting at 11:00", clock.Now.AddMinutes(30));
-        await svc.ScheduleAsync("+91-98000-00002", "Bid closes tomorrow", clock.Now.AddDays(1));
+        await svc.ScheduleAsync("+91-98000-00001", "Counselling at 11:00", clock.Now.AddMinutes(30));
+        await svc.ScheduleAsync("+91-98000-00002", "Applications close tomorrow", clock.Now.AddDays(1));
         clock.Now = clock.Now.AddHours(1);
         Assert.Equal(1, await svc.SendDueAsync());
         Assert.Equal(0, await svc.SendDueAsync());
-        Assert.Equal(new[] { "+91-98000-00001:Pre-bid meeting at 11:00" }, sender.Sent);
+        Assert.Equal(new[] { "+91-98000-00001:Counselling at 11:00" }, sender.Sent);
         clock.Now = clock.Now.AddDays(1);
         Assert.Equal(1, await svc.SendDueAsync());
     }
@@ -1013,7 +1031,7 @@ Architects often keep the component graph as data and check it in CI. Implement 
 ::requirements
 - `AddComponent(string name, int layer)`: higher numbers are higher layers (for example host = 3, business = 2, adapters/contracts = 1). Duplicate names throw `ArgumentException`.
 - `AddDependency(string from, string to)`: "from requires to". Unknown components throw `ArgumentException`.
-- `FindCycles()` returns each **elementary cycle once**, as a string like `"Bids -> Tendering -> Bids"`, rotated so it **starts at the alphabetically smallest** component in the cycle. Sort the returned list alphabetically. A self-dependency `A -> A` is a cycle `"A -> A"`.
+- `FindCycles()` returns each **elementary cycle once**, as a string like `"Applications -> Programmes -> Applications"`, rotated so it **starts at the alphabetically smallest** component in the cycle. Sort the returned list alphabetically. A self-dependency `A -> A` is a cycle `"A -> A"`.
 - `LayerViolations()` returns `"from -> to"` for every dependency where `from`'s layer is **lower** than `to`'s, in the order dependencies were added.
 - `DependsOn(from, to)` is true if `to` is reachable from `from` (directly or indirectly).
 ::acceptance
@@ -1068,71 +1086,71 @@ using Xunit;
 
 public class ComponentGraphTests
 {
-    private static ComponentGraph EProc()
+    private static ComponentGraph Admissions()
     {
         var g = new ComponentGraph();
         g.AddComponent("Web", 3);
-        g.AddComponent("Bids", 2);
-        g.AddComponent("Evaluation", 2);
-        g.AddComponent("Tendering", 2);
+        g.AddComponent("Applications", 2);
+        g.AddComponent("MeritList", 2);
+        g.AddComponent("Programmes", 2);
         g.AddComponent("StorageAdapter", 1);
-        g.AddDependency("Web", "Bids");
-        g.AddDependency("Web", "Evaluation");
-        g.AddDependency("Evaluation", "Bids");
-        g.AddDependency("Bids", "Tendering");
-        g.AddDependency("Bids", "StorageAdapter");
+        g.AddDependency("Web", "Applications");
+        g.AddDependency("Web", "MeritList");
+        g.AddDependency("MeritList", "Applications");
+        g.AddDependency("Applications", "Programmes");
+        g.AddDependency("Applications", "StorageAdapter");
         return g;
     }
 
-    [Fact] public void Acyclic_graph_has_no_cycles() => Assert.Empty(EProc().FindCycles());
+    [Fact] public void Acyclic_graph_has_no_cycles() => Assert.Empty(Admissions().FindCycles());
 
     [Fact]
     public void Two_and_three_component_cycles()
     {
-        var g = EProc();
-        g.AddDependency("Tendering", "Bids");              // Bids <-> Tendering
-        g.AddDependency("Tendering", "Web");               // closes two more cycles through Web
+        var g = Admissions();
+        g.AddDependency("Programmes", "Applications");              // Applications <-> Programmes
+        g.AddDependency("Programmes", "Web");               // closes two more cycles through Web
         Assert.Equal(new[]
         {
-            "Bids -> Tendering -> Bids",
-            "Bids -> Tendering -> Web -> Bids",
-            "Bids -> Tendering -> Web -> Evaluation -> Bids",
+            "Applications -> Programmes -> Applications",
+            "Applications -> Programmes -> Web -> Applications",
+            "Applications -> Programmes -> Web -> MeritList -> Applications",
         }, g.FindCycles());
     }
 
     [Fact]
     public void Self_dependency_is_a_cycle()
     {
-        var g = EProc();
-        g.AddDependency("Evaluation", "Evaluation");
-        Assert.Equal(new[] { "Evaluation -> Evaluation" }, g.FindCycles());
+        var g = Admissions();
+        g.AddDependency("MeritList", "MeritList");
+        Assert.Equal(new[] { "MeritList -> MeritList" }, g.FindCycles());
     }
 
     [Fact]
     public void Lower_layer_must_not_depend_on_higher()
     {
-        var g = EProc();
-        g.AddDependency("StorageAdapter", "Bids");
-        g.AddDependency("Bids", "Web");
-        Assert.Equal(new[] { "StorageAdapter -> Bids", "Bids -> Web" }, g.LayerViolations());
+        var g = Admissions();
+        g.AddDependency("StorageAdapter", "Applications");
+        g.AddDependency("Applications", "Web");
+        Assert.Equal(new[] { "StorageAdapter -> Applications", "Applications -> Web" }, g.LayerViolations());
     }
 
     [Fact]
     public void Transitive_dependency()
     {
-        var g = EProc();
-        Assert.True(g.DependsOn("Web", "Tendering"));
-        Assert.True(g.DependsOn("Evaluation", "StorageAdapter"));
-        Assert.False(g.DependsOn("Tendering", "Bids"));
+        var g = Admissions();
+        Assert.True(g.DependsOn("Web", "Programmes"));
+        Assert.True(g.DependsOn("MeritList", "StorageAdapter"));
+        Assert.False(g.DependsOn("Programmes", "Applications"));
         Assert.False(g.DependsOn("StorageAdapter", "Web"));
     }
 
     [Fact]
     public void Unknown_and_duplicate_components_rejected()
     {
-        var g = EProc();
-        Assert.Throws<ArgumentException>(() => g.AddComponent("Bids", 2));
-        Assert.Throws<ArgumentException>(() => g.AddDependency("Bids", "Payroll"));
+        var g = Admissions();
+        Assert.Throws<ArgumentException>(() => g.AddComponent("Applications", 2));
+        Assert.Throws<ArgumentException>(() => g.AddDependency("Applications", "Payroll"));
     }
 }
 ```
@@ -1319,7 +1337,7 @@ A smaller team could merge Tariffs into Billing and keep only the interface `ITa
 :::
 
 :::exercise id=m05-component-diagrams-ex5 difficulty=advanced kind=code title="Architecture tests with reflection"
-The compiler enforces project references, but inside one project nothing stops `Evaluation` from using a `Bids` internal class. Write two architecture rules that a test suite can run against any assembly.
+The compiler enforces project references, but inside one project nothing stops `MeritList` from using an `Applications` internal class. Write two architecture rules that a test suite can run against any assembly.
 ::requirements
 `ArchitectureRules` (static) with:
 
@@ -1545,40 +1563,40 @@ No business component requires Payouts, so a payout change can't break booking a
 
 Component diagrams make three kinds of tests natural.
 
-**1. Component tests through provided interfaces, with fakes for required ones.** Each component is tested alone. For Bid Submission, fakes of `ITenderCatalog`, `IDocumentStore`, `IEmdVerifier` and `ISignatureVerifier` are all you need, and each fake is a few lines because the ports are small:
+**1. Component tests through provided interfaces, with fakes for required ones.** Each component is tested alone. For Applications, fakes of `IProgrammeCatalog`, `IDocumentStore`, `IFeeVerifier` and `ISignatureVerifier` are all you need, and each fake is a few lines because the ports are small:
 
 ```csharp
-public class BidSubmissionComponentTests
+public class ApplicationsComponentTests
 {
-    private sealed class OpenTender : ITenderCatalog
+    private sealed class OpenProgramme : IProgrammeCatalog
     {
-        public Task<TenderSummary?> FindOpenAsync(string id, CancellationToken ct) =>
-            Task.FromResult<TenderSummary?>(new TenderSummary(id, "Culvert at km 3.4", DateTimeOffset.UtcNow.AddDays(2), 50_000m));
+        public Task<ProgrammeSummary?> FindOpenAsync(string id, CancellationToken ct) =>
+            Task.FromResult<ProgrammeSummary?>(new ProgrammeSummary(id, "B.Sc Data Science", DateTimeOffset.UtcNow.AddDays(2), 1_200m));
     }
-    private sealed class Unpaid : IEmdVerifier { public Task<bool> IsPaidAsync(string r, decimal a, CancellationToken ct) => Task.FromResult(false); }
+    private sealed class Unpaid : IFeeVerifier { public Task<bool> IsPaidAsync(string r, decimal a, CancellationToken ct) => Task.FromResult(false); }
     private sealed class ValidSignature : ISignatureVerifier { public Task<bool> VerifyAsync(string h, string c, CancellationToken ct) => Task.FromResult(true); }
     private sealed class NullStore : IDocumentStore { public Task<string> SaveAsync(string f, byte[] b, CancellationToken ct) => Task.FromResult("doc-1"); }
 
     [Fact]
-    public async Task Unpaid_emd_is_rejected()
+    public async Task Unpaid_fee_is_rejected()
     {
         var services = new ServiceCollection()
             .AddSingleton(TimeProvider.System)
-            .AddSingleton<ITenderCatalog, OpenTender>()
-            .AddSingleton<IEmdVerifier, Unpaid>()
+            .AddSingleton<IProgrammeCatalog, OpenProgramme>()
+            .AddSingleton<IFeeVerifier, Unpaid>()
             .AddSingleton<ISignatureVerifier, ValidSignature>()
             .AddSingleton<IDocumentStore, NullStore>()
-            .AddBids();
+            .AddApplications();
         using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
         using var scope = provider.CreateScope();
-        var submit = scope.ServiceProvider.GetRequiredService<IBidSubmission>();
-        await Assert.ThrowsAsync<BidRejectedException>(() => submit.SubmitAsync(
-            new SubmitBid("PWD-1", "C-9", 12_00_000m, new byte[] { 1 }, new string('a', 32), "DSC-77", "UTR123"), CancellationToken.None));
+        var submit = scope.ServiceProvider.GetRequiredService<IApplicationSubmission>();
+        await Assert.ThrowsAsync<ApplicationRejectedException>(() => submit.SubmitAsync(
+            new SubmitApplication("BSC-DS-2026", "APP-9", 92.4m, new byte[] { 1 }, new string('a', 32), "CBSE-77", "UPI123"), CancellationToken.None));
     }
 }
 ```
 
-Notice the test wires the component exactly as the composition root does, through `AddBids()`, so it also checks the registration.
+Notice the test wires the component exactly as the composition root does, through `AddApplications()`, so it also checks the registration.
 
 **2. Composition tests.** One test builds the real host's service collection with `ValidateOnBuild = true` (or uses `WebApplicationFactory` in an integration test project). It fails if any required interface lacks a provider: the "unplugged socket" bug.
 
@@ -1588,7 +1606,7 @@ Notice the test wires the component exactly as the composition root does, throug
 
 - **Modular monoliths in .NET.** Many teams build one ASP.NET Core host with several component projects, each with `AddX()` registration and a contracts surface. The component diagram is the module map, and the same boundaries later make it possible to extract a service if one component needs to scale or deploy independently. See [Modular monolith architecture](#/lesson/m02-modular-monolith).
 - **Hexagonal / ports-and-adapters.** Consumer-owned ports with adapter components are exactly [hexagonal architecture](#/lesson/m02-hexagonal). The component diagram is its picture.
-- **Vendor independence in government and enterprise systems.** Payment gateways, SMS providers, e-sign services and document storage often change through procurement cycles. Keeping each behind a port makes a vendor change a contained project, not a rewrite.
+- **Vendor independence in government and enterprise systems.** Payment gateways, SMS providers, e-sign services and document storage often change when contracts are renewed. Keeping each behind a port makes a vendor change a contained project, not a rewrite.
 - **Team topology.** Components with clear interfaces can have clear owners. A component diagram with team names on each box is a quick way to see whether team boundaries and code boundaries match (Conway's law).
 - **Microservices.** When components become services, provided interfaces become HTTP or gRPC APIs and message contracts, and the same diagram (with a [deployment diagram](#/lesson/m05-deployment-diagrams) beside it) describes the system.
 
@@ -1606,7 +1624,7 @@ The **lollipop** (a line ending in a circle) is a **provided interface**: operat
 ::q intermediate
 Should an interface between two components be owned by the provider or the consumer?
 ::a
-Both are valid. A **provider-owned contract** (Tendering publishes `ITenderCatalog`) suits a stable business capability with several consumers. A **consumer-owned port** (Bids defines `IDocumentStore` with exactly the operations it needs, implemented by an adapter) suits infrastructure and external systems, because the business component then doesn't depend on any vendor and the port stays minimal. This is the Dependency Inversion Principle at component scale. A common rule: business components publish contracts to each other, and reach infrastructure through their own ports.
+Both are valid. A **provider-owned contract** (Programmes publishes `IProgrammeCatalog`) suits a stable business capability with several consumers. A **consumer-owned port** (Applications defines `IDocumentStore` with exactly the operations it needs, implemented by an adapter) suits infrastructure and external systems, because the business component then doesn't depend on any vendor and the port stays minimal. This is the Dependency Inversion Principle at component scale. A common rule: business components publish contracts to each other, and reach infrastructure through their own ports.
 ::q intermediate
 How do you keep a component diagram true as the code changes?
 ::a
@@ -1618,7 +1636,7 @@ A cycle means neither can be built, tested or replaced alone. Options: (1) **mer
 ::q advanced
 How would you decide whether a component should become a separate microservice?
 ::a
-Only when there's a concrete need the in-process component can't meet: it must scale very differently (GPS ingestion at 50,000 messages per second versus 20 bids per minute), it needs a different release cadence or technology, it has a different availability or security requirement, or a separate team owns it end to end and coordination is the bottleneck. Costs include network latency and failures, distributed data and consistency, versioned APIs, and more operations work. If the component already has a clean provided/required boundary, extraction is mostly moving the implementation behind an HTTP or messaging adapter. If it doesn't, extracting it first would just distribute the mess.
+Only when there's a concrete need the in-process component can't meet: it must scale very differently (GPS ingestion at 50,000 messages per second versus 20 applications per minute), it needs a different release cadence or technology, it has a different availability or security requirement, or a separate team owns it end to end and coordination is the bottleneck. Costs include network latency and failures, distributed data and consistency, versioned APIs, and more operations work. If the component already has a clean provided/required boundary, extraction is mostly moving the implementation behind an HTTP or messaging adapter. If it doesn't, extracting it first would just distribute the mess.
 :::
 
 ## Summary and revision
@@ -1666,26 +1684,26 @@ The Billing component calls a bank SDK's classes directly. The bank is being cha
 - [ ] Draw the SDK as part of Billing on the diagram.
 > A consumer-owned port isolates Billing from the vendor. Changing banks then means a new adapter and one registration change.
 ::q single
-On a component diagram, `Evaluation` has a dashed "requires" arrow to `IBidQuery`, and `Bids` has a solid line to it. What does this say?
-- [ ] Evaluation implements IBidQuery.
-- [x] Bids provides IBidQuery and Evaluation uses it.
-- [ ] Bids and Evaluation are the same component.
-- [ ] Evaluation owns Bids.
+On a component diagram, `MeritList` has a dashed "requires" arrow to `IApplicationQuery`, and `Applications` has a solid line to it. What does this say?
+- [ ] MeritList implements IApplicationQuery.
+- [x] Applications provides IApplicationQuery and MeritList uses it.
+- [ ] Applications and MeritList are the same component.
+- [ ] MeritList owns Applications.
 > The solid line to the circle is the lollipop (provided); the dashed arrow is the socket (required).
 ::q single
-`AddBids()` registers `BidService`, which requires `IDocumentStore`. The host forgets to register a document store. With `ValidateOnBuild = true`, what happens?
-- [ ] The first bid submission throws.
+`AddApplications()` registers `ApplicationService`, which requires `IDocumentStore`. The host forgets to register a document store. With `ValidateOnBuild = true`, what happens?
+- [ ] The first application submission throws.
 - [x] Building the service provider fails at startup with an error naming the missing service.
 - [ ] DI creates a default implementation.
 - [ ] Nothing, until garbage collection.
 > Validation checks every registered service's dependencies when the provider is built, so the unfilled socket is found before any request.
 ::q single
-Which project reference best matches "Bids requires Tendering's provided interface"?
-- [ ] EProc.Tendering references EProc.Bids
-- [x] EProc.Bids references EProc.Tendering.Contracts
-- [ ] EProc.Bids references EProc.Tendering (the implementation project)
+Which project reference best matches "Applications requires Programmes's provided interface"?
+- [ ] Admissions.Programmes references Admissions.Applications
+- [x] Admissions.Applications references Admissions.Programmes.Contracts
+- [ ] Admissions.Applications references Admissions.Programmes (the implementation project)
 - [ ] Both reference each other
-> Depend on the contract only. Referencing the implementation lets Bids reach Tendering's internals, and mutual references are a cycle.
+> Depend on the contract only. Referencing the implementation lets Applications reach Programmes's internals, and mutual references are a cycle.
 ::q multi
 Which are signs of a poorly chosen component boundary? (Select all that apply.)
 - [x] Two components always change in the same pull request.
@@ -1701,7 +1719,7 @@ In Mermaid, which line draws a circle for an interface named `INotifier` in a fl
 - [ ] `iNotify ()-- INotifier`
 > Double round brackets draw a circle. `()--` is lollipop syntax in class diagrams, not flowcharts.
 ::q single
-A team wants to show *how* a bid request travels through the components at runtime. What should they add next to the component diagram?
+A team wants to show *how* an application request travels through the components at runtime. What should they add next to the component diagram?
 - [ ] A bigger component diagram
 - [x] A sequence diagram whose participants are the components
 - [ ] An ER diagram

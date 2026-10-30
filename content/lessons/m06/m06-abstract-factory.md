@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 75
 prerequisites: [m06-factory-method, m01-interfaces-abstract, m03-dependency-injection, m04-dip]
-related: [m06-factory-method, m06-builder, m06-bridge, m06-strategy, m06-adapter, m06-dependency-injection-pattern]
+related: [m06-factory-method, m06-builder, m06-strategy, m06-adapter, m06-dependency-injection-pattern]
 tags: [creational, gof, payments, file-storage, multi-tenant]
 patterns: [Abstract Factory]
 summary: One object creates a whole family of related objects (a payment provider's charge client, refund client and webhook verifier) so the pieces always match. Learn when a family really exists, how DI changes the pattern, and the real cost of adding a new product.
@@ -131,6 +131,21 @@ The container is the abstract factory, and this `if` block is the concrete-facto
 
 **Case 2: the family is chosen per request, per tenant or per message.** For example, merchant M-101 uses a UPI aggregator and merchant M-202 uses a card gateway, in the same running app. Now you do need factory objects you can choose between at runtime. That is the case this lesson implements.
 
+**How to pick a factory by key at runtime.** Since .NET 8 the built-in container supports **keyed services**, so you could register each concrete factory under its provider code:
+
+```csharp
+builder.Services.AddKeyedSingleton<IPaymentProviderFactory, UpiSwitchFactory>("upiswitch");
+builder.Services.AddKeyedSingleton<IPaymentProviderFactory, GlobalCardFactory>("globalcard");
+
+// Key known at compile time: inject it directly.
+app.MapPost("/upi/collect", ([FromKeyedServices("upiswitch")] IPaymentProviderFactory upi) => ...);
+
+// Key known only at runtime: ask the provider.
+var factory = serviceProvider.GetRequiredKeyedService<IPaymentProviderFactory>(merchantProviderCode);
+```
+
+Keyed services register *factories* well. Notice they are keyed by family, one registration per factory, not one per product (the "bad" example later keys every product separately, which loses the family guarantee). For runtime keys this lesson still uses a small `PaymentProviderRegistry` built from `IEnumerable<IPaymentProviderFactory>`, because it gives a clear domain error for an unknown code (the container throws a generic `InvalidOperationException`), can list all providers for health checks and admin screens, and keeps `IServiceProvider` (a service locator) out of business code. Both are reasonable; pick one and use it consistently.
+
 ### Trade-offs
 
 | You gain | You pay |
@@ -147,7 +162,8 @@ That second "pay" row is the famous drawback. Abstract Factory makes it easy to 
 - **There's no "must match" rule.** If any charge client could be used with any refund client, inject them separately as strategies.
 - **There's only one family.** A factory interface with one implementation is speculation; inject the products directly.
 - **The family is fixed at startup.** Use DI registration grouped in an extension method (Case 1 above).
-- **The products vary on two independent axes** (provider × environment). That points to [Bridge](#/lesson/m06-bridge) or configuration, not a factory per combination.
+- **The products vary on two independent axes** (provider × environment). That points to Bridge or configuration, not a factory per combination.
+- **A vendor already abstracts the family for you.** Many Indian online stores use one payment aggregator that offers UPI, cards, net banking and wallets behind a single API. That is one family; wrap it in an [Adapter](#/lesson/m06-adapter) and stop there until a second provider is a real business requirement.
 
 ## Visual explanation
 
@@ -170,7 +186,7 @@ classDiagram
     }
     class IRefundClient {
         <<interface>>
-        +RefundAsync(string providerChargeId, decimal amount, CancellationToken ct) RefundResult
+        +RefundAsync(string providerChargeId, decimal amount, string refundId, CancellationToken ct) RefundResult
     }
     class IWebhookVerifier {
         <<interface>>
@@ -294,7 +310,11 @@ public sealed record WebhookEvent(string ProviderChargeId, PaymentStatus Status)
 
 // Abstract products
 public interface IChargeClient { Task<ChargeResult> ChargeAsync(ChargeRequest request, CancellationToken ct); }
-public interface IRefundClient { Task<RefundResult> RefundAsync(string providerChargeId, decimal amountInr, CancellationToken ct); }
+public interface IRefundClient
+{
+    /// <summary>refundId is our own ID for this refund; it doubles as the idempotency key, so a retried call never refunds twice.</summary>
+    Task<RefundResult> RefundAsync(string providerChargeId, decimal amountInr, string refundId, CancellationToken ct);
+}
 public interface IWebhookVerifier
 {
     /// <summary>Returns the parsed event if the signature is valid, otherwise null. Never throws for bad input.</summary>
@@ -402,13 +422,14 @@ internal sealed class UpiSwitchRefundClient(HttpClient http, UpiSwitchOptions o)
 {
     private sealed record RefundResponse(string RefundId, string Status);
 
-    public async Task<RefundResult> RefundAsync(string providerChargeId, decimal amountInr, CancellationToken ct)
+    public async Task<RefundResult> RefundAsync(string providerChargeId, decimal amountInr, string refundId, CancellationToken ct)
     {
         using var msg = new HttpRequestMessage(HttpMethod.Post, $"v2/transactions/{Uri.EscapeDataString(providerChargeId)}/refunds")
         {
             Content = JsonContent.Create(new { amountPaise = UpiSwitchFactory.ToPaise(amountInr) }),
         };
         msg.Headers.Add("X-Api-Key", o.ApiKey);
+        msg.Headers.Add("Idempotency-Key", refundId);
         using var res = await http.SendAsync(msg, ct);
         res.EnsureSuccessStatusCode();
         var body = await res.Content.ReadFromJsonAsync<RefundResponse>(ct) ?? throw new InvalidOperationException("Empty response.");
@@ -485,13 +506,14 @@ internal sealed class GlobalCardRefundClient(HttpClient http, GlobalCardOptions 
 {
     private sealed record RefundResponse(string Id, string Status);
 
-    public async Task<RefundResult> RefundAsync(string providerChargeId, decimal amountInr, CancellationToken ct)
+    public async Task<RefundResult> RefundAsync(string providerChargeId, decimal amountInr, string refundId, CancellationToken ct)
     {
         using var msg = new HttpRequestMessage(HttpMethod.Post, "refunds")
         {
             Content = JsonContent.Create(new { charge = providerChargeId, amount = decimal.ToInt64(Math.Round(amountInr * 100m, MidpointRounding.AwayFromZero)) }),
         };
         msg.Headers.Authorization = new("Bearer", o.SecretKey);
+        msg.Headers.Add("Idempotency-Key", refundId);
         using var res = await http.SendAsync(msg, ct);
         res.EnsureSuccessStatusCode();
         var body = await res.Content.ReadFromJsonAsync<RefundResponse>(ct) ?? throw new InvalidOperationException("Empty response.");
@@ -572,8 +594,9 @@ public sealed class CheckoutService(PaymentProviderRegistry providers, IMerchant
     }
 
     /// <summary>Refunds go to the provider that captured the charge, not the merchant's current provider.</summary>
-    public Task<RefundResult> RefundAsync(ChargeResult original, decimal amountInr, CancellationToken ct) =>
-        providers.Get(original.ProviderCode).CreateRefundClient().RefundAsync(original.ProviderChargeId, amountInr, ct);
+    public Task<RefundResult> RefundAsync(ChargeResult original, decimal amountInr, Guid refundId, CancellationToken ct) =>
+        providers.Get(original.ProviderCode).CreateRefundClient()
+            .RefundAsync(original.ProviderChargeId, amountInr, refundId.ToString(), ct);
 }
 ```
 
@@ -631,6 +654,8 @@ Design notes:
 - **Products are `internal`.** Outside the payments folder, nobody can `new UpiSwitchWebhookVerifier(...)` with the wrong secret. Access modifiers are part of the family guarantee.
 - **Selection rules differ per use.** Charges select by the merchant's configuration, refunds by the original charge's provider, webhooks by the URL. The pattern doesn't decide these rules, but it makes each one a single line.
 - **Each provider's quirks stay inside its family**: paise versus minor units, plain versus timestamped signatures, status vocabularies (`SUCCESS` versus `succeeded`).
+- **Every money-moving call carries an idempotency key**: the order ID for charges, our own refund ID for refunds. That is what makes it safe to add retries later, for example with `AddStandardResilienceHandler()` from `Microsoft.Extensions.Http.Resilience` on each named client. Never retry a payment `POST` that has no idempotency key; a timeout does not tell you whether the money moved.
+- **Factories are singletons; products are cheap.** Creating a product per call is fine because `IHttpClientFactory` pools the underlying handlers. Don't cache `HttpClient` instances inside products for hours, or DNS changes are missed.
 
 ## Bad design vs good design
 
@@ -711,10 +736,10 @@ public static class Program
 {
     public static void Main()
     {
-        var families = new List<IStorageFactory> { new LocalDiskFactory("/data/uploads"), new CloudFactory("rodic-drawings", "ap-south-1") };
+        var families = new List<IStorageFactory> { new LocalDiskFactory("/data/uploads"), new CloudFactory("shop-invoices", "ap-south-1") };
         foreach (var f in families)
         {
-            var key = f.CreateStore().Save("bridge-gad-rev3.pdf", new byte[] { 1, 2, 3 });
+            var key = f.CreateStore().Save("invoice-INV-2026-00042.pdf", new byte[] { 1, 2, 3 });
             Console.WriteLine($"{f.Name,-6} {f.CreateSigner().SignedUrl(key, TimeSpan.FromMinutes(15))}");
         }
     }
@@ -1265,21 +1290,21 @@ The pattern made *which family* a one-line decision. This exercise shows that th
 :::
 
 :::exercise id=m06-abstract-factory-ex4 difficulty=intermediate kind=design title="File storage families: factory or DI?"
-A document-management system for infrastructure projects stores drawings and reports. Requirements:
+A telemedicine platform serves many hospitals and stores lab reports, scans and prescriptions for each of them. Requirements:
 
 - Development uses the local disk. Production uses an S3-compatible object store.
-- Some government clients require their files to stay in a specific region or on their own on-premises storage; that is chosen **per project**.
+- Some hospitals (for example a government hospital in Pune) require patient files to stay in a specific region or on their own on-premises storage; that is chosen **per hospital**.
 - Each storage family has a blob store, a signed-URL generator and a health check.
 
 Design the creation side. Decide where you would use plain DI registration and where an abstract factory, and draw the class diagram.
 ::acceptance
-- The environment choice (dev vs prod) and the per-project choice are handled separately, with a reason for each.
+- The environment choice (dev vs prod) and the per-hospital choice are handled separately, with a reason for each.
 - The design guarantees a signed URL is generated by the same family that stored the blob.
 - The diagram shows the factory interface, at least two concrete factories and the client.
 ::hint
 Is the dev/prod choice made once or many times while the app runs?
 ::hint
-"Per project" means the choice changes between requests in the same process. Which case from the lesson is that?
+"Per hospital" means the choice changes between requests in the same process. Which case from the lesson is that?
 ::hint
 Store the storage family code with each file's metadata, just as the payment example stores the provider code with each charge.
 ::hint
@@ -1288,7 +1313,7 @@ Health checks for every family can be registered once at startup with ASP.NET Co
 **Two separate decisions:**
 
 1. **Environment (dev vs prod): plain DI.** It's decided once at startup. `services.AddDocumentStorage(builder.Environment, config)` registers the default family. No factory interface needed for this part.
-2. **Per-project residency: Abstract Factory.** The family varies per request in one process, so we need factory objects to choose between.
+2. **Per-hospital residency: Abstract Factory.** The family varies per request in one process, so we need factory objects to choose between.
 
 ```mermaid
 classDiagram
@@ -1308,11 +1333,11 @@ classDiagram
       -Uri endpoint
   }
   class StorageFamilyRegistry {
-      +ForProject(Guid projectId) IStorageFamily
+      +ForHospital(Guid hospitalId) IStorageFamily
       +ForFile(FileRecord f) IStorageFamily
   }
   class DocumentService {
-      +UploadAsync(Guid projectId, Stream s)
+      +UploadAsync(Guid hospitalId, Stream s)
       +GetDownloadUrl(FileRecord f) string
   }
   IStorageFamily <|.. LocalDiskFamily
@@ -1322,15 +1347,16 @@ classDiagram
   DocumentService --> StorageFamilyRegistry
 ```
 
-- **Upload** picks `ForProject(projectId)` (the project's residency setting) and stores `FamilyCode` and `BlobKey` in the file's metadata row in PostgreSQL.
-- **Download** picks `ForFile(record)`, using the stored `FamilyCode`, so the signed URL is always made by the family that holds the blob, even if the project's setting changes later.
+- **Upload** picks `ForHospital(hospitalId)` (the hospital's residency setting) and stores `FamilyCode` and `BlobKey` in the file's metadata row in PostgreSQL.
+- **Download** picks `ForFile(record)`, using the stored `FamilyCode`, so the signed URL is always made by the family that holds the blob, even if the hospital's setting changes later.
 - Several S3-compatible regions are *instances* of one `S3CompatibleFamily` class with different options (`ap-south-1`, `ap-south-2`), not separate classes.
 - Health checks: at startup, register one ASP.NET Core health check per configured family by iterating the registry.
 ::alternatives
-If residency were per *deployment* (one app instance per government client), the per-project factory would be unnecessary; each deployment would register its single family with DI.
+If residency were per *deployment* (one app instance per hospital group), the per-hospital factory would be unnecessary; each deployment would register its single family with DI.
 ::mistakes
 - Writing one class per region. Regions are configuration of one family.
-- Generating download URLs from the project's *current* setting rather than from where the file actually is.
+- Generating download URLs from the hospital's *current* setting rather than from where the file actually is.
+- Issuing long-lived signed URLs for patient files. Keep them to a few minutes and log every access; the factory pattern decides *who* signs, not *how safely*.
 :::
 
 :::exercise id=m06-abstract-factory-ex5 difficulty=advanced kind=code title="Add payouts without breaking every family"
@@ -1550,7 +1576,7 @@ public sealed class FakeProviderFactory : IPaymentProviderFactory
     }
     private sealed class Refund : IRefundClient
     {
-        public Task<RefundResult> RefundAsync(string id, decimal amt, CancellationToken ct) => Task.FromResult(new RefundResult("FR-1", PaymentStatus.Refunded));
+        public Task<RefundResult> RefundAsync(string id, decimal amt, string refundId, CancellationToken ct) => Task.FromResult(new RefundResult("FR-1", PaymentStatus.Refunded));
     }
     private sealed class AcceptAll : IWebhookVerifier
     {
@@ -1568,7 +1594,9 @@ What to test:
 
 ## Real-world application
 
-- **ADO.NET** is the canonical .NET example: `DbProviderFactory` has `CreateConnection()`, `CreateCommand()`, `CreateParameter()` and more. `DbProviderFactories.GetFactory("Npgsql")` looks up a registered factory by name, which is the registry from this lesson.
+- **ADO.NET** is the canonical .NET example: `DbProviderFactory` has `CreateConnection()`, `CreateCommand()`, `CreateParameter()`, `CreateDataAdapter()` and (since .NET 6) `CreateBatch()`. `NpgsqlFactory.Instance` and `SqlClientFactory.Instance` are the concrete factories. `DbProviderFactories.GetFactory("Npgsql")` looks up a registered factory by name, which is the registry from this lesson (on .NET Core you must call `DbProviderFactories.RegisterFactory` first).
+- **EF Core database providers** are the "DI is the factory" form: `UseNpgsql()` or `UseSqlServer()` registers a whole matching family of internal services (SQL generator, type mappings, migrations SQL generator, query translators). You can't mix PostgreSQL type mappings with SQL Server SQL generation, because one call registers the whole set.
+- **Not every `*Factory` in .NET is an Abstract Factory.** `IHttpClientFactory` creates one kind of product (`HttpClient`, configured by name), and `ILoggerFactory` creates one kind of product (`ILogger`) fed by many providers. Those are plain factories (closer to Factory Method plus configuration). The test is the same as earlier in this lesson: several product *kinds* that must match.
 - **Payment platforms** commonly isolate each gateway or bank behind a provider family (charge, refund, webhook, settlement report), because each provider has its own units, statuses and signing scheme.
 - **Cloud-neutral storage and messaging layers** group a blob store, URL signer and queue client per cloud so that an app can be deployed to different clouds with one switch.
 - **Multi-country SaaS** often groups country-specific services (tax engine, invoice numbering, e-invoicing integration, address validation) into a per-country family chosen by the tenant's country.

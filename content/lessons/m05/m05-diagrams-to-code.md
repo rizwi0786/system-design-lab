@@ -44,19 +44,19 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-### Architect's drawing, builder's site, municipal record
+### Recipe, dish and food label
 
-When a house is built, three documents describe it. The **architect's drawing** shows rooms and how they connect. The **building on site** is the real thing. The **municipal record** lists plot number, built-up area and owner in a fixed format. All three describe the same house, in different languages, for different readers. If the architect draws a balcony and the builder skips it, or the record shows two floors when there are three, someone eventually has a problem.
+A packet of ready-to-eat biryani is described three ways. The **recipe** in the company's kitchen lists ingredients and how they combine. The **dish** in the packet is the real thing. The **label** on the back lists ingredients, weight and allergens in a fixed format that regulators and shoppers read for years. All three describe the same food, in different languages, for different readers. If the recipe says cashews and the cook leaves them out, or the label forgets to mention nuts, someone eventually has a problem.
 
-Software has the same three. The **class diagram** is the architect's drawing of the code's structure. The **C# code** is the building. The **database schema**, described by an **ER diagram**, is the record that has to survive for years, outlive several versions of the code, and be read by other systems. Mapping between them is translation, and translation has rules.
+Software has the same three. The **class diagram** is the recipe for the code's structure. The **C# code** is the dish. The **database schema**, described by an **ER diagram**, is the label that has to survive for years, outlive several versions of the code, and be read by other systems. Mapping between them is translation, and translation has rules.
 
-### Our example: HireYard
+### Our example: GigGear
 
-**HireYard** rents heavy construction equipment (excavators, crawler cranes, transit mixers) to contractors across Telangana and Maharashtra.
+**GigGear** rents event equipment (LED video walls, line-array sound systems, diesel generators) to wedding planners and event companies across Telangana and Maharashtra.
 
-- Each **equipment** item belongs to a **category**, which has a daily rate (for example, ₹18,000 a day for an excavator).
-- **Customers** (contractors, identified by GSTIN where they have one) have one or more **sites**.
-- A **rental order** is for one customer and is delivered to one of their sites, or collected from the yard.
+- Each **equipment** item belongs to a **category**, which has a daily rate (for example, ₹18,000 a day for an LED video wall).
+- **Customers** (event companies identified by GSTIN, or individuals without one) have one or more saved **venues**.
+- A **rental order** is for one customer and is delivered to one of their venues, or collected from the warehouse.
 - An order has one or more **rental lines**. Each line hires one equipment item for a **hire period** (start and end date) at the daily rate that applied when it was booked, and may include an **operator**.
 - **Operators** hold **certifications** for categories, each with an expiry date. An operator can only be assigned to a line if certified for that category for the whole hire.
 
@@ -136,7 +136,7 @@ Foreign keys and `NOT NULL` express **maximum** cardinality and **optionality of
 
 - **"At least one" on the many side** (`||--|{`: an order has one or more lines). A foreign key can't force a parent to have children. Enforce it in the domain (`Confirm()` throws with no lines), optionally backed by a deferred constraint trigger.
 - **Rules across rows**: "an equipment item can't be on two overlapping hires". PostgreSQL can enforce this with an **exclusion constraint** on a date range (it needs the `btree_gist` extension); otherwise the application checks it under a lock.
-- **Rules across tables**: "the delivery site must belong to the order's customer". A composite foreign key can enforce it: make `(id, customer_id)` unique on `site` and reference both columns from `rental_order`. It costs an extra column and index; many teams enforce it in code instead.
+- **Rules across tables**: "the delivery venue must belong to the order's customer". A composite foreign key can enforce it: make `(id, customer_id)` unique on `venue` and reference both columns from `rental_order`. It costs an extra column and index; many teams enforce it in code instead.
 - **Rules about time**: "the operator's certification must be valid for the whole hire". That needs a query or a trigger, or (more simply) a check in the domain at booking time.
 
 Write down where each rule is enforced. A rule enforced nowhere is a bug waiting for a busy Monday.
@@ -158,17 +158,17 @@ Objects and tables differ in ways that no tool hides completely. This is often c
 | Identity | Reference equality, or `Equals` | Primary key | Map the PK to an `Id` property; records for value objects |
 | Collections | `List<RentalLine>` inside the order | Rows in another table pointing back | FK on the child; load lines with the order |
 | Navigation | Can point both ways | FK points one way | Choose a direction; query for the other |
-| Inheritance | `Crane : Equipment` | No inheritance | Table per hierarchy, per type, or per concrete class |
+| Inheritance | `LedWall : Equipment` | No inheritance | Table per hierarchy, per type, or per concrete class |
 | Value objects | `HirePeriod(Start, End)` | Columns | Flatten into columns (`start_date`, `end_date`) or a range type |
 | Enums | `EquipmentStatus.OnHire` | Integer or text | `text` with `CHECK`, or a PostgreSQL `ENUM` type |
 | Types | `decimal`, `DateOnly`, `DateTimeOffset` | `numeric`, `date`, `timestamptz` | Choose precise types; never `float` for money |
 | Null | Nullable reference types | `NULL` / `NOT NULL` | Make them agree, and test that they do |
 
-**Inheritance mapping** deserves a closer look, because the diagram gives no hint which option to pick. Suppose HireYard tracks crane-specific data (maximum load, boom length) and excavator-specific data (bucket capacity):
+**Inheritance mapping** deserves a closer look, because the diagram gives no hint which option to pick. Suppose GigGear tracks LED-wall-specific data (panel count, pixel pitch) and generator-specific data (kVA rating, fuel tank size):
 
-- **Table per hierarchy (TPH):** one `equipment` table with a `kind` discriminator column and nullable type-specific columns, plus `CHECK` constraints such as "if kind is crane, max_load_tonnes is not null". Fast (no joins), simple, but many nullable columns. EF Core's default.
-- **Table per type (TPT):** a base `equipment` table plus `crane` and `excavator` tables sharing the primary key. Clean, normalised, but every load needs a join.
-- **Table per concrete class (TPC):** separate `crane` and `excavator` tables each with all columns. No joins for one type, but queries across all equipment need `UNION ALL`, and ids must be unique across tables.
+- **Table per hierarchy (TPH):** one `equipment` table with a `kind` discriminator column and nullable type-specific columns, plus `CHECK` constraints such as "if kind is led_wall, pixel_pitch_mm is not null". Fast (no joins), simple, but many nullable columns. EF Core's default.
+- **Table per type (TPT):** a base `equipment` table plus `led_wall` and `generator` tables sharing the primary key. Clean, normalised, but every load needs a join.
+- **Table per concrete class (TPC):** separate `led_wall` and `generator` tables each with all columns. No joins for one type, but queries across all equipment need `UNION ALL`, and ids must be unique across tables.
 
 For a handful of subtypes with a few extra columns each, TPH is usually the simplest choice. If subtypes have many columns or different owners, TPT is cleaner. And often the best answer is **no inheritance at all**: a `category` with a JSON column or a small attribute table for specifications, if the behaviour doesn't differ by type.
 
@@ -179,7 +179,7 @@ You'll often join a project where only the code and the database exist. Reverse 
 - **C# to class diagram.** Fields and properties become attributes; properties whose type is another class become associations (collections give `*`, nullable gives `0..1`); `internal` constructors and factory methods hint at composition; `: Base` and `: IInterface` give inheritance and realization. IDEs and small reflection-based generators (see the [class diagrams lesson](#/lesson/m05-class-diagrams)) can produce Mermaid automatically. Ownership (aggregation versus composition) can't be read from types alone; you have to read the methods.
 - **Schema to ER diagram.** Every table is an entity. Every foreign key is a relationship, with the crow's foot on the table that has the FK column. A nullable FK means the parent end is optional (`|o`); a `UNIQUE` FK makes it one-to-one; a table whose primary key is made of two foreign keys is a junction table, which becomes a many-to-many line (or an entity, if it has its own attributes). PostgreSQL's `information_schema` and `pg_catalog` expose all of this to a query, which you'll write in exercise 4. Tools such as EF Core scaffolding (`dotnet ef dbcontext scaffold`) reverse a schema into C# classes the same way.
 
-Reverse engineering recovers **structure**, never **intent**. The schema can't tell you that `site_id` is optional "because some customers collect from the yard". Write the intent back into the diagram as notes.
+Reverse engineering recovers **structure**, never **intent**. The schema can't tell you that `venue_id` is optional "because some customers collect from the warehouse". Write the intent back into the diagram as notes.
 
 ### Keeping three descriptions in step
 
@@ -193,7 +193,7 @@ Whichever you choose, add **round-trip checks**: generate the diagram from the t
 
 ## Visual explanation
 
-### The HireYard class diagram
+### The GigGear class diagram
 
 ```mermaid
 classDiagram
@@ -203,7 +203,7 @@ classDiagram
         +string Name
         +string? Gstin
     }
-    class Site {
+    class Venue {
         +long Id
         +long CustomerId
         +string Name
@@ -212,7 +212,7 @@ classDiagram
     class RentalOrder {
         +long Id
         +long CustomerId
-        +long? SiteId
+        +long? VenueId
         +OrderStatus Status
         -List~RentalLine~ _lines
         +AddLine(Equipment item, EquipmentCategory category, HirePeriod period, Operator? op) RentalLine
@@ -270,9 +270,9 @@ classDiagram
         OnHire
         Maintenance
     }
-    Site "0..*" --> "1" Customer : belongs to
+    Venue "0..*" --> "1" Customer : belongs to
     RentalOrder "0..*" --> "1" Customer : for
-    RentalOrder "0..*" --> "0..1" Site : delivered to
+    RentalOrder "0..*" --> "0..1" Venue : delivered to
     RentalOrder "1" *-- "1..*" RentalLine : lines
     RentalLine --> HirePeriod
     RentalLine "0..*" --> "1" Equipment : hires
@@ -289,17 +289,17 @@ Read the important lines aloud, then think about the code each one forces:
 
 - `RentalOrder "1" *-- "1..*" RentalLine`: an order **owns** its lines (filled diamond). Lines are created by `AddLine`, can't move to another order, and disappear with it. "At least one" is a rule for `Confirm()`, as the note says.
 - `RentalOrder "0..*" --> "1" Customer`: every order has exactly one customer, and the arrow says the order knows its customer, not the reverse. The attribute list shows `CustomerId`: across aggregates we hold the **id**, not the object.
-- `RentalOrder --> "0..1" Site`: optional, so `long? SiteId`.
+- `RentalOrder --> "0..1" Venue`: optional, so `long? VenueId`.
 - `Operator "1" *-- "0..*" Certification` plus `Certification --> EquipmentCategory`: this is how a class diagram shows a many-to-many relationship **with data** (the expiry date). The certification is a small value owned by the operator.
 - `HirePeriod` is a `<<record>>`: a value object with no identity, compared by its dates, with the overlap logic inside it.
 
-### The HireYard ER diagram
+### The GigGear ER diagram
 
 ```mermaid
 erDiagram
-    CUSTOMER ||--o{ SITE : owns
+    CUSTOMER ||--o{ VENUE : owns
     CUSTOMER ||--o{ RENTAL_ORDER : places
-    SITE |o--o{ RENTAL_ORDER : "delivered to"
+    VENUE |o--o{ RENTAL_ORDER : "delivered to"
     RENTAL_ORDER ||--|{ RENTAL_LINE : contains
     EQUIPMENT ||--o{ RENTAL_LINE : "hired on"
     OPERATOR |o--o{ RENTAL_LINE : operates
@@ -311,7 +311,7 @@ erDiagram
         text name
         char gstin UK "nullable, 15 characters"
     }
-    SITE {
+    VENUE {
         bigint id PK
         bigint customer_id FK
         text name
@@ -320,7 +320,7 @@ erDiagram
     RENTAL_ORDER {
         bigint id PK
         bigint customer_id FK
-        bigint site_id FK "nullable"
+        bigint venue_id FK "nullable"
         text status "DRAFT, CONFIRMED, CLOSED, CANCELLED"
         timestamptz created_at
     }
@@ -362,7 +362,7 @@ Now compare it with the class diagram, line by line:
 - **Composition became an identifying relationship.** `RENTAL_LINE` has the primary key `(order_id, line_no)`: a line can't exist, or even be identified, without its order. In SQL that's a composite primary key plus `ON DELETE CASCADE`.
 - **The value object became columns.** `HirePeriod` is two columns, `start_date` and `end_date`, with a `CHECK (end_date >= start_date)`. The record's invariant becomes a table constraint.
 - **The many-to-many with data became a junction table.** `OPERATOR_CERTIFICATION` has a composite primary key made of two foreign keys, plus `valid_until`.
-- **Optional associations became nullable foreign keys.** `site_id` and `operator_id` are the only nullable FKs, matching the two `0..1` ends on the class diagram. The `|o` symbols at the `SITE` and `OPERATOR` ends say the same thing.
+- **Optional associations became nullable foreign keys.** `venue_id` and `operator_id` are the only nullable FKs, matching the two `0..1` ends on the class diagram. The `|o` symbols at the `VENUE` and `OPERATOR` ends say the same thing.
 - **Enums became text with a check.** `status` columns store readable values and reject anything else.
 - **The rate is a snapshot.** `rental_line.daily_rate` copies the category rate at booking time, so changing the price list next month doesn't change old invoices. This is a deliberate **denormalisation**, and it appears on both diagrams.
 - **`||--|{` (one or more lines) is a promise the database can't keep**, as discussed above. The domain's `Confirm()` keeps it.
@@ -381,7 +381,7 @@ flowchart TD
     q3 -->|"yes"| restrict["Own PK, ordinary FK<br/>ON DELETE RESTRICT or SET NULL"]
 ```
 
-Start at the top with the maximum cardinality on each side, which decides the structure (column, unique column or junction table). Then the minimum cardinality decides `NULL` versus `NOT NULL`. Finally, ownership decides the delete rule and whether the parent's key is part of the child's identity. `rental_line` goes down the left path to "identifying, cascade"; `rental_order.site_id` goes to "ordinary FK, nullable"; `operator_certification` takes the junction-table path.
+Start at the top with the maximum cardinality on each side, which decides the structure (column, unique column or junction table). Then the minimum cardinality decides `NULL` versus `NOT NULL`. Finally, ownership decides the delete rule and whether the parent's key is part of the child's identity. `rental_line` goes down the left path to "identifying, cascade"; `rental_order.venue_id` goes to "ordinary FK, nullable"; `operator_certification` takes the junction-table path.
 
 ### The round trip, step by step
 
@@ -414,7 +414,7 @@ The sequence shows who does what and in which order. Humans make the decisions (
 
 ## Step-by-step example
 
-Let's translate one feature end to end: "book an excavator with an operator on an order".
+Let's translate one feature end to end: "book an LED wall with an operator on an order".
 
 ### Step 1 — read the relevant diagram lines
 
@@ -447,20 +447,20 @@ A small mapper converts the order to rows and back. A test saves an order, reads
 
 ## Production-style C# implementation
 
-Below is the HireYard model as code, following the class diagram exactly, plus the PostgreSQL schema that follows the ER diagram, and an explicit row mapper. Real projects would usually let EF Core do the mapping (a configuration snippet follows), but writing the mapper by hand once makes every mapping decision visible.
+Below is the GigGear model as code, following the class diagram exactly, plus the PostgreSQL schema that follows the ER diagram, and an explicit row mapper. Real projects would usually let EF Core do the mapping (a configuration snippet follows), but writing the mapper by hand once makes every mapping decision visible.
 
 ```text
-HireYard.Api/
+GigGear.Api/
   Program.cs
-  Domain/Catalog.cs           // Customer, Site, EquipmentCategory, Equipment, EquipmentStatus
+  Domain/Catalog.cs           // Customer, Venue, EquipmentCategory, Equipment, EquipmentStatus
   Domain/Operators.cs         // Operator, Certification
   Domain/Rentals.cs           // RentalOrder, RentalLine, HirePeriod, OrderStatus
-  Persistence/HireYardSchema.cs // DDL that matches the ER diagram
+  Persistence/GigGearSchema.cs // DDL that matches the ER diagram
   Persistence/RentalRows.cs     // row records and the explicit mapper
 ```
 
 ```csharp file=Domain/Catalog.cs
-namespace HireYard.Api.Domain;
+namespace GigGear.Api.Domain;
 
 public enum EquipmentStatus { Available, OnHire, Maintenance }
 
@@ -475,7 +475,7 @@ public sealed record Customer(long Id, string Name, string? Gstin)
         : throw new ArgumentException("A GSTIN has 15 characters.", nameof(Gstin));
 }
 
-public sealed record Site(long Id, long CustomerId, string Name, string City);
+public sealed record Venue(long Id, long CustomerId, string Name, string City);
 
 public sealed record EquipmentCategory(long Id, string Name, decimal DailyRate)
 {
@@ -498,7 +498,7 @@ public sealed class Equipment(long id, long categoryId, string registrationNo)
 ```
 
 ```csharp file=Domain/Operators.cs
-namespace HireYard.Api.Domain;
+namespace GigGear.Api.Domain;
 
 /// <summary>Association class for the operator-category many-to-many, owned by the operator.</summary>
 public sealed record Certification(long CategoryId, DateOnly ValidUntil);
@@ -525,7 +525,7 @@ public sealed class Operator(long id, string name, string licenceNo)
 ```
 
 ```csharp file=Domain/Rentals.cs
-namespace HireYard.Api.Domain;
+namespace GigGear.Api.Domain;
 
 public enum OrderStatus { Draft, Confirmed, Closed, Cancelled }
 
@@ -573,27 +573,27 @@ public sealed class RentalOrder
 {
     private readonly List<RentalLine> _lines = new();
 
-    public RentalOrder(long id, Customer customer, Site? site)
+    public RentalOrder(long id, Customer customer, Venue? venue)
     {
         ArgumentNullException.ThrowIfNull(customer);
-        if (site is not null && site.CustomerId != customer.Id)
-            throw new ArgumentException("The delivery site must belong to the order's customer.", nameof(site));
+        if (venue is not null && venue.CustomerId != customer.Id)
+            throw new ArgumentException("The delivery venue must belong to the order's customer.", nameof(venue));
         Id = id;
         CustomerId = customer.Id;
-        SiteId = site?.Id;
+        VenueId = venue?.Id;
     }
 
-    private RentalOrder(long id, long customerId, long? siteId, OrderStatus status)
+    private RentalOrder(long id, long customerId, long? venueId, OrderStatus status)
     {
         Id = id;
         CustomerId = customerId;
-        SiteId = siteId;
+        VenueId = venueId;
         Status = status;
     }
 
     public long Id { get; }
     public long CustomerId { get; }
-    public long? SiteId { get; }
+    public long? VenueId { get; }
     public OrderStatus Status { get; private set; } = OrderStatus.Draft;
     public IReadOnlyList<RentalLine> Lines => _lines.AsReadOnly();
 
@@ -621,20 +621,20 @@ public sealed class RentalOrder
     public decimal Total() => _lines.Sum(l => l.Amount());
 
     /// <summary>Used only by the persistence mapper to rebuild an order from rows.</summary>
-    internal static RentalOrder Rehydrate(long id, long customerId, long? siteId, OrderStatus status, IEnumerable<RentalLine> lines)
+    internal static RentalOrder Rehydrate(long id, long customerId, long? venueId, OrderStatus status, IEnumerable<RentalLine> lines)
     {
-        var order = new RentalOrder(id, customerId, siteId, status);
+        var order = new RentalOrder(id, customerId, venueId, status);
         order._lines.AddRange(lines.OrderBy(l => l.LineNo));
         return order;
     }
 }
 ```
 
-```csharp file=Persistence/HireYardSchema.cs
-namespace HireYard.Api.Persistence;
+```csharp file=Persistence/GigGearSchema.cs
+namespace GigGear.Api.Persistence;
 
 /// <summary>The ER diagram as DDL. In a real project this is migration V001, applied by a migration tool.</summary>
-public static class HireYardSchema
+public static class GigGearSchema
 {
     public const string Ddl = """
         CREATE TABLE customer (
@@ -642,13 +642,13 @@ public static class HireYardSchema
           name  text NOT NULL,
           gstin char(15) UNIQUE
         );
-        CREATE TABLE site (
+        CREATE TABLE venue (
           id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
           customer_id bigint NOT NULL REFERENCES customer (id),
           name        text NOT NULL,
           city        text NOT NULL
         );
-        CREATE INDEX ix_site_customer_id ON site (customer_id);
+        CREATE INDEX ix_venue_customer_id ON venue (customer_id);
         CREATE TABLE equipment_category (
           id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
           name       text NOT NULL UNIQUE,
@@ -678,13 +678,13 @@ public static class HireYardSchema
         CREATE TABLE rental_order (
           id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
           customer_id bigint NOT NULL REFERENCES customer (id),
-          site_id     bigint REFERENCES site (id),
+          venue_id    bigint REFERENCES venue (id),
           status      text NOT NULL DEFAULT 'DRAFT'
                       CHECK (status IN ('DRAFT', 'CONFIRMED', 'CLOSED', 'CANCELLED')),
           created_at  timestamptz NOT NULL DEFAULT now()
         );
         CREATE INDEX ix_rental_order_customer_id ON rental_order (customer_id);
-        CREATE INDEX ix_rental_order_site_id ON rental_order (site_id);
+        CREATE INDEX ix_rental_order_venue_id ON rental_order (venue_id);
         CREATE TABLE rental_line (
           order_id     bigint NOT NULL REFERENCES rental_order (id) ON DELETE CASCADE,
           line_no      int    NOT NULL CHECK (line_no > 0),
@@ -703,12 +703,12 @@ public static class HireYardSchema
 ```
 
 ```csharp file=Persistence/RentalRows.cs
-using HireYard.Api.Domain;
+using GigGear.Api.Domain;
 
-namespace HireYard.Api.Persistence;
+namespace GigGear.Api.Persistence;
 
 /// <summary>One record per table: the shape the database sees.</summary>
-public sealed record RentalOrderRow(long Id, long CustomerId, long? SiteId, string Status);
+public sealed record RentalOrderRow(long Id, long CustomerId, long? VenueId, string Status);
 
 public sealed record RentalLineRow(
     long OrderId, int LineNo, long EquipmentId, long? OperatorId,
@@ -719,7 +719,7 @@ public static class RentalOrderMapper
 {
     public static (RentalOrderRow Order, IReadOnlyList<RentalLineRow> Lines) ToRows(RentalOrder order)
     {
-        var orderRow = new RentalOrderRow(order.Id, order.CustomerId, order.SiteId, ToDb(order.Status));
+        var orderRow = new RentalOrderRow(order.Id, order.CustomerId, order.VenueId, ToDb(order.Status));
         var lineRows = order.Lines
             .Select(l => new RentalLineRow(order.Id, l.LineNo, l.EquipmentId, l.OperatorId,
                 l.Period.Start, l.Period.End, l.DailyRate))   // value object flattened into two columns
@@ -733,7 +733,7 @@ public static class RentalOrderMapper
             .Where(r => r.OrderId == order.Id)
             .Select(r => new RentalLine(r.LineNo, r.EquipmentId, r.OperatorId,
                 new HirePeriod(r.StartDate, r.EndDate), r.DailyRate));
-        return RentalOrder.Rehydrate(order.Id, order.CustomerId, order.SiteId, FromDb(order.Status), domainLines);
+        return RentalOrder.Rehydrate(order.Id, order.CustomerId, order.VenueId, FromDb(order.Status), domainLines);
     }
 
     // Enums are stored as readable text that matches the CHECK constraint.
@@ -759,18 +759,18 @@ public static class RentalOrderMapper
 
 ```csharp file=Program.cs
 using System.Collections.Concurrent;
-using HireYard.Api.Domain;
-using HireYard.Api.Persistence;
+using GigGear.Api.Domain;
+using GigGear.Api.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
 var app = builder.Build();
 
 // Reference data, as it would be loaded from the tables.
-var customer = new Customer(1, "Deccan Infra Projects", "36AABCD1234E1Z5");
-var site = new Site(1, 1, "ORR Package 4 flyover", "Hyderabad");
-var excavators = new EquipmentCategory(1, "Excavator", 18_000m);
-var ex0142 = new Equipment(1, 1, "TS09-EX-0142");
-var ravi = new Operator(1, "Ravi Kumar", "HMV-0192");
+var customer = new Customer(1, "Deccan Wedding Co.", "36AABCD1234E1Z5");
+var venue = new Venue(1, 1, "Lakeview Convention Centre", "Hyderabad");
+var ledWalls = new EquipmentCategory(1, "LED wall", 18_000m);
+var led0142 = new Equipment(1, 1, "HYD-LED-0142");
+var ravi = new Operator(1, "Ravi Kumar", "OPR-0192");
 ravi.Certify(1, new DateOnly(2027, 3, 31));
 
 // "Tables" held in memory, so the round trip through rows is visible without a database driver.
@@ -778,12 +778,12 @@ var orderRows = new ConcurrentDictionary<long, RentalOrderRow>();
 var lineRows = new ConcurrentDictionary<(long, int), RentalLineRow>();
 long nextOrderId = 0;
 
-app.MapGet("/schema", () => Results.Text(HireYardSchema.Ddl, "text/plain"));
+app.MapGet("/schema", () => Results.Text(GigGearSchema.Ddl, "text/plain"));
 
 app.MapPost("/orders/demo", () =>
 {
-    var order = new RentalOrder(Interlocked.Increment(ref nextOrderId), customer, site);
-    order.AddLine(ex0142, excavators, new HirePeriod(new DateOnly(2026, 10, 1), new DateOnly(2026, 10, 20)), ravi);
+    var order = new RentalOrder(Interlocked.Increment(ref nextOrderId), customer, venue);
+    order.AddLine(led0142, ledWalls, new HirePeriod(new DateOnly(2026, 10, 1), new DateOnly(2026, 10, 20)), ravi);
     order.Confirm();
 
     var (row, lines) = RentalOrderMapper.ToRows(order);
@@ -801,7 +801,7 @@ app.MapGet("/orders/{id:long}", (long id) =>
         order.Id,
         Status = order.Status.ToString(),
         order.CustomerId,
-        order.SiteId,
+        order.VenueId,
         Lines = order.Lines.Select(l => new { l.LineNo, l.EquipmentId, l.OperatorId, l.Period.Start, l.Period.End, Amount = l.Amount() }),
         Total = order.Total(),
     });
@@ -814,11 +814,11 @@ Check each mapping decision in the code:
 
 - **Composition** → `RentalLine`'s constructor is `internal`, `Lines` is read-only, `AddLine` is the only way in, and the table has `ON DELETE CASCADE` plus a composite PK.
 - **`1..*`** → `Confirm()` throws with no lines. The database can't express it, so the domain does.
-- **`0..1`** → `long? SiteId` and `long? OperatorId` in C#, nullable columns in SQL.
+- **`0..1`** → `long? VenueId` and `long? OperatorId` in C#, nullable columns in SQL.
 - **Across-aggregate associations** → ids (`CustomerId`, `EquipmentId`), with foreign keys in SQL.
 - **Value object** → `HirePeriod` validates itself and is flattened by the mapper into `start_date` and `end_date`; the table's `CHECK` repeats the rule, so data written by another tool can't break it.
 - **Enum** → text values matching the `CHECK`, converted in exactly one place. An unknown value from the database fails loudly instead of becoming `default`.
-- **The site belongs to the customer** → checked in the constructor. The schema doesn't enforce it (no composite FK), and that's a written-down decision.
+- **The venue belongs to the customer** → checked in the constructor. The schema doesn't enforce it (no composite FK), and that's a written-down decision.
 
 With EF Core the same decisions become configuration. This snippet isn't compiled here (EF Core isn't available to the checker), but it shows where each decision lives:
 
@@ -854,7 +854,7 @@ public class RentalOrder
 {
     public int Id { get; set; }
     public Customer Customer { get; set; } = null!;     // full object graph across aggregates
-    public Site Site { get; set; } = null!;             // 0..1 became "never null" (and lies)
+    public Venue Venue { get; set; } = null!;             // 0..1 became "never null" (and lies)
     public string Status { get; set; } = "draft";       // any string, any case
     public List<RentalLine> Lines { get; set; } = new(); // anyone can add, remove or replace lines
 }
@@ -885,7 +885,7 @@ CREATE TABLE rental_line (
 | Diagram promise | Bad translation | Good translation |
 |---|---|---|
 | Composition, `1..*` | Public `List<T>` with a setter | Private list, `internal` constructor, `AddLine`, `Confirm()` check |
-| `0..1` site | Non-nullable `Site` with `null!` | `long? SiteId` and a nullable FK |
+| `0..1` venue | Non-nullable `Venue` with `null!` | `long? VenueId` and a nullable FK |
 | `0..1` operator | `"3,7"` in a text column | `long? OperatorId`, FK to `operator` |
 | Enum | Free text | `enum` plus text with `CHECK` |
 | Value object with a rule | Two loose `DateTime`s | `HirePeriod` record plus a table `CHECK` |
@@ -902,25 +902,25 @@ Text with a `CHECK` is readable in queries and reports and safe against reorderi
 
 ## Practical playground
 
-The SQL playground below is seeded with HireYard's schema and some data. Try these, and connect each query back to a line on the ER diagram:
+The SQL playground below is seeded with GigGear's schema and some data. Try these, and connect each query back to a line on the ER diagram:
 
 1. Total value of each order (days × daily rate per line). Order 1 should be ₹4,07,500.
-2. Which equipment is on hire on 15 October 2026, and on which site?
+2. Which equipment is on hire on 15 October 2026, and on which venue?
 3. Delete order 3 and confirm its lines disappear (the cascade from the identifying relationship).
 4. Try to delete operator 4, who is on a line. What happens, and why (`ON DELETE SET NULL` on `rental_line`, `CASCADE` on certifications)?
 5. Try to insert a line whose end date is before its start date.
 6. Query `information_schema.table_constraints` to list every constraint on `rental_line`.
 
-You can also open the HireYard class diagram in the **LLD playground**, which can generate a class model and compare it with a reference, and use the **HLD playground** for the container-level views from the [C4 views lesson](#/lesson/m05-c4-views).
+You can also open the GigGear class diagram in the **LLD playground**, which can generate a class model and compare it with a reference, and use the **HLD playground** for the container-level views from the [C4 views lesson](#/lesson/m05-c4-views).
 
-:::playground type=sql title="HireYard schema and data"
+:::playground type=sql title="GigGear schema and data"
 ```sql
 CREATE TABLE customer (
   id    bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   name  text NOT NULL,
   gstin char(15) UNIQUE
 );
-CREATE TABLE site (
+CREATE TABLE venue (
   id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   customer_id bigint NOT NULL REFERENCES customer (id),
   name        text NOT NULL,
@@ -953,7 +953,7 @@ CREATE TABLE operator_certification (
 CREATE TABLE rental_order (
   id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   customer_id bigint NOT NULL REFERENCES customer (id),
-  site_id     bigint REFERENCES site (id),
+  venue_id    bigint REFERENCES venue (id),
   status      text NOT NULL DEFAULT 'DRAFT'
               CHECK (status IN ('DRAFT', 'CONFIRMED', 'CLOSED', 'CANCELLED')),
   created_at  timestamptz NOT NULL DEFAULT now()
@@ -970,28 +970,28 @@ CREATE TABLE rental_line (
   CHECK (end_date >= start_date)
 );
 INSERT INTO customer (name, gstin) VALUES
-  ('Deccan Infra Projects', '36AABCD1234E1Z5'),
-  ('Konkan Bridgeworks', '27AAACK5678F1Z2'),
-  ('Shree Ganesh Builders', NULL);
-INSERT INTO site (customer_id, name, city) VALUES
-  (1, 'ORR Package 4 flyover', 'Hyderabad'),
-  (1, 'Shamshabad ROB', 'Hyderabad'),
-  (2, 'Vashi creek bridge', 'Navi Mumbai');
+  ('Deccan Wedding Co.', '36AABCD1234E1Z5'),
+  ('Konkan Live Events', '27AAACK5678F1Z2'),
+  ('Shree Ganesh Caterers', NULL);
+INSERT INTO venue (customer_id, name, city) VALUES
+  (1, 'Lakeview Convention Centre', 'Hyderabad'),
+  (1, 'Shamshabad Farmhouse Lawns', 'Hyderabad'),
+  (2, 'Vashi Exhibition Grounds', 'Navi Mumbai');
 INSERT INTO equipment_category (name, daily_rate) VALUES
-  ('Excavator', 18000), ('Crawler crane', 42000), ('Transit mixer', 9500);
+  ('LED wall', 18000), ('Line-array sound system', 42000), ('Diesel generator', 9500);
 INSERT INTO equipment (category_id, registration_no, status, purchased_on) VALUES
-  (1, 'TS09-EX-0142', 'ON_HIRE', '2022-04-11'),
-  (1, 'TS09-EX-0187', 'AVAILABLE', '2023-08-02'),
-  (2, 'MH43-CR-0031', 'ON_HIRE', '2021-01-20'),
-  (3, 'TS09-TM-0410', 'MAINTENANCE', '2020-11-05'),
-  (3, 'TS09-TM-0415', 'AVAILABLE', '2024-02-14');
+  (1, 'HYD-LED-0142', 'ON_HIRE', '2022-04-11'),
+  (1, 'HYD-LED-0187', 'AVAILABLE', '2023-08-02'),
+  (2, 'MUM-SND-0031', 'ON_HIRE', '2021-01-20'),
+  (3, 'HYD-GEN-0410', 'MAINTENANCE', '2020-11-05'),
+  (3, 'HYD-GEN-0415', 'AVAILABLE', '2024-02-14');
 INSERT INTO operator (name, licence_no) VALUES
-  ('Ravi Kumar', 'HMV-0192'), ('Anjali Patil', 'HMV-2231'), ('Mohammed Irfan', 'HMV-0457'),
-  ('Suresh Naidu', 'HMV-3310'), ('Deepa Rao', 'HMV-1188');
+  ('Ravi Kumar', 'OPR-0192'), ('Anjali Patil', 'OPR-2231'), ('Mohammed Irfan', 'OPR-0457'),
+  ('Suresh Naidu', 'OPR-3310'), ('Deepa Rao', 'OPR-1188');
 INSERT INTO operator_certification VALUES
   (1, 1, '2027-03-31'), (1, 2, '2026-10-31'), (2, 1, '2026-11-01'), (3, 1, '2026-10-15'),
   (3, 3, '2027-01-31'), (4, 2, '2027-06-30'), (5, 3, '2026-12-31');
-INSERT INTO rental_order (customer_id, site_id, status) VALUES
+INSERT INTO rental_order (customer_id, venue_id, status) VALUES
   (1, 1, 'CONFIRMED'), (2, 3, 'CONFIRMED'), (3, NULL, 'DRAFT');
 INSERT INTO rental_line VALUES
   (1, 1, 1, 1, '2026-10-01', '2026-10-20', 18000),
@@ -1281,7 +1281,7 @@ public sealed class Booking
 :::exercise id=m05-diagrams-to-code-ex2 difficulty=beginner kind=sql ordered=true title="Walk a many-to-many line: certified operators"
 The ER diagram has `OPERATOR ||--o{ OPERATOR_CERTIFICATION }o--|| EQUIPMENT_CATEGORY`: the junction table that implements "operators are certified for categories".
 
-A customer wants an excavator with an operator from **1 November 2026**. List the operators whose **Excavator** certification is valid on that date (`valid_until` on or after 1 November 2026). Return `name`, `licence_no` and `valid_until`, ordered by name.
+A customer wants an LED wall with an operator from **1 November 2026**. List the operators whose **LED wall** certification is valid on that date (`valid_until` on or after 1 November 2026). Return `name`, `licence_no` and `valid_until`, ordered by name.
 ::setup
 ```sql
 CREATE TABLE equipment_category (
@@ -1301,10 +1301,10 @@ CREATE TABLE operator_certification (
   PRIMARY KEY (operator_id, category_id)
 );
 INSERT INTO equipment_category (name, daily_rate) VALUES
-  ('Excavator', 18000), ('Crawler crane', 42000), ('Transit mixer', 9500);
+  ('LED wall', 18000), ('Line-array sound system', 42000), ('Diesel generator', 9500);
 INSERT INTO operator (name, licence_no) VALUES
-  ('Ravi Kumar', 'HMV-0192'), ('Anjali Patil', 'HMV-2231'), ('Mohammed Irfan', 'HMV-0457'),
-  ('Suresh Naidu', 'HMV-3310'), ('Deepa Rao', 'HMV-1188');
+  ('Ravi Kumar', 'OPR-0192'), ('Anjali Patil', 'OPR-2231'), ('Mohammed Irfan', 'OPR-0457'),
+  ('Suresh Naidu', 'OPR-3310'), ('Deepa Rao', 'OPR-1188');
 INSERT INTO operator_certification VALUES
   (1, 1, '2027-03-31'), (1, 2, '2026-10-31'), (2, 1, '2026-11-01'), (3, 1, '2026-10-15'),
   (3, 3, '2027-01-31'), (4, 2, '2027-06-30'), (5, 3, '2026-12-31');
@@ -1315,13 +1315,13 @@ SELECT o.name, o.licence_no, oc.valid_until
 FROM operator o
 JOIN operator_certification oc ON oc.operator_id = o.id
 JOIN equipment_category c ON c.id = oc.category_id
-WHERE c.name = 'Excavator'
+WHERE c.name = 'LED wall'
   AND oc.valid_until >= DATE '2026-11-01'
 ORDER BY o.name;
 ```
 ::acceptance
 - Returns Anjali Patil (valid until 2026-11-01) and Ravi Kumar (2027-03-31), in that order.
-- Mohammed Irfan is excluded: his excavator certification expired on 2026-10-15.
+- Mohammed Irfan is excluded: his LED wall certification expired on 2026-10-15.
 - Operators certified only for other categories are excluded.
 - The query joins through the junction table rather than hard-coding the category id.
 ::hint
@@ -1338,7 +1338,7 @@ SELECT o.name, o.licence_no, oc.valid_until
 FROM operator o
 JOIN operator_certification oc ON oc.operator_id = o.id
 JOIN equipment_category c ON c.id = oc.category_id
-WHERE c.name = 'Excavator'
+WHERE c.name = 'LED wall'
   AND oc.valid_until >= DATE '2026-11-01'
 ORDER BY o.name;
 ```
@@ -1410,9 +1410,9 @@ public class RelationshipDdlTests
     {
         Assert.Equal(new[]
         {
-            "ALTER TABLE site ADD COLUMN customer_id bigint NOT NULL REFERENCES customer (id);",
-            "CREATE INDEX ix_site_customer_id ON site (customer_id);",
-        }, RelationshipDdl.ToSql(new ErRelationship("customer", "site", Cardinality.OneToMany, true)));
+            "ALTER TABLE venue ADD COLUMN customer_id bigint NOT NULL REFERENCES customer (id);",
+            "CREATE INDEX ix_venue_customer_id ON venue (customer_id);",
+        }, RelationshipDdl.ToSql(new ErRelationship("customer", "venue", Cardinality.OneToMany, true)));
     }
 
     [Fact]
@@ -1420,9 +1420,9 @@ public class RelationshipDdlTests
     {
         Assert.Equal(new[]
         {
-            "ALTER TABLE rental_order ADD COLUMN site_id bigint REFERENCES site (id);",
-            "CREATE INDEX ix_rental_order_site_id ON rental_order (site_id);",
-        }, RelationshipDdl.ToSql(new ErRelationship("site", "rental_order", Cardinality.OneToMany, false)));
+            "ALTER TABLE rental_order ADD COLUMN venue_id bigint REFERENCES venue (id);",
+            "CREATE INDEX ix_rental_order_venue_id ON rental_order (venue_id);",
+        }, RelationshipDdl.ToSql(new ErRelationship("venue", "rental_order", Cardinality.OneToMany, false)));
     }
 
     [Fact]
@@ -1448,10 +1448,10 @@ public class RelationshipDdlTests
     }
 
     [Theory]
-    [InlineData("Customer", "site")]
-    [InlineData("customer", "site; DROP TABLE customer")]
-    [InlineData("1site", "customer")]
-    [InlineData("", "site")]
+    [InlineData("Customer", "venue")]
+    [InlineData("customer", "venue; DROP TABLE customer")]
+    [InlineData("1venue", "customer")]
+    [InlineData("", "venue")]
     public void Invalid_identifiers_throw(string parent, string child) =>
         Assert.Throws<ArgumentException>(() =>
             RelationshipDdl.ToSql(new ErRelationship(parent, child, Cardinality.OneToMany, true)));
@@ -1519,21 +1519,21 @@ public static class RelationshipDdl
 }
 ```
 
-The three cases are the three rows of the "which table gets the foreign key?" flowchart. Note what the generator can't decide for you: the delete rule (`CASCADE`, `RESTRICT`, `SET NULL`), whether the relationship is identifying, and the name when a table relates to another table twice (an order's `billing_site_id` and `delivery_site_id`). Those need role names and ownership information that a bare cardinality doesn't carry, which is why real ER models include them.
+The three cases are the three rows of the "which table gets the foreign key?" flowchart. Note what the generator can't decide for you: the delete rule (`CASCADE`, `RESTRICT`, `SET NULL`), whether the relationship is identifying, and the name when a table relates to another table twice (an order's `billing_venue_id` and `delivery_venue_id`). Those need role names and ownership information that a bare cardinality doesn't carry, which is why real ER models include them.
 ::alternatives
 - Generate full `CREATE TABLE` statements from a model of entities and relationships, rather than `ALTER TABLE` per relationship; better for a new schema, while `ALTER` statements suit migrations.
 - Let EF Core migrations generate DDL from configuration; you still make the same decisions, just in C#.
 ::mistakes
-- Putting the foreign key on the parent ("customer has site_ids").
+- Putting the foreign key on the parent ("customer has venue_ids").
 - Adding a second index on a one-to-one FK that already has a unique index.
 - Building SQL from unchecked names, which is both an injection risk and a source of mixed-case identifiers that need quoting forever.
 ::extensions
 - Add `OnDelete` (`Cascade`, `Restrict`, `SetNull`) and reject `SetNull` on a `NOT NULL` column.
-- Add an optional role name, so `rental_order` can have both `billing_site_id` and `delivery_site_id`.
+- Add an optional role name, so `rental_order` can have both `billing_venue_id` and `delivery_venue_id`.
 :::
 
 :::exercise id=m05-diagrams-to-code-ex4 difficulty=intermediate kind=sql ordered=true title="Reverse-engineer the ER diagram from the catalog"
-You have joined a project with a live HireYard database and no ER diagram. Recover every relationship from PostgreSQL's catalog.
+You have joined a project with a live GigGear database and no ER diagram. Recover every relationship from PostgreSQL's catalog.
 
 Write a query that lists every foreign key in the `public` schema with: `child_table` (the table with the FK column), `fk_column`, `parent_table` (the referenced table) and `optional` (true if the FK column is nullable, which becomes `|o` instead of `||` at the parent end). Order by `child_table`, then `fk_column`. All foreign keys in this schema are single-column.
 ::setup
@@ -1543,7 +1543,7 @@ CREATE TABLE customer (
   name  text NOT NULL,
   gstin char(15) UNIQUE
 );
-CREATE TABLE site (
+CREATE TABLE venue (
   id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   customer_id bigint NOT NULL REFERENCES customer (id),
   name        text NOT NULL,
@@ -1576,7 +1576,7 @@ CREATE TABLE operator_certification (
 CREATE TABLE rental_order (
   id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   customer_id bigint NOT NULL REFERENCES customer (id),
-  site_id     bigint REFERENCES site (id),
+  venue_id    bigint REFERENCES venue (id),
   status      text NOT NULL DEFAULT 'DRAFT'
               CHECK (status IN ('DRAFT', 'CONFIRMED', 'CLOSED', 'CANCELLED')),
   created_at  timestamptz NOT NULL DEFAULT now()
@@ -1612,7 +1612,7 @@ ORDER BY child_table, fk_column;
 ```
 ::acceptance
 - Returns 9 rows, one per foreign key.
-- Exactly two rows are optional: `rental_line.operator_id` and `rental_order.site_id`.
+- Exactly two rows are optional: `rental_line.operator_id` and `rental_order.venue_id`.
 - `operator_certification` appears twice (once per parent), which identifies it as a junction table.
 - Rows are ordered by child table, then column.
 ::hint
@@ -1654,7 +1654,7 @@ WHERE c.contype = 'f' AND c.connamespace = 'public'::regnamespace
 ORDER BY child_table, fk_column;
 ```
 
-Each row is one line of the ER diagram: `{parent_table} ||--o{ {child_table}` when `optional` is false, `|o--o{` when it's true. The many side is always `o{` here because nothing in the schema forces a parent to have children. Two rows for `operator_certification`, whose primary key is exactly its two foreign keys, mark it as a junction table: draw it as a many-to-many between `operator` and `equipment_category` with `valid_until` as a relationship attribute. What the catalog can't tell you is **why** `site_id` is optional, or that an order should have at least one line. Add those as notes when you draw the diagram.
+Each row is one line of the ER diagram: `{parent_table} ||--o{ {child_table}` when `optional` is false, `|o--o{` when it's true. The many side is always `o{` here because nothing in the schema forces a parent to have children. Two rows for `operator_certification`, whose primary key is exactly its two foreign keys, mark it as a junction table: draw it as a many-to-many between `operator` and `equipment_category` with `valid_until` as a relationship attribute. What the catalog can't tell you is **why** `venue_id` is optional, or that an order should have at least one line. Add those as notes when you draw the diagram.
 ::mistakes
 - Joining only `key_column_usage`, which gives the child column but not the parent table.
 - Forgetting the schema filter, which pulls in system or extension tables in a real database.
@@ -1733,7 +1733,7 @@ public class SchemaDriftTests
     {
         new("id", "bigint", false),
         new("customer_id", "bigint", false),
-        new("site_id", "bigint", true),
+        new("venue_id", "bigint", true),
         new("status", "text", false),
         new("created_at", "timestamp with time zone", false),
     });
@@ -1753,7 +1753,7 @@ public class SchemaDriftTests
         {
             new("Id", "long", false),
             new("Customer", "Customer", false),
-            new("Site", "Site", true),
+            new("Venue", "Venue", true),
             new("Status", "OrderStatus", false),
             new("CreatedAt", "DateTimeOffset", false),
             new("Lines", "IReadOnlyList<RentalLine>", false),
@@ -1826,8 +1826,8 @@ public class SchemaDriftTests
     [Fact]
     public void Reference_must_be_bigint_or_uuid()
     {
-        var cls = new ClassModel("Site", new List<PropertyModel> { new("Customer", "Customer", false) });
-        var table = new TableModel("site", new List<ColumnModel> { new("customer_id", "text", false) });
+        var cls = new ClassModel("Venue", new List<PropertyModel> { new("Customer", "Customer", false) });
+        var table = new TableModel("venue", new List<ColumnModel> { new("customer_id", "text", false) });
         Assert.Equal(new[] { "Customer: Customer does not match customer_id text" }, SchemaDrift.Compare(cls, table, Enums));
     }
 }
@@ -1950,9 +1950,9 @@ Three kinds of tests keep diagram, code and schema in step.
 ```csharp
 public class RentalDiagramContractTests
 {
-    private static readonly Customer Deccan = new(1, "Deccan Infra Projects", null);
-    private static readonly EquipmentCategory Excavator = new(1, "Excavator", 18_000m);
-    private static readonly Equipment Ex0142 = new(1, 1, "TS09-EX-0142");
+    private static readonly Customer Deccan = new(1, "Deccan Wedding Co.", null);
+    private static readonly EquipmentCategory LedWall = new(1, "LED wall", 18_000m);
+    private static readonly Equipment Led0142 = new(1, 1, "HYD-LED-0142");
     private static readonly HirePeriod Oct1To20 = new(new DateOnly(2026, 10, 1), new DateOnly(2026, 10, 20));
 
     [Fact] // RentalOrder "1" *-- "1..*" RentalLine
@@ -1962,22 +1962,22 @@ public class RentalDiagramContractTests
     [Fact] // RentalLine --> "0..1" Operator, and the certification rule
     public void Uncertified_operator_is_rejected()
     {
-        var op = new Operator(3, "Mohammed Irfan", "HMV-0457");
+        var op = new Operator(3, "Mohammed Irfan", "OPR-0457");
         op.Certify(1, new DateOnly(2026, 10, 15)); // expires before the hire ends
-        Assert.Throws<InvalidOperationException>(() => new RentalOrder(1, Deccan, null).AddLine(Ex0142, Excavator, Oct1To20, op));
+        Assert.Throws<InvalidOperationException>(() => new RentalOrder(1, Deccan, null).AddLine(Led0142, LedWall, Oct1To20, op));
     }
 
     [Fact] // Round trip: aggregate -> rows -> aggregate
     public void Mapper_round_trip_preserves_the_order()
     {
         var order = new RentalOrder(7, Deccan, null);
-        order.AddLine(Ex0142, Excavator, Oct1To20, null);
+        order.AddLine(Led0142, LedWall, Oct1To20, null);
         order.Confirm();
         var (row, lines) = RentalOrderMapper.ToRows(order);
         var back = RentalOrderMapper.FromRows(row, lines);
         Assert.Equal(order.Total(), back.Total());       // 20 days x 18,000 = 3,60,000
         Assert.Equal(OrderStatus.Confirmed, back.Status);
-        Assert.Null(back.SiteId);
+        Assert.Null(back.VenueId);
     }
 }
 ```
@@ -1989,7 +1989,7 @@ public class RentalDiagramContractTests
 ## Real-world application
 
 - **Code reviews of migrations.** Reviewers check each new table against the ER mapping table: FK on the many side, `NOT NULL` matching the diagram, indexes on FK columns, delete rules matching ownership.
-- **Shared databases.** In organisations where reporting tools, a GIS and two applications read the same PostgreSQL database (common in infrastructure and government projects), the schema is the contract. Database-first design with reviewed DDL and a generated ER diagram is the norm.
+- **Shared databases.** In organisations where reporting tools, a GIS and two applications read the same PostgreSQL database (common in banks and government departments), the schema is the contract. Database-first design with reviewed DDL and a generated ER diagram is the norm.
 - **Legacy onboarding.** On a project with no documentation, the catalog query from exercise 4 produces an ER diagram in minutes; EF Core scaffolding produces classes; you then add the intent as notes.
 - **Data migrations between systems.** Moving from a vendor's schema to yours starts with both ER diagrams side by side and a column-by-column mapping table.
 - **Interviews.** LLD interviews often end with "how would you store this?". Translating your class diagram into tables (FK placement, junction tables, composite keys, inheritance strategy) out loud is a strong signal.
@@ -2001,7 +2001,7 @@ public class RentalDiagramContractTests
 ::q beginner
 How do you translate a one-to-many relationship from an ER diagram into tables?
 ::a
-Put a foreign key column on the "many" side (the side with the crow's foot) that references the "one" side's primary key: `site.customer_id REFERENCES customer (id)`. Make it `NOT NULL` if every child must have a parent, nullable if the parent is optional. Add an index on the FK column, because PostgreSQL doesn't create one automatically and joins and parent deletes need it. Choose the delete rule from ownership: `CASCADE` for owned children, `RESTRICT` or `SET NULL` for references.
+Put a foreign key column on the "many" side (the side with the crow's foot) that references the "one" side's primary key: `venue.customer_id REFERENCES customer (id)`. Make it `NOT NULL` if every child must have a parent, nullable if the parent is optional. Add an index on the FK column, because PostgreSQL doesn't create one automatically and joins and parent deletes need it. Choose the delete rule from ownership: `CASCADE` for owned children, `RESTRICT` or `SET NULL` for references.
 ::q beginner
 What does multiplicity `0..1` on a class diagram become in C# and in PostgreSQL?
 ::a
@@ -2011,13 +2011,13 @@ How do you map composition from a class diagram to code and to the database?
 ::a
 In code, the whole creates and owns its parts: the part's constructor is `internal` or private, the whole exposes the parts read-only, and changes go through methods on the whole (`order.AddLine(...)`). There's no setter that accepts a part from outside. In the database, the part's table has a `NOT NULL` foreign key to the whole with `ON DELETE CASCADE`, and often an **identifying** relationship: the part's primary key includes the whole's key, like `PRIMARY KEY (order_id, line_no)`. The whole and its parts are loaded and saved together as one aggregate.
 ::q intermediate
-A class diagram has `Crane` and `Excavator` inheriting from `Equipment`. How would you store them?
+A class diagram has `LedWall` and `Generator` inheriting from `Equipment`. How would you store them?
 ::a
 Three options. Table per hierarchy: one table with a discriminator and nullable subtype columns, plus `CHECK` constraints per type; fastest and simplest, EF Core's default. Table per type: a base table plus one table per subtype sharing the primary key; normalised, but every load joins. Table per concrete class: one full table per subtype; no joins for one type, but cross-type queries need `UNION ALL` and ids must be unique across tables. For two or three subtypes with a few extra columns each, I'd use table per hierarchy. I'd also ask whether inheritance is needed at all: if behaviour doesn't differ, a category plus a specifications column may be simpler.
 ::q advanced
 Which promises on an ER diagram can't be enforced by foreign keys, and how do you handle them?
 ::a
-Minimum cardinality on the many side ("an order has at least one line"), rules across rows ("no overlapping hires of the same equipment"), rules across tables ("the delivery site belongs to the order's customer") and time-based rules ("the operator is certified for the whole hire"). Options: enforce in the domain model (`Confirm()` checks for lines) and test it; use richer database constraints where possible (an exclusion constraint on a date range for overlaps, a composite foreign key for "same customer"); use triggers sparingly, such as a deferred constraint trigger for "at least one". The key is to write down where each rule is enforced, so none is enforced nowhere.
+Minimum cardinality on the many side ("an order has at least one line"), rules across rows ("no overlapping hires of the same equipment"), rules across tables ("the delivery venue belongs to the order's customer") and time-based rules ("the operator is certified for the whole hire"). Options: enforce in the domain model (`Confirm()` checks for lines) and test it; use richer database constraints where possible (an exclusion constraint on a date range for overlaps, a composite foreign key for "same customer"); use triggers sparingly, such as a deferred constraint trigger for "at least one". The key is to write down where each rule is enforced, so none is enforced nowhere.
 ::q advanced
 You join a team where the C# model, the EF Core migrations and the production schema have drifted apart. How do you get back to one truth?
 ::a
@@ -2042,7 +2042,7 @@ First, find the differences: script the production schema, compare it with a dat
 
 :::flashcards
 Q: Which table gets the foreign key in a one-to-many relationship?
-A: The "many" side, the one with the crow's foot: `site.customer_id REFERENCES customer (id)`.
+A: The "many" side, the one with the crow's foot: `venue.customer_id REFERENCES customer (id)`.
 Q: How is a many-to-many relationship stored?
 A: A junction table with two foreign keys and a composite primary key; relationship attributes (like `valid_until`) become its columns.
 Q: What does an identifying relationship look like in SQL?
@@ -2079,17 +2079,17 @@ A class diagram shows `Booking "1" *-- "1..*" Trip`. Which C# design keeps the p
 - [ ] A public `Trip` constructor taking a `Booking`
 > Composition means the whole creates and controls its parts; `1..*` needs a rule because types can't express it.
 ::q single
-Where does the foreign key go for "a site belongs to one customer, a customer has many sites"?
-- [ ] `customer.site_ids`
-- [x] `site.customer_id`
-- [ ] A junction table `customer_site`
+Where does the foreign key go for "a venue belongs to one customer, a customer has many venues"?
+- [ ] `customer.venue_ids`
+- [x] `venue.customer_id`
+- [ ] A junction table `customer_venue`
 - [ ] Both tables
 > The foreign key goes on the many side. A junction table is only needed for many-to-many.
 ::q single
-`rental_order.site_id` is nullable in the database, but the C# property is `long SiteId` (not nullable). What happens?
+`rental_order.venue_id` is nullable in the database, but the C# property is `long VenueId` (not nullable). What happens?
 - [ ] Nothing; they agree.
-- [x] Loading an order collected from the yard (null site) fails or turns null into 0, and the class diagram's `0..1` is lost in code.
-- [ ] The database rejects null sites.
+- [x] Loading an order collected from the warehouse (null venue) fails or turns null into 0, and the class diagram's `0..1` is lost in code.
+- [ ] The database rejects null venues.
 - [ ] EF Core automatically makes the property nullable.
 > Nullability must agree on both sides. A drift check catches exactly this.
 ::q multi

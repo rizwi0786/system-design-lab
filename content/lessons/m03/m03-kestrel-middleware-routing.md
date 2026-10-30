@@ -24,7 +24,7 @@ references:
     url: https://learn.microsoft.com/aspnet/core/fundamentals/minimal-apis/min-api-filters
 ---
 
-In [How an ASP.NET Core application starts](#/lesson/m03-startup) you saw that `Program.cs` has two phases, and in [HTTP request and response lifecycle](#/lesson/m03-request-lifecycle) you followed one request from the client to PostgreSQL and back. This lesson zooms into the three framework stages in the middle of that journey: **Kestrel** (the web server), the **middleware pipeline** (the checkpoints) and **routing** (the dispatcher), and then the two ways to write the code at the end of the line: **controllers** and **minimal APIs**. Our running example is an API for a network of EV charging stations in Bengaluru, Pune and Hyderabad.
+In [How an ASP.NET Core application starts](#/lesson/m03-startup) you saw that `Program.cs` has two phases, and in [HTTP request and response lifecycle](#/lesson/m03-request-lifecycle) you followed one request from the client to PostgreSQL and back. This lesson zooms into the three framework stages in the middle of that journey: **Kestrel** (the web server), the **middleware pipeline** (the checkpoints) and **routing** (the dispatcher), and then the two ways to write the code at the end of the line: **controllers** and **minimal APIs**. Our running example is a ride-hailing API, the kind behind apps like Uber, Ola or Rapido, serving riders and drivers in Bengaluru, Pune and Hyderabad: look up drivers, estimate a fare, request and cancel a ride.
 
 ## Learning objectives
 
@@ -65,16 +65,16 @@ Kestrel is the cross-platform HTTP server that ships with ASP.NET Core. When you
 
 What Kestrel gives you:
 
-- **HTTP/1.1, HTTP/2 and HTTP/3** (HTTP/3 needs QUIC support on the OS). HTTP/2 lets one TCP connection carry many requests at once, which matters for browsers and gRPC.
+- **HTTP/1.1, HTTP/2 and HTTP/3**. Endpoints speak HTTP/1.1 and HTTP/2 by default; HTTP/3 must be switched on per endpoint and needs QUIC support (msquic) on the OS. HTTP/2 lets one TCP connection carry many requests at once, which matters for browsers and gRPC.
 - **TLS** with certificates from configuration or the certificate store.
-- **Limits** that protect you from abusive or broken clients. The defaults are sensible, and you should know them: maximum request body 30,000,000 bytes (about 28.6 MB), total request headers 32 KB, and a keep-alive timeout of 130 seconds. A client that sends a 50 MB upload to an endpoint gets 413 (Payload Too Large) before your code runs.
+- **Limits** that protect you from abusive or broken clients. The defaults are sensible, and you should know them: maximum request body 30,000,000 bytes (about 28.6 MB), total request headers 32 KB, a keep-alive timeout of 130 seconds, and 30 seconds to receive the request headers (`RequestHeadersTimeout`). A client that sends a 50 MB upload to an endpoint gets 413 (Content Too Large) as soon as Kestrel sees it is over the limit, before your code reads the body.
 
 You configure it in code or in configuration:
 
 ```csharp
 builder.WebHost.ConfigureKestrel(k =>
 {
-    k.Limits.MaxRequestBodySize = 1 * 1024 * 1024; // 1 MB is plenty for a JSON booking API
+    k.Limits.MaxRequestBodySize = 1 * 1024 * 1024; // 1 MB is plenty for a JSON ride-booking API
     k.AddServerHeader = false;                      // do not advertise "Server: Kestrel"
 });
 ```
@@ -91,7 +91,7 @@ builder.WebHost.ConfigureKestrel(k =>
 
 **Kestrel at the edge or behind a proxy?** Kestrel is fast and safe enough to face the internet directly, but in most production setups something sits in front of it:
 
-- A **reverse proxy** or load balancer (Nginx, YARP, Azure Application Gateway, AWS ALB) terminates TLS, spreads traffic across several app instances, and forwards plain HTTP to Kestrel. Your app then sees the proxy's IP address, so you add `UseForwardedHeaders` early in the pipeline to restore the client's IP and scheme from `X-Forwarded-For` and `X-Forwarded-Proto`. Only trust these headers from known proxies, or any client can pretend to be any IP.
+- A **reverse proxy** or load balancer (Nginx, YARP, Azure Application Gateway, AWS ALB) terminates TLS, spreads traffic across several app instances, and forwards plain HTTP to Kestrel. Your app then sees the proxy's IP address, so you add `UseForwardedHeaders` early in the pipeline to restore the client's IP and scheme from `X-Forwarded-For` and `X-Forwarded-Proto`. Only trust these headers from known proxies (`KnownProxies` and `KnownIPNetworks`, called `KnownNetworks` before .NET 10), or any client can pretend to be any IP.
 - **IIS on Windows.** With the ASP.NET Core Module, the default is **in-process hosting**: the app runs inside the IIS worker process and uses the IIS HTTP server instead of Kestrel. In **out-of-process** mode, IIS forwards requests to Kestrel running in a separate process. Either way, your middleware and endpoints are identical; only the server underneath changes. That is the point of the `IServer` abstraction.
 - **Containers and Kubernetes.** Kestrel listens on a port such as 8080 (the default port in the official .NET 8+ container images), and an ingress controller sits in front.
 
@@ -123,7 +123,7 @@ A middleware can do four things:
 ```csharp
 app.Use(async (context, next) =>
 {
-    context.Response.Headers["X-Station-Network"] = "EvCharge";
+    context.Response.Headers["X-Ride-Platform"] = "RideHail";
     await next(context);
 });
 ```
@@ -176,16 +176,16 @@ The gap between the two is deliberate. Middleware in between (CORS, authorizatio
 
 | Template | Matches | Does not match |
 |---|---|---|
-| `/api/stations` | `/api/stations`, `/API/Stations` (case-insensitive) | `/api/stations/7` |
-| `/api/stations/{id}` | `/api/stations/7`, `/api/stations/abc` | `/api/stations` |
-| `/api/stations/{id:int}` | `/api/stations/7` | `/api/stations/abc` |
-| `/api/stations/{id:int:min(1)}` | `/api/stations/7` | `/api/stations/0` |
-| `/api/stations/{city}/{area?}` | `/api/stations/pune`, `/api/stations/pune/hinjewadi` | `/api/stations` |
-| `/files/{**path}` | `/files/a/b/c.pdf` (catch-all, `path = "a/b/c.pdf"`) | `/other` |
+| `/api/drivers` | `/api/drivers`, `/API/Drivers` (case-insensitive) | `/api/drivers/7` |
+| `/api/drivers/{id}` | `/api/drivers/7`, `/api/drivers/abc` | `/api/drivers` |
+| `/api/drivers/{id:int}` | `/api/drivers/7` | `/api/drivers/abc` |
+| `/api/drivers/{id:int:min(1)}` | `/api/drivers/7` | `/api/drivers/0` |
+| `/api/drivers/{city}/{area?}` | `/api/drivers/pune`, `/api/drivers/pune/hinjewadi` | `/api/drivers` |
+| `/receipts/{**path}` | `/receipts/2026/03/ride-1042.pdf` (catch-all, `path = "2026/03/ride-1042.pdf"`) | `/other` |
 
 Common constraints: `int`, `long`, `guid`, `bool`, `datetime`, `decimal`, `alpha`, `minlength(n)`, `maxlength(n)`, `range(a,b)`, `regex(...)`. Constraints help routing *choose*; they are **not** input validation. A constraint failure gives 404 (the URL simply does not exist), while invalid input to an existing resource should give 400 with details.
 
-**Which endpoint wins?** When several templates match the same URL, routing ranks them by **precedence**, segment by segment from left to right: a literal segment (`near`) beats a parameter with a constraint (`{id:int}`), which beats a plain parameter (`{slug}`), which beats a catch-all (`{**rest}`). So with all three of these registered, `/api/stations/near` goes to the literal, `/api/stations/42` goes to `{id:int}`, and `/api/stations/koramangala` goes to `{slug}`. If two endpoints have exactly the same precedence and both match, routing throws `AmbiguousMatchException` at request time, which is a bug to fix, not a feature.
+**Which endpoint wins?** When several templates match the same URL, routing ranks them by **precedence**, segment by segment from left to right: a literal segment (`nearby`) beats a parameter with a constraint (`{id:int}`), which beats a plain parameter (`{city}`), which beats a catch-all (`{**rest}`). So with all three of these registered, `/api/drivers/nearby` goes to the literal, `/api/drivers/42` goes to `{id:int}`, and `/api/drivers/pune` goes to `{city}`. If two endpoints have exactly the same precedence and both match, routing throws `AmbiguousMatchException` at request time, which is a bug to fix, not a feature.
 
 **404 versus 405.** If no template matches the path, no endpoint is selected and the request falls off the end of the pipeline: **404**. If the path matches but not for this HTTP method (a `DELETE` on a route that only has `GET`), routing selects a special endpoint that returns **405 Method Not Allowed** with an `Allow` header.
 
@@ -196,22 +196,22 @@ Common constraints: `int`, `long`, `guid`, `bool`, `datetime`, `decimal`, `alpha
 **Minimal APIs** map a route straight to a lambda or a static method:
 
 ```csharp
-app.MapGet("/api/stations/{id:int}", (int id, IStationDirectory stations) =>
-    stations.Find(id) is { } s ? Results.Ok(s) : Results.NotFound());
+app.MapGet("/api/drivers/{id:int}", (int id, IDriverDirectory drivers) =>
+    drivers.Find(id) is { } d ? Results.Ok(d) : Results.NotFound());
 ```
 
-Parameters are bound by convention: `id` matches the route value, `IStationDirectory` is a registered service so it comes from the container, a complex type on a `POST` comes from the JSON body, and simple types not in the route come from the query string. You can be explicit with `[FromRoute]`, `[FromQuery]`, `[FromHeader]`, `[FromBody]` and `[FromServices]`.
+Parameters are bound by convention: `id` matches the route value, `IDriverDirectory` is a registered service so it comes from the container, a complex type on a `POST` comes from the JSON body, and simple types not in the route come from the query string. You can be explicit with `[FromRoute]`, `[FromQuery]`, `[FromHeader]`, `[FromBody]` and `[FromServices]`.
 
 **Controllers** group related actions in a class that derives from `ControllerBase`:
 
 ```csharp
 [ApiController]
 [Route("api/[controller]")]
-public sealed class BookingsController(IBookingService bookings) : ControllerBase
+public sealed class RidesController(IRideService rides) : ControllerBase
 {
     [HttpGet("{id:guid}")]
-    public ActionResult<BookingConfirmation> GetById(Guid id) =>
-        bookings.Find(id) is { } b ? b : NotFound();
+    public ActionResult<RideConfirmation> GetById(Guid id) =>
+        rides.Find(id) is { } r ? r : NotFound();
 }
 ```
 
@@ -235,10 +235,10 @@ Microsoft's current guidance recommends minimal APIs for new projects, and contr
 
 As a minimal API grows, two tools stop `Program.cs` from becoming a wall of lambdas:
 
-- **Route groups** (`app.MapGroup("/api/stations")`) share a URL prefix and metadata such as `RequireAuthorization()`, tags or filters across many endpoints.
+- **Route groups** (`app.MapGroup("/api/drivers")`) share a URL prefix and metadata such as `RequireAuthorization()`, tags or filters across many endpoints.
 - **Endpoint filters** (`IEndpointFilter`) run around one endpoint (or a group) after parameter binding, with access to the bound arguments. They are the minimal-API equivalent of MVC action filters: validation, auditing, idempotency checks. Unlike middleware, a filter knows the endpoint's typed arguments; unlike code in the handler, it can be reused.
 
-Middleware versus filter is a common question. Use middleware when the concern applies to *all* requests and only needs the raw `HttpContext` (timing, correlation ids, maintenance mode). Use a filter when the concern applies to *specific* endpoints and needs the bound arguments (validate a `BookingRequest`).
+Middleware versus filter is a common question. Use middleware when the concern applies to *all* requests and only needs the raw `HttpContext` (timing, correlation ids, maintenance mode). Use a filter when the concern applies to *specific* endpoints and needs the bound arguments (validate a `RideRequest`).
 
 ### Trade-offs
 
@@ -281,20 +281,20 @@ sequenceDiagram
     participant M as Maintenance gate
     participant R as Routing
     participant A as Authorization
-    participant E as Endpoint GET /api/stations/{id}
-    C->>K: GET /api/stations/42
+    participant E as Endpoint GET /api/drivers/{id}
+    C->>K: GET /api/drivers/42
     K->>T: HttpContext
     T->>M: next()
     M->>R: next() because maintenance is off
     R->>R: match template, id = 42
     R->>A: next() with endpoint selected
     A->>E: allowed, run endpoint
-    E-->>A: 200 OK with station JSON
+    E-->>A: 200 OK with driver JSON
     A-->>T: response flows back
     T-->>K: add Server-Timing header
     K-->>C: 200 OK
     Note over M: later, maintenance is switched on
-    C->>K: GET /api/stations/42
+    C->>K: GET /api/drivers/42
     K->>T: HttpContext
     T->>M: next()
     M-->>T: 503 with Retry-After 120, next() not called
@@ -306,18 +306,18 @@ The first request travels all the way to the endpoint and back. The second is st
 
 ## Step-by-step example
 
-We will grow the charging-station API one concept at a time.
+We will grow the ride-hailing API one concept at a time.
 
 ### Step 1 — one endpoint, no middleware
 
 ```csharp
 var builder = WebApplication.CreateBuilder(args);
 var app = builder.Build();
-app.MapGet("/api/stations/{id:int}", (int id) => new { id, name = "Koramangala 5th Block", freeConnectors = 3 });
+app.MapGet("/api/drivers/{id:int}", (int id) => new { id, name = "Ravi Kumar", vehicle = "Sedan", available = true });
 app.Run();
 ```
 
-`GET /api/stations/7` returns JSON. `GET /api/stations/abc` returns 404 because the `int` constraint fails. `POST /api/stations/7` returns 405. You have written zero middleware, yet routing, binding and JSON serialization already work.
+`GET /api/drivers/7` returns JSON. `GET /api/drivers/abc` returns 404 because the `int` constraint fails. `POST /api/drivers/7` returns 405. You have written zero middleware, yet routing, binding and JSON serialization already work.
 
 ### Step 2 — add a timing middleware inline
 
@@ -335,11 +335,11 @@ Place it **before** `MapGet`. Run it and you will see a log line per request. Tr
 
 ### Step 3 — move it into a class and add a short-circuit
 
-Inline lambdas are hard to test. We move timing into `RequestTimingMiddleware` and add a `MaintenanceModeMiddleware` that returns 503 during planned maintenance (for example, while charger firmware is updated across the Pune network between 2 and 3 a.m.), while still allowing `/health` so the load balancer does not mark every instance dead.
+Inline lambdas are hard to test. We move timing into `RequestTimingMiddleware` and add a `MaintenanceModeMiddleware` that returns 503 during planned maintenance (for example, while the payments database is upgraded between 2 and 3 a.m., when ride requests are at their lowest), while still allowing `/health` so the load balancer does not mark every instance dead.
 
 ### Step 4 — grow the endpoints
 
-Station lookups stay as minimal APIs in a route group (`/api/stations`). Bookings, which have create, read and cancel actions, validation and more rules, go into a `BookingsController`. Both are mapped in the same app. This mixed setup is common in real codebases that started with MVC and add minimal APIs for new, small features.
+Driver lookups and fare estimates stay as minimal APIs in route groups (`/api/drivers`, `/api/fares`). Rides, which have request, read and cancel actions, validation and more rules, go into a `RidesController`. Both are mapped in the same app. This mixed setup is common in real codebases that started with MVC and add minimal APIs for new, small features.
 
 ### Step 5 — put the pipeline in order
 
@@ -350,16 +350,16 @@ Finally, we assemble `Program.cs` in the order from the table above and check ea
 Project layout:
 
 ```text
-EvCharge.Api/
+RideHail.Api/
   Program.cs
   Middleware/RequestTimingMiddleware.cs
   Middleware/MaintenanceModeMiddleware.cs
-  Stations/ChargingStation.cs
-  Stations/InMemoryStationDirectory.cs
-  Stations/StationEndpoints.cs
-  Bookings/BookingModels.cs
-  Bookings/InMemoryBookingService.cs
-  Bookings/BookingsController.cs
+  Drivers/Driver.cs
+  Drivers/InMemoryDriverDirectory.cs
+  Drivers/DriverEndpoints.cs
+  Rides/RideModels.cs
+  Rides/InMemoryRideService.cs
+  Rides/RidesController.cs
 ```
 
 ```csharp file=Middleware/RequestTimingMiddleware.cs
@@ -367,7 +367,7 @@ using System.Diagnostics;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 
-namespace EvCharge.Middleware;
+namespace RideHail.Middleware;
 
 /// <summary>
 /// Convention-based middleware: created once, so it only takes singleton-safe dependencies.
@@ -406,7 +406,7 @@ public sealed class RequestTimingMiddleware(RequestDelegate next, ILogger<Reques
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 
-namespace EvCharge.Middleware;
+namespace RideHail.Middleware;
 
 public sealed class MaintenanceOptions
 {
@@ -436,7 +436,7 @@ public sealed class MaintenanceModeMiddleware(IOptionsMonitor<MaintenanceOptions
         context.Response.Headers.RetryAfter = o.RetryAfterSeconds.ToString();
         await context.Response.WriteAsJsonAsync(new
         {
-            title = "Charging network under maintenance",
+            title = "Ride booking is under maintenance",
             status = 503,
             retryAfterSeconds = o.RetryAfterSeconds
         });
@@ -444,164 +444,183 @@ public sealed class MaintenanceModeMiddleware(IOptionsMonitor<MaintenanceOptions
 }
 ```
 
-```csharp file=Stations/ChargingStation.cs
-namespace EvCharge.Stations;
+```csharp file=Drivers/Driver.cs
+namespace RideHail.Drivers;
 
-public sealed record ChargingStation(int Id, string Name, string City, int FreeConnectors, decimal RatePerKwh);
+public sealed record Driver(int Id, string Name, string City, string Vehicle, bool Available, decimal PerKmRate);
 
-public interface IStationDirectory
+public interface IDriverDirectory
 {
-    ChargingStation? Find(int id);
-    IReadOnlyList<ChargingStation> InCity(string city);
+    Driver? Find(int id);
+    IReadOnlyList<Driver> InCity(string city);
+}
+
+/// <summary>Fare estimate = base fare + distance × the driver's per-km rate. Real apps add time, surge and tolls.</summary>
+public static class FareCalculator
+{
+    public const decimal BaseFare = 50m;
+
+    public static decimal Estimate(Driver driver, decimal distanceKm) =>
+        Math.Round(BaseFare + distanceKm * driver.PerKmRate, 2);
 }
 ```
 
-```csharp file=Stations/InMemoryStationDirectory.cs
-namespace EvCharge.Stations;
+```csharp file=Drivers/InMemoryDriverDirectory.cs
+namespace RideHail.Drivers;
 
-/// <summary>Read-only seed data. A real app would read PostgreSQL through a repository.</summary>
-public sealed class InMemoryStationDirectory : IStationDirectory
+/// <summary>Read-only seed data. A real app would read PostgreSQL (and live locations from a cache) through a repository.</summary>
+public sealed class InMemoryDriverDirectory : IDriverDirectory
 {
-    private readonly ChargingStation[] _stations =
+    private readonly Driver[] _drivers =
     [
-        new(1, "Koramangala 5th Block", "Bengaluru", 3, 18.50m),
-        new(2, "Whitefield ITPL Gate 2", "Bengaluru", 0, 19.00m),
-        new(3, "Hinjewadi Phase 1", "Pune", 5, 17.75m),
-        new(4, "HITEC City Metro", "Hyderabad", 2, 18.00m),
+        new(1, "Ravi Kumar", "Bengaluru", "Sedan", true, 14.00m),
+        new(2, "Imran Shaikh", "Bengaluru", "Auto", false, 12.00m),
+        new(3, "Pooja Deshmukh", "Pune", "Hatchback", true, 11.50m),
+        new(4, "Srinivas Reddy", "Hyderabad", "Sedan", true, 13.00m),
     ];
 
-    public ChargingStation? Find(int id) => _stations.FirstOrDefault(s => s.Id == id);
+    public Driver? Find(int id) => _drivers.FirstOrDefault(d => d.Id == id);
 
-    public IReadOnlyList<ChargingStation> InCity(string city) =>
-        _stations.Where(s => string.Equals(s.City, city, StringComparison.OrdinalIgnoreCase)).ToArray();
+    public IReadOnlyList<Driver> InCity(string city) =>
+        _drivers.Where(d => string.Equals(d.City, city, StringComparison.OrdinalIgnoreCase)).ToArray();
 }
 ```
 
-```csharp file=Stations/StationEndpoints.cs
+```csharp file=Drivers/DriverEndpoints.cs
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Routing;
 
-namespace EvCharge.Stations;
+namespace RideHail.Drivers;
 
-/// <summary>Minimal API endpoints for stations, organised as a route group in an extension method.</summary>
-public static class StationEndpoints
+public sealed record FareEstimate(string City, decimal DistanceKm, string Vehicle, decimal EstimatedFare);
+
+/// <summary>Minimal API endpoints for drivers and fare estimates, organised as route groups in an extension method.</summary>
+public static class DriverEndpoints
 {
-    public static RouteGroupBuilder MapStationEndpoints(this IEndpointRouteBuilder routes)
+    public static RouteGroupBuilder MapDriverEndpoints(this IEndpointRouteBuilder routes)
     {
-        var group = routes.MapGroup("/api/stations");
+        var group = routes.MapGroup("/api/drivers");
 
-        // Literal segment: wins over {id:int} for /api/stations/available
-        group.MapGet("/available", (string city, IStationDirectory stations) =>
-            TypedResults.Ok(stations.InCity(city).Where(s => s.FreeConnectors > 0).ToArray()));
+        // Literal segment: wins over {id:int} for /api/drivers/nearby
+        group.MapGet("/nearby", (string city, IDriverDirectory drivers) =>
+            TypedResults.Ok(drivers.InCity(city).Where(d => d.Available).ToArray()));
 
-        group.MapGet("/{id:int:min(1)}", GetById).WithName("GetStation");
+        group.MapGet("/{id:int:min(1)}", GetById).WithName("GetDriver");
 
-        group.MapGet("/", (string? city, IStationDirectory stations) =>
-            TypedResults.Ok(stations.InCity(city ?? "Bengaluru")));
+        group.MapGet("/", (string? city, IDriverDirectory drivers) =>
+            TypedResults.Ok(drivers.InCity(city ?? "Bengaluru")));
+
+        // GET /api/fares/estimate?city=pune&km=12
+        routes.MapGet("/api/fares/estimate", EstimateFare);
 
         return group;
     }
 
     // Results<A, B> documents both outcomes for OpenAPI and is checked by the compiler.
-    public static Results<Ok<ChargingStation>, NotFound> GetById(int id, IStationDirectory stations) =>
-        stations.Find(id) is { } station ? TypedResults.Ok(station) : TypedResults.NotFound();
+    public static Results<Ok<Driver>, NotFound> GetById(int id, IDriverDirectory drivers) =>
+        drivers.Find(id) is { } driver ? TypedResults.Ok(driver) : TypedResults.NotFound();
+
+    public static Results<Ok<FareEstimate>, NotFound> EstimateFare(string city, decimal km, IDriverDirectory drivers) =>
+        drivers.InCity(city).FirstOrDefault(d => d.Available) is { } driver
+            ? TypedResults.Ok(new FareEstimate(driver.City, km, driver.Vehicle, FareCalculator.Estimate(driver, km)))
+            : TypedResults.NotFound();
 }
 ```
 
-```csharp file=Bookings/BookingModels.cs
+```csharp file=Rides/RideModels.cs
 using System.ComponentModel.DataAnnotations;
 
-namespace EvCharge.Bookings;
+namespace RideHail.Rides;
 
-public sealed class BookingRequest
+public sealed class RideRequest
 {
-    [Range(1, int.MaxValue)]
-    public int StationId { get; set; }
+    [Required]
+    public string City { get; set; } = "";
 
-    [Range(1, 150)]
-    public decimal Kwh { get; set; }
+    [Range(1, 100)]
+    public decimal DistanceKm { get; set; }
 
-    [Required, RegularExpression(@"^[A-Z]{2}\d{2}[A-Z]{1,2}\d{4}$", ErrorMessage = "Use a registration such as KA01AB1234.")]
-    public string VehicleNumber { get; set; } = "";
+    [Required, RegularExpression(@"^[6-9]\d{9}$", ErrorMessage = "Use a 10-digit mobile number such as 9876543210.")]
+    public string RiderPhone { get; set; } = "";
 }
 
-public sealed record BookingConfirmation(Guid BookingId, int StationId, string VehicleNumber, decimal Kwh, decimal EstimatedCost);
+public sealed record RideConfirmation(Guid RideId, int DriverId, string DriverName, string City, decimal DistanceKm, decimal EstimatedFare);
 
-public interface IBookingService
+public interface IRideService
 {
-    BookingConfirmation? Create(BookingRequest request);
-    BookingConfirmation? Find(Guid id);
+    RideConfirmation? Request(RideRequest request);
+    RideConfirmation? Find(Guid id);
     bool Cancel(Guid id);
 }
 ```
 
-```csharp file=Bookings/InMemoryBookingService.cs
+```csharp file=Rides/InMemoryRideService.cs
 using System.Collections.Concurrent;
-using EvCharge.Stations;
+using RideHail.Drivers;
 
-namespace EvCharge.Bookings;
+namespace RideHail.Rides;
 
 /// <summary>Singleton, so state is in a thread-safe dictionary. Replace with a repository over PostgreSQL.</summary>
-public sealed class InMemoryBookingService(IStationDirectory stations) : IBookingService
+public sealed class InMemoryRideService(IDriverDirectory drivers) : IRideService
 {
-    private readonly ConcurrentDictionary<Guid, BookingConfirmation> _bookings = new();
+    private readonly ConcurrentDictionary<Guid, RideConfirmation> _rides = new();
 
-    public BookingConfirmation? Create(BookingRequest request)
+    public RideConfirmation? Request(RideRequest request)
     {
-        var station = stations.Find(request.StationId);
-        if (station is null || station.FreeConnectors == 0) return null;
+        var driver = drivers.InCity(request.City).FirstOrDefault(d => d.Available);
+        if (driver is null) return null;
 
-        var confirmation = new BookingConfirmation(
-            Guid.NewGuid(), station.Id, request.VehicleNumber, request.Kwh,
-            Math.Round(request.Kwh * station.RatePerKwh, 2));
-        _bookings[confirmation.BookingId] = confirmation;
+        var confirmation = new RideConfirmation(
+            Guid.NewGuid(), driver.Id, driver.Name, driver.City, request.DistanceKm,
+            FareCalculator.Estimate(driver, request.DistanceKm));
+        _rides[confirmation.RideId] = confirmation;
         return confirmation;
     }
 
-    public BookingConfirmation? Find(Guid id) => _bookings.GetValueOrDefault(id);
+    public RideConfirmation? Find(Guid id) => _rides.GetValueOrDefault(id);
 
-    public bool Cancel(Guid id) => _bookings.TryRemove(id, out _);
+    public bool Cancel(Guid id) => _rides.TryRemove(id, out _);
 }
 ```
 
-```csharp file=Bookings/BookingsController.cs
+```csharp file=Rides/RidesController.cs
 using Microsoft.AspNetCore.Mvc;
 
-namespace EvCharge.Bookings;
+namespace RideHail.Rides;
 
 /// <summary>Controller style: one class per resource, attribute routing, automatic 400 from [ApiController].</summary>
 [ApiController]
 [Route("api/[controller]")]
-public sealed class BookingsController(IBookingService bookings) : ControllerBase
+public sealed class RidesController(IRideService rides) : ControllerBase
 {
     [HttpPost]
-    [ProducesResponseType<BookingConfirmation>(StatusCodes.Status201Created)]
+    [ProducesResponseType<RideConfirmation>(StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
-    public ActionResult<BookingConfirmation> Create(BookingRequest request)
+    public ActionResult<RideConfirmation> RequestRide(RideRequest request)
     {
         // No "if (!ModelState.IsValid)" needed: [ApiController] already returned 400 for invalid input.
-        var confirmation = bookings.Create(request);
+        var confirmation = rides.Request(request);
         if (confirmation is null)
-            return Problem(statusCode: StatusCodes.Status409Conflict, title: "Station unknown or no free connector");
+            return Problem(statusCode: StatusCodes.Status409Conflict, title: "No driver available nearby");
 
-        return CreatedAtAction(nameof(GetById), new { id = confirmation.BookingId }, confirmation);
+        return CreatedAtAction(nameof(GetById), new { id = confirmation.RideId }, confirmation);
     }
 
     [HttpGet("{id:guid}")]
-    public ActionResult<BookingConfirmation> GetById(Guid id) =>
-        bookings.Find(id) is { } booking ? booking : NotFound();
+    public ActionResult<RideConfirmation> GetById(Guid id) =>
+        rides.Find(id) is { } ride ? ride : NotFound();
 
     [HttpDelete("{id:guid}")]
-    public IActionResult Cancel(Guid id) => bookings.Cancel(id) ? NoContent() : NotFound();
+    public IActionResult Cancel(Guid id) => rides.Cancel(id) ? NoContent() : NotFound();
 }
 ```
 
 ```csharp file=Program.cs
-using EvCharge.Bookings;
-using EvCharge.Middleware;
-using EvCharge.Stations;
+using RideHail.Drivers;
+using RideHail.Middleware;
+using RideHail.Rides;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -617,12 +636,12 @@ builder.Services.AddProblemDetails();
 builder.Services.AddAuthentication();
 builder.Services.AddAuthorization();
 builder.Services.AddCors(o => o.AddPolicy("web-app", p =>
-    p.WithOrigins("https://app.evcharge.example").AllowAnyHeader().AllowAnyMethod()));
+    p.WithOrigins("https://app.ridehail.example").AllowAnyHeader().AllowAnyMethod()));
 
 builder.Services.Configure<MaintenanceOptions>(builder.Configuration.GetSection(MaintenanceOptions.SectionName));
 builder.Services.AddTransient<MaintenanceModeMiddleware>();   // IMiddleware must be registered
-builder.Services.AddSingleton<IStationDirectory, InMemoryStationDirectory>();
-builder.Services.AddSingleton<IBookingService, InMemoryBookingService>();
+builder.Services.AddSingleton<IDriverDirectory, InMemoryDriverDirectory>();
+builder.Services.AddSingleton<IRideService, InMemoryRideService>();
 
 var app = builder.Build();
 
@@ -639,7 +658,7 @@ app.UseAuthorization();                          // 8. allowed
 
 // ---------- Endpoints ----------
 app.MapGet("/health", () => TypedResults.Ok("healthy"));
-app.MapStationEndpoints();                       // minimal APIs
+app.MapDriverEndpoints();                        // minimal APIs
 app.MapControllers();                            // controllers, same pipeline
 
 app.Run();
@@ -652,7 +671,8 @@ Things to notice:
 - `RequestTimingMiddleware` uses `OnStarting` for the header and `finally` for the log, so it records slow requests *and* failed ones.
 - `MaintenanceModeMiddleware` is `IMiddleware`, so it is registered with `AddTransient` and created per request. It reads `IOptionsMonitor`, so an operator can flip `Maintenance:Enabled` in configuration and the change applies without a restart (configuration reload is covered in [Configuration, environment variables and secrets](#/lesson/m03-configuration)).
 - `StartsWithSegments("/health")` matches `/health` and `/health/ready` but **not** `/healthy`. A plain `StartsWith` string check would let `/healthy-looking-path` through.
-- The `/available` literal route coexists with `/{id:int:min(1)}` without ambiguity, thanks to precedence.
+- The `/nearby` literal route coexists with `/{id:int:min(1)}` without ambiguity, thanks to precedence.
+- The fare estimate is an *estimate*: the real fare is computed when the ride ends (actual distance, waiting time, surge). Returning the estimate from both the minimal API and the ride confirmation, through one `FareCalculator`, keeps the two numbers from drifting apart.
 
 ## Bad design vs good design
 
@@ -670,7 +690,7 @@ app.Use(async (ctx, next) =>                   // after the endpoints: only runs
     await next(ctx);
 });
 app.UseExceptionHandler("/error");             // too low to catch anything above it
-app.MapGet("/api/stations/{id}", (string id) =>
+app.MapGet("/api/drivers/{id}", (string id) =>
 {
     if (!int.TryParse(id, out var n)) return Results.BadRequest();   // route constraint would do this
     if (ctx_user_is_not_admin) return Results.Forbid();              // authorization inside the handler
@@ -733,7 +753,7 @@ public static class Program
 
         RequestDelegate pipeline = app.Build();
 
-        foreach (var path in new[] { "/api/stations/42", "/health/ready", "/healthy" })
+        foreach (var path in new[] { "/api/drivers/42", "/health/ready", "/healthy" })
         {
             log.Clear();
             var ctx = new DefaultHttpContext();
@@ -747,7 +767,7 @@ public static class Program
 ```
 :::
 
-With `maintenance = true` you should see `/api/stations/42` stopped at the gate (no `auth` or `endpoint` lines, but `timing: out (503)` still appears), `/health/ready` reaching the endpoint, and `/healthy` blocked, because `StartsWithSegments` compares whole path segments.
+With `maintenance = true` you should see `/api/drivers/42` stopped at the gate (no `auth` or `endpoint` lines, but `timing: out (503)` still appears), `/health/ready` reaching the endpoint, and `/healthy` blocked, because `StartsWithSegments` compares whole path segments.
 
 ## Exercises
 
@@ -902,7 +922,7 @@ Add `Run(MiniDelegate terminal)` that marks the pipeline as terminated, and make
 :::
 
 :::exercise id=m03-kestrel-middleware-routing-ex2 difficulty=beginner kind=written title="Diagnose a pipeline from its symptoms"
-A teammate's `Program.cs` for a GST invoice API registers a fallback authorization policy that requires an authenticated user, and then builds this pipeline, in this order: `UseAuthentication()`, `UseAuthorization()`, `UseExceptionHandler()`, `UseRouting()`, `UseCors("portal")`, `MapControllers()`. Users report three symptoms: (1) every call from the React portal fails with a CORS error in the browser console, (2) an exception thrown by the authentication handler returns an empty 500 instead of a ProblemDetails body, (3) a signed-in clerk without the `Accountant` role can call `[Authorize(Roles = "Accountant")]` actions.
+A teammate's `Program.cs` for the ride-hailing operations API (used by the support team's web portal) registers a fallback authorization policy that requires an authenticated user, and then builds this pipeline, in this order: `UseAuthentication()`, `UseAuthorization()`, `UseExceptionHandler()`, `UseRouting()`, `UseCors("portal")`, `MapControllers()`. Users report three symptoms: (1) every call from the React portal fails with a CORS error in the browser console, (2) an exception thrown by the authentication handler returns an empty 500 instead of a ProblemDetails body, (3) a signed-in support agent without the `FleetManager` role can call `[Authorize(Roles = "FleetManager")]` actions such as suspending a driver.
 
 Explain the cause of each symptom and write the corrected order.
 ::acceptance
@@ -921,7 +941,7 @@ Corrected skeleton: exception handler, HTTPS, routing, CORS, authentication, aut
 ::solution
 1. **CORS error**: authorization runs before CORS. The browser's pre-flight `OPTIONS` request has no credentials, so the fallback policy rejects it with 401 before `UseCors` can answer it. The response has no CORS headers, so the browser blocks the real call and reports a CORS failure. Fix: `UseCors` after `UseRouting` and before `UseAuthentication` and `UseAuthorization`.
 2. **Empty 500**: `UseExceptionHandler` is registered after `UseAuthentication`, so authentication is *outside* the handler's wrapper. Exceptions it throws never reach the handler. Fix: exception handler first.
-3. **Role check ignored**: `UseAuthorization` runs before `UseRouting`, so no endpoint has been selected and there is no `[Authorize(Roles = "Accountant")]` metadata to evaluate. Only the fallback policy (any signed-in user) is applied, so the clerk gets through. Fix: routing, then authentication, then authorization, then endpoints.
+3. **Role check ignored**: `UseAuthorization` runs before `UseRouting`, so no endpoint has been selected and there is no `[Authorize(Roles = "FleetManager")]` metadata to evaluate. Only the fallback policy (any signed-in user) is applied, so the support agent gets through. Fix: routing, then authentication, then authorization, then endpoints.
 
 Corrected:
 
@@ -948,7 +968,7 @@ Write a convention-based middleware that returns 503 during planned maintenance 
 - Otherwise set status 503, set the `Retry-After` header to `settings.RetryAfterSeconds`, write the text `Down for maintenance` and do **not** call `next`.
 ::acceptance
 - Disabled gate: `next` is called, status unchanged.
-- Enabled gate on `/api/stations/1`: 503, `Retry-After: 120`, body `Down for maintenance`, `next` not called.
+- Enabled gate on `/api/rides/1`: 503, `Retry-After: 120`, body `Down for maintenance`, `next` not called.
 - Enabled gate on `/health/ready`: `next` called.
 - Enabled gate on `/healthy`: blocked.
 ::hint
@@ -1029,7 +1049,7 @@ public class MaintenanceGateTests
     public async Task Disabled_passes_through()
     {
         var (gate, nextCalled) = Create(enabled: false);
-        var ctx = Context("/api/stations/1");
+        var ctx = Context("/api/rides/1");
         await gate.InvokeAsync(ctx);
         Assert.True(nextCalled());
         Assert.Equal(200, ctx.Response.StatusCode);
@@ -1039,7 +1059,7 @@ public class MaintenanceGateTests
     public async Task Enabled_blocks_api_calls()
     {
         var (gate, nextCalled) = Create(enabled: true);
-        var ctx = Context("/api/stations/1");
+        var ctx = Context("/api/rides/1");
         await gate.InvokeAsync(ctx);
         Assert.False(nextCalled());
         Assert.Equal(503, ctx.Response.StatusCode);
@@ -1129,9 +1149,9 @@ Build `TinyRouter`, a simplified router that matches paths against templates wit
 - If some template matches the path but none for the request method, return `MethodNotAllowed`. If no template matches the path, return `NotFound`.
 - On a match, return the template and captured route values (name without constraint, e.g. `id`).
 ::acceptance
-- With `/api/stations/{id:int}`, `/api/stations/available` and `/api/stations/{slug}` registered for GET: `/api/stations/available` picks the literal, `/api/stations/42` picks `{id:int}` with `id = 42`, `/api/stations/koramangala` picks `{slug}`.
-- `/API/Stations/Available` still matches the literal.
-- `DELETE /api/stations/42` returns `MethodNotAllowed`.
+- With `/api/drivers/{id:int}`, `/api/drivers/nearby` and `/api/drivers/{city}` registered for GET: `/api/drivers/nearby` picks the literal, `/api/drivers/42` picks `{id:int}` with `id = 42`, `/api/drivers/pune` picks `{city}`.
+- `/API/Drivers/Nearby` still matches the literal.
+- `DELETE /api/drivers/42` returns `MethodNotAllowed`.
 - `GET /api/unknown` returns `NotFound`.
 ::hint
 Split both path and template on `/` with `StringSplitOptions.RemoveEmptyEntries`. Then compare position by position.
@@ -1176,47 +1196,47 @@ public class TinyRouterTests
     private static TinyRouter Router()
     {
         var r = new TinyRouter();
-        r.Add("GET", "/api/stations/{id:int}");
-        r.Add("GET", "/api/stations/available");
-        r.Add("GET", "/api/stations/{slug}");
-        r.Add("GET", "/api/stations");
+        r.Add("GET", "/api/drivers/{id:int}");
+        r.Add("GET", "/api/drivers/nearby");
+        r.Add("GET", "/api/drivers/{city}");
+        r.Add("GET", "/api/drivers");
         return r;
     }
 
     [Fact]
     public void Literal_beats_parameters()
     {
-        var m = Router().Match("GET", "/api/stations/available");
+        var m = Router().Match("GET", "/api/drivers/nearby");
         Assert.Equal(MatchOutcome.Matched, m.Outcome);
-        Assert.Equal("/api/stations/available", m.Template);
+        Assert.Equal("/api/drivers/nearby", m.Template);
     }
 
     [Fact]
     public void Int_constraint_beats_plain_parameter()
     {
-        var m = Router().Match("GET", "/api/stations/42");
-        Assert.Equal("/api/stations/{id:int}", m.Template);
+        var m = Router().Match("GET", "/api/drivers/42");
+        Assert.Equal("/api/drivers/{id:int}", m.Template);
         Assert.Equal("42", m.Values["id"]);
     }
 
     [Fact]
     public void Plain_parameter_catches_the_rest()
     {
-        var m = Router().Match("GET", "/api/stations/koramangala");
-        Assert.Equal("/api/stations/{slug}", m.Template);
-        Assert.Equal("koramangala", m.Values["slug"]);
+        var m = Router().Match("GET", "/api/drivers/pune");
+        Assert.Equal("/api/drivers/{city}", m.Template);
+        Assert.Equal("pune", m.Values["city"]);
     }
 
     [Fact]
     public void Literals_are_case_insensitive()
     {
-        Assert.Equal("/api/stations/available", Router().Match("GET", "/API/Stations/Available").Template);
+        Assert.Equal("/api/drivers/nearby", Router().Match("GET", "/API/Drivers/Nearby").Template);
     }
 
     [Fact]
     public void Wrong_method_is_405()
     {
-        Assert.Equal(MatchOutcome.MethodNotAllowed, Router().Match("DELETE", "/api/stations/42").Outcome);
+        Assert.Equal(MatchOutcome.MethodNotAllowed, Router().Match("DELETE", "/api/drivers/42").Outcome);
     }
 
     [Fact]
@@ -1230,8 +1250,8 @@ public class TinyRouterTests
     [Fact]
     public void Segment_count_must_match()
     {
-        Assert.Equal("/api/stations", Router().Match("GET", "/api/stations").Template);
-        Assert.Equal(MatchOutcome.NotFound, Router().Match("GET", "/api/stations/1/connectors").Outcome);
+        Assert.Equal("/api/drivers", Router().Match("GET", "/api/drivers").Template);
+        Assert.Equal(MatchOutcome.NotFound, Router().Match("GET", "/api/drivers/1/ratings").Outcome);
     }
 }
 ```
@@ -1324,27 +1344,27 @@ The real router precomputes a decision tree (a DFA) at startup instead of loopin
 ::alternatives
 Sort routes once by precedence at `Add` time and return the first match. That is faster per request but must still check every route to decide between 404 and 405.
 ::mistakes
-- Returning the first template that matches in registration order, so `/api/stations/{slug}` registered first swallows `/available`.
+- Returning the first template that matches in registration order, so `/api/drivers/{city}` registered first swallows `/nearby`.
 - Treating "path matched with the wrong method" as 404, which hides a client bug that a 405 with an `Allow` header would reveal.
 - Comparing literals case-sensitively; ASP.NET Core route literals are case-insensitive.
 ::extensions
 Add a catch-all `{**rest}` segment with the lowest precedence, and an `Allow` list on `MethodNotAllowed` results.
 :::
 
-:::exercise id=m03-kestrel-middleware-routing-ex5 difficulty=advanced kind=code title="An endpoint filter that validates bookings"
-In a minimal API, validation that needs the bound argument belongs in an endpoint filter, not middleware. Implement `BookingValidationFilter` as an `IEndpointFilter` that validates a `BookingRequest` argument and returns a 400 `ValidationProblem` with every error, or calls the next filter when the request is valid.
+:::exercise id=m03-kestrel-middleware-routing-ex5 difficulty=advanced kind=code title="An endpoint filter that validates scheduled rides"
+In a minimal API, validation that needs the bound argument belongs in an endpoint filter, not middleware. Riders can schedule a ride for later (an airport drop at 5 a.m.). Implement `RideRequestValidationFilter` as an `IEndpointFilter` that validates a `RideRequest` argument and returns a 400 `ValidationProblem` with every error, or calls the next filter when the request is valid.
 ::requirements
-- Find the first argument of type `BookingRequest` in `context.Arguments`. If there is none, throw `InvalidOperationException` (the filter was attached to the wrong endpoint).
-- Rules: `StationId` must be positive (key `StationId`), `Kwh` between 1 and 150 inclusive (key `Kwh`), `StartsAt` at least 5 minutes after "now" from the injected `TimeProvider` (key `StartsAt`).
+- Find the first argument of type `RideRequest` in `context.Arguments`. If there is none, throw `InvalidOperationException` (the filter was attached to the wrong endpoint).
+- Rules: `PickupZoneId` must be positive (key `PickupZoneId`), `DistanceKm` between 1 and 100 inclusive (key `DistanceKm`), `PickupAt` at least 15 minutes after "now" from the injected `TimeProvider` (key `PickupAt`), so there is time to assign a driver.
 - Collect all errors into a `Dictionary<string, string[]>` and return `TypedResults.ValidationProblem(errors)`.
 - If valid, return the result of `await next(context)` unchanged.
 ::acceptance
 - Valid request: the next delegate's result is returned and the next delegate is called once.
-- A request with `StationId = 0` and `Kwh = 500` returns a 400 result whose errors contain both keys, and `next` is not called.
-- `StartsAt` 2 minutes from now is rejected, 10 minutes from now is accepted.
-- An endpoint without a `BookingRequest` argument causes `InvalidOperationException`.
+- A request with `PickupZoneId = 0` and `DistanceKm = 500` returns a 400 result whose errors contain both keys, and `next` is not called.
+- `PickupAt` 10 minutes from now is rejected, 30 minutes from now is accepted.
+- An endpoint without a `RideRequest` argument causes `InvalidOperationException`.
 ::hint
-`context.Arguments` is an `IList<object?>`. Use `OfType<BookingRequest>().FirstOrDefault()`.
+`context.Arguments` is an `IList<object?>`. Use `OfType<RideRequest>().FirstOrDefault()`.
 ::hint
 Inject `TimeProvider` through the constructor and use `clock.GetUtcNow()`, never `DateTimeOffset.UtcNow`, so tests control time.
 ::hint
@@ -1352,46 +1372,46 @@ Inject `TimeProvider` through the constructor and use `clock.GetUtcNow()`, never
 ::hint
 ```csharp
 var errors = new Dictionary<string, string[]>();
-if (req.StationId <= 0) errors["StationId"] = new[] { "Must be a positive station id." };
+if (req.PickupZoneId <= 0) errors["PickupZoneId"] = new[] { "Must be a positive zone id." };
 // more rules
 if (errors.Count > 0) return TypedResults.ValidationProblem(errors);
 return await next(context);
 ```
 ::hint
-Attach it with `group.MapPost("/bookings", handler).AddEndpointFilter<BookingValidationFilter>();`. The filter runs after binding, so the argument is already a typed object.
+Attach it with `group.MapPost("/scheduled", handler).AddEndpointFilter<RideRequestValidationFilter>();`. The filter runs after binding, so the argument is already a typed object.
 ::starter
-```csharp file=BookingValidationFilter.cs
+```csharp file=RideRequestValidationFilter.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 
-public sealed class BookingRequest
+public sealed class RideRequest
 {
-    public int StationId { get; set; }
-    public decimal Kwh { get; set; }
-    public DateTimeOffset StartsAt { get; set; }
+    public int PickupZoneId { get; set; }
+    public decimal DistanceKm { get; set; }
+    public DateTimeOffset PickupAt { get; set; }
 }
 
-public sealed class BookingValidationFilter : IEndpointFilter
+public sealed class RideRequestValidationFilter : IEndpointFilter
 {
     private readonly TimeProvider _clock;
-    public BookingValidationFilter(TimeProvider clock) => _clock = clock;
+    public RideRequestValidationFilter(TimeProvider clock) => _clock = clock;
 
     public ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
         => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=BookingValidationFilterTests.cs
+```csharp file=RideRequestValidationFilterTests.cs
 using System;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Xunit;
 
-public class BookingValidationFilterTests
+public class RideRequestValidationFilterTests
 {
     private sealed class FixedClock : TimeProvider
     {
@@ -1406,13 +1426,13 @@ public class BookingValidationFilterTests
     {
         var calls = 0;
         EndpointFilterDelegate next = _ => { calls++; return ValueTask.FromResult<object?>("created"); };
-        var filter = new BookingValidationFilter(new FixedClock(Now));
+        var filter = new RideRequestValidationFilter(new FixedClock(Now));
         var ctx = new DefaultEndpointFilterInvocationContext(new DefaultHttpContext(), args);
         var result = await filter.InvokeAsync(ctx, next);
         return (result, calls);
     }
 
-    private static BookingRequest Valid() => new() { StationId = 3, Kwh = 30, StartsAt = Now.AddMinutes(10) };
+    private static RideRequest Valid() => new() { PickupZoneId = 3, DistanceKm = 18, PickupAt = Now.AddMinutes(30) };
 
     [Fact]
     public async Task Valid_request_reaches_handler()
@@ -1426,13 +1446,13 @@ public class BookingValidationFilterTests
     public async Task All_errors_are_reported()
     {
         var req = Valid();
-        req.StationId = 0;
-        req.Kwh = 500;
+        req.PickupZoneId = 0;
+        req.DistanceKm = 500;
         var (result, calls) = await Run(req);
         var problem = Assert.IsType<ValidationProblem>(result);
         Assert.Equal(400, problem.StatusCode);
-        Assert.True(problem.ProblemDetails.Errors.ContainsKey("StationId"));
-        Assert.True(problem.ProblemDetails.Errors.ContainsKey("Kwh"));
+        Assert.True(problem.ProblemDetails.Errors.ContainsKey("PickupZoneId"));
+        Assert.True(problem.ProblemDetails.Errors.ContainsKey("DistanceKm"));
         Assert.Equal(0, calls);
     }
 
@@ -1440,16 +1460,16 @@ public class BookingValidationFilterTests
     public async Task Start_too_soon_is_rejected()
     {
         var req = Valid();
-        req.StartsAt = Now.AddMinutes(2);
+        req.PickupAt = Now.AddMinutes(10);
         var (result, _) = await Run(req);
         var problem = Assert.IsType<ValidationProblem>(result);
-        Assert.True(problem.ProblemDetails.Errors.ContainsKey("StartsAt"));
+        Assert.True(problem.ProblemDetails.Errors.ContainsKey("PickupAt"));
     }
 
     [Fact]
     public async Task Other_arguments_are_ignored()
     {
-        var (result, calls) = await Run("KA01AB1234", Valid());
+        var (result, calls) = await Run("9876543210", Valid());
         Assert.Equal("created", result);
         Assert.Equal(1, calls);
     }
@@ -1457,46 +1477,46 @@ public class BookingValidationFilterTests
     [Fact]
     public async Task Missing_argument_is_a_configuration_error()
     {
-        await Assert.ThrowsAsync<InvalidOperationException>(async () => await Run("no booking here"));
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await Run("no ride here"));
     }
 }
 ```
 ::solution
-The filter runs after parameter binding, so it works with a typed `BookingRequest`. It collects every error so the client can fix them all at once.
+The filter runs after parameter binding, so it works with a typed `RideRequest`. It collects every error so the client can fix them all at once.
 
-```csharp file=BookingValidationFilter.cs
+```csharp file=RideRequestValidationFilter.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 
-public sealed class BookingRequest
+public sealed class RideRequest
 {
-    public int StationId { get; set; }
-    public decimal Kwh { get; set; }
-    public DateTimeOffset StartsAt { get; set; }
+    public int PickupZoneId { get; set; }
+    public decimal DistanceKm { get; set; }
+    public DateTimeOffset PickupAt { get; set; }
 }
 
-public sealed class BookingValidationFilter : IEndpointFilter
+public sealed class RideRequestValidationFilter : IEndpointFilter
 {
-    private static readonly TimeSpan MinimumLeadTime = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan MinimumLeadTime = TimeSpan.FromMinutes(15);
     private readonly TimeProvider _clock;
-    public BookingValidationFilter(TimeProvider clock) => _clock = clock;
+    public RideRequestValidationFilter(TimeProvider clock) => _clock = clock;
 
     public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
     {
-        var request = context.Arguments.OfType<BookingRequest>().FirstOrDefault()
+        var request = context.Arguments.OfType<RideRequest>().FirstOrDefault()
             ?? throw new InvalidOperationException(
-                $"{nameof(BookingValidationFilter)} requires a {nameof(BookingRequest)} argument.");
+                $"{nameof(RideRequestValidationFilter)} requires a {nameof(RideRequest)} argument.");
 
         var errors = new Dictionary<string, string[]>();
-        if (request.StationId <= 0)
-            errors[nameof(request.StationId)] = new[] { "Must be a positive station id." };
-        if (request.Kwh < 1 || request.Kwh > 150)
-            errors[nameof(request.Kwh)] = new[] { "Must be between 1 and 150 kWh." };
-        if (request.StartsAt < _clock.GetUtcNow() + MinimumLeadTime)
-            errors[nameof(request.StartsAt)] = new[] { "Must be at least 5 minutes from now." };
+        if (request.PickupZoneId <= 0)
+            errors[nameof(request.PickupZoneId)] = new[] { "Must be a positive zone id." };
+        if (request.DistanceKm < 1 || request.DistanceKm > 100)
+            errors[nameof(request.DistanceKm)] = new[] { "Must be between 1 and 100 km." };
+        if (request.PickupAt < _clock.GetUtcNow() + MinimumLeadTime)
+            errors[nameof(request.PickupAt)] = new[] { "Must be at least 15 minutes from now." };
 
         if (errors.Count > 0)
             return TypedResults.ValidationProblem(errors);
@@ -1510,11 +1530,11 @@ Wiring in `Program.cs`:
 
 ```csharp
 builder.Services.AddSingleton(TimeProvider.System);
-app.MapPost("/api/bookings", (BookingRequest req, IBookingService svc) => TypedResults.Ok(svc.Create(req)))
-   .AddEndpointFilter<BookingValidationFilter>();
+app.MapPost("/api/rides/scheduled", (RideRequest req, IScheduledRideService svc) => TypedResults.Ok(svc.Schedule(req)))
+   .AddEndpointFilter<RideRequestValidationFilter>();
 ```
 ::alternatives
-In .NET 10 you can call `builder.Services.AddValidation()` and put data annotations on `BookingRequest`; the framework then validates minimal API arguments automatically. Rules that need services (the clock, a database lookup) still fit better in a filter or the service layer. In a controller, the same logic would be an action filter or a FluentValidation validator.
+In .NET 10 you can call `builder.Services.AddValidation()` and put data annotations on `RideRequest`; the framework then validates minimal API arguments automatically. Rules that need services (the clock, a database lookup) still fit better in a filter or the service layer. In a controller, the same logic would be an action filter or a FluentValidation validator.
 ::mistakes
 - Doing this in middleware, which would have to read and parse the body stream itself and then rewind it for the endpoint.
 - Returning on the first error instead of collecting all of them.
@@ -1529,13 +1549,13 @@ Middleware and endpoints are just code, and you can test them at three levels.
 
 **1. Unit-test middleware with `DefaultHttpContext`.** Create the middleware with a fake `next` delegate (a lambda that records it was called), invoke it with a `DefaultHttpContext`, and assert status, headers and body. Exercise 3 shows the pattern. Set `Response.Body` to a `MemoryStream` if you need to read what was written. Tests run in microseconds.
 
-**2. Unit-test endpoint logic as methods.** Static handler methods such as `StationEndpoints.GetById` take plain arguments and return typed results, so you can call them directly:
+**2. Unit-test endpoint logic as methods.** Static handler methods such as `DriverEndpoints.GetById` take plain arguments and return typed results, so you can call them directly:
 
 ```csharp
 [Fact]
-public void Unknown_station_returns_404()
+public void Unknown_driver_returns_404()
 {
-    var result = StationEndpoints.GetById(999, new InMemoryStationDirectory());
+    var result = DriverEndpoints.GetById(999, new InMemoryDriverDirectory());
     Assert.IsType<NotFound>(result.Result);
 }
 ```
@@ -1551,21 +1571,21 @@ public class PipelineTests(WebApplicationFactory<Program> factory) : IClassFixtu
     public async Task Maintenance_returns_503_with_timing()
     {
         var client = factory.WithWebHostBuilder(b => b.UseSetting("Maintenance:Enabled", "true")).CreateClient();
-        var response = await client.GetAsync("/api/stations/1");
+        var response = await client.GetAsync("/api/drivers/1");
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         Assert.True(response.Headers.Contains("Server-Timing"));
     }
 }
 ```
 
-Edge cases worth a test: trailing slashes (`/api/stations/1/` matches the same route), URL-encoded segments (`%20`), very long paths, `HEAD` requests on `GET` endpoints, and a request body over the Kestrel limit (expect 413).
+Edge cases worth a test: trailing slashes (`/api/drivers/1/` matches the same route), URL-encoded segments (`%20`), very long paths, `HEAD` requests on `GET` endpoints, and a request body over the Kestrel limit (expect 413).
 
 ## Real-world application
 
 - **API gateways and BFFs.** A backend-for-frontend built on ASP.NET Core with YARP is essentially a carefully ordered pipeline: authentication, rate limiting, header rewriting, then a catch-all route that forwards to internal services.
 - **Government portals behind IIS.** Many public-sector .NET apps in India run on Windows Server with IIS in-process hosting. Kestrel is not used at all in that mode, yet the middleware and routing code is identical, which makes moving to Linux containers later much easier.
 - **Payment and UPI callback endpoints.** Payment providers call your webhook endpoints. A dedicated middleware or endpoint filter verifies the provider's signature on every callback before routing reaches the handler, and it must sit after `UseRouting` if it only applies to `/webhooks/*` endpoints via metadata.
-- **Maintenance windows.** Utilities and transport operators often schedule firmware or database maintenance overnight. A configuration-driven gate like ours lets operations switch an entire API into maintenance without a deployment, while health checks keep the load balancer happy.
+- **Maintenance windows.** Ride-hailing, food-delivery and payment platforms schedule database or payment-provider maintenance in the quietest hour of the night. A configuration-driven gate like ours lets operations switch an entire API into maintenance without a deployment, while health checks keep the load balancer happy.
 - **Mixed codebases.** Large, older APIs often keep their controllers and add minimal APIs for new, small endpoints such as health, feature flags or webhook receivers. Both share one pipeline, so cross-cutting concerns do not need to be written twice.
 
 ## Interview questions
@@ -1617,8 +1637,8 @@ Q: What does it mean for middleware to short-circuit?
 A: It writes a response and does not call `next`, so nothing further down the pipeline (including the endpoint) runs.
 Q: Why is endpoint selection (UseRouting) separate from endpoint execution?
 A: So middleware in between, such as CORS, authorization and rate limiting, can read the selected endpoint's metadata before it runs.
-Q: Which wins for /api/stations/42: {id:int}, {slug} or available?
-A: `{id:int}`. Precedence is literal > constrained parameter > plain parameter > catch-all, and `available` does not match `42`.
+Q: Which wins for /api/drivers/42: {id:int}, {city} or nearby?
+A: `{id:int}`. Precedence is literal > constrained parameter > plain parameter > catch-all, and `nearby` does not match `42`.
 Q: What is the default Kestrel maximum request body size?
 A: 30,000,000 bytes (about 28.6 MB). Larger bodies get 413 before your code runs.
 Q: Convention-based middleware vs IMiddleware: what is the lifetime difference?
@@ -1647,14 +1667,14 @@ An exception thrown inside `RequestTimingMiddleware` produces an empty 500 inste
 - [ ] Inside `MapControllers`.
 > The handler only catches exceptions from components it wraps, which are those registered after it. It must be at the top.
 ::q single
-Routes `/api/stations/{slug}`, `/api/stations/{id:int}` and `/api/stations/available` are all registered for GET. Which handles `GET /api/stations/available`?
-- [ ] `{slug}`, because it was registered first.
+Routes `/api/drivers/{city}`, `/api/drivers/{id:int}` and `/api/drivers/nearby` are all registered for GET. Which handles `GET /api/drivers/nearby`?
+- [ ] `{city}`, because it was registered first.
 - [ ] `{id:int}`.
-- [x] The `available` literal.
+- [x] The `nearby` literal.
 - [ ] None, routing throws `AmbiguousMatchException`.
 > Literal segments have the highest precedence. Registration order does not decide between templates of different precedence.
 ::q single
-`GET /api/stations/abc` hits a route `/api/stations/{id:int}` and nothing else. What does the client get?
+`GET /api/drivers/abc` hits a route `/api/drivers/{id:int}` and nothing else. What does the client get?
 - [ ] 400 Bad Request, because `abc` is not an int.
 - [x] 404 Not Found, because the constraint fails and no endpoint matches.
 - [ ] 405 Method Not Allowed.
@@ -1664,11 +1684,11 @@ Routes `/api/stations/{slug}`, `/api/stations/{id:int}` and `/api/stations/avail
 Which of these belong in middleware rather than an endpoint filter? (Select all that apply.)
 - [x] Adding a correlation id header to every response.
 - [x] Returning 503 for all API paths during a maintenance window.
-- [ ] Checking that a `BookingRequest.Kwh` is between 1 and 150.
+- [ ] Checking that a `RideRequest.DistanceKm` is between 1 and 100.
 - [x] Measuring total request duration.
 > Middleware suits concerns for all requests that only need `HttpContext`. Validating a specific typed argument belongs in a filter, where the argument is already bound.
 ::q single
-A middleware class takes a scoped `IBookingRepository` in its constructor and is added with `app.UseMiddleware<T>()`. In Development the app fails at startup. Why?
+A middleware class takes a scoped `IRideRepository` in its constructor and is added with `app.UseMiddleware<T>()`. In Development the app fails at startup. Why?
 - [ ] Middleware cannot use dependency injection.
 - [x] Convention-based middleware is created once from the root provider, so resolving a scoped service there violates scope validation.
 - [ ] The repository must be registered as transient.

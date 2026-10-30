@@ -1525,8 +1525,8 @@ Thread-safety bugs are hard to catch with unit tests because they depend on timi
 - **ASP.NET Core itself** uses these structures everywhere: route tables are lookups by path, request headers are a dictionary-like collection keyed case-insensitively, and middleware runs as an ordered pipeline (a list).
 - **Idempotency** in payment systems: before processing a UPI-style request, a service checks "have I seen this request ID?", which is a set lookup. In production that set is a database table with a unique index, but the idea is identical.
 - **Caching** is a dictionary with an eviction rule, like the LRU exercise. `IMemoryCache` is the built-in version.
-- **Background work** is a queue: emails to send, PDFs to generate, drone images to process. In-process you might use `System.Threading.Channels`; across servers, a message broker.
-- **Reports and dashboards** for infrastructure projects (progress by package, payments by contractor, delays by district) are mostly `GroupBy` + `Sum`. On large data, the same shapes are written as SQL `GROUP BY` queries so the database does the work.
+- **Background work** is a queue: emails to send, PDFs to generate, product photos to resize. In-process you might use `System.Threading.Channels`; across servers, a message broker.
+- **Reports and dashboards** for a courier company (parcels by PIN code, cash-on-delivery collected per rider, delays by city) are mostly `GroupBy` + `Sum`. On large data, the same shapes are written as SQL `GROUP BY` queries so the database does the work.
 - **Interview coding rounds** frequently reduce to "pick the right collection": a dictionary turns many slow problems into fast ones.
 
 ## Interview questions

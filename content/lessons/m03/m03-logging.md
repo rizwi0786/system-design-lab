@@ -46,13 +46,13 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Imagine a toll plaza on the Delhi–Jaipur highway. Every lane keeps a register: time, vehicle number, lane, amount, whether the FASTag read succeeded. Nobody reads the register during the day. But when a driver complains that they were charged twice, or when the operator notices revenue dropped on Tuesday, someone opens it and looks.
+Imagine a busy chemist shop in Pune with three billing counters, each with a UPI QR code and a card machine. The owner keeps a daily register: time, counter, payment reference, amount, and whether the UPI payment went through. Nobody reads the register during the day. But when a customer complains that they were charged twice, or when the owner notices that Tuesday's takings do not match the bank statement, someone opens it and looks.
 
 A well-kept register has three qualities:
 
-1. **Every entry has the same columns.** You can run your finger down the "lane" column and find all entries for lane 4. If each attendant wrote free sentences ("a white car came at about 3"), you could not.
-2. **Each entry says how serious it is.** "FASTag read failed, charged manually" is a note. "Barrier stuck open, vehicles passing free" is an alarm that someone must act on now.
-3. **It does not record what it must not.** The register does not copy down the driver's bank card number. If the register is stolen, nobody's money is at risk.
+1. **Every entry has the same columns.** You can run your finger down the "counter" column and find all entries for counter 2. If each cashier wrote free sentences ("an old man paid by phone around 3"), you could not.
+2. **Each entry says how serious it is.** "UPI timed out, customer paid cash instead" is a note. "Card machine is charging every customer twice" is an alarm that someone must act on now.
+3. **It does not record what it must not.** The register does not copy down the customer's card number, UPI PIN or full phone number. If the register is stolen, nobody's money is at risk.
 
 Application logging is exactly this register. The columns are **structured properties**, the seriousness is the **log level**, and the third rule is **data hygiene (PII and secret redaction)**. A line like `"Payment 8af3 for order 1022 failed: insufficient balance"` is a sentence. A line with properties `{PaymentId: "8af3", OrderId: 1022, Reason: "InsufficientBalance"}` is a row you can query: "show me every `InsufficientBalance` in the last hour, grouped by merchant".
 
@@ -117,6 +117,10 @@ Each `LogInformation("... {A} {B}", a, b)` call allocates an `object[]` for the 
 - **`logger.IsEnabled(LogLevel.Debug)`** before building anything expensive.
 - **The `[LoggerMessage]` source generator** (.NET 6+): you declare a `static partial void` method with the template and parameters, and the compiler generates a strongly typed method that checks `IsEnabled`, avoids boxing, and caches the template. This is the recommended style for libraries and busy services.
 
+### Logs, traces and the correlation id you already have
+
+ASP.NET Core creates an `Activity` for every request and, by default, the host adds its W3C `TraceId` and `SpanId` to the logging scope. If you use OpenTelemetry, that trace id is the natural correlation id across services. Many teams still accept or create an explicit `X-Correlation-ID` header, because it is easy for a mobile app or a support agent to quote. The middleware in this lesson does that; it does not replace the trace id, it sits next to it.
+
 ### Where logs go: providers, and Serilog
 
 `Microsoft.Extensions.Logging` is the **API** (what you call). **Providers** are the destinations: Console, JSON console, Debug, EventLog, Application Insights, OpenTelemetry. You can plug in several at once.
@@ -134,15 +138,18 @@ Your application code does not change: you still inject `ILogger<T>`. Serilog re
 
 This list is short and non-negotiable:
 
-- **Secrets**: passwords, API keys, connection strings, JWTs, session cookies, OTPs.
-- **Payment data**: full card numbers (PCI DSS allows at most the first 6 and last 4 digits), CVV ever, full bank account numbers.
+- **Secrets**: passwords, API keys, connection strings, JWTs, session cookies, OTPs, UPI PINs, payment-gateway signing keys.
+- **Payment data**: full card numbers (PCI DSS allows at most the BIN and the last 4 digits to be shown; showing only the last 4 is safer), CVV ever, full bank account numbers, full UPI ids (VPAs such as `priya.sharma@okhdfc`, which usually contain a name or a phone number).
 - **Government identifiers**: Aadhaar, PAN, passport numbers, in full.
 - **Health or biometric data.**
-- **Full request and response bodies** by default: they contain all of the above. ASP.NET Core's HTTP logging middleware exists for this, and it has field-by-field controls for exactly this reason.
+- **Free text typed by users**: a payment note, a chat message or a support comment can contain anything, including all of the above.
+- **Full request and response bodies** by default: they contain all of the above. ASP.NET Core's HTTP logging middleware (`AddHttpLogging`) leaves bodies off by default and has field-by-field controls for exactly this reason.
 
-The reason is simple: logs are copied to many places (developer laptops, search clusters, backups, third-party tools) with weaker access control than your database. A log store is the easiest place for an attacker to find a credential. The Data Protection and Digital Personal Data Protection frameworks in various countries treat logs as personal data stores too.
+The reason is simple: logs are copied to many places (developer laptops, search clusters, backups, third-party tools) with weaker access control than your database. A log store is the easiest place for an attacker to find a credential. Privacy laws such as the EU's GDPR and India's Digital Personal Data Protection Act, 2023 treat logs that hold personal data as personal-data stores, with the same duties.
 
-Instead, log **identifiers** (order id, customer id, masked phone like `+91******7843`) and **categories** (`Reason: InsufficientBalance`) that let you find the record in the system of record, where access is audited.
+Instead, log **identifiers** (payment id, merchant id, order id), **masked values** (phone as `+91******7843`, VPA as `p***@okhdfc`) and **categories** (`Reason: InsufficientBalance`) that let you find the record in the system of record, where access is audited.
+
+For larger systems, .NET 8+ also ships a framework-level option: `Microsoft.Extensions.Compliance.Redaction` plus data-classification attributes. You mark a property as personal data, log the object with `[LogProperties]`, and a registered redactor masks or hashes it before any provider sees it. Hand-written `Redactor` helpers, as in this lesson, are the simpler starting point and teach the same rule.
 
 ### Trade-offs
 
@@ -160,7 +167,7 @@ Instead, log **identifiers** (order id, customer id, masked phone like `+91*****
 ```mermaid
 flowchart LR
     MW["CorrelationIdMiddleware<br/>BeginScope(CorrelationId)"] --> EP["Endpoint / Controller"]
-    EP --> SVC["RfiSubmissionService<br/>LogInformation(template, args)"]
+    EP --> SVC["UpiPaymentService<br/>LogInformation(template, args)"]
     SVC --> LOG["ILogger&lt;T&gt; (category)"]
     LOG --> FLT{"Level filter<br/>per category"}
     FLT -- "disabled" --> DROP["Dropped (no allocation with LoggerMessage)"]
@@ -178,98 +185,106 @@ Reading left to right: middleware opens a scope so the correlation id is attache
 sequenceDiagram
     participant C as Client
     participant M as CorrelationIdMiddleware
-    participant S as RfiSubmissionService
+    participant S as UpiPaymentService
+    participant G as IPaymentGateway
     participant L as ILogger
     participant J as JSON console
-    C->>M: POST /rfis (X-Correlation-ID: abc-123)
+    C->>M: POST /payments (X-Correlation-ID: abc-123)
     M->>L: BeginScope {CorrelationId: abc-123}
-    M->>S: SubmitAsync(request)
-    S->>L: BeginScope {ProjectCode: NH48-PKG3}
-    S->>L: Information "RFI {RfiNumber} submitted by {ContractorId}" (EventId 1001)
-    L->>J: {level, template, RfiNumber, ContractorId, ProjectCode, CorrelationId}
-    S->>L: Warning "Attachment {FileName} rejected: {Reason}" (EventId 1003)
-    L->>J: {level, template, FileName, Reason, ProjectCode, CorrelationId}
+    M->>S: InitiateAsync(request)
+    S->>L: BeginScope {PaymentId: pay_7Hq2, MerchantId: MER-2041}
+    S->>L: Debug "Validating payment for order {OrderId}" (EventId 1002)
+    S->>G: CreateCollectAsync(paymentId, request)
+    G-->>S: GatewayRef, PENDING
+    S->>L: Information "Collect request created for order {OrderId} ... payer {PayerVpa}" (EventId 1001)
+    L->>J: {level, template, OrderId, AmountPaise, PayerVpa: p***@okhdfc, PaymentId, MerchantId, CorrelationId}
     S-->>M: result
-    M-->>C: 201 Created (X-Correlation-ID: abc-123)
+    M-->>C: 202 Accepted (X-Correlation-ID: abc-123)
 ```
 
-Both log lines carry `CorrelationId` and `ProjectCode` without the service repeating them. The client receives the correlation id back in a header, so a support ticket can quote it and an engineer can pull every line for that request in one query.
+Every log line carries `CorrelationId`, `PaymentId` and `MerchantId` without the service repeating them. The Debug line is dropped in production because the category's minimum level is Information. The payer's UPI id reaches the log already masked. The client receives the correlation id back in a header, so a support ticket can quote it and an engineer can pull every line for that request in one query. The response is `202 Accepted`, not `201 Created`, because a UPI collect request is only *pending* until the payer approves it in their UPI app.
 
 ## Step-by-step example
 
-We will build logging for an RFI (Request for Inspection) submission service used on a highway construction project. A contractor submits an RFI with attachments; the service validates it, stores it and notifies the engineer.
+We will build logging for a UPI payment service used by an online store. When a customer checks out, the service receives the merchant id, order id, the payer's UPI id (VPA, like `priya.sharma@okhdfc`), their phone number, the amount and an optional note. It validates the request, asks the payment gateway to send a collect request to the payer's UPI app, and returns a payment id.
 
 ### Step 1 — the version everyone writes first
 
 ```csharp
-Console.WriteLine($"RFI {rfi.Number} submitted by {rfi.ContractorEmail} with {rfi.Attachments.Count} files at {DateTime.Now}");
+Console.WriteLine($"Payment from {req.PayerVpa} ({req.PayerPhone}) of Rs {req.AmountPaise / 100m} for {req.OrderId}, note: {req.Note}, at {DateTime.Now}");
 ```
 
-Problems: it goes to stdout with no level, no category, no way to turn it off; the email is personal data; `DateTime.Now` is local time on whichever server ran it; and the text cannot be filtered by contractor.
+Problems: it goes to stdout with no level, no category, no way to turn it off; the VPA, phone and free-text note are personal data; `DateTime.Now` is local time on whichever server ran it; and the text cannot be filtered by merchant or order.
 
 ### Step 2 — ILogger with a template
 
 ```csharp
-logger.LogInformation("RFI {RfiNumber} submitted by {ContractorId} with {AttachmentCount} attachments",
-    rfi.Number, rfi.ContractorId, rfi.Attachments.Count);
+logger.LogInformation("Collect request created for order {OrderId} of {AmountPaise} paise for merchant {MerchantId}",
+    req.OrderId, req.AmountPaise, req.MerchantId);
 ```
 
-Now there is a level, a category (`RfiSubmissionService`), named properties, and an id instead of an email. The provider adds the timestamp in UTC.
+Now there is a level, a category (`UpiPaymentService`), named properties, and identifiers instead of personal data. Amounts are logged in paise (integers), the same unit the code stores, so nobody has to guess whether `499` means rupees or paise. The provider adds the timestamp in UTC.
 
 ### Step 3 — a scope for the request
 
-A middleware reads `X-Correlation-ID` (or creates one), opens a scope, and echoes the header back. Every line in the request carries the id, including lines from framework code such as EF Core or `HttpClient`.
+A middleware reads `X-Correlation-ID` (or creates one), opens a scope, and echoes the header back. Inside the service a second scope adds `PaymentId` and `MerchantId`. Every line in the request carries these, including lines from framework code such as EF Core or `HttpClient`.
 
 ### Step 4 — generated log methods
 
-Replace the `LogInformation` call with a `[LoggerMessage]`-generated method. The call site becomes `Log.RfiSubmitted(logger, rfi.Number, rfi.ContractorId, count)`, the template lives in one place, and nothing is allocated when Information is disabled.
+Replace the `LogInformation` call with a `[LoggerMessage]`-generated method. The call site becomes `PaymentLog.Initiated(logger, orderId, amountPaise, maskedVpa, maskedPhone, gatewayRef, elapsedMs)`, the template lives in one place, and nothing is allocated when Information is disabled.
 
 ### Step 5 — redaction and tests
 
-Add a `Redactor` with `MaskPhone`, `MaskEmail` and `MaskCard`. Add a unit test that uses a capturing fake logger and asserts that no log entry contains an `@` or a 16-digit run. The full code follows.
+Add a `Redactor` with `MaskVpa`, `MaskPhone`, `MaskEmail` and `MaskCard`. Add a unit test that uses a capturing fake logger and asserts that no log entry contains the raw phone digits, the VPA's user part or the note. The full code follows.
 
 ## Production-style C# implementation
 
 Project layout:
 
 ```text
-Rfi.Api/
+Upi.Api/
   Program.cs
   Logging/CorrelationIdMiddleware.cs
   Logging/Redactor.cs
-  Logging/RfiLog.cs
-  Rfi/RfiModels.cs
-  Rfi/RfiSubmissionService.cs
-Rfi.Tests/
-  RfiSubmissionServiceTests.cs
+  Logging/PaymentLog.cs
+  Payments/PaymentModels.cs
+  Payments/UpiPaymentService.cs
+Upi.Tests/
+  UpiPaymentServiceTests.cs
 ```
 
-```csharp file=Rfi/RfiModels.cs
-namespace Rfi.Api.Rfi;
+```csharp file=Payments/PaymentModels.cs
+namespace Upi.Api.Payments;
 
-public sealed record Attachment(string FileName, long SizeBytes);
+/// <summary>Amounts are in paise (1 rupee = 100 paise) so money is never a floating-point number.</summary>
+public sealed record PaymentRequest(
+    string MerchantId,
+    string OrderId,
+    string PayerVpa,
+    string PayerPhone,
+    long AmountPaise,
+    string? Note);
 
-public sealed record RfiRequest(
-    string ProjectCode,
-    string ContractorId,
-    string ContractorPhone,
-    string Chainage,
-    IReadOnlyList<Attachment> Attachments);
+public enum PaymentStatus { Pending, Rejected }
 
-public sealed record RfiResult(string RfiNumber, int AcceptedAttachments, IReadOnlyList<string> RejectedAttachments);
+public sealed record PaymentResult(string PaymentId, PaymentStatus Status, string? RejectReason);
 
-public interface IRfiStore
+public sealed record GatewayResponse(string GatewayRef, string StatusCode);
+
+public interface IPaymentGateway
 {
-    Task<string> SaveAsync(RfiRequest request, IReadOnlyList<Attachment> accepted, CancellationToken ct);
+    Task<GatewayResponse> CreateCollectAsync(string paymentId, PaymentRequest request, CancellationToken ct);
 }
 
-public sealed class InMemoryRfiStore : IRfiStore
+/// <summary>Stand-in for a real UPI gateway client. Production code would call the gateway over HTTPS
+/// with a timeout and pass paymentId as the idempotency key.</summary>
+public sealed class FakePaymentGateway : IPaymentGateway
 {
     private int _seq;
-    public Task<string> SaveAsync(RfiRequest request, IReadOnlyList<Attachment> accepted, CancellationToken ct)
+    public Task<GatewayResponse> CreateCollectAsync(string paymentId, PaymentRequest request, CancellationToken ct)
     {
         var n = Interlocked.Increment(ref _seq);
-        return Task.FromResult($"{request.ProjectCode}-RFI-{n:D4}");
+        return Task.FromResult(new GatewayResponse($"GW{n:D8}", "PENDING"));
     }
 }
 ```
@@ -277,7 +292,7 @@ public sealed class InMemoryRfiStore : IRfiStore
 ```csharp file=Logging/Redactor.cs
 using System.Text.RegularExpressions;
 
-namespace Rfi.Api.Logging;
+namespace Upi.Api.Logging;
 
 /// <summary>Helpers that turn personal data into log-safe identifiers.
 /// Rule: a log line should let you FIND the record, not READ it.</summary>
@@ -297,6 +312,16 @@ public static partial class Redactor
         return $"{prefix}******{last4}";
     }
 
+    /// <summary>UPI id (VPA) priya.sharma@okhdfc -> p***@okhdfc. The handle after @ shows the payer's
+    /// app/bank, which is useful for grouping failures; the part before @ often holds a name or phone number.</summary>
+    public static string MaskVpa(string? vpa)
+    {
+        if (string.IsNullOrWhiteSpace(vpa)) return "(none)";
+        var at = vpa.IndexOf('@');
+        if (at <= 0 || at == vpa.Length - 1) return "(invalid)";
+        return $"{vpa[0]}***{vpa[at..].ToLowerInvariant()}";
+    }
+
     /// <summary>ajit.kumar@example.com -> a***@example.com. Domain stays visible for support.</summary>
     public static string MaskEmail(string? email)
     {
@@ -305,7 +330,7 @@ public static partial class Redactor
         return $"{email[0]}***{email[at..]}";
     }
 
-    /// <summary>Card numbers: PCI DSS allows at most first 6 + last 4. We show only the last 4.</summary>
+    /// <summary>Card numbers: PCI DSS allows at most the BIN + last 4. We show only the last 4.</summary>
     public static string MaskCard(string? pan)
     {
         if (string.IsNullOrWhiteSpace(pan)) return "(none)";
@@ -315,101 +340,105 @@ public static partial class Redactor
 }
 ```
 
-```csharp file=Logging/RfiLog.cs
+```csharp file=Logging/PaymentLog.cs
 using Microsoft.Extensions.Logging;
 
-namespace Rfi.Api.Logging;
+namespace Upi.Api.Logging;
 
 /// <summary>Compile-time generated log methods. One place owns every template and event id,
-/// and calls are allocation-free when the level is disabled.</summary>
-public static partial class RfiLog
+/// and calls are allocation-free when the level is disabled.
+/// Parameters named PayerVpa / PayerPhone must receive MASKED values: see Redactor.</summary>
+public static partial class PaymentLog
 {
     public static class Events
     {
-        public const int Submitted = 1001;
+        public const int Initiated = 1001;
         public const int Validating = 1002;
-        public const int AttachmentRejected = 1003;
-        public const int StoreFailed = 1004;
+        public const int Rejected = 1003;
+        public const int GatewayFailed = 1004;
     }
 
     [LoggerMessage(EventId = Events.Validating, Level = LogLevel.Debug,
-        Message = "Validating RFI for {ProjectCode} at chainage {Chainage} with {AttachmentCount} attachments")]
-    public static partial void Validating(ILogger logger, string projectCode, string chainage, int attachmentCount);
+        Message = "Validating payment for order {OrderId} of {AmountPaise} paise")]
+    public static partial void Validating(ILogger logger, string orderId, long amountPaise);
 
-    [LoggerMessage(EventId = Events.AttachmentRejected, Level = LogLevel.Warning,
-        Message = "Attachment {FileName} rejected: {Reason}")]
-    public static partial void AttachmentRejected(ILogger logger, string fileName, string reason);
+    [LoggerMessage(EventId = Events.Rejected, Level = LogLevel.Warning,
+        Message = "Payment for order {OrderId} rejected: {Reason} (payer {PayerVpa})")]
+    public static partial void Rejected(ILogger logger, string orderId, string reason, string payerVpa);
 
-    [LoggerMessage(EventId = Events.Submitted, Level = LogLevel.Information,
-        Message = "RFI {RfiNumber} submitted by {ContractorId} ({ContractorPhone}) with {AcceptedCount} attachments in {ElapsedMs} ms")]
-    public static partial void Submitted(ILogger logger, string rfiNumber, string contractorId, string contractorPhone, int acceptedCount, long elapsedMs);
+    [LoggerMessage(EventId = Events.Initiated, Level = LogLevel.Information,
+        Message = "Collect request created for order {OrderId} of {AmountPaise} paise, payer {PayerVpa} ({PayerPhone}), gateway ref {GatewayRef} in {ElapsedMs} ms")]
+    public static partial void Initiated(ILogger logger, string orderId, long amountPaise, string payerVpa, string payerPhone, string gatewayRef, long elapsedMs);
 
-    [LoggerMessage(EventId = Events.StoreFailed, Level = LogLevel.Error,
-        Message = "Failed to store RFI for {ProjectCode} from {ContractorId}")]
-    public static partial void StoreFailed(ILogger logger, Exception ex, string projectCode, string contractorId);
+    [LoggerMessage(EventId = Events.GatewayFailed, Level = LogLevel.Error,
+        Message = "Gateway call failed for order {OrderId} of {AmountPaise} paise")]
+    public static partial void GatewayFailed(ILogger logger, Exception ex, string orderId, long amountPaise);
 }
 ```
 
-```csharp file=Rfi/RfiSubmissionService.cs
-using System.Diagnostics;
+```csharp file=Payments/UpiPaymentService.cs
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
-using Rfi.Api.Logging;
+using Upi.Api.Logging;
 
-namespace Rfi.Api.Rfi;
+namespace Upi.Api.Payments;
 
-public sealed class RfiSubmissionService(IRfiStore store, ILogger<RfiSubmissionService> logger, TimeProvider clock)
+public sealed partial class UpiPaymentService(IPaymentGateway gateway, ILogger<UpiPaymentService> logger, TimeProvider clock)
 {
-    private const long MaxAttachmentBytes = 25L * 1024 * 1024;   // 25 MB
-    private static readonly HashSet<string> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase) { ".pdf", ".jpg", ".jpeg", ".png", ".dwg" };
+    /// <summary>NPCI's default per-transaction UPI limit for most payments: Rs 1,00,000 = 1,00,00,000 paise.</summary>
+    public const long MaxAmountPaise = 1_00_000L * 100;
 
-    public async Task<RfiResult> SubmitAsync(RfiRequest request, CancellationToken ct)
+    [GeneratedRegex(@"^[a-zA-Z0-9._-]{2,256}@[a-zA-Z]{2,64}$")]
+    private static partial Regex VpaShape();
+
+    public async Task<PaymentResult> InitiateAsync(PaymentRequest request, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var paymentId = $"pay_{Guid.NewGuid():N}";
 
-        // Everything logged inside this block carries ProjectCode and ContractorId automatically.
+        // Everything logged inside this block carries PaymentId and MerchantId automatically.
         using var scope = logger.BeginScope(new Dictionary<string, object>
         {
-            ["ProjectCode"] = request.ProjectCode,
-            ["ContractorId"] = request.ContractorId,
+            ["PaymentId"] = paymentId,
+            ["MerchantId"] = request.MerchantId,
         });
 
         var started = clock.GetTimestamp();
-        RfiLog.Validating(logger, request.ProjectCode, request.Chainage, request.Attachments.Count);
+        PaymentLog.Validating(logger, request.OrderId, request.AmountPaise);
 
-        var accepted = new List<Attachment>();
-        var rejected = new List<string>();
-        foreach (var a in request.Attachments)
+        var reason = Validate(request);
+        if (reason is not null)
         {
-            var reason = Validate(a);
-            if (reason is null) accepted.Add(a);
-            else
-            {
-                rejected.Add(a.FileName);
-                RfiLog.AttachmentRejected(logger, a.FileName, reason);
-            }
+            // A rejected request is handled, not a failure of our system: Warning, with a stable reason code.
+            PaymentLog.Rejected(logger, request.OrderId, reason, Redactor.MaskVpa(request.PayerVpa));
+            return new PaymentResult(paymentId, PaymentStatus.Rejected, reason);
         }
 
-        string number;
+        GatewayResponse response;
         try
         {
-            number = await store.SaveAsync(request, accepted, ct);
+            response = await gateway.CreateCollectAsync(paymentId, request, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // Log once, at the level that matches the impact, with the exception object (not ex.Message).
-            RfiLog.StoreFailed(logger, ex, request.ProjectCode, request.ContractorId);
+            PaymentLog.GatewayFailed(logger, ex, request.OrderId, request.AmountPaise);
             throw;
         }
 
         var elapsedMs = (long)clock.GetElapsedTime(started).TotalMilliseconds;
-        RfiLog.Submitted(logger, number, request.ContractorId, Redactor.MaskPhone(request.ContractorPhone), accepted.Count, elapsedMs);
-        return new RfiResult(number, accepted.Count, rejected);
+        // request.Note is deliberately never logged: it is free text typed by the customer.
+        PaymentLog.Initiated(logger, request.OrderId, request.AmountPaise,
+            Redactor.MaskVpa(request.PayerVpa), Redactor.MaskPhone(request.PayerPhone),
+            response.GatewayRef, elapsedMs);
+        return new PaymentResult(paymentId, PaymentStatus.Pending, null);
     }
 
-    private static string? Validate(Attachment a)
+    private static string? Validate(PaymentRequest r)
     {
-        if (a.SizeBytes > MaxAttachmentBytes) return "TooLarge";
-        if (!AllowedExtensions.Contains(Path.GetExtension(a.FileName))) return "UnsupportedType";
+        if (r.AmountPaise <= 0) return "AmountNotPositive";
+        if (r.AmountPaise > MaxAmountPaise) return "AmountAboveLimit";
+        if (string.IsNullOrWhiteSpace(r.PayerVpa) || !VpaShape().IsMatch(r.PayerVpa)) return "InvalidVpa";
         return null;
     }
 }
@@ -419,7 +448,7 @@ public sealed class RfiSubmissionService(IRfiStore store, ILogger<RfiSubmissionS
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 
-namespace Rfi.Api.Logging;
+namespace Upi.Api.Logging;
 
 /// <summary>Reads X-Correlation-ID or creates one, puts it in a log scope for the whole request,
 /// and echoes it in the response so support tickets can quote it.</summary>
@@ -454,8 +483,8 @@ public static class CorrelationIdMiddlewareExtensions
 ```
 
 ```csharp file=Program.cs
-using Rfi.Api.Logging;
-using Rfi.Api.Rfi;
+using Upi.Api.Logging;
+using Upi.Api.Payments;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -469,17 +498,19 @@ builder.Logging.AddJsonConsole(o =>
 });
 
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<IRfiStore, InMemoryRfiStore>();
-builder.Services.AddSingleton<RfiSubmissionService>();
+builder.Services.AddSingleton<IPaymentGateway, FakePaymentGateway>();
+builder.Services.AddSingleton<UpiPaymentService>();
 
 var app = builder.Build();
 
 app.UseCorrelationId();
 
-app.MapPost("/rfis", async (RfiRequest request, RfiSubmissionService service, CancellationToken ct) =>
+app.MapPost("/payments", async (PaymentRequest request, UpiPaymentService service, CancellationToken ct) =>
 {
-    var result = await service.SubmitAsync(request, ct);
-    return Results.Created($"/rfis/{result.RfiNumber}", result);
+    var result = await service.InitiateAsync(request, ct);
+    return result.Status == PaymentStatus.Rejected
+        ? Results.Problem(title: "Payment rejected", detail: result.RejectReason, statusCode: StatusCodes.Status422UnprocessableEntity)
+        : Results.Accepted($"/payments/{result.PaymentId}", result);   // pending until the payer approves in their UPI app
 });
 
 app.Run();
@@ -494,7 +525,7 @@ And the matching `appsettings.json`, where the level per category lives. `Defaul
       "Default": "Information",
       "Microsoft.AspNetCore": "Warning",
       "Microsoft.AspNetCore.Hosting.Diagnostics": "Information",
-      "Rfi.Api.Rfi": "Debug"
+      "Upi.Api.Payments": "Debug"
     }
   }
 }
@@ -518,12 +549,12 @@ builder.Host.UseSerilog((ctx, services, cfg) => cfg
     .Enrich.FromLogContext()
     .Enrich.WithMachineName()
     .WriteTo.Console(new Serilog.Formatting.Compact.CompactJsonFormatter())
-    .WriteTo.File("logs/rfi-.json", rollingInterval: RollingInterval.Day, retainedFileCountLimit: 14));
+    .WriteTo.File("logs/payments-.json", rollingInterval: RollingInterval.Day, retainedFileCountLimit: 14));
 
 app.UseSerilogRequestLogging();   // one summary line per request, replaces the noisy framework lines
 ```
 
-`RfiSubmissionService` is untouched: it still takes `ILogger<RfiSubmissionService>`. That is the whole point of logging to an abstraction.
+`UpiPaymentService` is untouched: it still takes `ILogger<UpiPaymentService>`. That is the whole point of logging to an abstraction.
 
 ## Bad design vs good design
 
@@ -1162,23 +1193,31 @@ Logging is testable, and worth testing in three specific places.
 
 ```csharp
 [Fact]
-public async Task Submission_logs_never_contain_the_raw_phone()
+public async Task Payment_logs_never_contain_raw_vpa_phone_or_note()
 {
     var log = new CapturingLogger();
-    var svc = new RfiSubmissionService(new InMemoryRfiStore(), new TypedLogger<RfiSubmissionService>(log), TimeProvider.System);
-    var request = new RfiRequest("NH48-PKG3", "CTR-17", "+91 98765 43210", "km 112+400", new[] { new Attachment("site.jpg", 2_000_000) });
+    var svc = new UpiPaymentService(new FakePaymentGateway(), new TypedLogger<UpiPaymentService>(log), TimeProvider.System);
+    var request = new PaymentRequest("MER-2041", "ORD-88231", "priya.sharma@okhdfc", "+91 98765 43210",
+        AmountPaise: 49_900, Note: "Birthday gift for Rahul");
 
-    await svc.SubmitAsync(request, CancellationToken.None);
+    await svc.InitiateAsync(request, CancellationToken.None);
 
-    Assert.All(log.Entries, e => Assert.DoesNotContain("98765", e.Message));
-    var submitted = Assert.Single(log.Entries, e => e.EventId.Id == RfiLog.Events.Submitted);
-    Assert.Equal("******3210", submitted.Properties["ContractorPhone"]?.ToString()?[^10..]);
+    Assert.All(log.Entries, e =>
+    {
+        Assert.DoesNotContain("98765", e.Message);
+        Assert.DoesNotContain("priya.sharma", e.Message);
+        Assert.DoesNotContain("Birthday", e.Message);
+    });
+    var initiated = Assert.Single(log.Entries, e => e.EventId.Id == PaymentLog.Events.Initiated);
+    Assert.Equal("p***@okhdfc", initiated.Properties["PayerVpa"]);
+    Assert.Equal("+91******3210", initiated.Properties["PayerPhone"]);
+    Assert.Equal(49_900L, initiated.Properties["AmountPaise"]);
 }
 ```
 
-`TypedLogger<T>` is a two-line adapter that implements `ILogger<T>` by delegating to a plain `ILogger`. `Microsoft.Extensions.Logging.Testing` also ships a `FakeLogger<T>` with a `Collector` you can query; use it in real projects instead of hand-rolling.
+`TypedLogger<T>` is a two-line adapter that implements `ILogger<T>` by delegating to a plain `ILogger`. In real projects use `FakeLogger<T>` from the `Microsoft.Extensions.Diagnostics.Testing` package (namespace `Microsoft.Extensions.Logging.Testing`): it records every entry, including scopes, in a `Collector` you can query, so you do not hand-roll a fake.
 
-**3. Levels and event ids are part of the contract.** A dashboard filters on `EventId == 1003`. If someone renumbers it, the dashboard silently shows zero. A test that asserts `AttachmentRejected` produces event 1003 at Warning is cheap insurance.
+**3. Levels and event ids are part of the contract.** A dashboard filters on `EventId == 1003`. If someone renumbers it, the dashboard silently shows zero. A test that asserts a rejected payment produces event 1003 at Warning with a `Reason` property is cheap insurance.
 
 What *not* to test: the exact rendered text. Wording changes; properties and ids should not.
 
@@ -1281,8 +1320,9 @@ Which of these may be logged in a payment service? (Select all that apply.)
 - [ ] The full 16-digit card number
 - [x] The last 4 digits of the card
 - [ ] The customer's OTP
+- [ ] The payer's full UPI id, such as `priya.sharma@okhdfc`
 - [x] The gateway's reason code
-> Identifiers and reason codes let you find the record and group failures. Full card numbers, CVV and OTPs are never logged.
+> Identifiers and reason codes let you find the record and group failures. Full card numbers, CVV, OTPs and full UPI ids are never logged; a masked VPA like `p***@okhdfc` is fine.
 ::q single
 What is the main benefit of the `[LoggerMessage]` source generator on a hot path?
 - [ ] It writes logs faster to disk.
@@ -1294,7 +1334,7 @@ What is the main benefit of the `[LoggerMessage]` source generator on a hot path
 In a `catch` block you want the stack trace, exception type and inner exceptions in the log. Which call is right?
 - [ ] `logger.LogError(ex.Message)`
 - [ ] `logger.LogError("Failed: " + ex)`
-- [x] `logger.LogError(ex, "Failed to store RFI {ProjectCode}", code)`
+- [x] `logger.LogError(ex, "Gateway call failed for order {OrderId}", orderId)`
 - [ ] `logger.LogError(ex.StackTrace)`
 > Passing the exception object as the first argument keeps it structured; providers render type, message, stack and inner exceptions. String concatenation loses structure and ex.Message alone loses almost everything.
 ::q single

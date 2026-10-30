@@ -136,7 +136,7 @@ The **caller** queries the registry, keeps a local list of healthy instances, an
 - Smart balancing per request: least-requests, power of two choices, zone-aware routing ("prefer instances in my availability zone"), and it handles HTTP/2 and gRPC well because the client chooses per call.
 - But every client needs discovery logic, and every language needs a library. Bugs in that library are spread across all callers. Clients also need credentials to read the registry.
 
-In .NET, the `Microsoft.Extensions.ServiceDiscovery` library (used by .NET Aspire) does this: you call `http://pricing` and a delegating handler resolves the logical name from configuration, DNS SRV records or a provider, picks an endpoint, and rewrites the request.
+In .NET, the `Microsoft.Extensions.ServiceDiscovery` library (used by Aspire, formerly .NET Aspire) does this: you call `http://pricing` and a delegating handler resolves the logical name, picks an endpoint (round robin by default), and rewrites the request. Out of the box it reads endpoints from configuration and otherwise passes the name through to DNS unchanged (which is what you want on Kubernetes, where `pricing` is already a Service name). The separate `Microsoft.Extensions.ServiceDiscovery.Dns` package adds DNS SRV lookups (`AddDnsSrvServiceEndpointProvider()`). Resolved endpoints are cached and refreshed in the background, so the library has the same staleness trade-off as any client-side cache.
 
 ```csharp
 // Needs the Microsoft.Extensions.ServiceDiscovery package; shown as a snippet.
@@ -144,6 +144,8 @@ builder.Services.AddServiceDiscovery();
 builder.Services.ConfigureHttpClientDefaults(http => http.AddServiceDiscovery());
 builder.Services.AddHttpClient<PricingClient>(c => c.BaseAddress = new Uri("https+http://pricing"));
 // "https+http://" means: prefer an https endpoint, fall back to http.
+// In production, restrict to https so a misconfiguration cannot silently downgrade:
+// builder.Services.Configure<ServiceDiscoveryOptions>(o => o.AllowedSchemes = ["https"]);
 ```
 
 ```json
@@ -204,6 +206,8 @@ That is why passive ejection and caller retries (on another instance, for idempo
 
 If the process exits first, every caller with a cached list sends requests into a closed port until the next refresh.
 
+In ASP.NET Core, keep the whole sequence inside the platform's budget: Kubernetes sends `SIGTERM`, waits `terminationGracePeriodSeconds` (30 s by default), then kills the pod. The host's `HostOptions.ShutdownTimeout` (30 s by default) plus the `preStop` delay must fit inside that grace period, or in-flight requests are cut off anyway.
+
 ### Kubernetes: discovery built in
 
 Kubernetes gives you third-party registration, health-aware membership and both kinds of discovery without application code ([Kubernetes fundamentals](#/lesson/m15-kubernetes)):
@@ -214,6 +218,8 @@ Kubernetes gives you third-party registration, health-aware membership and both 
 - **kube-proxy** (or an eBPF-based networking layer) programs each node so connections to the ClusterIP are spread across ready pod IPs. That is server-side discovery at L4: balancing is per connection.
 - A **headless Service** (`clusterIP: None`) skips the virtual IP; DNS returns the ready pod IPs directly. Clients then do client-side balancing, which is the usual setup for gRPC.
 - `NodePort`, `LoadBalancer` and Ingress / Gateway API resources expose Services outside the cluster.
+- **Zone-aware routing** is available on the Service itself: `spec.trafficDistribution: PreferClose` asks the data plane to prefer endpoints in the caller's zone, which cuts cross-zone latency and data-transfer cost.
+- **A DNS trap**: pods resolve names with `ndots:5` by default, so an external name such as `api.payments.example.com` is first tried against every cluster search domain. That multiplies DNS queries (and CoreDNS load) several times. Use fully qualified names with a trailing dot for external hosts, or lower `ndots` in the pod's `dnsConfig`.
 
 ```yaml
 apiVersion: v1
@@ -241,6 +247,8 @@ livenessProbe:
 lifecycle:
   preStop:
     exec: { command: ["sleep", "5"] }
+    # Chiseled/distroless .NET images have no shell or sleep binary. On recent
+    # Kubernetes versions use the built-in action instead:  preStop: { sleep: { seconds: 5 } }
 ```
 
 ### Failure modes and what to do about them
@@ -573,6 +581,7 @@ public sealed class DiscoveryHandler(ServiceEndpointResolver resolver) : Delegat
 ```csharp file=Program.cs
 using Discovery.Client;
 using Discovery.Registry;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -594,6 +603,9 @@ builder.Services.AddHealthChecks();
 
 var app = builder.Build();
 
+// Liveness runs no checks: it only proves the process can answer. Readiness runs every
+// registered check (add dependency checks here) and controls membership in discovery.
+app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
 app.MapHealthChecks("/health/ready");
 
 // A tiny registry API, standing in for Consul's or the Kubernetes API.
@@ -1482,8 +1494,8 @@ private sealed class Recording(Func<HttpRequestMessage, HttpResponseMessage> res
 - **Consul** provides a registry, health checks and a DNS interface across VMs and containers, and is common in hybrid estates.
 - **Netflix's open-source Eureka and Ribbon** popularised client-side discovery and the AP "self-preservation" design; their public write-ups are a good source on why availability beat consistency for their registry.
 - **gRPC** supports pluggable resolvers and client-side balancing policies, and the xDS protocol (from Envoy) lets a control plane push endpoints and policies to clients and proxies.
-- **.NET Aspire** uses `Microsoft.Extensions.ServiceDiscovery` so that local development, Docker Compose and Kubernetes deployments all resolve `http://catalog` correctly without code changes.
-- **Infrastructure-monitoring platforms** with field-device gateways (toll plazas, weigh-in-motion stations, bridge sensors) often face discovery in reverse: thousands of devices must find the current ingestion endpoint. They use a stable DNS name with health-checked records and short TTLs, plus a fallback list baked into the device firmware.
+- **Aspire** (formerly .NET Aspire) uses `Microsoft.Extensions.ServiceDiscovery` so that local development, Docker Compose and Kubernetes deployments all resolve `http://catalog` correctly without code changes.
+- **IoT platforms** (smart electricity meters, EV chargers, delivery-fleet trackers) often face discovery in reverse: thousands of devices must find the current ingestion endpoint. They use a stable DNS name with health-checked records and short TTLs, plus a fallback list baked into the device firmware.
 
 ## Interview questions
 

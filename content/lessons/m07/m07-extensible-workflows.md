@@ -22,7 +22,7 @@ references:
     url: https://dl.acm.org/doi/10.1145/38713.38742
 ---
 
-Every organisation runs on workflows: leave approvals, purchase requests, expense claims, contractor bills, grievance handling. They all start simple ("manager approves, done") and then the exceptions arrive. Sick leave over two days needs a certificate. Purchases above ₹5 lakh need Finance. IT purchases need the IT head. Requests stuck for 48 hours escalate. This lesson shows how to design workflows so each new rule is a small addition, not another branch in a 600-line method.
+Every organisation runs on workflows: leave approvals, purchase requests, expense claims, refund requests, customer-complaint handling. They all start simple ("manager approves, done") and then the exceptions arrive. Sick leave over two days needs a certificate. Purchases above ₹5 lakh need Finance. IT purchases need the IT head. Requests stuck for 48 hours escalate. This lesson shows how to design workflows so each new rule is a small addition, not another branch in a 600-line method.
 
 ## Learning objectives
 
@@ -116,7 +116,7 @@ When a purchase request is approved, several things happen in order: validate it
 
 Two design details make it extensible:
 
-1. **Steps are discovered, not listed.** Each step is registered in DI as `IWorkflowStep<PurchaseContext>` with an `Order` number. Another team can add a "GeM portal check" step at order 25 without touching the pipeline code.
+1. **Steps are discovered, not listed.** Each step is registered in DI as `IWorkflowStep<PurchaseContext>` with an `Order` number. Another team can add a "vendor KYC check" step at order 25 without touching the pipeline code.
 2. **Steps can be undone.** If raising the purchase order fails after budget was reserved, the reservation must be released. Each step that changes something outside the process offers a `CompensateAsync`. The pipeline calls compensations of completed steps in **reverse order**. This is the **Saga** idea from Garcia-Molina and Salem (1987): a long transaction made of steps, each with a compensating action, instead of one database transaction spanning everything.
 
 Compensation isn't a rollback. A released budget reservation might already have been seen in a report, and a sent SMS can't be unsent. Design compensations as business actions ("release reservation", "send cancellation notice"), and make them idempotent, because they may be retried.
@@ -473,13 +473,13 @@ public static class LeaveWorkflow
             .Permit(LeaveStatus.PendingHr, LeaveTrigger.Cancel, LeaveStatus.Cancelled);
 
     /// <summary>Who may fire which trigger. Kept beside the definition so the two are reviewed together.</summary>
-    public static IReadOnlyDictionary<LeaveTrigger, string> RequiredRole { get; } = new Dictionary<LeaveTrigger, string>
+    public static IReadOnlyDictionary<LeaveTrigger, string[]> AllowedRoles { get; } = new Dictionary<LeaveTrigger, string[]>
     {
-        [LeaveTrigger.Submit] = "Employee",
-        [LeaveTrigger.Cancel] = "Employee",
-        [LeaveTrigger.ManagerApprove] = "Manager",
-        [LeaveTrigger.Reject] = "Manager",
-        [LeaveTrigger.HrApprove] = "HR",
+        [LeaveTrigger.Submit] = ["Employee"],
+        [LeaveTrigger.Cancel] = ["Employee"],
+        [LeaveTrigger.ManagerApprove] = ["Manager"],
+        [LeaveTrigger.Reject] = ["Manager", "HR"],         // HR must be able to reject a request waiting in PendingHr
+        [LeaveTrigger.HrApprove] = ["HR"],
     };
 }
 
@@ -543,8 +543,8 @@ public sealed class LeaveService(RuleSet<LeaveRequest> rules, TimeProvider clock
 {
     public LeaveCommandResult Fire(LeaveRequest request, LeaveTrigger trigger, string actor, string actorRole, string? comment = null)
     {
-        if (LeaveWorkflow.RequiredRole.TryGetValue(trigger, out var role) && role != actorRole)
-            return new(false, request.Status, [new("forbidden", $"Only {role} can {trigger}.")]);
+        if (LeaveWorkflow.AllowedRoles.TryGetValue(trigger, out var roles) && !roles.Contains(actorRole))
+            return new(false, request.Status, [new("forbidden", $"Only {string.Join(" or ", roles)} can {trigger}.")]);
 
         if (trigger == LeaveTrigger.Submit && rules.Evaluate(request) is { Count: > 0 } violations)
             return new(false, request.Status, violations);
@@ -563,7 +563,7 @@ public sealed class LeaveService(RuleSet<LeaveRequest> rules, TimeProvider clock
 }
 ```
 
-The service is short because it only *composes*: check the role, run the rules on submit, ask the state machine for the next state, record it. Each of those has its own home and its own tests. A notification or outbox write would go right after `request.Apply`, keyed on the new status.
+The service is short because it only *composes*: check the role, run the rules on submit, ask the state machine for the next state, record it. The role check is deliberately coarse; a real system also checks *which* manager (the employee's own, never the employee approving their own leave), usually with an ASP.NET Core resource-based authorization handler. Each of those has its own home and its own tests. A notification or outbox write would go right after `request.Apply`, keyed on the new status.
 
 ```csharp file=Procurement/Procurement.cs
 using Microsoft.Extensions.Options;
@@ -693,7 +693,7 @@ public sealed class InMemoryVendorRegistry : IVendorRegistry
 public sealed class InMemoryBudgetService : IBudgetService
 {
     private readonly object _gate = new();
-    private readonly Dictionary<string, decimal> _available = new(StringComparer.OrdinalIgnoreCase) { ["Civil"] = 25_00_000m, ["IT"] = 8_00_000m };
+    private readonly Dictionary<string, decimal> _available = new(StringComparer.OrdinalIgnoreCase) { ["Operations"] = 25_00_000m, ["IT"] = 8_00_000m };
     private readonly Dictionary<string, (string Dept, decimal Amount)> _reservations = [];
 
     public string? TryReserve(string department, decimal amount)
@@ -1200,7 +1200,7 @@ public class ApprovalMatrixTests
     [InlineData(50001, "DepartmentManager,FinanceOfficer")]
     [InlineData(1200000, "DepartmentManager,FinanceOfficer,Director")]
     public void Routes_by_amount(decimal amount, string expected) =>
-        Assert.Equal(expected, string.Join(",", M().ChainFor(amount, "Civil")));
+        Assert.Equal(expected, string.Join(",", M().ChainFor(amount, "Operations")));
 
     [Fact] public void It_head_inserted_after_first() =>
         Assert.Equal("DepartmentManager,ItHead,FinanceOfficer", string.Join(",", M().ChainFor(300000m, "IT")));
@@ -1224,7 +1224,7 @@ public class ApprovalMatrixTests
         Assert.Throws<ArgumentException>(() => new ApprovalMatrix(new[] { new ApprovalTier(null, new string[0]) }, Extras));
 
     [Fact] public void Non_positive_amount_throws() =>
-        Assert.Throws<ArgumentOutOfRangeException>(() => M().ChainFor(0m, "Civil"));
+        Assert.Throws<ArgumentOutOfRangeException>(() => M().ChainFor(0m, "Operations"));
 }
 ```
 ::solution
@@ -1641,7 +1641,7 @@ public async Task Failure_compensates_completed_steps_in_reverse()
 - **Public procurement** in India follows delegation-of-financial-powers rules and general financial rules, with thresholds that decide who approves and which procurement method applies. Approval matrices as data, and a complete audit trail per transition, map directly onto those requirements.
 - **Order processing** in e-commerce is a pipeline with compensation: reserve stock, charge payment, create shipment; if shipment creation fails, refund and release stock. Large systems implement it as a saga across services.
 - **Insurance and loan processing** combine rule sets (eligibility, risk) with routing (amounts and risk grades decide underwriter levels) and long waits for documents, a typical case for a durable workflow engine.
-- **Construction and infrastructure projects** run many document workflows: requests for information (RFIs), contractor bills, variation orders and drawing approvals, each with a lifecycle, a routing matrix (engineer, team leader, client) and SLA-based escalation.
+- **Customer-support and SaaS tools** (Jira- or Zendesk-style ticketing) run configurable workflows: each ticket type has a lifecycle, routing rules (team, priority, customer tier) and SLA-based escalation when a ticket sits too long in one state.
 - **ASP.NET Core's own middleware pipeline** is the same plug-in step idea applied to HTTP requests: ordered components, each deciding whether to continue.
 
 ## Interview questions

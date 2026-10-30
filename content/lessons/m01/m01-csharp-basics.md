@@ -406,7 +406,7 @@ total = total + total * 0.05m;
 Console.WriteLine($"Pay ₹{total}");
 ```
 
-It prints `Pay ₹94.500`. Fine for a one-off. But the prices ₹15 and ₹20, the 5 % discount and the 5 % GST are **magic numbers**: numbers with no name. Change the GST rate and you must hunt for the right `0.05m` among two identical ones.
+It prints `Pay ₹94.50` (the bill is ₹90, under ₹500, so no discount; 5 % GST adds ₹4.50). Fine for a one-off. But the prices ₹15 and ₹20, the 5 % discount and the 5 % GST are **magic numbers**: numbers with no name. Change the GST rate and you must hunt for the right `0.05m` among two identical ones.
 
 ### Step 2: name the rules
 
@@ -1505,7 +1505,7 @@ The [unit testing lesson](#/lesson/m01-testing-debugging) covers test structure,
 - **Billing and GST**: invoicing systems are mostly loops over line items, conditions for tax slabs and exemptions, and careful `decimal` rounding at defined points. An off-by-one paisa in rounding is a real support ticket.
 - **Configuration and feature flags**: `if (options.EnableUpi) { ... }` is a condition driven by a `bool` loaded from settings.
 - **Background jobs**: a worker that processes a queue is a `while` loop that runs until the app shuts down (`while (!stoppingToken.IsCancellationRequested)`).
-- **Infrastructure projects**: a progress report that totals chainage-wise quantities for a highway (kilometres of earthwork per section) is a `foreach` with a running sum, and the "is this section delayed?" flag is a condition on planned vs actual dates.
+- **Food delivery and ride-hailing apps**: the weekly earnings statement for a delivery partner is a `foreach` over completed orders with a running sum of fees and tips, and the "is this partner below the minimum guarantee?" flag is a condition comparing that sum with a threshold.
 - **Parsing**: expression evaluators like the one in exercise 5 appear inside spreadsheets, rule engines and pricing tools that let business users type formulas.
 
 ## Interview questions

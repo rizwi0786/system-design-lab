@@ -7,10 +7,10 @@ status: reviewed
 template: hld-case
 minutes: 100
 prerequisites: [m11-capacity-estimation, m09-locking, m09-transactions-acid, m13-distributed-locks, m10-idempotency]
-related: [m17-hotel-reservation, m17-ecommerce, m17-payment-system, m12-sagas, m10-rate-limiting, m09-isolation-levels]
+related: [m17-hotel-reservation, m17-flash-sale, m17-ecommerce, m17-payment-system, m12-sagas, m10-rate-limiting, m09-isolation-levels]
 tags: [hld, case-study, seat-locking, ttl, concurrency, waiting-room, payments]
 patterns: []
-summary: Design a BookMyShow-style movie ticket system — seat maps, all-or-nothing seat holds with a TTL, payment timeouts and late payments, and a waiting room for blockbuster releases — with capacity maths, a PostgreSQL data model that makes double booking impossible, and C# for seat holds and the booking flow.
+summary: Design a movie ticket system like BookMyShow or Fandango — seat maps, all-or-nothing seat holds with a TTL, payment timeouts and late payments, and a waiting room for blockbuster releases — with capacity maths, a PostgreSQL data model that makes double booking impossible, and C# for seat holds and the booking flow.
 references:
   - title: PostgreSQL 17 documentation — Explicit locking
     url: https://www.postgresql.org/docs/17/explicit-locking.html
@@ -307,7 +307,7 @@ The hold is taken **before** any money moves, so a customer who loses the race f
 
 **Option A: conditional update in PostgreSQL (the default).** The `UPDATE … WHERE status = 'AVAILABLE' OR expired` shown above, inside a transaction that checks the row count. Concurrent holds on the same seat serialise on the row lock: the second transaction waits for the first to commit, then re-checks the condition and matches nothing. Advantages: one source of truth, transactional with bookings, simple to reason about. Cost: on a hot show, many transactions queue on the same rows.
 
-To avoid deadlocks when two customers request overlapping seat sets in different orders ({F7, F8} and {F8, F7}), always lock seats in a **consistent order** (sort the seat ids), or let the single `UPDATE … WHERE seat_id = ANY(...)` statement take the locks. A variant uses `SELECT … FOR UPDATE NOWAIT` on the sorted seats first, failing fast instead of waiting; on a hot show, failing fast and letting the customer pick again is better than queueing.
+To avoid deadlocks when two customers request overlapping seat sets in different orders ({F7, F8} and {F8, F7}), always lock seats in a **consistent order**. A single `UPDATE … WHERE seat_id = ANY(...)` usually visits rows in the same order for everyone, but that order depends on the query plan, so it is not a guarantee. The reliable form locks first with `SELECT … WHERE show_id = $show AND seat_id = ANY($seats) ORDER BY seat_id FOR UPDATE`, then updates. A variant adds `NOWAIT`, failing fast instead of waiting; on a hot show, failing fast and letting the customer pick again is better than queueing. Keep `lock_timeout` short on the hold service's connections either way, so a stuck transaction can't fill the connection pool.
 
 **Option B: Redis keys with expiry.** One key per seat: `SET hold:{show}:{seat} {holdId} NX PX 480000` (set only if absent, expire in 8 minutes). Multi-seat holds must be all-or-nothing, so use a Lua script that checks all keys and sets them only if all are free:
 
@@ -321,6 +321,8 @@ for i, key in ipairs(KEYS) do
 end
 return 1
 ```
+
+In a Redis Cluster, a Lua script may only touch keys in one hash slot, so put the show id in a hash tag: `hold:{501}:F7` and `hold:{501}:F8` always land on the same node. That also means one hot show lives on one Redis shard, which is fine: a single Redis node handles tens of thousands of such operations per second.
 
 Advantages: very fast, expiry is automatic, contention is handled in memory. Risks: Redis is now a second source of truth; a failover can lose recent keys (asynchronous replication), briefly allowing a second hold on the same seat. That's acceptable **only because the booking step re-checks in PostgreSQL** and `booked_seat` cannot hold duplicates. In other words, Redis may make a hold *optimistically wrong*, but it can never make a booking wrong.
 
@@ -554,6 +556,8 @@ public sealed class BookingService(IRefunds refunds)
             else
             {
                 // Late payment: try to re-hold exactly the same seats, then confirm immediately.
+                // Caveat: if the customer has since started a new hold in this show, TryHold replaces it;
+                // production checks for that case and asks the customer (or refunds) instead.
                 var retry = show.TryHold(hold.CustomerId, hold.Seats);
                 result = retry.Succeeded && show.TryConfirm(retry.Hold!.HoldId)
                     ? new BookingResult(BookingOutcome.Booked, Guid.NewGuid())
@@ -589,7 +593,7 @@ Even with holds and bitmaps, letting 1 M people loose at 10:00 means 50,000 requ
 3. The page shows position and an estimate ("about 6 minutes"), refreshed every 15–30 seconds from a cheap endpoint.
 4. When the film's shows are sold out, the waiting room says so and stops admitting.
 
-Randomising positions among everyone who arrived before 10:00 is fairer than "whoever's script was fastest at 09:59:59.999", and it removes the incentive to hammer the site early.
+Randomising positions among everyone who arrived before 10:00 is fairer than "whoever's script was fastest at 09:59:59.999", and it removes the incentive to hammer the site early. The same admission-control idea, applied to one stock counter instead of seats, is the heart of the [flash sale](#/lesson/m17-flash-sale) case study.
 
 ```csharp file=Queue/WaitingRoom.cs
 using System.Collections.Concurrent;
@@ -703,7 +707,7 @@ Most designs combine them: online sync by default, with a small offline allocati
 | Failure | Effect | Mitigation |
 |---|---|---|
 | Two customers hold F7 at once | Double hold | Conditional update serialises on the row; one gets `409` |
-| Overlapping multi-seat holds | Deadlock | Lock seats in sorted order, or one `UPDATE … ANY` statement; `NOWAIT` on hot shows |
+| Overlapping multi-seat holds | Deadlock | Lock seats in sorted order (`ORDER BY seat_id FOR UPDATE`); `NOWAIT` and a short `lock_timeout` on hot shows |
 | Sweeper stops | Expired seats look held | Expiry is part of the hold `WHERE` clause; sweeper is housekeeping; alert on age of expired holds |
 | Payment succeeds after hold expired | Paid, no seats | Re-hold same seats or refund automatically; reconciliation job |
 | Webhook delivered three times | Three bookings | `booking.payment_id UNIQUE`; idempotent confirm |
@@ -1435,7 +1439,7 @@ A: status = 'AVAILABLE' OR (status = 'HELD' AND held_until <= now()).
 Q: What makes double booking impossible?
 A: The booked_seat table's primary key (show_id, seat_id), plus the booking transaction re-checking the hold.
 Q: How do you avoid deadlocks on multi-seat holds?
-A: Lock seats in a consistent (sorted) order, or use one UPDATE … WHERE seat_id = ANY(…) statement; NOWAIT on hot shows.
+A: Lock seats in a consistent (sorted) order, for example SELECT … ORDER BY seat_id FOR UPDATE before the UPDATE; NOWAIT on hot shows.
 Q: What happens on a late payment?
 A: Re-hold the same seats and book if still free; otherwise refund automatically. Never substitute seats silently.
 Q: Why a bitmap for seat availability?
@@ -1466,7 +1470,7 @@ The sweeper that expires holds crashed 10 minutes ago during an evening peak. Wh
 ::q single
 Customer A requests seats {F7, F8} while B requests {F8, F7}, each locking seats in the order given. What risk does this create, and what fixes it?
 - [ ] Lost updates; fix with a higher isolation level
-- [x] Deadlock; lock seats in sorted order or use one UPDATE for all seats
+- [x] Deadlock; lock seats in one consistent (sorted) order
 - [ ] Phantom reads; fix with a unique index
 - [ ] None; row locks never conflict
 > Opposite lock orders on two rows can deadlock. A consistent order removes the cycle.

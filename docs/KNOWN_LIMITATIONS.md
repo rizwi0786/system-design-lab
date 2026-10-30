@@ -5,7 +5,7 @@
 2. **Data lives in one browser.** Clearing site data deletes it. The app requests persistent storage and reminds you
    to export, but the backup file is your real safety net. Different browsers/devices do not sync automatically.
 3. **Solutions and "hidden" tests are reachable** by a determined learner (static site). Fine for self-study, not for certification.
-4. **All 311 lessons are written and pass the automated checks** (structure, C# compile + tests, Mermaid parse,
+4. **All 312 lessons are written and pass the automated checks** (structure, C# compile + tests, Mermaid parse,
    SQL verified in PGlite by the writers). Automated checks are not a substitute for expert human review; treat
    version-specific claims about .NET 10 / ASP.NET Core 10 and cloud pricing as "verify before relying on it".
 5. **Architecture feedback is rule-based.** It catches common issues (single points of failure, direct client→DB,

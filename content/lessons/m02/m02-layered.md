@@ -326,21 +326,27 @@ public sealed class SalaryRevisionService(IEmployeeRepository employees, ILogger
 ```
 
 ```csharp file=Presentation/SalaryEndpoints.cs
+using System.Security.Claims;
 using Ems.Layered.Business;
 using Ems.Layered.Data;
 
 namespace Ems.Layered.Presentation;
 
-public sealed record ReviseSalaryRequest(decimal NewMonthlySalary, bool HrHeadApproved);
+/// <summary>What the client may send. Whether the caller is the HR head is NOT a field here:
+/// it comes from the signed-in user's roles, otherwise anyone could send "approved: true".</summary>
+public sealed record ReviseSalaryRequest(decimal NewMonthlySalary);
 
 /// <summary>Presentation layer: HTTP in, HTTP out. Translates between JSON and business commands and results.</summary>
 public static class SalaryEndpoints
 {
     public static IEndpointRouteBuilder MapSalaryEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapPost("/employees/{id:int}/salary", async (int id, ReviseSalaryRequest body, SalaryRevisionService service, CancellationToken ct) =>
+        app.MapPost("/employees/{id:int}/salary", async (int id, ReviseSalaryRequest body, ClaimsPrincipal user,
+                                                         SalaryRevisionService service, CancellationToken ct) =>
         {
-            var result = await service.ReviseAsync(new RevisionCommand(id, body.NewMonthlySalary, body.HrHeadApproved), ct);
+            // Presentation translates "who is calling" into a plain value for the business layer.
+            var hrHeadApproved = user.IsInRole("HrHead");
+            var result = await service.ReviseAsync(new RevisionCommand(id, body.NewMonthlySalary, hrHeadApproved), ct);
             return result.Outcome switch
             {
                 RevisionOutcome.Accepted => Results.Ok(new { result.OldSalary, result.NewSalary }),
@@ -394,10 +400,10 @@ app.Run();
 
 ```csharp
 // Presentation doing business work
-app.MapPost("/employees/{id}/salary", async (int id, ReviseSalaryRequest body, IEmployeeRepository repo) =>
+app.MapPost("/employees/{id}/salary", async (int id, ReviseSalaryRequest body, ClaimsPrincipal user, IEmployeeRepository repo) =>
 {
     var e = await repo.GetByIdAsync(id, default);
-    if (body.NewMonthlySalary > e!.MonthlySalary * 1.25m && !body.HrHeadApproved) return Results.UnprocessableEntity();
+    if (body.NewMonthlySalary > e!.MonthlySalary * 1.25m && !user.IsInRole("HrHead")) return Results.UnprocessableEntity();
     await repo.UpdateSalaryAsync(id, body.NewMonthlySalary, default);
     return Results.Ok();
 });
@@ -411,7 +417,7 @@ public sealed class LeaveService(IHttpContextAccessor http) { /* reads http.Http
 
 The 25 % rule is in an endpoint, so a bulk import bypasses it. `LeaveService` cannot run in a background job because there is no `HttpContext`. The trigger hides a business rule where no C# developer will look, and its error message reaches users as a database exception.
 
-**Good:** the implementation above. Rules in one business service, the endpoint as a thin translator, the repository only storing and loading. The current user's identity, if a rule needs it, is passed into the business layer as a plain value (`approverId`), not as `HttpContext`.
+**Good:** the implementation above. Rules in one business service, the endpoint as a thin translator, the repository only storing and loading. The current user's identity or role, if a rule needs it, is read from the signed-in user by the presentation layer and passed into the business layer as a plain value (`hrHeadApproved`, `approverId`), not as `HttpContext`, and never taken from the request body where a client could fake it. (A real app also needs `AddAuthentication`/`AddAuthorization` and a policy on the endpoint; they are omitted here to keep the sample short.)
 
 **Is layering worth it for every endpoint?** No. For a read-only lookup with no rules, the business layer would be a sinkhole. Allow a relaxed read path for those, and document it.
 
@@ -1036,7 +1042,7 @@ Edge cases worth testing: a raise of exactly 25 % (boundary), a zero or negative
 ## Real-world application
 
 - **The default ASP.NET Core template** for many teams is effectively layered: controllers or endpoints, a services folder, a data folder with EF Core. Microsoft's architecture guide calls it the "traditional N-layer" design.
-- **Enterprise line-of-business apps** (HR, procurement, asset management, government grievance portals) are commonly layered monoliths. Layers make it easy for rotating contractors to find code.
+- **Enterprise line-of-business apps** (HR, procurement, asset management, government grievance portals) are commonly layered monoliths. Layers make it easy for rotating vendor teams and new joiners to find code.
 - **Operating systems and network stacks** are layered in a stricter sense: the TCP/IP model's application, transport, internet and link layers each use only the layer below.
 - **Clean, Onion and Hexagonal architectures** are refinements of layering that flip the dependency between business and data, so that business code depends on nothing.
 - **Modular monoliths** typically use layering *inside* each module, so the skills transfer directly.

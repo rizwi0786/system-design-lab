@@ -67,7 +67,7 @@ A JWT in its common form (a **JWS**, JSON Web Signature) is three base64url stri
 
 ```text
 eyJhbGciOiJFUzI1NiIsImtpZCI6InBhc3MtMjAyNi0xMCIsInR5cCI6IkpXVCJ9   ← header
-.eyJpc3MiOiJodHRwczovL3Bhc3MuY2l0eWJ1cy5pbiIsInN1YiI6InJpZGVyLTQyIiwiYXVkIjoicGFzcy1hcGkiLCJleHAiOjE3NjA5NTE4MDB9   ← payload
+.eyJpc3MiOiJodHRwczovL3Bhc3MuY2l0eWJ1cy5leGFtcGxlIiwic3ViIjoicmlkZXItNDIiLCJhdWQiOiJwYXNzLWFwaSIsImV4cCI6MTc2MDk1MTgwMH0   ← payload
 .MEUCIQ...   ← signature
 ```
 
@@ -75,7 +75,7 @@ Decoded:
 
 ```json
 { "alg": "ES256", "kid": "pass-2026-10", "typ": "JWT" }
-{ "iss": "https://pass.citybus.in", "sub": "rider-42", "aud": "pass-api",
+{ "iss": "https://pass.citybus.example", "sub": "rider-42", "aud": "pass-api",
   "iat": 1760948200, "nbf": 1760948200, "exp": 1760951800, "jti": "b7c1e0…", "scope": "pass.read" }
 ```
 
@@ -418,7 +418,7 @@ namespace BusPass.Tokens;
 
 public sealed class JwtValidationOptions
 {
-    public string Issuer { get; set; } = "https://pass.citybus.in";
+    public string Issuer { get; set; } = "https://pass.citybus.example";
     public string Audience { get; set; } = "pass-api";
     public TimeSpan ClockSkew { get; set; } = TimeSpan.FromSeconds(30);
     public HashSet<string> AllowedAlgorithms { get; } = new(StringComparer.Ordinal) { "ES256", "RS256" };
@@ -617,7 +617,7 @@ builder.Services.AddSingleton<ISigningKeyProvider>(keyProvider);
 builder.Services.AddSingleton<InMemoryRevocationList>();
 builder.Services.AddSingleton<IRevocationChecker>(sp => sp.GetRequiredService<InMemoryRevocationList>());
 builder.Services.AddSingleton<JwtValidator>();
-builder.Services.AddSingleton(sp => new JwtIssuer(signingKey, Kid, "https://pass.citybus.in", sp.GetRequiredService<TimeProvider>()));
+builder.Services.AddSingleton(sp => new JwtIssuer(signingKey, Kid, "https://pass.citybus.example", sp.GetRequiredService<TimeProvider>()));
 
 builder.Services.AddAuthentication(BusPassBearerHandler.SchemeName)
     .AddScheme<AuthenticationSchemeOptions, BusPassBearerHandler>(BusPassBearerHandler.SchemeName, _ => { });
@@ -637,11 +637,13 @@ if (app.Environment.IsDevelopment())
 app.MapGet("/pass", (ClaimsPrincipal user) => Results.Ok(new { rider = user.FindFirstValue("sub"), validUntil = "2026-10-31" }))
    .RequireAuthorization("pass.read");
 
-app.MapPost("/riders/{rider}/revoke-all", (string rider, InMemoryRevocationList list) =>
+app.MapPost("/riders/{rider}/revoke-all", (string rider, ClaimsPrincipal user, InMemoryRevocationList list) =>
 {
+    // A rider may only revoke their own tokens. Support staff would use a separate, audited admin policy.
+    if (user.FindFirstValue("sub") != rider) return Results.NotFound();
     list.RevokeAllFor(rider);   // stolen phone: every existing token for this rider dies now
     return Results.NoContent();
-}).RequireAuthorization("pass.read");   // in production: an admin or support policy
+}).RequireAuthorization("pass.read");
 
 app.Run();
 ```
@@ -653,12 +655,12 @@ In a real service you use the JWT bearer handler (package `Microsoft.AspNetCore.
 ```csharp
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(o =>
 {
-    o.Authority = "https://pass.citybus.in";      // discovery + JWKS, refreshed automatically
+    o.Authority = "https://pass.citybus.example";      // discovery + JWKS, refreshed automatically
     o.Audience = "pass-api";
     o.MapInboundClaims = false;                   // keep "sub", "scope" names unchanged
     o.TokenValidationParameters = new TokenValidationParameters
     {
-        ValidIssuer = "https://pass.citybus.in",
+        ValidIssuer = "https://pass.citybus.example",
         ValidAudience = "pass-api",
         ValidAlgorithms = ["ES256"],              // allowlist
         ValidTypes = ["at+jwt"],                  // ID tokens can't be replayed as access tokens
@@ -668,16 +670,19 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJw
     };
     o.Events = new JwtBearerEvents
     {
-        OnTokenValidated = async ctx =>
+        OnTokenValidated = ctx =>
         {
             var revocations = ctx.HttpContext.RequestServices.GetRequiredService<IRevocationChecker>();
             var iat = DateTimeOffset.FromUnixTimeSeconds(long.Parse(ctx.Principal!.FindFirstValue("iat") ?? "0"));
             if (revocations.IsRevoked(ctx.Principal.FindFirstValue("jti"), ctx.Principal.FindFirstValue("sub"), iat))
                 ctx.Fail("revoked");
+            return Task.CompletedTask;
         },
     };
 });
 ```
+
+Two cautions about this configuration. `ValidTypes = ["at+jwt"]` only works if your provider stamps access tokens with that `typ` (RFC 9068); some providers, Microsoft Entra ID among them, issue access tokens with `typ: JWT`, so check a real token before you pin it, and fall back to checking `aud` and a token-type claim. And the JWKS refresh is automatic: the handler's configuration manager refetches the discovery document periodically (by default every 12 hours) and on an unknown `kid` (at most every 5 minutes by default), which is exactly the rotation behaviour described above.
 
 ## Bad design vs good design
 
@@ -1086,10 +1091,10 @@ public static class T
         return input + "." + B64(HMACSHA256.HashData(key, Encoding.ASCII.GetBytes(input)));
     }
     public static string Good(string? payload = null) => Make("{\"alg\":\"HS256\",\"kid\":\"a\"}",
-        payload ?? $"{{\"iss\":\"https://pass.citybus.in\",\"aud\":\"pass-api\",\"sub\":\"rider-42\",\"exp\":{S(900)},\"nbf\":{S(-10)}}}", KeyA);
+        payload ?? $"{{\"iss\":\"https://pass.citybus.example\",\"aud\":\"pass-api\",\"sub\":\"rider-42\",\"exp\":{S(900)},\"nbf\":{S(-10)}}}", KeyA);
 
     public static TokenValidator V() => new(new Dictionary<string, byte[]> { ["a"] = KeyA },
-        new ValidationOptions("https://pass.citybus.in", "pass-api", TimeSpan.FromSeconds(30)), new FixedClock(Now));
+        new ValidationOptions("https://pass.citybus.example", "pass-api", TimeSpan.FromSeconds(30)), new FixedClock(Now));
 }
 
 public class TokenValidatorTests
@@ -1111,22 +1116,22 @@ public class TokenValidatorTests
         T.V().Validate(T.Good($"{{\"iss\":\"https://evil.example\",\"aud\":\"pass-api\",\"exp\":{T.S(900)}}}")));
 
     [Fact] public void Wrong_audience() => Assert.Equal(TokenCheck.WrongAudience,
-        T.V().Validate(T.Good($"{{\"iss\":\"https://pass.citybus.in\",\"aud\":\"hr-app\",\"exp\":{T.S(900)}}}")));
+        T.V().Validate(T.Good($"{{\"iss\":\"https://pass.citybus.example\",\"aud\":\"hr-app\",\"exp\":{T.S(900)}}}")));
 
     [Fact] public void Audience_array_accepted() => Assert.Equal(TokenCheck.Valid,
-        T.V().Validate(T.Good($"{{\"iss\":\"https://pass.citybus.in\",\"aud\":[\"billing\",\"pass-api\"],\"exp\":{T.S(900)}}}")));
+        T.V().Validate(T.Good($"{{\"iss\":\"https://pass.citybus.example\",\"aud\":[\"billing\",\"pass-api\"],\"exp\":{T.S(900)}}}")));
 
     [Theory]
     [InlineData(-20, TokenCheck.Valid)]
     [InlineData(-40, TokenCheck.Expired)]
     public void Expiry_with_skew(int expOffset, TokenCheck expected) => Assert.Equal(expected,
-        T.V().Validate(T.Good($"{{\"iss\":\"https://pass.citybus.in\",\"aud\":\"pass-api\",\"exp\":{T.S(expOffset)}}}")));
+        T.V().Validate(T.Good($"{{\"iss\":\"https://pass.citybus.example\",\"aud\":\"pass-api\",\"exp\":{T.S(expOffset)}}}")));
 
     [Fact] public void Missing_exp_is_malformed() => Assert.Equal(TokenCheck.Malformed,
-        T.V().Validate(T.Good("{\"iss\":\"https://pass.citybus.in\",\"aud\":\"pass-api\"}")));
+        T.V().Validate(T.Good("{\"iss\":\"https://pass.citybus.example\",\"aud\":\"pass-api\"}")));
 
     [Fact] public void Not_yet_valid() => Assert.Equal(TokenCheck.NotYetValid,
-        T.V().Validate(T.Good($"{{\"iss\":\"https://pass.citybus.in\",\"aud\":\"pass-api\",\"exp\":{T.S(900)},\"nbf\":{T.S(120)}}}")));
+        T.V().Validate(T.Good($"{{\"iss\":\"https://pass.citybus.example\",\"aud\":\"pass-api\",\"exp\":{T.S(900)},\"nbf\":{T.S(120)}}}")));
 }
 ```
 ::solution

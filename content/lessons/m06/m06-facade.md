@@ -30,7 +30,7 @@ By the end of this lesson you will be able to:
 
 1. Explain the problem Facade solves: clients that must know and coordinate too many subsystem classes.
 2. Name the participants (facade, subsystem classes, client) and draw the class and sequence diagrams.
-3. Build a facade in ASP.NET Core that orchestrates several services (a running-account bill for a construction contract) and register it in DI.
+3. Build a facade in ASP.NET Core that orchestrates several services (a weekly restaurant payout on a food-delivery platform) and register it in DI.
 4. Handle failure inside a facade: compensation for partial work, and graceful degradation for optional subsystems.
 5. Test a facade with fakes, and keep it thin enough that it doesn't become a god object.
 6. Tell Facade apart from Adapter, Mediator, Decorator and API gateways or BFFs, and know when a facade adds nothing.
@@ -43,9 +43,9 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Picture starting a small factory in an Indian industrial area. You need a building-plan approval, a fire NOC, a pollution-control consent, an electricity connection, a water connection and a trade licence. Six offices, six forms, six queues, and some of them want a certificate from another one first.
+Picture opening a small café in an Indian city. You need a food-safety (FSSAI) licence, GST registration, a trade licence, a shop-and-establishment registration, a fire NOC and a signboard permit. Six offices, six forms, six queues, and some of them want a certificate from another one first.
 
-Many states now offer a **single-window** system. You submit one application at one counter. Behind the counter, the single-window office sends the right papers to each department, in the right order, and gives you one combined status. The departments still exist and still do their own work. An expert consultant can still visit the fire department directly. But a normal applicant only deals with one window.
+Many states now offer a **single-window** system. You submit one application at one counter. Behind the counter, the single-window office sends the right papers to each department, in the right order, and gives you one combined status. The departments still exist and still do their own work. A licensing consultant can still visit the fire department directly. But a normal applicant only deals with one window.
 
 That single window is a **facade**:
 
@@ -55,11 +55,11 @@ That single window is a **facade**:
 
 Three points matter:
 
-1. **The facade doesn't do the departments' work.** It doesn't inspect fire exits itself. It coordinates.
+1. **The facade doesn't do the departments' work.** It doesn't inspect the kitchen itself. It coordinates.
 2. **The departments don't know the facade exists.** They'd work the same without it.
 3. **The facade doesn't lock the side doors.** Advanced users can still use the subsystems directly.
 
-In code, a construction-billing module might need a measurement book, a rate schedule, a tax calculator, a PDF renderer, a bill repository and a notifier to produce one contractor bill. Without a facade, every controller and background job repeats that six-step dance. With a facade, they call `PrepareBillAsync(contractId, period)`.
+In code, a food-delivery platform pays each partner restaurant once a week. Producing one payout needs an order ledger, a commission plan, a deductions calculator, a PDF statement renderer, a payout repository and a notifier. Without a facade, every controller and background job repeats that six-step dance. With a facade, they call `PreparePayoutAsync(restaurantId, period)`.
 
 ## First-principles explanation
 
@@ -69,10 +69,10 @@ The *Design Patterns* book defines Facade as: "Provide a unified interface to a 
 
 Good design splits a system into small, focused classes. That's the [Single Responsibility Principle](#/lesson/m04-srp) at work. The side effect is that *using* the system now means knowing many classes:
 
-- **Which classes** are involved (six services to produce one bill).
-- **What order** to call them in (you need rates before you can price quantities).
+- **Which classes** are involved (six services to produce one payout).
+- **What order** to call them in (you need commission rates before you can work out the commission).
 - **How to pass data** between them (the output of one is the input of the next).
-- **What to do on failure** (if the PDF fails, don't mark the measurements as billed).
+- **What to do on failure** (if the PDF fails, don't mark the orders as settled).
 
 When that knowledge lives in every client (two controllers, one background job, one admin tool), you get duplication, inconsistency, and high coupling. Every client depends on six interfaces, so changing any one subsystem ripples through all of them.
 
@@ -81,7 +81,7 @@ When that knowledge lives in every client (two controllers, one background job, 
 A facade is an ordinary class:
 
 1. Its constructor receives the subsystem objects (via DI).
-2. It exposes a **few, task-shaped methods** in the client's language: `PrepareBillAsync`, `ExportAsync`, `BookVisitAsync`, not `GetRates` and `Compute`.
+2. It exposes a **few, task-shaped methods** in the client's language: `PreparePayoutAsync`, `ExportAsync`, `BookAppointmentAsync`, not `GetRates` and `Compute`.
 3. Each method calls subsystems in the right order, passes data between them, and handles the failure rules for the workflow.
 4. It returns a result shaped for the client (a summary DTO), not the subsystems' internal objects.
 
@@ -107,17 +107,17 @@ Three subsystem calls behind one method. The client goes from "know three interf
 
 | Participant | Role | In our example |
 |---|---|---|
-| **Facade** | Knows which subsystem classes handle a request, and delegates to them in the right order | `RaBillingFacade` |
-| **Subsystem classes** | Do the real work; know nothing about the facade | `IMeasurementBook`, `IRateSchedule`, `IStatutoryDeductions`, `IBillDocumentRenderer`, `IBillRepository`, `IBillNotifier` |
-| **Client** | Calls the facade instead of the subsystems | The bill endpoint, a month-end background job |
+| **Facade** | Knows which subsystem classes handle a request, and delegates to them in the right order | `RestaurantPayoutFacade` |
+| **Subsystem classes** | Do the real work; know nothing about the facade | `IOrderLedger`, `ICommissionPlan`, `IPayoutDeductions`, `IStatementRenderer`, `IPayoutRepository`, `IPayoutNotifier` |
+| **Client** | Calls the facade instead of the subsystems | The payout endpoint, a weekly payout background job |
 
 ### What belongs in a facade, and what doesn't
 
 This is the most important design decision.
 
-**Belongs in the facade (orchestration):** the order of steps, passing data between subsystems, workflow-level failure rules ("don't mark quantities as billed if saving failed"), transaction boundaries, and shaping the result for the client.
+**Belongs in the facade (orchestration):** the order of steps, passing data between subsystems, workflow-level failure rules ("don't mark orders as settled if saving the payout failed"), transaction boundaries, and shaping the result for the client.
 
-**Does not belong in the facade (business rules):** how GST is calculated, what the retention percentage is, how a rate is chosen for an item. Those are subsystem responsibilities. If the facade starts computing tax, it slowly turns into a *god object* that knows everything. Then you have one huge class instead of one simple entry point.
+**Does not belong in the facade (business rules):** how GST on commission is calculated, what the payment-gateway fee is, which commission percentage a restaurant's plan uses. Those are subsystem responsibilities. If the facade starts computing tax, it slowly turns into a *god object* that knows everything. Then you have one huge class instead of one simple entry point.
 
 A useful test: **if you deleted the facade, would any business rule be lost?** If yes, that rule is in the wrong place.
 
@@ -132,9 +132,9 @@ A useful test: **if you deleted the facade, would any business rule be lost?** I
 ### When not to use it
 
 - **The task is one call.** A facade with a method that just forwards to a single service adds a layer with nothing in it.
-- **Clients genuinely need fine control.** An admin tool that recalculates only GST for a bill shouldn't be forced through `PrepareBillAsync`. Let it use the subsystem directly. Facades simplify; they shouldn't imprison.
-- **The facade would cover unrelated tasks.** A `ProjectFacade` with billing, scheduling, document management and HR methods is a god object with a pattern name. Create several focused facades instead.
-- **The workflow spans services over the network and must survive crashes.** A facade method is an in-process sequence. If step 4 of 6 fails after a power cut, nothing resumes it. For long-running or distributed workflows, use a [saga](#/lesson/m12-sagas) with durable state, or a workflow engine.
+- **Clients genuinely need fine control.** A support tool that only re-sends a payout statement shouldn't be forced through `PreparePayoutAsync`. Let it use the subsystem directly. Facades simplify; they shouldn't imprison.
+- **The facade would cover unrelated tasks.** A `RestaurantFacade` with payout, menu, ratings, rider-zone and HR methods is a god object with a pattern name. Create several focused facades instead.
+- **The workflow spans services over the network and must survive crashes.** A facade method is an in-process sequence. If step 4 of 6 fails because the pod is restarted, nothing resumes it. For long-running or distributed workflows, use a [saga](#/lesson/m12-sagas) with durable state, or a workflow engine.
 
 ### Trade-offs
 
@@ -151,114 +151,114 @@ A useful test: **if you deleted the facade, would any business rule be lost?** I
 
 ```mermaid
 classDiagram
-    class RaBillEndpoint {
-        +Post(contractId, period) IResult
+    class PayoutEndpoint {
+        +Post(restaurantId, period) IResult
     }
-    class MonthEndBillingJob {
+    class WeeklyPayoutJob {
         +ExecuteAsync(ct) Task
     }
-    class IRaBillingFacade {
+    class IRestaurantPayoutFacade {
         <<interface>>
-        +PrepareBillAsync(int contractId, BillingPeriod period, CancellationToken ct) Task~RaBillSummary~
+        +PreparePayoutAsync(int restaurantId, SettlementPeriod period, CancellationToken ct) Task~PayoutSummary~
     }
-    class RaBillingFacade
-    class IMeasurementBook {
+    class RestaurantPayoutFacade
+    class IOrderLedger {
         <<interface>>
-        +GetUnbilledAsync() Task
-        +MarkBilledAsync() Task
+        +GetUnsettledAsync() Task
+        +MarkSettledAsync() Task
     }
-    class IRateSchedule {
+    class ICommissionPlan {
         <<interface>>
         +GetRatesAsync() Task
     }
-    class IStatutoryDeductions {
+    class IPayoutDeductions {
         <<interface>>
-        +Compute(decimal gross) BillTaxes
+        +Compute(decimal sales, decimal commission) List
     }
-    class IBillDocumentRenderer {
+    class IStatementRenderer {
         <<interface>>
         +RenderAndStoreAsync() Task~string~
     }
-    class IBillRepository {
+    class IPayoutRepository {
         <<interface>>
         +NextSequenceNoAsync() Task~int~
         +SaveAsync() Task
     }
-    class IBillNotifier {
+    class IPayoutNotifier {
         <<interface>>
-        +BillReadyAsync() Task
+        +PayoutReadyAsync() Task
     }
-    RaBillEndpoint --> IRaBillingFacade
-    MonthEndBillingJob --> IRaBillingFacade
-    IRaBillingFacade <|.. RaBillingFacade
-    RaBillingFacade --> IMeasurementBook
-    RaBillingFacade --> IRateSchedule
-    RaBillingFacade --> IStatutoryDeductions
-    RaBillingFacade --> IBillDocumentRenderer
-    RaBillingFacade --> IBillRepository
-    RaBillingFacade --> IBillNotifier
+    PayoutEndpoint --> IRestaurantPayoutFacade
+    WeeklyPayoutJob --> IRestaurantPayoutFacade
+    IRestaurantPayoutFacade <|.. RestaurantPayoutFacade
+    RestaurantPayoutFacade --> IOrderLedger
+    RestaurantPayoutFacade --> ICommissionPlan
+    RestaurantPayoutFacade --> IPayoutDeductions
+    RestaurantPayoutFacade --> IStatementRenderer
+    RestaurantPayoutFacade --> IPayoutRepository
+    RestaurantPayoutFacade --> IPayoutNotifier
 ```
 
-How to read it: on the left, two very different clients (an HTTP endpoint and a scheduled job) depend on **one** interface, `IRaBillingFacade`. On the right, the facade depends on six subsystem interfaces. Count the arrows: without the facade, each client would need six arrows (12 in total, and more for every new client). With it, each client needs one. Notice also what's missing: no arrows go from the subsystems back to the facade, because subsystems don't know it exists.
+How to read it: on the left, two very different clients (an HTTP endpoint and a scheduled job) depend on **one** interface, `IRestaurantPayoutFacade`. On the right, the facade depends on six subsystem interfaces. Count the arrows: without the facade, each client would need six arrows (12 in total, and more for every new client). With it, each client needs one. Notice also what's missing: no arrows go from the subsystems back to the facade, because subsystems don't know it exists.
 
 ### Sequence diagram
 
 ```mermaid
 sequenceDiagram
-    participant C as POST /contracts/7/ra-bills
-    participant F as RaBillingFacade
-    participant MB as MeasurementBook
-    participant RS as RateSchedule
-    participant SD as StatutoryDeductions
-    participant DR as DocumentRenderer
-    participant BR as BillRepository
+    participant C as POST /restaurants/7/payouts
+    participant F as RestaurantPayoutFacade
+    participant OL as OrderLedger
+    participant CP as CommissionPlan
+    participant PD as PayoutDeductions
+    participant SR as StatementRenderer
+    participant PR as PayoutRepository
     participant N as Notifier
-    C->>F: PrepareBillAsync(7, Oct 2026)
-    F->>MB: GetUnbilledAsync(7, period)
-    MB-->>F: 3 executed items
-    F->>RS: GetRatesAsync(7)
-    RS-->>F: rates by item code
-    F->>F: price lines, gross = ₹48,72,500
-    F->>SD: Compute(gross)
-    SD-->>F: GST, retention, TDS
-    F->>BR: NextSequenceNoAsync(7)
-    BR-->>F: RA bill no. 5
-    F->>DR: RenderAndStoreAsync(draft)
-    DR-->>F: document URL
-    F->>BR: SaveAsync(bill)
-    F->>MB: MarkBilledAsync(7, period, billId)
-    F->>N: BillReadyAsync(bill)
+    C->>F: PreparePayoutAsync(7, 19-25 Oct 2026)
+    F->>OL: GetUnsettledAsync(7, period)
+    OL-->>F: sales for 3 channels
+    F->>CP: GetRatesAsync(7)
+    CP-->>F: commission % by channel
+    F->>F: sales = ₹6,66,900, commission = ₹1,15,158
+    F->>PD: Compute(sales, commission)
+    PD-->>F: GST on commission, gateway fee, TDS
+    F->>PR: NextSequenceNoAsync(7)
+    PR-->>F: payout no. 5
+    F->>SR: RenderAndStoreAsync(draft)
+    SR-->>F: statement URL
+    F->>PR: SaveAsync(payout)
+    F->>OL: MarkSettledAsync(7, period, payoutId)
+    F->>N: PayoutReadyAsync(payout)
     Note over F,N: notification failure is logged, not fatal
-    F-->>C: RaBillSummary
+    F-->>C: PayoutSummary
 ```
 
-The diagram makes the facade's real job visible: **order and hand-offs**. Rates come before pricing, pricing before deductions, and the document is rendered before the bill is saved, so a saved bill always has a document. Measurements are marked as billed only *after* the bill is saved, so a crash in between leaves quantities unbilled rather than lost. The note on the last step records a workflow decision: a failed email shouldn't undo a valid bill. These are exactly the rules you don't want copied into every client.
+The diagram makes the facade's real job visible: **order and hand-offs**. Rates come before the commission, the commission before the deductions, and the statement is rendered before the payout is saved, so a saved payout always has a statement. Orders are marked as settled only *after* the payout is saved, so a crash in between leaves orders unsettled (they get paid next run) rather than lost (never paid). The note on the last step records a workflow decision: a failed email shouldn't undo a valid payout. These are exactly the rules you don't want copied into every client.
 
 ## Step-by-step example
 
-Scenario: an infrastructure contractor submits a **running-account (RA) bill** each month for work done. The bill prices the executed quantities recorded in the measurement book at contract rates, adds GST, and subtracts statutory and contractual deductions such as retention money and TDS (tax deducted at source). The percentages in this lesson are illustrative configuration values, not tax advice.
+Scenario: a food-delivery platform settles with each partner restaurant once a week. The payout adds up the restaurant's food sales for the week by channel (delivery, takeaway, dine-out bookings), subtracts the platform's commission at the restaurant's plan rates, and subtracts other deductions such as GST on that commission, a payment-gateway fee and income-tax TDS (tax deducted at source). The percentages in this lesson are illustrative configuration values, not tax advice.
 
 ### Step 1 — the naive version: orchestration in the controller
 
 ```csharp
-app.MapPost("/contracts/{id}/ra-bills", async (int id, BillingPeriod period, IMeasurementBook mb, IRateSchedule rs,
-    IStatutoryDeductions sd, IBillDocumentRenderer dr, IBillRepository repo, IBillNotifier n, CancellationToken ct) =>
+app.MapPost("/restaurants/{id}/payouts", async (int id, SettlementPeriod period, IOrderLedger ledger, ICommissionPlan plan,
+    IPayoutDeductions pd, IStatementRenderer sr, IPayoutRepository repo, IPayoutNotifier n, CancellationToken ct) =>
 {
-    var qty = await mb.GetUnbilledAsync(id, period, ct);
-    var rates = await rs.GetRatesAsync(id, ct);
-    // ... 40 more lines: pricing, deductions, sequence number, render, save, mark billed, notify
+    var sales = await ledger.GetUnsettledAsync(id, period, ct);
+    var rates = await plan.GetRatesAsync(id, ct);
+    // ... 40 more lines: commission, deductions, sequence number, render, save, mark settled, notify
 });
 ```
 
-Then the finance team asks for an automatic month-end run. Someone copies the 40 lines into a `BackgroundService`. Six months later, the endpoint version marks quantities billed *after* saving and the job version does it *before*. One crash later, a contractor's quantities have vanished from billing.
+Then the finance team asks for an automatic Monday-morning run. Someone copies the 40 lines into a `BackgroundService`. Six months later, the endpoint version marks orders settled *after* saving and the job version does it *before*. One crash later, a restaurant's orders are marked settled but no payout exists, and the restaurant isn't paid for a week of work.
 
 ### Step 2 — name the task
 
-What do the clients want? "Prepare the RA bill for this contract and period." That becomes the facade's method name. Don't use names like `RunBillingSteps`. Use the business task.
+What do the clients want? "Prepare this week's payout for this restaurant." That becomes the facade's method name. Don't use names like `RunSettlementSteps`. Use the business task.
 
 ### Step 3 — move the orchestration, not the rules
 
-Move the sequence into `RaBillingFacade`. Leave tax rules in `IStatutoryDeductions`, rates in `IRateSchedule`, and so on.
+Move the sequence into `RestaurantPayoutFacade`. Leave tax and fee rules in `IPayoutDeductions`, commission rates in `ICommissionPlan`, and so on.
 
 ### Step 4 — point both clients at the facade
 
@@ -267,273 +267,273 @@ The endpoint and the job each shrink to a few lines and can no longer drift apar
 ## Production-style C# implementation
 
 ```text
-Infra.Api/
+FoodHub.Api/
   Program.cs
-  Billing/Model.cs              # records shared by the billing module
-  Billing/Subsystems.cs         # subsystem interfaces
-  Billing/InMemorySubsystems.cs # simple implementations so the sample runs
-  Billing/RaBillingFacade.cs    # the facade
+  Payouts/Model.cs              # records shared by the payouts module
+  Payouts/Subsystems.cs         # subsystem interfaces
+  Payouts/InMemorySubsystems.cs # simple implementations so the sample runs
+  Payouts/RestaurantPayoutFacade.cs   # the facade
 ```
 
-```csharp file=Billing/Model.cs
-namespace Infra.Billing;
+```csharp file=Payouts/Model.cs
+namespace FoodHub.Payouts;
 
-public sealed record BillingPeriod(DateOnly From, DateOnly To)
+public sealed record SettlementPeriod(DateOnly From, DateOnly To)
 {
     public void Validate()
     {
-        if (To < From) throw new ArgumentException("Billing period ends before it starts.");
+        if (To < From) throw new ArgumentException("Settlement period ends before it starts.");
     }
 }
 
-/// <summary>A quantity of work recorded in the measurement book, not yet billed.</summary>
-public sealed record ExecutedQuantity(string ItemCode, string Description, string Unit, decimal Quantity);
+/// <summary>Food sales on one channel that have not been paid out yet.</summary>
+public sealed record UnsettledSales(string Channel, string Description, int OrderCount, decimal FoodValue);
 
-public sealed record BillLine(string ItemCode, string Description, string Unit, decimal Quantity, decimal Rate)
+public sealed record PayoutLine(string Channel, string Description, int OrderCount, decimal FoodValue, decimal CommissionPercent)
 {
-    public decimal Amount => Math.Round(Quantity * Rate, 2, MidpointRounding.AwayFromZero);
+    public decimal Commission => Math.Round(FoodValue * CommissionPercent / 100m, 2, MidpointRounding.AwayFromZero);
 }
 
 public sealed record Deduction(string Name, decimal Amount);
 
-public sealed record BillTaxes(decimal Gst, IReadOnlyList<Deduction> Deductions);
-
-public sealed record RaBill(
-    Guid Id, int ContractId, int SequenceNo, BillingPeriod Period, IReadOnlyList<BillLine> Lines,
-    decimal GrossAmount, decimal Gst, IReadOnlyList<Deduction> Deductions, decimal NetPayable, string DocumentUrl);
+public sealed record Payout(
+    Guid Id, int RestaurantId, int SequenceNo, SettlementPeriod Period, IReadOnlyList<PayoutLine> Lines,
+    decimal FoodSales, decimal Commission, IReadOnlyList<Deduction> Deductions, decimal NetPayout, string StatementUrl);
 
 /// <summary>What clients get back: a summary, not the subsystems' internals.</summary>
-public sealed record RaBillSummary(Guid BillId, int SequenceNo, decimal GrossAmount, decimal Gst, decimal TotalDeductions, decimal NetPayable, string DocumentUrl);
+public sealed record PayoutSummary(Guid PayoutId, int SequenceNo, decimal FoodSales, decimal Commission, decimal OtherDeductions, decimal NetPayout, string StatementUrl);
 
-public sealed class BillingException(string message) : Exception(message);
+public sealed class PayoutException(string message) : Exception(message);
 ```
 
-```csharp file=Billing/Subsystems.cs
-namespace Infra.Billing;
+```csharp file=Payouts/Subsystems.cs
+namespace FoodHub.Payouts;
 
-public interface IMeasurementBook
+public interface IOrderLedger
 {
-    Task<IReadOnlyList<ExecutedQuantity>> GetUnbilledAsync(int contractId, BillingPeriod period, CancellationToken ct);
-    Task MarkBilledAsync(int contractId, BillingPeriod period, Guid billId, CancellationToken ct);
+    Task<IReadOnlyList<UnsettledSales>> GetUnsettledAsync(int restaurantId, SettlementPeriod period, CancellationToken ct);
+    Task MarkSettledAsync(int restaurantId, SettlementPeriod period, Guid payoutId, CancellationToken ct);
 }
 
-public interface IRateSchedule
+public interface ICommissionPlan
 {
-    Task<IReadOnlyDictionary<string, decimal>> GetRatesAsync(int contractId, CancellationToken ct);
+    /// <returns>Commission percentage by channel for this restaurant's plan.</returns>
+    Task<IReadOnlyDictionary<string, decimal>> GetRatesAsync(int restaurantId, CancellationToken ct);
 }
 
-/// <summary>Owns the tax and deduction RULES. The facade only asks for the result.</summary>
-public interface IStatutoryDeductions
+/// <summary>Owns the tax and fee RULES. The facade only asks for the result.</summary>
+public interface IPayoutDeductions
 {
-    BillTaxes Compute(decimal grossAmount);
+    IReadOnlyList<Deduction> Compute(decimal foodSales, decimal commission);
 }
 
-public interface IBillDocumentRenderer
+public interface IStatementRenderer
 {
-    /// <returns>URL of the stored PDF.</returns>
-    Task<string> RenderAndStoreAsync(RaBill draft, CancellationToken ct);
+    /// <returns>URL of the stored PDF statement.</returns>
+    Task<string> RenderAndStoreAsync(Payout draft, CancellationToken ct);
 }
 
-public interface IBillRepository
+public interface IPayoutRepository
 {
-    Task<int> NextSequenceNoAsync(int contractId, CancellationToken ct);
-    Task SaveAsync(RaBill bill, CancellationToken ct);
+    Task<int> NextSequenceNoAsync(int restaurantId, CancellationToken ct);
+    Task SaveAsync(Payout payout, CancellationToken ct);
 }
 
-public interface IBillNotifier
+public interface IPayoutNotifier
 {
-    Task BillReadyAsync(RaBill bill, CancellationToken ct);
+    Task PayoutReadyAsync(Payout payout, CancellationToken ct);
 }
 ```
 
-```csharp file=Billing/InMemorySubsystems.cs
+```csharp file=Payouts/InMemorySubsystems.cs
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
 
-namespace Infra.Billing;
+namespace FoodHub.Payouts;
 
-public sealed class InMemoryMeasurementBook : IMeasurementBook
+public sealed class InMemoryOrderLedger : IOrderLedger
 {
-    private readonly ConcurrentDictionary<int, Guid> _billedContracts = new();
+    private readonly ConcurrentDictionary<int, Guid> _settledRestaurants = new();
 
-    public Task<IReadOnlyList<ExecutedQuantity>> GetUnbilledAsync(int contractId, BillingPeriod period, CancellationToken ct)
+    public Task<IReadOnlyList<UnsettledSales>> GetUnsettledAsync(int restaurantId, SettlementPeriod period, CancellationToken ct)
     {
-        IReadOnlyList<ExecutedQuantity> rows = _billedContracts.ContainsKey(contractId)
+        IReadOnlyList<UnsettledSales> rows = _settledRestaurants.ContainsKey(restaurantId)
             ? []
             : [
-                new("EW-01", "Embankment with approved soil", "cum", 4_500m),
-                new("GSB-02", "Granular sub-base, grading III", "cum", 1_250m),
-                new("DBM-04", "Dense bituminous macadam, 50 mm", "cum", 310m),
+                new("DELIVERY", "Delivery orders", 1_240, 4_46_400m),
+                new("PICKUP", "Takeaway orders", 310, 93_000m),
+                new("DINEOUT", "Table bookings paid in the app", 85, 1_27_500m),
             ];
         return Task.FromResult(rows);
     }
 
-    public Task MarkBilledAsync(int contractId, BillingPeriod period, Guid billId, CancellationToken ct)
+    public Task MarkSettledAsync(int restaurantId, SettlementPeriod period, Guid payoutId, CancellationToken ct)
     {
-        _billedContracts[contractId] = billId;
+        _settledRestaurants[restaurantId] = payoutId;
         return Task.CompletedTask;
     }
 }
 
-public sealed class FixedRateSchedule : IRateSchedule
+public sealed class FixedCommissionPlan : ICommissionPlan
 {
     private static readonly IReadOnlyDictionary<string, decimal> Rates = new Dictionary<string, decimal>
     {
-        ["EW-01"] = 310m, ["GSB-02"] = 1_650m, ["DBM-04"] = 4_500m,
+        ["DELIVERY"] = 22m, ["PICKUP"] = 10m, ["DINEOUT"] = 6m,
     };
 
-    public Task<IReadOnlyDictionary<string, decimal>> GetRatesAsync(int contractId, CancellationToken ct) => Task.FromResult(Rates);
+    public Task<IReadOnlyDictionary<string, decimal>> GetRatesAsync(int restaurantId, CancellationToken ct) => Task.FromResult(Rates);
 }
 
 public sealed class DeductionOptions
 {
-    // Illustrative percentages only. Real values come from the contract and current statutory rules.
-    public decimal GstPercent { get; set; } = 18m;
-    public decimal RetentionPercent { get; set; } = 5m;
-    public decimal IncomeTaxTdsPercent { get; set; } = 2m;
+    // Illustrative percentages only. Real values come from the partner agreement and current tax rules.
+    public decimal GstOnCommissionPercent { get; set; } = 18m;
+    public decimal GatewayFeePercent { get; set; } = 1.5m;
+    public decimal IncomeTaxTdsPercent { get; set; } = 0.1m;
 }
 
-public sealed class ConfiguredStatutoryDeductions(IOptions<DeductionOptions> options) : IStatutoryDeductions
+public sealed class ConfiguredPayoutDeductions(IOptions<DeductionOptions> options) : IPayoutDeductions
 {
-    public BillTaxes Compute(decimal grossAmount)
+    public IReadOnlyList<Deduction> Compute(decimal foodSales, decimal commission)
     {
         var o = options.Value;
         static decimal Pct(decimal amount, decimal pct) => Math.Round(amount * pct / 100m, 2, MidpointRounding.AwayFromZero);
-        return new BillTaxes(
-            Pct(grossAmount, o.GstPercent),
-            [
-                new Deduction("Retention money", Pct(grossAmount, o.RetentionPercent)),
-                new Deduction("Income-tax TDS", Pct(grossAmount, o.IncomeTaxTdsPercent)),
-            ]);
+        return
+        [
+            new Deduction("GST on commission", Pct(commission, o.GstOnCommissionPercent)),
+            new Deduction("Payment-gateway fee", Pct(foodSales, o.GatewayFeePercent)),
+            new Deduction("Income-tax TDS", Pct(foodSales, o.IncomeTaxTdsPercent)),
+        ];
     }
 }
 
-public sealed class FakePdfRenderer : IBillDocumentRenderer
+public sealed class FakePdfStatementRenderer : IStatementRenderer
 {
-    public Task<string> RenderAndStoreAsync(RaBill draft, CancellationToken ct) =>
-        Task.FromResult($"/documents/ra-bills/{draft.ContractId}-{draft.SequenceNo:D3}.pdf");
+    public Task<string> RenderAndStoreAsync(Payout draft, CancellationToken ct) =>
+        Task.FromResult($"/documents/payouts/{draft.RestaurantId}-{draft.SequenceNo:D3}.pdf");
 }
 
-public sealed class InMemoryBillRepository : IBillRepository
+public sealed class InMemoryPayoutRepository : IPayoutRepository
 {
-    private readonly ConcurrentDictionary<Guid, RaBill> _bills = new();
+    private readonly ConcurrentDictionary<Guid, Payout> _payouts = new();
 
-    public Task<int> NextSequenceNoAsync(int contractId, CancellationToken ct) =>
-        Task.FromResult(_bills.Values.Count(b => b.ContractId == contractId) + 1);
+    public Task<int> NextSequenceNoAsync(int restaurantId, CancellationToken ct) =>
+        Task.FromResult(_payouts.Values.Count(p => p.RestaurantId == restaurantId) + 1);
 
-    public Task SaveAsync(RaBill bill, CancellationToken ct)
+    public Task SaveAsync(Payout payout, CancellationToken ct)
     {
-        _bills[bill.Id] = bill;
+        _payouts[payout.Id] = payout;
         return Task.CompletedTask;
     }
 }
 
-public sealed class LoggingBillNotifier(ILogger<LoggingBillNotifier> logger) : IBillNotifier
+public sealed class LoggingPayoutNotifier(ILogger<LoggingPayoutNotifier> logger) : IPayoutNotifier
 {
-    public Task BillReadyAsync(RaBill bill, CancellationToken ct)
+    public Task PayoutReadyAsync(Payout payout, CancellationToken ct)
     {
-        logger.LogInformation("RA bill {Seq} for contract {Contract} ready: net {Net}", bill.SequenceNo, bill.ContractId, bill.NetPayable);
+        logger.LogInformation("Payout {Seq} for restaurant {Restaurant} ready: net {Net}", payout.SequenceNo, payout.RestaurantId, payout.NetPayout);
         return Task.CompletedTask;
     }
 }
 ```
 
-```csharp file=Billing/RaBillingFacade.cs
-namespace Infra.Billing;
+```csharp file=Payouts/RestaurantPayoutFacade.cs
+namespace FoodHub.Payouts;
 
-/// <summary>The single entry point for "prepare this month's RA bill".</summary>
-public interface IRaBillingFacade
+/// <summary>The single entry point for "prepare this week's payout for a restaurant".</summary>
+public interface IRestaurantPayoutFacade
 {
-    Task<RaBillSummary> PrepareBillAsync(int contractId, BillingPeriod period, CancellationToken ct = default);
+    Task<PayoutSummary> PreparePayoutAsync(int restaurantId, SettlementPeriod period, CancellationToken ct = default);
 }
 
 /// <summary>
-/// Facade: orchestrates the billing subsystems in the correct order. It owns the WORKFLOW
-/// (sequence, hand-offs, failure rules) but no business RULES (rates, tax, retention).
+/// Facade: orchestrates the payout subsystems in the correct order. It owns the WORKFLOW
+/// (sequence, hand-offs, failure rules) but no business RULES (commission rates, tax, fees).
 /// </summary>
-public sealed class RaBillingFacade(
-    IMeasurementBook measurementBook,
-    IRateSchedule rateSchedule,
-    IStatutoryDeductions deductions,
-    IBillDocumentRenderer renderer,
-    IBillRepository bills,
-    IBillNotifier notifier,
-    ILogger<RaBillingFacade> logger) : IRaBillingFacade
+public sealed class RestaurantPayoutFacade(
+    IOrderLedger ledger,
+    ICommissionPlan commissionPlan,
+    IPayoutDeductions deductions,
+    IStatementRenderer renderer,
+    IPayoutRepository payouts,
+    IPayoutNotifier notifier,
+    ILogger<RestaurantPayoutFacade> logger) : IRestaurantPayoutFacade
 {
-    public async Task<RaBillSummary> PrepareBillAsync(int contractId, BillingPeriod period, CancellationToken ct = default)
+    public async Task<PayoutSummary> PreparePayoutAsync(int restaurantId, SettlementPeriod period, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(period);
         period.Validate();
 
-        // 1. What was executed and not yet billed?
-        var quantities = await measurementBook.GetUnbilledAsync(contractId, period, ct);
-        if (quantities.Count == 0) throw new BillingException("No unbilled measurements in this period.");
+        // 1. What was sold and not yet paid out?
+        var sales = await ledger.GetUnsettledAsync(restaurantId, period, ct);
+        if (sales.Count == 0) throw new PayoutException("No unsettled orders in this period.");
 
-        // 2. Price it at contract rates.
-        var rates = await rateSchedule.GetRatesAsync(contractId, ct);
-        var lines = quantities.Select(q => rates.TryGetValue(q.ItemCode, out var rate)
-                ? new BillLine(q.ItemCode, q.Description, q.Unit, q.Quantity, rate)
-                : throw new BillingException($"No contract rate for item {q.ItemCode}."))
+        // 2. Apply the restaurant's commission plan.
+        var rates = await commissionPlan.GetRatesAsync(restaurantId, ct);
+        var lines = sales.Select(s => rates.TryGetValue(s.Channel, out var pct)
+                ? new PayoutLine(s.Channel, s.Description, s.OrderCount, s.FoodValue, pct)
+                : throw new PayoutException($"No commission rate for channel {s.Channel}."))
             .ToList();
-        var gross = lines.Sum(l => l.Amount);
+        var foodSales = lines.Sum(l => l.FoodValue);
+        var commission = lines.Sum(l => l.Commission);
 
-        // 3. Taxes and deductions: rules live in the subsystem.
-        var taxes = deductions.Compute(gross);
-        var totalDeductions = taxes.Deductions.Sum(d => d.Amount);
-        var net = gross + taxes.Gst - totalDeductions;
+        // 3. Taxes and fees: rules live in the subsystem.
+        var otherDeductions = deductions.Compute(foodSales, commission);
+        var otherTotal = otherDeductions.Sum(d => d.Amount);
+        var net = foodSales - commission - otherTotal;
 
-        // 4. Number, render, then save. A saved bill always has a document.
-        var sequenceNo = await bills.NextSequenceNoAsync(contractId, ct);
-        var draft = new RaBill(Guid.NewGuid(), contractId, sequenceNo, period, lines, gross, taxes.Gst, taxes.Deductions, net, DocumentUrl: "");
-        var bill = draft with { DocumentUrl = await renderer.RenderAndStoreAsync(draft, ct) };
+        // 4. Number, render, then save. A saved payout always has a statement.
+        var sequenceNo = await payouts.NextSequenceNoAsync(restaurantId, ct);
+        var draft = new Payout(Guid.NewGuid(), restaurantId, sequenceNo, period, lines, foodSales, commission, otherDeductions, net, StatementUrl: "");
+        var payout = draft with { StatementUrl = await renderer.RenderAndStoreAsync(draft, ct) };
 
-        // 5. Persist, and only then mark measurements as billed. In a real system, steps 5a and 5b
+        // 5. Persist, and only then mark the orders as settled. In a real system, these two writes
         //    share one database transaction (unit of work) so they succeed or fail together.
-        await bills.SaveAsync(bill, ct);
-        await measurementBook.MarkBilledAsync(contractId, period, bill.Id, ct);
+        await payouts.SaveAsync(payout, ct);
+        await ledger.MarkSettledAsync(restaurantId, period, payout.Id, ct);
 
-        // 6. Notification is useful but not critical: a failed email must not undo a valid bill.
+        // 6. Notification is useful but not critical: a failed email must not undo a valid payout.
         try
         {
-            await notifier.BillReadyAsync(bill, ct);
+            await notifier.PayoutReadyAsync(payout, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.LogWarning(ex, "RA bill {BillId} saved but notification failed", bill.Id);
+            logger.LogWarning(ex, "Payout {PayoutId} saved but notification failed", payout.Id);
         }
 
-        return new RaBillSummary(bill.Id, bill.SequenceNo, gross, taxes.Gst, totalDeductions, net, bill.DocumentUrl);
+        return new PayoutSummary(payout.Id, payout.SequenceNo, foodSales, commission, otherTotal, net, payout.StatementUrl);
     }
 }
 ```
 
 ```csharp file=Program.cs
-using Infra.Billing;
+using FoodHub.Payouts;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Subsystems: each one replaceable on its own (PostgreSQL repository, real PDF renderer, email notifier...).
-builder.Services.Configure<DeductionOptions>(builder.Configuration.GetSection("Billing:Deductions"));
-builder.Services.AddSingleton<IMeasurementBook, InMemoryMeasurementBook>();
-builder.Services.AddSingleton<IRateSchedule, FixedRateSchedule>();
-builder.Services.AddSingleton<IStatutoryDeductions, ConfiguredStatutoryDeductions>();
-builder.Services.AddSingleton<IBillDocumentRenderer, FakePdfRenderer>();
-builder.Services.AddSingleton<IBillRepository, InMemoryBillRepository>();
-builder.Services.AddSingleton<IBillNotifier, LoggingBillNotifier>();
+builder.Services.Configure<DeductionOptions>(builder.Configuration.GetSection("Payouts:Deductions"));
+builder.Services.AddSingleton<IOrderLedger, InMemoryOrderLedger>();
+builder.Services.AddSingleton<ICommissionPlan, FixedCommissionPlan>();
+builder.Services.AddSingleton<IPayoutDeductions, ConfiguredPayoutDeductions>();
+builder.Services.AddSingleton<IStatementRenderer, FakePdfStatementRenderer>();
+builder.Services.AddSingleton<IPayoutRepository, InMemoryPayoutRepository>();
+builder.Services.AddSingleton<IPayoutNotifier, LoggingPayoutNotifier>();
 
 // The facade: what clients depend on. Scoped, because real subsystems (DbContext) usually are.
-builder.Services.AddScoped<IRaBillingFacade, RaBillingFacade>();
+builder.Services.AddScoped<IRestaurantPayoutFacade, RestaurantPayoutFacade>();
 
 var app = builder.Build();
 
-app.MapPost("/contracts/{contractId:int}/ra-bills", async (int contractId, BillingPeriod period, IRaBillingFacade billing, CancellationToken ct) =>
+app.MapPost("/restaurants/{restaurantId:int}/payouts", async (int restaurantId, SettlementPeriod period, IRestaurantPayoutFacade payouts, CancellationToken ct) =>
 {
     try
     {
-        var summary = await billing.PrepareBillAsync(contractId, period, ct);
-        return Results.Created($"/ra-bills/{summary.BillId}", summary);
+        var summary = await payouts.PreparePayoutAsync(restaurantId, period, ct);
+        return Results.Created($"/payouts/{summary.PayoutId}", summary);
     }
-    catch (BillingException ex)
+    catch (PayoutException ex)
     {
         return Results.Problem(ex.Message, statusCode: StatusCodes.Status422UnprocessableEntity);
     }
@@ -546,13 +546,25 @@ app.MapPost("/contracts/{contractId:int}/ra-bills", async (int contractId, Billi
 app.Run();
 ```
 
+With the sample data, the numbers work out like this (rounded to paise):
+
+| Channel | Orders | Food sales | Commission rate | Commission |
+|---|---|---|---|---|
+| Delivery | 1,240 | ₹4,46,400 | 22 % | ₹98,208 |
+| Takeaway | 310 | ₹93,000 | 10 % | ₹9,300 |
+| Dine-out bookings | 85 | ₹1,27,500 | 6 % | ₹7,650 |
+| **Total** | 1,635 | **₹6,66,900** | | **₹1,15,158** |
+
+Other deductions: GST on commission 18 % of ₹1,15,158 = ₹20,728.44; gateway fee 1.5 % of ₹6,66,900 = ₹10,003.50; TDS 0.1 % = ₹666.90. Net payout = ₹6,66,900 − ₹1,15,158 − ₹31,398.84 = **₹5,20,343.16**. The facade did none of the percentage maths itself except adding up the lines. The rates came from the plan, and the tax and fee rules came from the deductions subsystem.
+
 ### Design notes
 
-- **Why an interface for the facade?** So clients (the endpoint, the month-end job) can be tested with a one-method fake. The facade is the client's only dependency, which is a big simplification compared with faking six services.
-- **The facade returns a summary**, not `RaBill` with all its lines and internals. Clients get what they need, and the internal model can change.
-- **Transactions.** Saving the bill and marking measurements must be atomic. With EF Core, both repositories share one scoped `DbContext`, and a single `SaveChangesAsync` (or an explicit transaction) commits both. The facade is the natural place to define that boundary, because it's the only class that sees the whole workflow.
-- **Notifications after commit.** Sending the email *after* saving is correct. For guaranteed delivery, the facade would instead write an "RA bill ready" message to an outbox table in the same transaction ([Transactional outbox](#/lesson/m12-outbox)).
-- **Bypassing is allowed.** A "re-render PDF" admin action can call `IBillDocumentRenderer` directly. The facade simplifies the common path; it doesn't hide the subsystem.
+- **Why an interface for the facade?** So clients (the endpoint, the weekly job) can be tested with a one-method fake. The facade is the client's only dependency, which is a big simplification compared with faking six services.
+- **The facade returns a summary**, not `Payout` with all its lines and internals. Clients get what they need, and the internal model can change.
+- **Transactions.** Saving the payout and marking orders as settled must be atomic. With EF Core, both repositories share one scoped `DbContext`, and a single `SaveChangesAsync` (or an explicit transaction) commits both. The facade is the natural place to define that boundary, because it's the only class that sees the whole workflow.
+- **Idempotency.** The weekly job may retry after a timeout. The ledger only returns *unsettled* orders, so a second run finds nothing to pay. In PostgreSQL, back this up with a unique constraint on `(restaurant_id, period_from)` in the payouts table, so two concurrent runs can't both insert a payout for the same week.
+- **Notifications after commit.** Sending the email *after* saving is correct. For guaranteed delivery, the facade would instead write a "payout ready" message to an outbox table in the same transaction ([Transactional outbox](#/lesson/m12-outbox)).
+- **Bypassing is allowed.** A "re-send statement" support action can call `IStatementRenderer` directly. The facade simplifies the common path; it doesn't hide the subsystem.
 
 ## Bad design vs good design
 
@@ -561,13 +573,13 @@ app.Run();
 **Bad #2: a god facade.**
 
 ```csharp
-public sealed class ProjectFacade(/* 23 constructor parameters */)
+public sealed class RestaurantFacade(/* 23 constructor parameters */)
 {
-    public Task<RaBillSummary> PrepareBillAsync(...) { ... }
-    public Task ApproveDrawingAsync(...) { ... }
+    public Task<PayoutSummary> PreparePayoutAsync(...) { ... }
+    public Task PublishMenuAsync(...) { ... }
     public Task<decimal> CalculateGstAsync(decimal amount) => Task.FromResult(amount * 0.18m);   // a business rule!
-    public Task OnboardSubcontractorAsync(...) { ... }
-    public Task<IReadOnlyList<Incident>> GetSafetyIncidentsAsync(...) { ... }
+    public Task OnboardRestaurantAsync(...) { ... }
+    public Task<IReadOnlyList<Review>> GetLowRatingsAsync(...) { ... }
     // ... 40 more methods
 }
 ```
@@ -579,55 +591,57 @@ Problems:
 - Every team edits this file, so merge conflicts become routine.
 - Its tests need 23 fakes.
 
-**Good:** one focused facade per *task family* (`IRaBillingFacade`, `IDrawingApprovalFacade`, `ISubcontractorOnboardingFacade`), each with a handful of dependencies, orchestration only, and rules delegated to subsystems.
+**Good:** one focused facade per *task family* (`IRestaurantPayoutFacade`, `IMenuPublishingFacade`, `IRestaurantOnboardingFacade`), each with a handful of dependencies, orchestration only, and rules delegated to subsystems.
 
 **Is it worth it?** If only one client performs the workflow and it's three short lines, a facade is optional. Introduce it when a second client appears, when the sequence has failure rules worth protecting, or when you want to shield clients from a subsystem that's changing.
 
 :::callout type=tip title="Application services are facades"
-In layered and clean architectures, an application service such as `PlaceOrderHandler` or `RaBillingService` is usually a facade over the domain and infrastructure. Don't worry about the name. Worry about keeping it thin: orchestrate, don't calculate.
+In layered and clean architectures, an application service such as `PlaceOrderHandler` or `PayoutService` is usually a facade over the domain and infrastructure. Don't worry about the name. Worry about keeping it thin: orchestrate, don't calculate.
 :::
 
 :::callout type=warning title="A facade is not a saga"
-A facade method runs in one process, in one request. If the process dies halfway, nothing resumes it. When steps span several services or take minutes to hours (approvals, external payments), use durable workflow state, such as a [saga](#/lesson/m12-sagas), instead of a longer facade method.
+A facade method runs in one process, in one request. If the process dies halfway, nothing resumes it. When steps span several services or take minutes to hours (approvals, bank transfers that settle later), use durable workflow state, such as a [saga](#/lesson/m12-sagas), instead of a longer facade method.
 :::
 
 ## Practical playground
 
-The playground has three subsystem classes, a facade, and two clients: one uses the facade, and one reaches past it to a subsystem. Run it, then add a fourth subsystem step (`SafetyBriefing`) and notice that only the facade changes.
+The playground has three subsystem classes, a facade, and two clients: one uses the facade, and one reaches past it to a subsystem. Run it, then add a fourth subsystem step (`HygieneAudit`, which schedules a kitchen inspection before go-live) and notice that only the facade changes.
 
-:::playground type=csharp title="A facade over a site-mobilisation subsystem"
+:::playground type=csharp title="A facade over restaurant go-live"
 ```csharp file=Program.cs
 using System;
 using System.Collections.Generic;
 
 // ----- Subsystem: each class does one job and knows nothing about the facade -----
-public sealed class EquipmentYard
+public sealed class MenuCatalogue
 {
-    public string Dispatch(string site, string machine) { Console.WriteLine($"  [yard] dispatching {machine} to {site}"); return $"EQ-{machine[..3].ToUpperInvariant()}-01"; }
+    public string Publish(string restaurant, IReadOnlyList<string> dishes)
+    {
+        Console.WriteLine($"  [menu] {dishes.Count} dishes published for {restaurant}: {string.Join(", ", dishes)}");
+        return $"MENU-{restaurant[..3].ToUpperInvariant()}-01";
+    }
 }
 
-public sealed class LabourContractor
+public sealed class DeliveryZones
 {
-    public int AssignCrew(string site, int workers) { Console.WriteLine($"  [labour] {workers} workers assigned to {site}"); return workers; }
+    public int Enable(string restaurant, int radiusKm) { Console.WriteLine($"  [zones] delivery enabled within {radiusKm} km of {restaurant}"); return radiusKm; }
 }
 
-public sealed class SiteStores
+public sealed class PromoDesk
 {
-    public void OpenIndent(string site, IReadOnlyList<string> materials) =>
-        Console.WriteLine($"  [stores] indent opened at {site}: {string.Join(", ", materials)}");
+    public void CreateOffer(string restaurant, string offer) => Console.WriteLine($"  [promo] offer at {restaurant}: {offer}");
 }
 
 // ----- Facade: one task-shaped method in the client's language -----
-public sealed class SiteMobilisationFacade(EquipmentYard yard, LabourContractor labour, SiteStores stores)
+public sealed class RestaurantLaunchFacade(MenuCatalogue menus, DeliveryZones zones, PromoDesk promos)
 {
-    public string MobiliseForEarthwork(string site)
+    public string GoLive(string restaurant)
     {
-        Console.WriteLine($"Mobilising {site} for earthwork...");
-        var excavator = yard.Dispatch(site, "excavator");
-        yard.Dispatch(site, "roller");
-        var crew = labour.AssignCrew(site, 25);
-        stores.OpenIndent(site, new[] { "diesel", "geotextile", "survey pegs" });
-        return $"{site}: {excavator}, crew of {crew}, stores open";
+        Console.WriteLine($"Launching {restaurant}...");
+        var menuId = menus.Publish(restaurant, new[] { "Masala dosa", "Idli vada", "Filter coffee" });
+        var radius = zones.Enable(restaurant, 5);
+        promos.CreateOffer(restaurant, "50% off first order, up to ₹100");
+        return $"{restaurant}: {menuId}, delivers within {radius} km, launch offer live";
     }
 }
 
@@ -635,21 +649,21 @@ public static class Program
 {
     public static void Main()
     {
-        var yard = new EquipmentYard();
-        var facade = new SiteMobilisationFacade(yard, new LabourContractor(), new SiteStores());
+        var promos = new PromoDesk();
+        var facade = new RestaurantLaunchFacade(new MenuCatalogue(), new DeliveryZones(), promos);
 
         // Client 1: the common case, one call.
-        Console.WriteLine(facade.MobiliseForEarthwork("Km 18 to Km 24, Package 2"));
+        Console.WriteLine(facade.GoLive("Dosa Corner, Indiranagar"));
 
         // Client 2: an expert who needs one specific thing can still use the subsystem directly.
         Console.WriteLine("Extra request, bypassing the facade:");
-        yard.Dispatch("Km 18 to Km 24, Package 2", "water tanker");
+        promos.CreateOffer("Dosa Corner, Indiranagar", "Free filter coffee on orders above ₹299");
     }
 }
 ```
 :::
 
-The output shows one call fanning out into four subsystem calls in a fixed order, and a second client using `EquipmentYard` directly for an unusual request. That's the healthy shape of a facade: a convenient front door with the side doors still open. If you find yourself adding parameters to `MobiliseForEarthwork` for every special case (`bool skipRoller`, `int? crewSize`), that's the signal to let those clients use the subsystem directly, or to add a second, differently named facade method.
+The output shows one call fanning out into three subsystem calls in a fixed order, and a second client using `PromoDesk` directly for an unusual request. That's the healthy shape of a facade: a convenient front door with the side doors still open. If you find yourself adding parameters to `GoLive` for every special case (`bool skipLaunchOffer`, `int? radiusKm`), that's the signal to let those clients use the subsystem directly, or to add a second, differently named facade method.
 
 ## Exercises
 
@@ -658,10 +672,10 @@ Three services are needed to export a report: a query that loads it, formatters 
 ::requirements
 - Pick the formatter whose `Format` matches the requested format, case-insensitively. Unknown formats throw `NotSupportedException` **before** loading the report.
 - A missing report throws `KeyNotFoundException`.
-- File name: the report title in lowercase with spaces replaced by `-`, then `-{reportId}.{format}`. For example, "Monthly Progress Oct" with id 17 as CSV gives `monthly-progress-oct-17.csv`.
+- File name: the report title in lowercase with spaces replaced by `-`, then `-{reportId}.{format}`. For example, "Monthly Sales Oct" with id 17 as CSV gives `monthly-sales-oct-17.csv`.
 - Save with the formatter's content type and return `ExportResult(url, fileName, sizeInBytes)`.
 ::acceptance
-- Exporting report 17 as `"CSV"` saves `monthly-progress-oct-17.csv` with content type `text/csv` and returns the store's URL.
+- Exporting report 17 as `"CSV"` saves `monthly-sales-oct-17.csv` with content type `text/csv` and returns the store's URL.
 - Requesting `"xlsx"` with no such formatter throws `NotSupportedException`, and the query is never called.
 - A missing report throws `KeyNotFoundException`, and nothing is saved.
 - The returned size equals the number of rendered bytes.
@@ -733,7 +747,7 @@ public sealed class FakeQuery : IReportQuery
     {
         Calls++;
         return Task.FromResult(reportId == 17
-            ? new ReportData("Monthly Progress Oct", new List<string[]> { new[] { "Item", "Done" }, new[] { "Earthwork", "62%" } })
+            ? new ReportData("Monthly Sales Oct", new List<string[]> { new[] { "Dish", "Sold" }, new[] { "Masala dosa", "412" } })
             : null);
     }
 }
@@ -763,8 +777,8 @@ public class ReportExportTests
         var store = new FakeStore();
         var facade = new ReportExportFacade(new FakeQuery(), new IReportFormatter[] { new CsvFormatter() }, store);
         var result = await facade.ExportAsync(17, "CSV");
-        Assert.Equal("monthly-progress-oct-17.csv", result.FileName);
-        Assert.Equal("https://files.example.com/monthly-progress-oct-17.csv", result.Url);
+        Assert.Equal("monthly-sales-oct-17.csv", result.FileName);
+        Assert.Equal("https://files.example.com/monthly-sales-oct-17.csv", result.Url);
         var saved = Assert.Single(store.Saved);
         Assert.Equal("text/csv", saved.Type);
         Assert.Equal((long)saved.Size, result.SizeBytes);
@@ -864,7 +878,7 @@ Creating a zip file in memory with `ZipArchive` has some traps: you must dispose
 - `List(byte[] zip)` returns the entry names, sorted ordinally.
 - `ReadText(byte[] zip, string entryName)` returns the entry's text, or throws `FileNotFoundException` if the entry is missing.
 ::acceptance
-- A round trip preserves text exactly, including Hindi (`प्रगति रिपोर्ट`).
+- A round trip preserves text exactly, including Hindi (`बिक्री रिपोर्ट`).
 - An empty dictionary produces a valid zip with no entries.
 - Folder-style names are listed as given.
 - A missing entry throws `FileNotFoundException`.
@@ -907,11 +921,11 @@ public class ZipBundleTests
     {
         var zip = ZipBundle.Create(new Dictionary<string, string>
         {
-            ["summary.txt"] = "प्रगति रिपोर्ट: 62% complete",
-            ["reports/oct.csv"] = "item,qty\nEW-01,4500",
+            ["summary.txt"] = "बिक्री रिपोर्ट: 412 dosas sold",
+            ["reports/oct.csv"] = "dish,qty\nMasala dosa,412",
         });
-        Assert.Equal("प्रगति रिपोर्ट: 62% complete", ZipBundle.ReadText(zip, "summary.txt"));
-        Assert.Equal("item,qty\nEW-01,4500", ZipBundle.ReadText(zip, "reports/oct.csv"));
+        Assert.Equal("बिक्री रिपोर्ट: 412 dosas sold", ZipBundle.ReadText(zip, "summary.txt"));
+        Assert.Equal("dish,qty\nMasala dosa,412", ZipBundle.ReadText(zip, "reports/oct.csv"));
     }
 
     [Fact]
@@ -1004,23 +1018,23 @@ This is a facade over a *library*. The caller no longer needs to know about `Zip
 - Forgetting `leaveOpen: true`, so disposing the archive also disposes the `MemoryStream`. On .NET, `ToArray()` happens to still work on a disposed `MemoryStream`, but relying on that is fragile.
 - Writing with `Encoding.UTF8`, which adds a BOM that some CSV consumers show as a stray character.
 ::extensions
-Add `Create(IReadOnlyDictionary<string, byte[]>)` for binary files such as PDFs and photos, and an option to choose `CompressionLevel.NoCompression` for already-compressed formats like JPEG.
+Add `Create(IReadOnlyDictionary<string, byte[]>)` for binary files such as PDF statements and dish photos, and an option to choose `CompressionLevel.NoCompression` for already-compressed formats like JPEG.
 :::
 
 :::exercise id=m06-facade-ex3 difficulty=intermediate kind=code title="A booking facade with compensation"
-Booking a site inspection takes three subsystems: reserve a vehicle, book the inspector's slot, and issue a site gate pass. If a later step fails, the earlier ones must be undone, so the facade doesn't leave a vehicle reserved for a visit that will never happen. Write `SiteVisitBookingFacade`.
+A customer schedules a catering order for a party on a future date. Booking it takes three subsystems: hold capacity in the restaurant's kitchen for that day, reserve a delivery rider for the customer's zone, and charge the customer's wallet. If a later step fails, the earlier ones must be undone, so the facade doesn't leave a kitchen slot and a rider blocked for an order that will never happen. Write `CateringBookingFacade`.
 ::requirements
-- Order: reserve vehicle → book slot → issue gate pass.
-- If booking the slot fails, release the vehicle, then rethrow the original exception.
-- If issuing the gate pass fails, cancel the slot, then release the vehicle (reverse order), then rethrow the original exception.
+- Order: hold kitchen slot → reserve rider → charge wallet.
+- If reserving the rider fails, release the kitchen slot, then rethrow the original exception.
+- If the charge fails, cancel the rider, then release the kitchen slot (reverse order), then rethrow the original exception.
 - If a compensation step itself fails, still attempt the remaining compensations, and rethrow the **original** exception, not the compensation's.
 - Compensations must not use the caller's cancellation token (use `CancellationToken.None`), so a cancelled request still cleans up.
 ::acceptance
-- On success, the calls are `reserve`, `book`, `issue`, and the booking holds all three ids.
-- On a slot failure, the calls are `reserve`, `book`, `release`, and the slot's exception reaches the caller.
-- On a gate-pass failure, the calls are `reserve`, `book`, `issue`, `cancel`, `release`.
-- If `cancel` throws during compensation, `release` still happens, and the caller sees the gate-pass exception.
-- If the caller's request is cancelled during the gate-pass step, compensations still run with a non-cancellable token.
+- On success, the calls are `hold`, `reserve`, `charge`, and the booking holds all three ids.
+- On a rider failure, the calls are `hold`, `reserve`, `release`, and the rider service's exception reaches the caller.
+- On a payment failure, the calls are `hold`, `reserve`, `charge`, `cancel`, `release`.
+- If `cancel` throws during compensation, `release` still happens, and the caller sees the payment exception.
+- If the caller's request is cancelled during the payment step, compensations still run with a non-cancellable token.
 ::hint
 Keep track of what has succeeded so far, so you know what to undo.
 ::hint
@@ -1030,122 +1044,122 @@ Wrap each undo in its own `try/catch`, so one failing compensation doesn't stop 
 ::hint
 ```csharp
 var undo = new Stack<Func<Task>>();
-try { var v = await vehicles.ReserveAsync(...); undo.Push(() => vehicles.ReleaseAsync(v, CancellationToken.None)); ... }
+try { var k = await kitchen.HoldAsync(...); undo.Push(() => kitchen.ReleaseAsync(k, CancellationToken.None)); ... }
 catch { while (undo.Count > 0) { try { await undo.Pop()(); } catch { /* log */ } } throw; }
 ```
 ::starter
-```csharp file=SiteVisitBooking.cs
+```csharp file=CateringBooking.cs
 using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-public interface IVehiclePool
+public interface IKitchenCapacity
 {
-    Task<string> ReserveAsync(DateOnly day, CancellationToken ct);
-    Task ReleaseAsync(string reservationId, CancellationToken ct);
+    Task<string> HoldAsync(string restaurantId, DateOnly day, CancellationToken ct);
+    Task ReleaseAsync(string holdId, CancellationToken ct);
 }
 
-public interface IInspectorCalendar
+public interface IRiderRoster
 {
-    Task<string> BookSlotAsync(string inspectorId, DateOnly day, CancellationToken ct);
-    Task CancelSlotAsync(string slotId, CancellationToken ct);
+    Task<string> ReserveRiderAsync(string zoneId, DateOnly day, CancellationToken ct);
+    Task CancelReservationAsync(string reservationId, CancellationToken ct);
 }
 
-public interface IGatePassService
+public interface IWalletPayments
 {
-    Task<string> IssueAsync(string siteCode, DateOnly day, string visitorName, CancellationToken ct);
+    Task<string> ChargeAsync(string customerId, decimal amount, string idempotencyKey, CancellationToken ct);
 }
 
-public sealed record SiteVisitRequest(string SiteCode, DateOnly Day, string InspectorId, string VisitorName);
+public sealed record CateringRequest(string OrderRef, string RestaurantId, DateOnly Day, string ZoneId, string CustomerId, decimal Amount);
 
-public sealed record SiteVisitBooking(string VehicleReservationId, string SlotId, string GatePassNo);
+public sealed record CateringBooking(string KitchenHoldId, string RiderReservationId, string PaymentId);
 
-public sealed class SiteVisitBookingFacade
+public sealed class CateringBookingFacade
 {
-    public SiteVisitBookingFacade(IVehiclePool vehicles, IInspectorCalendar calendar, IGatePassService gatePasses) =>
+    public CateringBookingFacade(IKitchenCapacity kitchen, IRiderRoster riders, IWalletPayments payments) =>
         throw new NotImplementedException();
 
-    public Task<SiteVisitBooking> BookAsync(SiteVisitRequest request, CancellationToken ct = default) =>
+    public Task<CateringBooking> BookAsync(CateringRequest request, CancellationToken ct = default) =>
         throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=SiteVisitBookingTests.cs
+```csharp file=CateringBookingTests.cs
 using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-public sealed class Recorder : IVehiclePool, IInspectorCalendar, IGatePassService
+public sealed class Recorder : IKitchenCapacity, IRiderRoster, IWalletPayments
 {
     public List<string> Calls { get; } = new();
-    public bool FailBook { get; set; }
-    public bool FailIssue { get; set; }
+    public bool FailReserve { get; set; }
+    public bool FailCharge { get; set; }
     public bool FailCancel { get; set; }
-    public CancellationTokenSource? CancelDuringIssue { get; set; }
+    public CancellationTokenSource? CancelDuringCharge { get; set; }
 
-    public Task<string> ReserveAsync(DateOnly day, CancellationToken ct) { Calls.Add("reserve"); return Task.FromResult("VEH-9"); }
+    public Task<string> HoldAsync(string restaurantId, DateOnly day, CancellationToken ct) { Calls.Add("hold"); return Task.FromResult("KIT-9"); }
     public Task ReleaseAsync(string id, CancellationToken ct) { Calls.Add(ct.CanBeCanceled ? "release:cancellable" : "release"); return Task.CompletedTask; }
 
-    public Task<string> BookSlotAsync(string inspectorId, DateOnly day, CancellationToken ct)
+    public Task<string> ReserveRiderAsync(string zoneId, DateOnly day, CancellationToken ct)
     {
-        Calls.Add("book");
-        return FailBook ? Task.FromException<string>(new InvalidOperationException("slot taken")) : Task.FromResult("SLOT-3");
+        Calls.Add("reserve");
+        return FailReserve ? Task.FromException<string>(new InvalidOperationException("no rider available")) : Task.FromResult("RDR-3");
     }
 
-    public Task CancelSlotAsync(string slotId, CancellationToken ct)
+    public Task CancelReservationAsync(string reservationId, CancellationToken ct)
     {
         Calls.Add(ct.CanBeCanceled ? "cancel:cancellable" : "cancel");
-        return FailCancel ? Task.FromException(new TimeoutException("calendar down")) : Task.CompletedTask;
+        return FailCancel ? Task.FromException(new TimeoutException("rider service down")) : Task.CompletedTask;
     }
 
-    public Task<string> IssueAsync(string siteCode, DateOnly day, string visitorName, CancellationToken ct)
+    public Task<string> ChargeAsync(string customerId, decimal amount, string idempotencyKey, CancellationToken ct)
     {
-        Calls.Add("issue");
-        if (CancelDuringIssue is { } cts) { cts.Cancel(); return Task.FromException<string>(new OperationCanceledException(cts.Token)); }
-        return FailIssue ? Task.FromException<string>(new InvalidOperationException("gate system offline")) : Task.FromResult("GP-1207");
+        Calls.Add("charge");
+        if (CancelDuringCharge is { } cts) { cts.Cancel(); return Task.FromException<string>(new OperationCanceledException(cts.Token)); }
+        return FailCharge ? Task.FromException<string>(new InvalidOperationException("payment declined")) : Task.FromResult("PAY-1207");
     }
 }
 
-public class SiteVisitBookingTests
+public class CateringBookingTests
 {
-    private static readonly SiteVisitRequest Req = new("PKG2-KM18", new DateOnly(2026, 11, 4), "INSP-07", "R. Iyer");
-    private static SiteVisitBookingFacade Facade(Recorder r) => new(r, r, r);
+    private static readonly CateringRequest Req = new("CAT-2026-0042", "dosa-corner", new DateOnly(2026, 11, 4), "BLR-INDIRANAGAR", "CUST-77", 18_500m);
+    private static CateringBookingFacade Facade(Recorder r) => new(r, r, r);
 
     [Fact]
     public async Task Success_runs_all_steps_in_order()
     {
         var r = new Recorder();
         var booking = await Facade(r).BookAsync(Req);
-        Assert.Equal(new List<string> { "reserve", "book", "issue" }, r.Calls);
-        Assert.Equal(new SiteVisitBooking("VEH-9", "SLOT-3", "GP-1207"), booking);
+        Assert.Equal(new List<string> { "hold", "reserve", "charge" }, r.Calls);
+        Assert.Equal(new CateringBooking("KIT-9", "RDR-3", "PAY-1207"), booking);
     }
 
     [Fact]
-    public async Task Slot_failure_releases_vehicle()
+    public async Task Rider_failure_releases_kitchen_slot()
     {
-        var r = new Recorder { FailBook = true };
+        var r = new Recorder { FailReserve = true };
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => Facade(r).BookAsync(Req));
-        Assert.Equal("slot taken", ex.Message);
-        Assert.Equal(new List<string> { "reserve", "book", "release" }, r.Calls);
+        Assert.Equal("no rider available", ex.Message);
+        Assert.Equal(new List<string> { "hold", "reserve", "release" }, r.Calls);
     }
 
     [Fact]
-    public async Task Gate_failure_compensates_in_reverse_order()
+    public async Task Payment_failure_compensates_in_reverse_order()
     {
-        var r = new Recorder { FailIssue = true };
+        var r = new Recorder { FailCharge = true };
         await Assert.ThrowsAsync<InvalidOperationException>(() => Facade(r).BookAsync(Req));
-        Assert.Equal(new List<string> { "reserve", "book", "issue", "cancel", "release" }, r.Calls);
+        Assert.Equal(new List<string> { "hold", "reserve", "charge", "cancel", "release" }, r.Calls);
     }
 
     [Fact]
     public async Task Failing_compensation_does_not_mask_original_error()
     {
-        var r = new Recorder { FailIssue = true, FailCancel = true };
+        var r = new Recorder { FailCharge = true, FailCancel = true };
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => Facade(r).BookAsync(Req));
-        Assert.Equal("gate system offline", ex.Message);
+        Assert.Equal("payment declined", ex.Message);
         Assert.Contains("release", r.Calls);
     }
 
@@ -1153,67 +1167,68 @@ public class SiteVisitBookingTests
     public async Task Cancelled_request_still_compensates_with_non_cancellable_token()
     {
         using var cts = new CancellationTokenSource();
-        var r = new Recorder { CancelDuringIssue = cts };
+        var r = new Recorder { CancelDuringCharge = cts };
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Facade(r).BookAsync(Req, cts.Token));
-        Assert.Equal(new List<string> { "reserve", "book", "issue", "cancel", "release" }, r.Calls);
+        Assert.Equal(new List<string> { "hold", "reserve", "charge", "cancel", "release" }, r.Calls);
     }
 }
 ```
 ::solution
-```csharp file=SiteVisitBooking.cs
+```csharp file=CateringBooking.cs
 using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-public interface IVehiclePool
+public interface IKitchenCapacity
 {
-    Task<string> ReserveAsync(DateOnly day, CancellationToken ct);
-    Task ReleaseAsync(string reservationId, CancellationToken ct);
+    Task<string> HoldAsync(string restaurantId, DateOnly day, CancellationToken ct);
+    Task ReleaseAsync(string holdId, CancellationToken ct);
 }
 
-public interface IInspectorCalendar
+public interface IRiderRoster
 {
-    Task<string> BookSlotAsync(string inspectorId, DateOnly day, CancellationToken ct);
-    Task CancelSlotAsync(string slotId, CancellationToken ct);
+    Task<string> ReserveRiderAsync(string zoneId, DateOnly day, CancellationToken ct);
+    Task CancelReservationAsync(string reservationId, CancellationToken ct);
 }
 
-public interface IGatePassService
+public interface IWalletPayments
 {
-    Task<string> IssueAsync(string siteCode, DateOnly day, string visitorName, CancellationToken ct);
+    Task<string> ChargeAsync(string customerId, decimal amount, string idempotencyKey, CancellationToken ct);
 }
 
-public sealed record SiteVisitRequest(string SiteCode, DateOnly Day, string InspectorId, string VisitorName);
+public sealed record CateringRequest(string OrderRef, string RestaurantId, DateOnly Day, string ZoneId, string CustomerId, decimal Amount);
 
-public sealed record SiteVisitBooking(string VehicleReservationId, string SlotId, string GatePassNo);
+public sealed record CateringBooking(string KitchenHoldId, string RiderReservationId, string PaymentId);
 
-public sealed class SiteVisitBookingFacade
+public sealed class CateringBookingFacade
 {
-    private readonly IVehiclePool _vehicles;
-    private readonly IInspectorCalendar _calendar;
-    private readonly IGatePassService _gatePasses;
+    private readonly IKitchenCapacity _kitchen;
+    private readonly IRiderRoster _riders;
+    private readonly IWalletPayments _payments;
 
-    public SiteVisitBookingFacade(IVehiclePool vehicles, IInspectorCalendar calendar, IGatePassService gatePasses)
+    public CateringBookingFacade(IKitchenCapacity kitchen, IRiderRoster riders, IWalletPayments payments)
     {
-        _vehicles = vehicles ?? throw new ArgumentNullException(nameof(vehicles));
-        _calendar = calendar ?? throw new ArgumentNullException(nameof(calendar));
-        _gatePasses = gatePasses ?? throw new ArgumentNullException(nameof(gatePasses));
+        _kitchen = kitchen ?? throw new ArgumentNullException(nameof(kitchen));
+        _riders = riders ?? throw new ArgumentNullException(nameof(riders));
+        _payments = payments ?? throw new ArgumentNullException(nameof(payments));
     }
 
-    public async Task<SiteVisitBooking> BookAsync(SiteVisitRequest request, CancellationToken ct = default)
+    public async Task<CateringBooking> BookAsync(CateringRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         var undo = new Stack<Func<Task>>();
         try
         {
-            var vehicle = await _vehicles.ReserveAsync(request.Day, ct);
-            undo.Push(() => _vehicles.ReleaseAsync(vehicle, CancellationToken.None));
+            var hold = await _kitchen.HoldAsync(request.RestaurantId, request.Day, ct);
+            undo.Push(() => _kitchen.ReleaseAsync(hold, CancellationToken.None));
 
-            var slot = await _calendar.BookSlotAsync(request.InspectorId, request.Day, ct);
-            undo.Push(() => _calendar.CancelSlotAsync(slot, CancellationToken.None));
+            var rider = await _riders.ReserveRiderAsync(request.ZoneId, request.Day, ct);
+            undo.Push(() => _riders.CancelReservationAsync(rider, CancellationToken.None));
 
-            var gatePass = await _gatePasses.IssueAsync(request.SiteCode, request.Day, request.VisitorName, ct);
-            return new SiteVisitBooking(vehicle, slot, gatePass);
+            // The order reference doubles as the idempotency key, so a retried request can't charge twice.
+            var payment = await _payments.ChargeAsync(request.CustomerId, request.Amount, request.OrderRef, ct);
+            return new CateringBooking(hold, rider, payment);
         }
         catch
         {
@@ -1229,45 +1244,48 @@ public sealed class SiteVisitBookingFacade
 ```
 
 The facade owns the **workflow-level failure rule**: what to undo, and in which order. None of the three subsystems could own that rule, because none of them knows about the others. This is the in-process version of the compensating-transaction idea behind [sagas](#/lesson/m12-sagas). It works for a single request, but it doesn't survive a process crash in the middle of compensation. Log failed compensations so someone can follow up.
+
+The payment step is deliberately last. A charge is the hardest step to undo (a refund takes days to reach the customer and costs a fee), so the cheap, reversible holds go first. And if the charge *times out*, you don't know whether money moved. That's why the order reference is passed as an idempotency key: the client can safely retry, and a reconciliation job can ask the payment provider for the real status.
 ::alternatives
 If the subsystems are tables in one PostgreSQL database, a single database transaction is simpler and stronger than compensation. Use compensation only when the steps really are separate systems.
 ::mistakes
-- Compensating with the caller's `ct`. If the request was cancelled, every undo call fails at once and the vehicle stays reserved.
+- Compensating with the caller's `ct`. If the request was cancelled, every undo call fails at once and the kitchen slot and rider stay blocked.
 - `throw ex;` or throwing the compensation's exception, which hides the real cause.
-- Compensating in forward order (release the vehicle before cancelling the slot). Undo in reverse, as with nested `using` blocks.
+- Compensating in forward order (release the kitchen slot before cancelling the rider). Undo in reverse, as with nested `using` blocks.
+- Charging the wallet first. Then every later failure needs a refund, which is slow, visible to the customer and sometimes charged a fee.
 ::extensions
-Make each step idempotent with a booking reference passed to all three subsystems, so a client that retries `BookAsync` after a timeout doesn't double-book.
+Make the hold and rider steps idempotent too, by passing `OrderRef` to all three subsystems, so a client that retries `BookAsync` after a timeout doesn't double-book.
 :::
 
 :::exercise id=m06-facade-ex4 difficulty=intermediate kind=design title="Refactor: one workflow, three copies"
-A contractor-onboarding workflow exists in three places: an MVC controller (150 lines), a bulk-import background job (120 lines), and an admin console command (90 lines). Each one, in its own way: validates PAN and GSTIN through a verification API, creates the vendor in the ERP over SOAP, creates a user in the identity provider, creates a document folder in blob storage, assigns default permissions, and sends a welcome email. Bugs differ between the copies: the job doesn't send emails, and the console creates the user *before* the ERP vendor exists. Redesign it with a facade, and plan the migration.
+A restaurant-partner onboarding workflow on a food-delivery platform exists in three places: an MVC controller (150 lines), a bulk-import background job (120 lines, used when a restaurant chain joins with 200 outlets), and an admin console command (90 lines). Each one, in its own way: validates PAN, GSTIN and the FSSAI food licence through a verification API, creates the vendor in the ERP over SOAP, creates a user in the identity provider, creates a document folder in blob storage, assigns default permissions, and sends a welcome email. Bugs differ between the copies: the job doesn't send emails, and the console creates the user *before* the ERP vendor exists. Redesign it with a facade, and plan the migration.
 ::acceptance
 - A facade interface with a task-shaped method and a result type.
 - The step order is justified, including which step failures are fatal and which are not.
 - A clear line between orchestration (facade) and rules (subsystems), with at least two examples of each.
 - A migration plan that moves the three clients one at a time, with tests protecting behaviour.
 ::hint
-Start from the client's sentence: "Onboard this contractor." What do the three clients pass in, and what do they need back?
+Start from the client's sentence: "Onboard this restaurant." What do the three clients pass in, and what do they need back?
 ::hint
 Which steps create things in *external* systems that would need undoing if a later step fails?
 ::hint
-Is "PAN must be valid" orchestration or a rule? What about "create the ERP vendor before the identity user"?
+Is "the FSSAI licence must be valid" orchestration or a rule? What about "create the ERP vendor before the identity user"?
 ::hint
 For bulk import, does the facade's method need a variant, or can the job just call it in a loop with limited concurrency?
 ::solution
 **Interface**
 
 ```csharp
-public interface IContractorOnboardingFacade
+public interface IRestaurantOnboardingFacade
 {
-    Task<OnboardingResult> OnboardAsync(OnboardContractorRequest request, CancellationToken ct);
+    Task<OnboardingResult> OnboardAsync(OnboardRestaurantRequest request, CancellationToken ct);
 }
 public sealed record OnboardingResult(string VendorCode, Guid UserId, string DocumentFolderUrl, IReadOnlyList<string> Warnings);
 ```
 
 **Order and failure policy**
 
-1. *Verify PAN and GSTIN* (`ITaxIdVerifier`). Fatal; nothing has been created yet, so no undo is needed.
+1. *Verify PAN, GSTIN and FSSAI licence* (`IComplianceVerifier`). Fatal; nothing has been created yet, so no undo is needed.
 2. *Create ERP vendor* (`IErpVendorAdapter`, an [adapter](#/lesson/m06-adapter) over SOAP). Fatal. The undo is "deactivate vendor", because ERP records usually can't be deleted.
 3. *Create identity user* (`IIdentityProvisioner`). Fatal; on failure, deactivate the ERP vendor. It comes after the ERP step because the user's profile stores the vendor code. That's the console's bug.
 4. *Create document folder* (`IDocumentStore`). Fatal; on failure, disable the user and deactivate the vendor, in reverse order.
@@ -1276,7 +1294,7 @@ public sealed record OnboardingResult(string VendorCode, Guid UserId, string Doc
 
 **Orchestration in the facade**: step order, passing the vendor code to the identity step, the compensation stack, the fatal versus non-fatal decision, and building `OnboardingResult`.
 
-**Rules in subsystems**: PAN format and checksum validation (`ITaxIdVerifier`), which permissions a new contractor gets (`IPermissionService` reads a policy), ERP field mapping (adapter), the welcome email template (notifier).
+**Rules in subsystems**: PAN and GSTIN format and checksum validation, FSSAI expiry checks (`IComplianceVerifier`), which permissions a new restaurant partner gets (`IPermissionService` reads a policy), ERP field mapping (adapter), the welcome email template (notifier).
 
 **Migration**
 
@@ -1288,24 +1306,24 @@ public sealed record OnboardingResult(string VendorCode, Guid UserId, string Doc
 
 **Later**: if onboarding grows to include human approval (days, not seconds), move it to a durable workflow or saga. A facade method can't wait for days.
 ::mistakes
-- Putting PAN validation logic in the facade, which makes it a god object.
+- Putting PAN or FSSAI validation logic in the facade, which makes it a god object.
 - One facade with `OnboardAsync`, `OffboardAsync`, `UpdateBankDetailsAsync`, `ChangeGstinAsync` and twelve more. Keep separate task families in separate facades.
 - A "big bang" change of all three clients with no characterisation tests.
 :::
 
 :::exercise id=m06-facade-ex5 difficulty=advanced kind=code title="A dashboard facade that degrades gracefully"
-A project dashboard needs data from four subsystems: progress (mandatory), finance, safety and weather (all optional). Calling them one after another takes the *sum* of their latencies. Write `ProjectDashboardFacade`, which calls all four **concurrently**, gives each optional source a timeout, and returns whatever is available.
+The "track your order" screen of a food-delivery app needs data from four subsystems: order status (mandatory), rider location, offers for the next order and local weather (all optional). Calling them one after another takes the *sum* of their latencies. Write `OrderTrackingFacade`, which calls all four **concurrently**, gives each optional source a timeout, and returns whatever is available.
 ::requirements
 - Start all four calls before awaiting any of them.
-- Progress is mandatory: if it fails, the facade fails with that exception.
-- Optional sources that throw, or exceed `optionalTimeout`, appear as `null`, with their name (`"finance"`, `"safety"`, `"weather"`) in `Unavailable`.
+- Order status is mandatory: if it fails, the facade fails with that exception.
+- Optional sources that throw, or exceed `optionalTimeout`, appear as `null`, with their name (`"rider"`, `"offers"`, `"weather"`) in `Unavailable`.
 - If the *caller* cancels, throw an `OperationCanceledException` (or subclass) instead of reporting sources as unavailable.
 - An optional source that ignores its cancellation token must still be cut off at the timeout.
 ::acceptance
 - All four calls are in flight at the same time.
-- A finance failure gives `Finance == null` and `Unavailable` containing `"finance"`, while the other sections are present.
+- A rider-location failure gives `Rider == null` and `Unavailable` containing `"rider"`, while the other sections are present.
 - A weather source that never responds is reported unavailable after about 100 ms, and the call completes.
-- A progress failure propagates as the original exception type.
+- An order-status failure propagates as the original exception type.
 - Caller cancellation results in an `OperationCanceledException`.
 ::hint
 Start the tasks first (store them in variables), then await. Awaiting each call as you start it makes the facade sequential.
@@ -1316,36 +1334,36 @@ Inside the helper, create a linked token source from the caller's token and call
 ::hint
 Catch with a filter: `catch (Exception) when (!ct.IsCancellationRequested) { return (null, name); }`. When the caller cancelled, the filter is false, so the exception propagates.
 ::starter
-```csharp file=ProjectDashboard.cs
+```csharp file=OrderTracking.cs
 using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-public sealed record ProgressSnapshot(decimal PhysicalPercent);
-public sealed record FinanceSnapshot(decimal SpentCrore);
-public sealed record SafetySnapshot(int OpenIncidents);
+public sealed record OrderSnapshot(string Status);
+public sealed record RiderSnapshot(decimal DistanceKm);
+public sealed record OffersSnapshot(int ActiveOffers);
 public sealed record WeatherSnapshot(string Summary);
 
-public interface IProgressService { Task<ProgressSnapshot> GetAsync(int projectId, CancellationToken ct); }
-public interface IFinanceService { Task<FinanceSnapshot> GetAsync(int projectId, CancellationToken ct); }
-public interface ISafetyService { Task<SafetySnapshot> GetAsync(int projectId, CancellationToken ct); }
-public interface IWeatherService { Task<WeatherSnapshot> GetAsync(int projectId, CancellationToken ct); }
+public interface IOrderStatusService { Task<OrderSnapshot> GetAsync(int orderId, CancellationToken ct); }
+public interface IRiderLocationService { Task<RiderSnapshot> GetAsync(int orderId, CancellationToken ct); }
+public interface IOffersService { Task<OffersSnapshot> GetAsync(int orderId, CancellationToken ct); }
+public interface IWeatherService { Task<WeatherSnapshot> GetAsync(int orderId, CancellationToken ct); }
 
-public sealed record ProjectDashboard(
-    int ProjectId, ProgressSnapshot Progress, FinanceSnapshot? Finance, SafetySnapshot? Safety, WeatherSnapshot? Weather,
+public sealed record OrderTrackingView(
+    int OrderId, OrderSnapshot Order, RiderSnapshot? Rider, OffersSnapshot? Offers, WeatherSnapshot? Weather,
     IReadOnlyList<string> Unavailable);
 
-public sealed class ProjectDashboardFacade
+public sealed class OrderTrackingFacade
 {
-    public ProjectDashboardFacade(IProgressService progress, IFinanceService finance, ISafetyService safety,
+    public OrderTrackingFacade(IOrderStatusService orders, IRiderLocationService riders, IOffersService offers,
         IWeatherService weather, TimeSpan optionalTimeout) => throw new NotImplementedException();
 
-    public Task<ProjectDashboard> GetAsync(int projectId, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<OrderTrackingView> GetAsync(int orderId, CancellationToken ct = default) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=ProjectDashboardTests.cs
+```csharp file=OrderTrackingTests.cs
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -1355,7 +1373,7 @@ using Xunit;
 
 public enum Mode { Immediate, Gated, Throw, Never }
 
-public sealed class FakeSources : IProgressService, IFinanceService, ISafetyService, IWeatherService
+public sealed class FakeSources : IOrderStatusService, IRiderLocationService, IOffersService, IWeatherService
 {
     public ConcurrentDictionary<string, bool> Started { get; } = new();
     public Dictionary<string, Mode> Modes { get; } = new();
@@ -1373,22 +1391,22 @@ public sealed class FakeSources : IProgressService, IFinanceService, ISafetyServ
         return value;
     }
 
-    Task<ProgressSnapshot> IProgressService.GetAsync(int id, CancellationToken ct) => Run("progress", new ProgressSnapshot(62.5m), ct);
-    Task<FinanceSnapshot> IFinanceService.GetAsync(int id, CancellationToken ct) => Run("finance", new FinanceSnapshot(148.2m), ct);
-    Task<SafetySnapshot> ISafetyService.GetAsync(int id, CancellationToken ct) => Run("safety", new SafetySnapshot(2), ct);
+    Task<OrderSnapshot> IOrderStatusService.GetAsync(int id, CancellationToken ct) => Run("order", new OrderSnapshot("Out for delivery"), ct);
+    Task<RiderSnapshot> IRiderLocationService.GetAsync(int id, CancellationToken ct) => Run("rider", new RiderSnapshot(1.8m), ct);
+    Task<OffersSnapshot> IOffersService.GetAsync(int id, CancellationToken ct) => Run("offers", new OffersSnapshot(2), ct);
     Task<WeatherSnapshot> IWeatherService.GetAsync(int id, CancellationToken ct) => Run("weather", new WeatherSnapshot("Light rain"), ct);
 }
 
-public class ProjectDashboardTests
+public class OrderTrackingTests
 {
-    private static ProjectDashboardFacade Facade(FakeSources f, int timeoutMs = 100) => new(f, f, f, f, TimeSpan.FromMilliseconds(timeoutMs));
+    private static OrderTrackingFacade Facade(FakeSources f, int timeoutMs = 100) => new(f, f, f, f, TimeSpan.FromMilliseconds(timeoutMs));
 
     [Fact]
     public async Task All_sections_present_when_everything_works()
     {
         var d = await Facade(new FakeSources()).GetAsync(7);
-        Assert.Equal(62.5m, d.Progress.PhysicalPercent);
-        Assert.NotNull(d.Finance); Assert.NotNull(d.Safety); Assert.NotNull(d.Weather);
+        Assert.Equal("Out for delivery", d.Order.Status);
+        Assert.NotNull(d.Rider); Assert.NotNull(d.Offers); Assert.NotNull(d.Weather);
         Assert.Empty(d.Unavailable);
     }
 
@@ -1396,7 +1414,7 @@ public class ProjectDashboardTests
     public async Task Calls_run_concurrently()
     {
         var f = new FakeSources();
-        foreach (var n in new[] { "progress", "finance", "safety", "weather" }) f.Modes[n] = Mode.Gated;
+        foreach (var n in new[] { "order", "rider", "offers", "weather" }) f.Modes[n] = Mode.Gated;
         var task = Facade(f, timeoutMs: 5_000).GetAsync(7);
         await Task.Delay(100);
         Assert.Equal(4, f.Started.Count);
@@ -1409,11 +1427,11 @@ public class ProjectDashboardTests
     public async Task Optional_failure_degrades()
     {
         var f = new FakeSources();
-        f.Modes["finance"] = Mode.Throw;
+        f.Modes["rider"] = Mode.Throw;
         var d = await Facade(f).GetAsync(7);
-        Assert.Null(d.Finance);
-        Assert.Equal(new List<string> { "finance" }, d.Unavailable);
-        Assert.NotNull(d.Safety);
+        Assert.Null(d.Rider);
+        Assert.Equal(new List<string> { "rider" }, d.Unavailable);
+        Assert.NotNull(d.Offers);
     }
 
     [Fact]
@@ -1430,7 +1448,7 @@ public class ProjectDashboardTests
     public async Task Mandatory_failure_propagates()
     {
         var f = new FakeSources();
-        f.Modes["progress"] = Mode.Throw;
+        f.Modes["order"] = Mode.Throw;
         await Assert.ThrowsAsync<InvalidOperationException>(() => Facade(f).GetAsync(7));
     }
 
@@ -1438,7 +1456,7 @@ public class ProjectDashboardTests
     public async Task Caller_cancellation_is_not_reported_as_unavailable()
     {
         var f = new FakeSources();
-        foreach (var n in new[] { "progress", "finance", "safety", "weather" }) f.Modes[n] = Mode.Gated;
+        foreach (var n in new[] { "order", "rider", "offers", "weather" }) f.Modes[n] = Mode.Gated;
         using var cts = new CancellationTokenSource();
         var task = Facade(f, timeoutMs: 5_000).GetAsync(7, cts.Token);
         await Task.Delay(50);
@@ -1448,59 +1466,59 @@ public class ProjectDashboardTests
 }
 ```
 ::solution
-```csharp file=ProjectDashboard.cs
+```csharp file=OrderTracking.cs
 using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-public sealed record ProgressSnapshot(decimal PhysicalPercent);
-public sealed record FinanceSnapshot(decimal SpentCrore);
-public sealed record SafetySnapshot(int OpenIncidents);
+public sealed record OrderSnapshot(string Status);
+public sealed record RiderSnapshot(decimal DistanceKm);
+public sealed record OffersSnapshot(int ActiveOffers);
 public sealed record WeatherSnapshot(string Summary);
 
-public interface IProgressService { Task<ProgressSnapshot> GetAsync(int projectId, CancellationToken ct); }
-public interface IFinanceService { Task<FinanceSnapshot> GetAsync(int projectId, CancellationToken ct); }
-public interface ISafetyService { Task<SafetySnapshot> GetAsync(int projectId, CancellationToken ct); }
-public interface IWeatherService { Task<WeatherSnapshot> GetAsync(int projectId, CancellationToken ct); }
+public interface IOrderStatusService { Task<OrderSnapshot> GetAsync(int orderId, CancellationToken ct); }
+public interface IRiderLocationService { Task<RiderSnapshot> GetAsync(int orderId, CancellationToken ct); }
+public interface IOffersService { Task<OffersSnapshot> GetAsync(int orderId, CancellationToken ct); }
+public interface IWeatherService { Task<WeatherSnapshot> GetAsync(int orderId, CancellationToken ct); }
 
-public sealed record ProjectDashboard(
-    int ProjectId, ProgressSnapshot Progress, FinanceSnapshot? Finance, SafetySnapshot? Safety, WeatherSnapshot? Weather,
+public sealed record OrderTrackingView(
+    int OrderId, OrderSnapshot Order, RiderSnapshot? Rider, OffersSnapshot? Offers, WeatherSnapshot? Weather,
     IReadOnlyList<string> Unavailable);
 
-public sealed class ProjectDashboardFacade
+public sealed class OrderTrackingFacade
 {
-    private readonly IProgressService _progress;
-    private readonly IFinanceService _finance;
-    private readonly ISafetyService _safety;
+    private readonly IOrderStatusService _orders;
+    private readonly IRiderLocationService _riders;
+    private readonly IOffersService _offers;
     private readonly IWeatherService _weather;
     private readonly TimeSpan _optionalTimeout;
 
-    public ProjectDashboardFacade(IProgressService progress, IFinanceService finance, ISafetyService safety,
+    public OrderTrackingFacade(IOrderStatusService orders, IRiderLocationService riders, IOffersService offers,
         IWeatherService weather, TimeSpan optionalTimeout)
     {
-        _progress = progress; _finance = finance; _safety = safety; _weather = weather;
+        _orders = orders; _riders = riders; _offers = offers; _weather = weather;
         _optionalTimeout = optionalTimeout;
     }
 
-    public async Task<ProjectDashboard> GetAsync(int projectId, CancellationToken ct = default)
+    public async Task<OrderTrackingView> GetAsync(int orderId, CancellationToken ct = default)
     {
         // Start everything first: total latency becomes the slowest call, not the sum.
-        var progressTask = _progress.GetAsync(projectId, ct);
-        var financeTask = Optional("finance", t => _finance.GetAsync(projectId, t), ct);
-        var safetyTask = Optional("safety", t => _safety.GetAsync(projectId, t), ct);
-        var weatherTask = Optional("weather", t => _weather.GetAsync(projectId, t), ct);
+        var orderTask = _orders.GetAsync(orderId, ct);
+        var riderTask = Optional("rider", t => _riders.GetAsync(orderId, t), ct);
+        var offersTask = Optional("offers", t => _offers.GetAsync(orderId, t), ct);
+        var weatherTask = Optional("weather", t => _weather.GetAsync(orderId, t), ct);
 
-        var progress = await progressTask.WaitAsync(ct);   // mandatory: failures propagate
-        var finance = await financeTask;
-        var safety = await safetyTask;
+        var order = await orderTask.WaitAsync(ct);   // mandatory: failures propagate
+        var rider = await riderTask;
+        var offers = await offersTask;
         var weather = await weatherTask;
 
         var unavailable = new List<string>();
-        foreach (var missing in new[] { finance.Missing, safety.Missing, weather.Missing })
+        foreach (var missing in new[] { rider.Missing, offers.Missing, weather.Missing })
             if (missing is not null) unavailable.Add(missing);
 
-        return new ProjectDashboard(projectId, progress, finance.Value, safety.Value, weather.Value, unavailable);
+        return new OrderTrackingView(orderId, order, rider.Value, offers.Value, weather.Value, unavailable);
     }
 
     private async Task<(T? Value, string? Missing)> Optional<T>(string name, Func<CancellationToken, Task<T>> call, CancellationToken ct)
@@ -1523,13 +1541,13 @@ public sealed class ProjectDashboardFacade
 
 At architecture scale, this facade is a small **Backend for Frontend** (BFF): one endpoint that aggregates several backends for one screen ([API gateway and BFF](#/lesson/m16-gateway-bff)). The workflow decisions (what is mandatory, how long to wait, how to report missing parts) belong to the facade, because only it knows what this screen needs.
 ::alternatives
-If optional sections are slow but rarely change (weather, finance totals), cache them with a [decorator](#/lesson/m06-decorator) around each service, and keep the facade's timeout for the cache-miss path.
+If optional sections are slow but rarely change (weather, active offers), cache them with a [decorator](#/lesson/m06-decorator) around each service, and keep the facade's timeout for the cache-miss path.
 ::mistakes
-- `var p = await _progress.GetAsync(...); var f = await ...` makes it sequential, so the dashboard takes the sum of all latencies.
-- `catch (Exception)` without the `when` filter turns a user closing the browser into "finance unavailable" and keeps working for nobody.
+- `var o = await _orders.GetAsync(...); var r = await ...` makes it sequential, so the screen takes the sum of all latencies.
+- `catch (Exception)` without the `when` filter turns a user closing the app into "rider unavailable" and keeps working for nobody.
 - Relying only on the token: a source that ignores it hangs the dashboard. `WaitAsync` enforces the timeout anyway. The orphaned call keeps running in the background, so report it in metrics.
 ::extensions
-Return the dashboard with HTTP 200 and a `Warning`-style field when sections are missing, and add an OpenTelemetry metric per unavailable source so you can alert when one is regularly missing.
+Return the tracking view with HTTP 200 and a `Warning`-style field when sections are missing, and add an OpenTelemetry metric per unavailable source so you can alert when one is regularly missing.
 :::
 
 ## Automated testing
@@ -1539,50 +1557,50 @@ A facade has a lot of collaborators, but it's straightforward to test because ea
 **1. Workflow tests with fakes.** Give each subsystem a small fake that records calls into a shared list (as in exercise 3). Then assert:
 
 - the **order** of calls on the happy path,
-- **what is passed between steps** (the bill id passed to `MarkBilledAsync` is the id of the saved bill),
+- **what is passed between steps** (the payout id passed to `MarkSettledAsync` is the id of the saved payout),
 - the **failure policy**: which failures stop the workflow, what gets undone, and which failures are only logged.
 
 ```csharp
 [Fact]
-public async Task Notification_failure_does_not_fail_the_bill()
+public async Task Notification_failure_does_not_fail_the_payout()
 {
     var notifier = new ThrowingNotifier();   // throws InvalidOperationException
-    var facade = new RaBillingFacade(new InMemoryMeasurementBook(), new FixedRateSchedule(),
-        new ConfiguredStatutoryDeductions(Options.Create(new DeductionOptions())), new FakePdfRenderer(),
-        new InMemoryBillRepository(), notifier, NullLogger<RaBillingFacade>.Instance);
+    var facade = new RestaurantPayoutFacade(new InMemoryOrderLedger(), new FixedCommissionPlan(),
+        new ConfiguredPayoutDeductions(Options.Create(new DeductionOptions())), new FakePdfStatementRenderer(),
+        new InMemoryPayoutRepository(), notifier, NullLogger<RestaurantPayoutFacade>.Instance);
 
-    var summary = await facade.PrepareBillAsync(7, new BillingPeriod(new(2026, 10, 1), new(2026, 10, 31)));
+    var summary = await facade.PreparePayoutAsync(7, new SettlementPeriod(new(2026, 10, 19), new(2026, 10, 25)));
 
     Assert.Equal(1, summary.SequenceNo);
-    Assert.True(summary.NetPayable > 0);
+    Assert.Equal(520_343.16m, summary.NetPayout);
 }
 
 [Fact]
-public async Task Missing_rate_stops_before_anything_is_saved()
+public async Task Missing_commission_rate_stops_before_anything_is_saved()
 {
-    var repo = new RecordingBillRepository();
-    var facade = CreateFacade(rates: new EmptyRateSchedule(), repository: repo);
-    await Assert.ThrowsAsync<BillingException>(() => facade.PrepareBillAsync(7, October));
+    var repo = new RecordingPayoutRepository();
+    var facade = CreateFacade(plan: new EmptyCommissionPlan(), repository: repo);
+    await Assert.ThrowsAsync<PayoutException>(() => facade.PreparePayoutAsync(7, LastWeek));
     Assert.Empty(repo.Saved);
 }
 ```
 
-**2. Don't re-test subsystem rules through the facade.** GST and retention arithmetic are tested in `ConfiguredStatutoryDeductions`' own tests. The facade test only checks that the facade *used* the result correctly (net = gross + GST − deductions). Otherwise every rule change breaks two sets of tests.
+**2. Don't re-test subsystem rules through the facade.** GST-on-commission and gateway-fee arithmetic are tested in `ConfiguredPayoutDeductions`' own tests. The facade test only checks that the facade *used* the result correctly (net = sales − commission − other deductions). Otherwise every rule change breaks two sets of tests.
 
-**3. Client tests use a fake facade.** The endpoint and the month-end job each need a one-method fake of `IRaBillingFacade`. That's one of the main benefits of the pattern.
+**3. Client tests use a fake facade.** The endpoint and the weekly job each need a one-method fake of `IRestaurantPayoutFacade`. That's one of the main benefits of the pattern.
 
-**4. One integration test per facade method**, with real subsystem implementations against a test database (Testcontainers for PostgreSQL), covering the transaction boundary. Save a bill, then kill the process between steps in a test-only hook, and confirm that measurements aren't lost.
+**4. One integration test per facade method**, with real subsystem implementations against a test database (Testcontainers for PostgreSQL), covering the transaction boundary. Make the ledger throw after the payout insert in a test-only hook, and confirm that neither the payout nor the "settled" flags were committed, so the next run pays the restaurant exactly once.
 
-**Extensibility.** New steps (for example, "upload to the client's e-measurement portal") are added in one place. New clients (a mobile app, a CLI) reuse the same method. When a method starts gaining flags (`skipPdf`, `dryRun`), split it into separately named methods, or let those clients use subsystems directly.
+**Extensibility.** New steps (for example, "push the payout to the bank's payouts API") are added in one place. New clients (a partner mobile app, a CLI) reuse the same method. When a method starts gaining flags (`skipPdf`, `dryRun`), split it into separately named methods, or let those clients use subsystems directly.
 
 ## Real-world application
 
 - **.NET's own facades.** `File.ReadAllText` / `WriteAllText` over `FileStream`, `StreamReader` and encodings. `ZipFile.CreateFromDirectory` over `ZipArchive`. `HttpClient.GetFromJsonAsync` over request, response, content and serializer. `WebApplication.CreateBuilder(args)` over host, configuration, logging, DI and Kestrel setup. `Process.Start(...)` over the operating system's process APIs.
-- **Application services.** In layered or clean architecture, each use case (`PlaceOrder`, `ApproveDrawing`, `PrepareRaBill`) is typically a thin facade over domain objects and infrastructure, as described in Martin Fowler's *Service Layer*.
-- **Module APIs in a modular monolith.** Each module exposes a small facade (`IBillingModule`), and other modules may call only that, never the module's internals. This keeps the boundaries enforceable.
+- **Application services.** In layered or clean architecture, each use case (`PlaceOrder`, `CancelBooking`, `PreparePayout`) is typically a thin facade over domain objects and infrastructure, as described in Martin Fowler's *Service Layer*.
+- **Module APIs in a modular monolith.** Each module exposes a small facade (`IPayoutsModule`), and other modules may call only that, never the module's internals. This keeps the boundaries enforceable.
 - **API gateways and BFFs.** At system scale, a Backend for Frontend aggregates several microservices for one client (mobile app, web dashboard). It's a network-level facade.
 - **SDK convenience layers.** Cloud SDKs often provide a high-level client (upload a file in one call) over lower-level REST operations (initiate, upload blocks, commit).
-- **Infrastructure project platforms.** Month-end billing, progress-report generation and contractor onboarding are classic multi-step workflows that benefit from one well-tested entry point used by the UI, scheduled jobs and integrations alike.
+- **Marketplaces and delivery platforms.** Partner payouts, restaurant or seller onboarding, and order tracking screens are classic multi-step workflows that benefit from one well-tested entry point used by the UI, scheduled jobs and integrations alike.
 
 ### Comparison with similar patterns
 
@@ -1623,7 +1641,7 @@ First classify each step: mandatory or optional, and whether it creates somethin
 ::q advanced
 How do you stop a facade from becoming a god object over time?
 ::a
-Name facades after task families (billing, onboarding, approvals), not after the whole system. Watch constructor size and method count, and split when unrelated workflows accumulate. Keep business rules in subsystems and review pull requests for calculations creeping into the facade. Avoid boolean flags that create hidden variants. Give special cases their own methods, or let those clients use the subsystem. Return client-shaped results rather than leaking subsystem internals. Test the facade's orchestration separately from the subsystems' rules. And use architecture tests or code ownership so changes to the facade get reviewed by the people who own the workflow.
+Name facades after task families (payouts, onboarding, refunds), not after the whole system. Watch constructor size and method count, and split when unrelated workflows accumulate. Keep business rules in subsystems and review pull requests for calculations creeping into the facade. Avoid boolean flags that create hidden variants. Give special cases their own methods, or let those clients use the subsystem. Return client-shaped results rather than leaking subsystem internals. Test the facade's orchestration separately from the subsystems' rules. And use architecture tests or code ownership so changes to the facade get reviewed by the people who own the workflow.
 :::
 
 ## Summary and revision
@@ -1662,16 +1680,16 @@ A: File.ReadAllText (streams + encoding), WebApplication.CreateBuilder (host + c
 
 :::quiz pass=70
 ::q single
-An endpoint and a background job each call the same six services in the same order to prepare a bill, and their copies have started to differ. What's the most direct fix?
+An endpoint and a background job each call the same six services in the same order to prepare a restaurant payout, and their copies have started to differ. What's the most direct fix?
 - [ ] Merge the six services into one class.
-- [x] Introduce a facade with a `PrepareBillAsync` method and point both clients at it.
+- [x] Introduce a facade with a `PreparePayoutAsync` method and point both clients at it.
 - [ ] Add a decorator around each service.
 - [ ] Make the six services static.
 > The duplicated orchestration belongs in one place. Merging the services would destroy their separation, and decorators add behaviour to one object, not coordination across many.
 ::q single
-Your `BillingFacade` has a method `CalculateGst(decimal amount) => amount * 0.18m`, and the tax subsystem has its own GST calculation. What's wrong?
+Your `PayoutFacade` has a method `CalculateGst(decimal amount) => amount * 0.18m`, and the deductions subsystem has its own GST calculation. What's wrong?
 - [ ] Nothing; facades may contain any code.
-- [x] A business rule has leaked into the facade and now exists twice. The facade should ask the tax subsystem.
+- [x] A business rule has leaked into the facade and now exists twice. The facade should ask the deductions subsystem.
 - [ ] GST should be calculated in the controller.
 - [ ] The facade should inherit from the tax subsystem.
 > Facades orchestrate; subsystems own rules. Duplicated rules diverge.
@@ -1683,14 +1701,14 @@ Which statement about Facade is true?
 - [ ] A facade must implement the same interface as its subsystem classes.
 > That's the GoF intent: simplify the common path without hiding the subsystem. Only deliberate module boundaries restrict direct access.
 ::q multi
-A booking facade reserves a vehicle, books a slot, then fails to issue a gate pass. Which actions are correct? (Select all that apply.)
-- [x] Cancel the slot, then release the vehicle.
+A catering-booking facade holds a kitchen slot, reserves a rider, then the wallet charge is declined. Which actions are correct? (Select all that apply.)
+- [x] Cancel the rider reservation, then release the kitchen slot.
 - [x] Use a non-cancellable token for compensation calls.
-- [ ] Throw the compensation's exception if cancelling the slot fails.
-- [x] Rethrow the original gate-pass exception after compensating.
+- [ ] Throw the compensation's exception if cancelling the rider fails.
+- [x] Rethrow the original payment exception after compensating.
 > Undo in reverse order, don't let the caller's cancellation block cleanup, and never mask the real cause.
 ::q single
-A dashboard facade awaits four services one after another, taking 300 + 250 + 400 + 200 ms (estimated). What change gives the biggest latency improvement?
+An order-tracking facade awaits four services one after another, taking 300 + 250 + 400 + 200 ms (estimated). What change gives the biggest latency improvement?
 - [ ] Add retries to each call.
 - [x] Start all four calls first, then await them, so latency approaches the slowest call (about 400 ms).
 - [ ] Cache the facade instance as a singleton.
@@ -1704,7 +1722,7 @@ Which is a Facade rather than an Adapter?
 - [ ] A class that converts a callback API to `Task`.
 > The others each make one class fit a different interface. `File.ReadAllText` hides the coordination of several classes.
 ::q single
-An onboarding workflow needs manager approval that can take up to three days. Is a facade method the right home for the whole workflow?
+A restaurant-onboarding workflow needs a food-safety officer's approval that can take up to three days. Is a facade method the right home for the whole workflow?
 - [ ] Yes; just `await` the approval for up to three days.
 - [x] No. A facade method is an in-process, short-lived sequence. Use a saga or workflow with durable state, possibly with a facade for each short step.
 - [ ] Yes, if the facade is registered as a singleton.

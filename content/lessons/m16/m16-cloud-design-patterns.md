@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 100
 prerequisites: [m11-object-storage, m12-messaging-patterns, m13-distributed-locks]
-related: [m16-multi-tenancy, m16-multi-region, m16-cqrs, m13-sharding, m12-sagas, m10-rate-limiting]
+related: [m16-multi-tenancy, m16-multi-region, m17-scaling-journey, m16-cqrs, m13-sharding, m12-sagas, m10-rate-limiting]
 tags: [cloud, patterns, azure-architecture-center, sidecar, valet-key, leader-election, deployment-stamps, claim-check]
 patterns: [Sidecar, Ambassador, Valet Key, Gatekeeper, Throttling, Leader Election, Geode, Deployment Stamps, Compensating Transaction, Competing Consumers, Queue-Based Load Leveling, Health Endpoint Monitoring, External Configuration Store, Static Content Hosting, Claim Check, Materialized View, Index Table, Sharding]
 summary: Eighteen proven patterns for building on the cloud, each with the problem it solves, how it works, when to use it and when not to. Build the valet key, lease-based leader election, claim check, queue-based load levelling with competing consumers, throttling and health endpoints in ASP.NET Core.
@@ -57,7 +57,7 @@ None of this is magic. Each pattern is a known, reusable answer to a problem tha
 
 ### How to read this catalogue
 
-For each pattern: **Problem** (what goes wrong without it), **Solution** (the idea), **Use when**, **Avoid when**. Patterns are grouped by the kind of problem they solve. The names follow the Azure Architecture Center catalogue, which is the most widely referenced public list; the ideas apply equally on AWS, GCP or on-premises.
+For each pattern: **Problem** (what goes wrong without it), **Solution** (the idea), **Use when**, **Avoid when**. Patterns are grouped by the kind of problem they solve. The names follow the Azure Architecture Center catalogue, which is the most widely referenced public list; the ideas apply equally on AWS, GCP or on-premises. That catalogue has grown to more than 40 patterns (it also covers Retry, Circuit Breaker, Bulkhead, Cache-Aside, Strangler Fig, Saga, Backends for Frontends, Gateway Routing and others taught elsewhere in this course); the 18 here are the ones you meet most in application architecture and have not yet seen in depth.
 
 ### Group 1 — Structure around your service
 
@@ -100,21 +100,21 @@ For each pattern: **Problem** (what goes wrong without it), **Solution** (the id
 
 #### Valet Key
 
-- **Problem.** Users upload 8 GB drone survey files. Streaming them *through* your API ties up threads, memory and bandwidth, and costs egress twice.
+- **Problem.** Instructors upload 8 GB raw lecture recordings (an hour of 4K video). Streaming them *through* your API ties up threads, memory and bandwidth, and costs egress twice.
 - **Solution.** The API checks the user's permission and returns a **time-limited, scope-limited token** (Azure SAS, S3 presigned URL). The client talks to storage directly. The token encodes what (one blob), how (write only) and until when (15 minutes), signed so it cannot be altered.
 - **Use when.** Large uploads and downloads; many clients; storage that supports signed access.
 - **Avoid when.** You must inspect or transform data inline (virus scanning before storage; then scan asynchronously after upload instead, and quarantine). Keep validity short, scope tight, and prefer HTTPS-only tokens; a leaked token is usable by anyone until it expires.
 
 #### Claim Check
 
-- **Problem.** A message carries a 40 MB payload. Queues have size limits (Azure Service Bus standard tier: 256 KB per message; premium allows larger), and large messages slow brokers.
+- **Problem.** A message carries a 40 MB payload. Queues have size limits (Azure Service Bus standard tier: 256 KB per message; premium allows up to 100 MB, but big messages still slow the broker and every consumer), and large messages slow brokers.
 - **Solution.** Store the payload in blob storage; send a small message containing a reference (the "claim check"). The consumer fetches the payload. Delete the blob when processed, or let a lifecycle rule expire it.
 - **Use when.** Payloads exceed broker limits or vary wildly in size; many consumers need only metadata to decide whether to fetch.
 - **Avoid when.** Payloads are small; the extra storage round trip adds latency; you cannot secure the blob as well as the message. Watch the race where the message arrives before the blob write completes: write blob first, then send.
 
 #### Materialized View
 
-- **Problem.** The data is stored in a shape good for writing (normalised, or as events), but a dashboard needs an aggregated shape: "total sanctioned value by state". Computing it on every request is slow and expensive.
+- **Problem.** The data is stored in a shape good for writing (normalised, or as events), but a dashboard needs an aggregated shape: "total course revenue by state". Computing it on every request is slow and expensive.
 - **Solution.** Precompute the read shape and store it: a PostgreSQL `MATERIALIZED VIEW` refreshed periodically, or a read-model table updated from events (see [CQRS](#/lesson/m16-cqrs)).
 - **Use when.** Reads vastly outnumber writes; the query is expensive; some staleness is acceptable.
 - **Avoid when.** Data must be exactly current; the source changes constantly so refreshes never keep up; the query is already fast with a good index. `REFRESH MATERIALIZED VIEW CONCURRENTLY` needs a unique index and still recomputes the whole view.
@@ -224,8 +224,8 @@ For each pattern: **Problem** (what goes wrong without it), **Solution** (the id
 
 ```mermaid
 flowchart LR
-    U["Site engineers (mobile app)"] -->|"1. ask for upload URL"| GK["Gatekeeper: WAF + API gateway"]
-    GK --> API["Survey API (stamp 1 of 4)"]
+    U["Instructors (studio app)"] -->|"1. ask for upload URL"| GK["Gatekeeper: WAF + API gateway"]
+    GK --> API["Lecture API (stamp 1 of 4)"]
     API -->|"2. signed URL, write-only, 15 min"| U
     U -->|"3. PUT 8 GB directly (valet key)"| BLOB[("Object storage")]
     U --> CDN["CDN (static content hosting)"]
@@ -236,41 +236,41 @@ flowchart LR
     Q --> W3["Worker C"]
     W1 -->|"fetch payload by reference"| BLOB
     W2 --> DB[("PostgreSQL stamp DB")]
-    LEAD["Nightly report job (leader only)"] -->|"lease + fencing token"| DB
+    LEAD["Nightly watch-time report (leader only)"] -->|"lease + fencing token"| DB
     CFG["External configuration store"] -.-> API
     MON["Health monitors"] -.->|"/health/live, /health/ready"| API
 ```
 
-Follow the numbers. The engineer's app asks the API for an upload URL; the request passes through the gatekeeper, which authenticates and validates it. The API returns a signed, write-only URL valid for 15 minutes (valet key), so the 8 GB file goes straight to object storage and never touches the API. The API then puts a small message on the queue holding only the blob's path (claim check). Three workers compete for messages (competing consumers), and the queue absorbs bursts so the database is never flooded (queue-based load levelling). One instance at a time, holding a lease, runs the nightly report (leader election). The dotted lines are the operational patterns: settings come from an external configuration store, and monitors poll health endpoints. The whole picture is one deployment stamp; more stamps can be added for more tenants.
+Follow the numbers. The instructor's studio app asks the API for an upload URL; the request passes through the gatekeeper, which authenticates and validates it. The API returns a signed, write-only URL valid for 15 minutes (valet key), so the 8 GB file goes straight to object storage and never touches the API. The API then puts a small message on the queue holding only the blob's path (claim check). Three workers compete for messages (competing consumers), and the queue absorbs bursts so the database is never flooded (queue-based load levelling). One instance at a time, holding a lease, runs the nightly watch-time report (leader election). The dotted lines are the operational patterns: settings come from an external configuration store, and monitors poll health endpoints. The whole picture is one deployment stamp; more stamps can be added for more tenants.
 
 ### Sequence: valet key upload with claim check
 
 ```mermaid
 sequenceDiagram
     participant App as Mobile app
-    participant API as Survey API
+    participant API as Lecture API
     participant S as Object storage
     participant Q as Queue
     participant W as Worker
-    App->>API: POST /surveys/77/upload-url (auth token)
-    API->>API: check user may upload to project 77
+    App->>API: POST /lectures/77/upload-url (auth token)
+    API->>API: check instructor teaches course 77
     API-->>App: URL + signature, write-only, expires 10:15
-    App->>S: PUT /surveys/77/ortho.tif?sig=... (8 GB)
+    App->>S: PUT /lectures/77/raw.mp4?sig=... (8 GB)
     S->>S: verify signature, permission, expiry
     S-->>App: 201 Created
-    App->>API: POST /surveys/77/uploaded (path)
-    API->>Q: enqueue {surveyId: 77, blob: "surveys/77/ortho.tif"}
+    App->>API: POST /lectures/77/uploaded (path)
+    API->>Q: enqueue {lectureId: 77, blob: "lectures/77/raw.mp4"}
     Q-->>W: deliver message (small)
-    W->>S: GET surveys/77/ortho.tif
-    W->>W: tile, measure, compare with last survey
+    W->>S: GET lectures/77/raw.mp4
+    W->>W: virus scan, thumbnails, start transcoding
     W->>Q: ack
 ```
 
-The API does only two cheap things: an authorisation check and a signature calculation. Storage, not the API, verifies the signature on the 8 GB upload. The message on the queue is a few hundred bytes, whatever the file size. If the worker crashes mid-processing, it never acknowledges, so the message is redelivered to another worker, which is why processing must be idempotent (keyed by survey id).
+The API does only two cheap things: an authorisation check and a signature calculation. Storage, not the API, verifies the signature on the 8 GB upload. The message on the queue is a few hundred bytes, whatever the file size. If the worker crashes mid-processing, it never acknowledges, so the message is redelivered to another worker, which is why processing must be idempotent (keyed by lecture id).
 
 ## Step-by-step example
 
-A survey platform for 300 construction sites. We apply patterns one at a time, only where numbers justify them.
+**CourseCast** is a video-course platform. Twelve training institutes (the tenants) have 300 instructors between them, who record lectures and upload them for students to stream. We apply patterns one at a time, only where numbers justify them.
 
 ### Step 1 — the starting point
 
@@ -278,38 +278,38 @@ One API (3 instances) and PostgreSQL. Uploads stream through the API. Reports ru
 
 ### Step 2 — uploads: valet key
 
-Estimates: 300 sites × 2 surveys a week × 8 GB = **4.8 TB a week**. Average 4.8 TB ÷ 604,800 s ≈ 8 MB/s, but uploads bunch on Friday afternoons: 40 concurrent uploads × 50 Mbit/s ≈ **2 Gbit/s** through 3 API instances, plus memory for buffering. With a valet key, the API serves a signature in milliseconds and bandwidth goes straight to storage, which is built for it.
+Estimates: 300 instructors × 2 lectures a week × 8 GB = **4.8 TB a week**. Average 4.8 TB ÷ 604,800 s ≈ 8 MB/s, but uploads bunch on Friday afternoons: 40 concurrent uploads × 50 Mbit/s ≈ **2 Gbit/s** through 3 API instances, plus memory for buffering. With a valet key, the API serves a signature in milliseconds and bandwidth goes straight to storage, which is built for it.
 
 ### Step 3 — processing: claim check + competing consumers
 
-Each upload needs about 6 minutes of processing (estimate). 600 surveys a week is fine for one worker on average, but Friday's 40 arrive together: one worker takes 40 × 6 = 240 minutes. Three competing workers finish in 80 minutes; scaling to 8 on queue depth finishes in 30. Messages carry only the blob path, well under queue size limits.
+Each upload needs about 6 minutes of processing in our workers: virus scan, thumbnails, audio extraction for captions, then a hand-off to a managed transcoding service (estimate). 600 lectures a week is fine for one worker on average, but Friday's 40 arrive together: one worker takes 40 × 6 = 240 minutes. Three competing workers finish in 80 minutes; scaling to 8 on queue depth finishes in 30. Messages carry only the blob path, well under queue size limits.
 
 ### Step 4 — monthly reports: queue-based load levelling
 
-On the 1st at 10:00, project managers request 900 reports in one minute (15/s). The reporting queries can safely run at 8/s on the reporting replica. With a queue: backlog grows by 7/s for 60 s ≈ 420 items, drained in 420 ÷ 8 ≈ 53 s after the spike. Users wait up to about 2 minutes and get a notification, instead of the replica collapsing.
+On the 1st at 10:00, instructors and institute admins request 900 earnings and watch-time reports in one minute (15/s). The reporting queries can safely run at 8/s on the reporting replica. With a queue: backlog grows by 7/s for 60 s ≈ 420 items, drained in 420 ÷ 8 ≈ 53 s after the spike. Users wait up to about 2 minutes and get a notification, instead of the replica collapsing.
 
 ### Step 5 — one nightly job: leader election
 
-The nightly progress roll-up must not run three times. A lease row in PostgreSQL with a 30-second lease, renewed every 10 seconds, picks one instance. If it dies mid-run, another takes over within about 30 seconds. The roll-up writes include the fencing token, and the table rejects writes with a token lower than the last seen.
+The nightly watch-time roll-up (which feeds instructor payouts) must not run three times. A lease row in PostgreSQL with a 30-second lease, renewed every 10 seconds, picks one instance. If it dies mid-run, another takes over within about 30 seconds. The roll-up writes include the fencing token, and the table rejects writes with a token lower than the last seen.
 
 ### Step 6 — throttling and health
 
-One contractor's integration polls `/surveys` 50 times a second in a loop. A per-tenant token bucket (20 burst, 10 per second) returns 429 with `Retry-After`, protecting others. Liveness is a trivial endpoint; readiness also checks the database and queue depth.
+One institute's LMS integration polls `/lectures` 50 times a second in a loop. A per-tenant token bucket (20 burst, 10 per second) returns 429 with `Retry-After`, protecting others. Liveness is a trivial endpoint; readiness also checks the database and queue depth.
 
 ### Step 7 — what we did *not* do
 
-No sharding: the metadata database is 40 GB, and one PostgreSQL instance handles it with room to spare. No geodes: users are in India and one region with a CDN gives good latency. No deployment stamps yet: 300 sites from 12 clients fit one deployment. Revisit when a client demands isolation, or when the database passes, say, 1 TB.
+No sharding: the metadata database is 40 GB, and one PostgreSQL instance handles it with room to spare. No geodes: users are in India and one region with a CDN gives good latency. No deployment stamps yet: 300 instructors from 12 institutes fit one deployment. Revisit when an institute demands isolation, or when the database passes, say, 1 TB. The [scaling journey](#/lesson/m17-scaling-journey) case study shows the same discipline across a product's whole life: most of these patterns arrive one growth stage at a time, each when a measured bottleneck asks for it.
 
 ## Production-style C# implementation
 
 The sample implements six patterns in one ASP.NET Core app, offline, with in-memory stand-ins behind interfaces.
 
 ```text
-Survey.Api/
+CourseCast.Api/
   Program.cs                       throttling, health endpoints, external config, endpoints
   ValetKey/SignedUrlService.cs     HMAC-signed, scoped, expiring URLs
   ClaimCheck/BlobStore.cs          IBlobStore + in-memory implementation
-  LoadLeveling/SurveyQueue.cs      bounded channel queue + competing consumer workers
+  LoadLeveling/LectureQueue.cs      bounded channel queue + competing consumer workers
   LeaderElection/Leases.cs         lease store with fencing tokens + leader-only job
   Health/QueueHealthCheck.cs       readiness check on queue depth
 ```
@@ -321,7 +321,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Options;
 
-namespace Survey.ValetKey;
+namespace CourseCast.ValetKey;
 
 [Flags]
 public enum BlobPermissions { None = 0, Read = 1, Write = 2 }
@@ -370,14 +370,14 @@ public sealed class SignedUrlService(IOptions<ValetKeyOptions> options, TimeProv
 }
 ```
 
-Everything the token allows (path, permissions, expiry) is inside the signed payload, so changing any of them invalidates the signature. `FixedTimeEquals` prevents timing attacks that guess a signature byte by byte. With Azure Blob Storage you would call the SDK's SAS builder instead of hand-rolling this; the principle is identical.
+Everything the token allows (path, permissions, expiry) is inside the signed payload, so changing any of them invalidates the signature. `FixedTimeEquals` prevents timing attacks that guess a signature byte by byte. With Azure Blob Storage you would call the SDK's SAS builder instead of hand-rolling this; the principle is identical. Prefer a **user delegation SAS** (signed with a key obtained through the app's Microsoft Entra identity, revocable, and visible in logs) over an account-key SAS, which is signed with the storage account key and can only be revoked by rotating that key.
 
 ### Claim check store
 
 ```csharp file=ClaimCheck/BlobStore.cs
 using System.Collections.Concurrent;
 
-namespace Survey.ClaimCheck;
+namespace CourseCast.ClaimCheck;
 
 public interface IBlobStore
 {
@@ -407,17 +407,17 @@ public sealed class InMemoryBlobStore : IBlobStore
 }
 
 /// <summary>The claim check: a small message that points at the payload instead of carrying it.</summary>
-public sealed record SurveyUploaded(string SurveyId, string BlobPath, long SizeBytes, DateTimeOffset UploadedAt);
+public sealed record LectureUploaded(string LectureId, string BlobPath, long SizeBytes, DateTimeOffset UploadedAt);
 ```
 
 ### Queue-based load levelling with competing consumers
 
-```csharp file=LoadLeveling/SurveyQueue.cs
+```csharp file=LoadLeveling/LectureQueue.cs
 using System.Threading.Channels;
 using Microsoft.Extensions.Options;
-using Survey.ClaimCheck;
+using CourseCast.ClaimCheck;
 
-namespace Survey.LoadLeveling;
+namespace CourseCast.LoadLeveling;
 
 public sealed class QueueOptions
 {
@@ -427,9 +427,9 @@ public sealed class QueueOptions
 
 /// <summary>In-process stand-in for a durable broker (Service Bus, RabbitMQ). A real broker survives restarts;
 /// a Channel does not, so production code must not rely on this for durability.</summary>
-public sealed class SurveyQueue(IOptions<QueueOptions> options)
+public sealed class LectureQueue(IOptions<QueueOptions> options)
 {
-    private readonly Channel<SurveyUploaded> _channel = Channel.CreateBounded<SurveyUploaded>(
+    private readonly Channel<LectureUploaded> _channel = Channel.CreateBounded<LectureUploaded>(
         new BoundedChannelOptions(options.Value.Capacity) { FullMode = BoundedChannelFullMode.Wait });
     private int _depth;
 
@@ -437,14 +437,14 @@ public sealed class SurveyQueue(IOptions<QueueOptions> options)
     public int Capacity => options.Value.Capacity;
 
     /// <summary>Returns false when the queue is full: the producer should answer 503 + Retry-After (load shedding).</summary>
-    public bool TryEnqueue(SurveyUploaded message)
+    public bool TryEnqueue(LectureUploaded message)
     {
         if (!_channel.Writer.TryWrite(message)) return false;
         Interlocked.Increment(ref _depth);
         return true;
     }
 
-    public async ValueTask<SurveyUploaded> DequeueAsync(CancellationToken ct)
+    public async ValueTask<LectureUploaded> DequeueAsync(CancellationToken ct)
     {
         var m = await _channel.Reader.ReadAsync(ct);
         Interlocked.Decrement(ref _depth);
@@ -452,25 +452,25 @@ public sealed class SurveyQueue(IOptions<QueueOptions> options)
     }
 }
 
-public interface ISurveyProcessor
+public interface ILectureProcessor
 {
-    Task ProcessAsync(SurveyUploaded message, ReadOnlyMemory<byte> payload, CancellationToken ct);
+    Task ProcessAsync(LectureUploaded message, ReadOnlyMemory<byte> payload, CancellationToken ct);
 }
 
-public sealed class LoggingSurveyProcessor(ILogger<LoggingSurveyProcessor> log) : ISurveyProcessor
+public sealed class LoggingLectureProcessor(ILogger<LoggingLectureProcessor> log) : ILectureProcessor
 {
-    public Task ProcessAsync(SurveyUploaded message, ReadOnlyMemory<byte> payload, CancellationToken ct)
+    public Task ProcessAsync(LectureUploaded message, ReadOnlyMemory<byte> payload, CancellationToken ct)
     {
-        log.LogInformation("Processed survey {SurveyId}: {Bytes} bytes", message.SurveyId, payload.Length);
+        log.LogInformation("Processed lecture {LectureId}: {Bytes} bytes", message.LectureId, payload.Length);
         return Task.CompletedTask;
     }
 }
 
 /// <summary>N consumers compete for messages from one queue. Each processes at its own pace,
 /// so the back end sees at most N concurrent jobs however spiky the arrivals are.</summary>
-public sealed class SurveyWorkers(
-    SurveyQueue queue, IBlobStore blobs, ISurveyProcessor processor,
-    IOptions<QueueOptions> options, ILogger<SurveyWorkers> log) : BackgroundService
+public sealed class LectureWorkers(
+    LectureQueue queue, IBlobStore blobs, ILectureProcessor processor,
+    IOptions<QueueOptions> options, ILogger<LectureWorkers> log) : BackgroundService
 {
     protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
         Task.WhenAll(Enumerable.Range(1, options.Value.Consumers).Select(i => ConsumeAsync(i, stoppingToken)));
@@ -479,7 +479,7 @@ public sealed class SurveyWorkers(
     {
         while (!ct.IsCancellationRequested)
         {
-            SurveyUploaded message;
+            LectureUploaded message;
             try { message = await queue.DequeueAsync(ct); }
             catch (OperationCanceledException) { break; }
 
@@ -488,14 +488,14 @@ public sealed class SurveyWorkers(
                 var payload = await blobs.GetAsync(message.BlobPath, ct);
                 if (payload is null)
                 {
-                    log.LogWarning("Consumer {Id}: blob {Path} missing for survey {SurveyId}", consumerId, message.BlobPath, message.SurveyId);
+                    log.LogWarning("Consumer {Id}: blob {Path} missing for lecture {LectureId}", consumerId, message.BlobPath, message.LectureId);
                     continue;   // a real broker would dead-letter this message
                 }
                 await processor.ProcessAsync(message, payload.Value, ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                log.LogError(ex, "Consumer {Id} failed on survey {SurveyId}", consumerId, message.SurveyId);
+                log.LogError(ex, "Consumer {Id} failed on lecture {LectureId}", consumerId, message.LectureId);
             }
         }
     }
@@ -505,7 +505,7 @@ public sealed class SurveyWorkers(
 ### Leader election with fencing tokens
 
 ```csharp file=LeaderElection/Leases.cs
-namespace Survey.LeaderElection;
+namespace CourseCast.LeaderElection;
 
 public sealed record Lease(string Name, string Owner, DateTimeOffset ExpiresAt, long FencingToken);
 
@@ -592,6 +592,7 @@ public sealed class NightlyRollupJob(ILeaseStore leases, IRollupWriter writer, T
                 var lease = await leases.TryAcquireOrRenewAsync("nightly-rollup", _instanceId, LeaseDuration, stoppingToken);
                 if (lease is not null)
                 {
+                    // Simplified: a real job checks a "done for this day" row and runs once per day, not on every renewal.
                     var day = DateOnly.FromDateTime(time.GetUtcNow().UtcDateTime.AddDays(-1));
                     if (!await writer.WriteDailyRollupAsync(day, lease.FencingToken, stoppingToken))
                         log.LogWarning("Rollup write rejected: token {Token} is stale", lease.FencingToken);
@@ -615,12 +616,12 @@ The renewal interval is a third of the lease, so one missed renewal (a slow data
 
 ```csharp file=Health/QueueHealthCheck.cs
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Survey.LoadLeveling;
+using CourseCast.LoadLeveling;
 
-namespace Survey.Health;
+namespace CourseCast.Health;
 
 /// <summary>Readiness, not liveness: a full queue means "stop sending me new work", not "restart me".</summary>
-public sealed class QueueHealthCheck(SurveyQueue queue) : IHealthCheck
+public sealed class QueueHealthCheck(LectureQueue queue) : IHealthCheck
 {
     public Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
     {
@@ -642,11 +643,11 @@ public sealed class QueueHealthCheck(SurveyQueue queue) : IHealthCheck
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
-using Survey.ClaimCheck;
-using Survey.Health;
-using Survey.LeaderElection;
-using Survey.LoadLeveling;
-using Survey.ValetKey;
+using CourseCast.ClaimCheck;
+using CourseCast.Health;
+using CourseCast.LeaderElection;
+using CourseCast.LoadLeveling;
+using CourseCast.ValetKey;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -658,9 +659,9 @@ builder.Services.Configure<QueueOptions>(builder.Configuration.GetSection("Queue
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<SignedUrlService>();
 builder.Services.AddSingleton<IBlobStore, InMemoryBlobStore>();
-builder.Services.AddSingleton<SurveyQueue>();
-builder.Services.AddSingleton<ISurveyProcessor, LoggingSurveyProcessor>();
-builder.Services.AddHostedService<SurveyWorkers>();
+builder.Services.AddSingleton<LectureQueue>();
+builder.Services.AddSingleton<ILectureProcessor, LoggingLectureProcessor>();
+builder.Services.AddHostedService<LectureWorkers>();
 builder.Services.AddSingleton<ILeaseStore, InMemoryLeaseStore>();
 builder.Services.AddSingleton<IRollupWriter, FencedRollupWriter>();
 builder.Services.AddHostedService<NightlyRollupJob>();
@@ -698,10 +699,10 @@ app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = r => r.
 app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = r => r.Tags.Contains("ready") });
 
 // Valet key: authorise, then hand out a narrow, short-lived permission.
-app.MapPost("/surveys/{surveyId}/upload-url", (string surveyId, SignedUrlService urls) =>
+app.MapPost("/lectures/{lectureId}/upload-url", (string lectureId, SignedUrlService urls) =>
 {
-    // A real app checks here that the caller may upload to this survey's project.
-    var path = $"surveys/{surveyId}/{Guid.NewGuid():N}.tif";
+    // A real app checks here that the caller teaches the course this lecture belongs to.
+    var path = $"lectures/{lectureId}/{Guid.NewGuid():N}.mp4";
     var access = urls.Issue(path, BlobPermissions.Write, TimeSpan.FromMinutes(15));
     return Results.Ok(new { uploadUrl = $"/blob/{path}?{access.ToQueryString()}", expiresUnix = access.ExpiresUnix });
 }).RequireRateLimiting("per-tenant");
@@ -718,9 +719,9 @@ app.MapPut("/blob/{**path}", async (string path, int perm, long exp, string sig,
 });
 
 // Claim check + load levelling: enqueue a small reference; shed load when the queue is full.
-app.MapPost("/surveys/{surveyId}/uploaded", (string surveyId, string blobPath, long sizeBytes, SurveyQueue queue, TimeProvider time) =>
-    queue.TryEnqueue(new SurveyUploaded(surveyId, blobPath, sizeBytes, time.GetUtcNow()))
-        ? Results.Accepted($"/surveys/{surveyId}")
+app.MapPost("/lectures/{lectureId}/uploaded", (string lectureId, string blobPath, long sizeBytes, LectureQueue queue, TimeProvider time) =>
+    queue.TryEnqueue(new LectureUploaded(lectureId, blobPath, sizeBytes, time.GetUtcNow()))
+        ? Results.Accepted($"/lectures/{lectureId}")
         : Results.Problem("Processing queue is full, retry later.", statusCode: StatusCodes.Status503ServiceUnavailable))
    .RequireRateLimiting("per-tenant");
 
@@ -745,12 +746,12 @@ A team building an internal tool for 200 users deploys: a sidecar mesh, three ge
 
 ```csharp
 // Anti-example: 8 GB through the API, buffered in memory, synchronous processing
-app.MapPost("/surveys/{id}/upload", async (string id, IFormFile file) =>
+app.MapPost("/lectures/{id}/upload", async (string id, IFormFile file) =>
 {
     using var ms = new MemoryStream();
     await file.CopyToAsync(ms);                      // 8 GB in RAM
     await blobClient.UploadAsync(ms);                // second copy over the network
-    await ProcessSurveyAsync(id, ms.ToArray());      // 6 minutes inside the request
+    await ProcessLectureAsync(id, ms.ToArray());      // 6 minutes inside the request
     return Results.Ok();
 });
 ```
@@ -829,16 +830,16 @@ public class ValetKeyTests
     public void Fresh_token_validates()
     {
         var k = Key();
-        var t = k.Issue("surveys/77/a.tif", Perm.Write, T0, TimeSpan.FromMinutes(15));
-        Assert.True(k.Validate(t, "surveys/77/a.tif", Perm.Write, T0.AddMinutes(5)));
+        var t = k.Issue("lectures/77/a.mp4", Perm.Write, T0, TimeSpan.FromMinutes(15));
+        Assert.True(k.Validate(t, "lectures/77/a.mp4", Perm.Write, T0.AddMinutes(5)));
     }
 
     [Fact]
     public void Other_path_fails()
     {
         var k = Key();
-        var t = k.Issue("surveys/77/a.tif", Perm.Write, T0, TimeSpan.FromMinutes(15));
-        Assert.False(k.Validate(t, "surveys/78/a.tif", Perm.Write, T0));
+        var t = k.Issue("lectures/77/a.mp4", Perm.Write, T0, TimeSpan.FromMinutes(15));
+        Assert.False(k.Validate(t, "lectures/78/a.mp4", Perm.Write, T0));
     }
 
     [Fact]
@@ -925,13 +926,13 @@ Add a `KeyVersion` field and support two active keys so you can rotate the signi
 :::exercise id=m16-cloud-design-patterns-ex2 difficulty=beginner kind=written title="Name the pattern"
 For each scenario, name the most fitting pattern, and for two of them say what simpler option you would try first.
 
-1. Contractors download 2 GB BIM models from your app; the API servers' network is saturated.
+1. Students download 2 GB course bundles (datasets and offline videos) from your app; the API servers' network is saturated.
 2. A legacy Java service needs retries, mTLS and metrics when calling your new APIs, and nobody can change its code.
 3. A nightly GST reconciliation must run on exactly one of 6 API instances.
-4. 60 state agencies each want their data isolated, and one bad release must not affect all of them at once.
+4. 60 universities each want their data isolated, and one bad release must not affect all of them at once.
 5. On the 1st of each month, 10,000 invoice PDFs are requested in 5 minutes; the PDF renderer handles 20 per second.
-6. A 15 MB inspection report must be passed to three downstream services through a queue with a 256 KB message limit.
-7. The project dashboard runs a 9-second aggregation over 80 million progress entries on every page load.
+6. A 15 MB assignment submission (a PDF of scanned pages) must be passed to three downstream services through a queue with a 256 KB message limit.
+7. The instructor dashboard runs a 9-second aggregation over 80 million video-watch events on every page load.
 8. Pods keep receiving traffic while their database connection pool is exhausted.
 ::acceptance
 - All 8 scenarios have a correct pattern name.
@@ -944,12 +945,12 @@ Scenarios 1 and 6 are both about large data, but one is about clients and storag
 ::hint
 Scenario 4 is about tenants and blast radius; scenario 8 is about telling the load balancer the truth.
 ::solution
-1. **Valet key** (plus **static content hosting** behind a CDN if the models are shared). Failure mode: leaked links; keep lifetimes short.
+1. **Valet key** (plus **static content hosting** behind a CDN if the bundles are shared). Failure mode: leaked links; keep lifetimes short.
 2. **Ambassador** (a sidecar proxy for outbound calls).
 3. **Leader election** with a lease and fencing token. Simpler first: a Kubernetes CronJob or a scheduled function that runs once.
-4. **Deployment stamps**, a few agencies per stamp, with stamp-by-stamp releases.
+4. **Deployment stamps**, a few universities per stamp, with stamp-by-stamp releases.
 5. **Queue-based load levelling** with **competing consumers**: 10,000 / 20 per second ≈ 8.3 minutes to drain; notify users when ready. Simpler first: pre-generate the PDFs overnight.
-6. **Claim check**: store the report in blob storage, send its path. Failure mode: blob not yet written when the message arrives; write first, then send.
+6. **Claim check**: store the submission in blob storage, send its path. Failure mode: blob not yet written when the message arrives; write first, then send.
 7. **Materialized view** refreshed every few minutes, or a read model updated by events. Simpler first: check the query plan and add an index or a summary table.
 8. **Health endpoint monitoring** with a readiness check that includes the database; keep liveness shallow so pods are not restarted needlessly.
 ::mistakes
@@ -1113,20 +1114,20 @@ Kubernetes provides `coordination.k8s.io/v1` `Lease` objects, and the client lib
 - Forgetting fencing entirely: two leaders after a pause both write the nightly roll-up.
 :::
 
-:::exercise id=m16-cloud-design-patterns-ex4 difficulty=intermediate kind=hld title="Deployment stamps for a multi-agency project platform"
-A project monitoring SaaS serves 60 government agencies, growing to 200 in two years. Each agency has 50–500 users and up to 20 GB of data. Three large agencies require their own isolated database. Releases have twice caused platform-wide outages. Users are all in India; drone imagery is uploaded from sites.
+:::exercise id=m16-cloud-design-patterns-ex4 difficulty=intermediate kind=hld title="Deployment stamps for a multi-university learning platform"
+An online-learning SaaS (a learning management system) serves 60 universities and colleges, growing to 200 in two years. Each has 500–5,000 active students and up to 20 GB of database data (videos live in object storage). Three large universities require their own isolated database. Releases have twice caused platform-wide outages. Users are all in India; lecture videos are uploaded from classrooms.
 
 Design the topology using deployment stamps. Include: stamp size, how a request finds its stamp, how a release rolls out, where uploads go, and health monitoring. Say why geodes are not needed.
 ::acceptance
-- Stamp capacity is justified with numbers (agencies and data per stamp).
+- Stamp capacity is justified with numbers (universities and data per stamp).
 - A global routing layer maps tenant to stamp, and its failure mode is addressed.
 - Releases roll out stamp by stamp with a health gate.
-- Large agencies get dedicated stamps; the rest share.
+- Large universities get dedicated stamps; the rest share.
 - Uploads use a valet key into the stamp's own storage.
 ::hint
-If each shared stamp holds, say, 25 agencies × 20 GB, how big is its database?
+If each shared stamp holds, say, 25 universities × 20 GB, how big is its database?
 ::hint
-How does a browser request for agency X reach the right stamp? Subdomain, header, or a lookup at the edge?
+How does a browser request for university X reach the right stamp? Subdomain, header, or a lookup at the edge?
 ::hint
 What is the blast radius of a bad release with 8 stamps rolled out one at a time?
 ::hint
@@ -1135,11 +1136,11 @@ Geodes serve any user from any region with replicated data. Do these users need 
 ```json
 {
   "nodes": [
-    { "id": "users", "type": "client", "label": "Agency users", "props": { "rps": 400 } },
+    { "id": "users", "type": "client", "label": "Students and staff", "props": { "rps": 400 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
     { "id": "api", "type": "app-server", "label": "Platform API", "props": { "instances": 6 } },
     { "id": "db", "type": "database", "label": "One shared PostgreSQL" },
-    { "id": "blob", "type": "object-storage", "label": "Imagery" }
+    { "id": "blob", "type": "object-storage", "label": "Lecture videos" }
   ],
   "edges": [
     { "from": "users", "to": "lb", "kind": "sync" },
@@ -1150,13 +1151,13 @@ Geodes serve any user from any region with replicated data. Do these users need 
 }
 ```
 ::solution
-**Sizing (estimates).** Shared stamp: up to 25 agencies × up to 20 GB = 500 GB worst case; realistic average 8 GB ≈ 200 GB per stamp, comfortable on one PostgreSQL primary with a replica. 200 agencies − 3 dedicated = 197 shared ÷ 25 ≈ **8 shared stamps** at full growth, starting with 3 today, plus **3 dedicated stamps**. Traffic: 400 RPS total today, so each stamp sees well under 100 RPS; 2–3 API instances per stamp for availability.
+**Sizing (estimates).** Shared stamp: up to 25 universities × up to 20 GB = 500 GB worst case; realistic average 8 GB ≈ 200 GB per stamp, comfortable on one PostgreSQL primary with a replica. 200 universities − 3 dedicated = 197 shared ÷ 25 ≈ **8 shared stamps** at full growth, starting with 3 today, plus **3 dedicated stamps**. Traffic: 400 RPS total today, so each stamp sees well under 100 RPS; 2–3 API instances per stamp for availability.
 
-**Routing.** Each agency has a subdomain (`pwd-bihar.example.in`). A global front door (CDN/edge with routing rules, or a thin router service) looks up tenant → stamp in a small catalogue table, cached at the edge for 5 minutes. If the catalogue is down, the cached map keeps routing; new tenants wait. The catalogue is the only global component and holds no business data.
+**Routing.** Each university has a subdomain (`sunrise-college.example.in`). A global front door (CDN/edge with routing rules, or a thin router service) looks up tenant → stamp in a small catalogue table, cached at the edge for 5 minutes. If the catalogue is down, the cached map keeps routing; new tenants wait. The catalogue is the only global component and holds no business data.
 
 **Releases.** Ring rollout: internal stamp first, then one small shared stamp, then the rest two at a time, dedicated stamps last, with a 30-minute health gate (error rate, p95, readiness) between rings and automatic halt. A bad release affects one stamp's ~25 agencies, not all 200.
 
-**Uploads.** The stamp's API issues valet-key URLs for its own storage account; imagery never crosses stamps. Processing uses the claim check and competing consumers inside the stamp.
+**Uploads.** The stamp's API issues valet-key URLs for its own storage account; videos never cross stamps. Processing uses the claim check and competing consumers inside the stamp.
 
 **Health.** Each stamp exposes `/health/live` and `/health/ready`; the front door uses readiness for routing, and synthetic monitors test a login and a dashboard per stamp.
 
@@ -1165,15 +1166,15 @@ Geodes serve any user from any region with replicated data. Do these users need 
 ```json
 {
   "nodes": [
-    { "id": "users", "type": "client", "label": "Agency users", "props": { "rps": 400 } },
+    { "id": "users", "type": "client", "label": "Students and staff", "props": { "rps": 400 } },
     { "id": "edge", "type": "cdn", "label": "Front door: static content + tenant routing" },
     { "id": "cat", "type": "database", "label": "Stamp catalogue (tenant -> stamp)" },
-    { "id": "s1api", "type": "app-server", "label": "Stamp 1 API (25 agencies)", "props": { "instances": 3 } },
+    { "id": "s1api", "type": "app-server", "label": "Stamp 1 API (25 universities)", "props": { "instances": 3 } },
     { "id": "s1db", "type": "database", "label": "Stamp 1 PostgreSQL", "props": { "replicas": 1 } },
-    { "id": "s1blob", "type": "object-storage", "label": "Stamp 1 imagery (valet key)" },
+    { "id": "s1blob", "type": "object-storage", "label": "Stamp 1 videos (valet key)" },
     { "id": "s1q", "type": "queue", "label": "Stamp 1 processing queue" },
     { "id": "s1w", "type": "worker", "label": "Stamp 1 workers", "props": { "instances": 3 } },
-    { "id": "d1api", "type": "app-server", "label": "Dedicated stamp: large agency", "props": { "instances": 3 } },
+    { "id": "d1api", "type": "app-server", "label": "Dedicated stamp: large university", "props": { "instances": 3 } },
     { "id": "d1db", "type": "database", "label": "Dedicated PostgreSQL", "props": { "replicas": 1 } },
     { "id": "mon", "type": "monitoring", "label": "Per-stamp health gates and synthetics" }
   ],
@@ -1194,81 +1195,81 @@ Geodes serve any user from any region with replicated data. Do these users need 
 }
 ```
 ::mistakes
-- One stamp per agency for all 200: 200 databases to patch and pay for.
+- One stamp per university for all 200: 200 databases to patch and pay for.
 - A global database shared by all stamps, which removes the isolation stamps were meant to give.
 - Deploying to all stamps at once, which throws away the blast-radius benefit.
-- No plan for moving a growing agency to its own stamp (it needs a data migration tool from day one).
+- No plan for moving a growing university to its own stamp (it needs a data migration tool from day one).
 :::
 
 :::exercise id=m16-cloud-design-patterns-ex5 difficulty=intermediate kind=sql ordered=true title="A materialized view for the state dashboard"
-The dashboard shows, per state, the number of **active** projects and their total sanctioned value in crore, sorted by total value descending. Write the `SELECT` that would define the materialized view. Return `state_code`, `active_projects` and `sanctioned_crore` (sanctioned value ÷ 10,000,000, rounded to 2 decimals).
+CourseCast's admin dashboard shows, per state (where the institute is registered), the number of **live** courses and their total revenue in lakh, sorted by total revenue descending. Write the `SELECT` that would define the materialized view. Return `state_code`, `live_courses` and `revenue_lakh` (revenue ÷ 1,00,000, rounded to 2 decimals).
 ::setup
 ```sql
-CREATE TABLE project (
-  id              int PRIMARY KEY,
-  state_code      text NOT NULL,
-  status          text NOT NULL,          -- active | completed | suspended
-  sanctioned_inr  numeric(16,2) NOT NULL
+CREATE TABLE course (
+  id           int PRIMARY KEY,
+  state_code   text NOT NULL,
+  status       text NOT NULL,          -- live | archived | draft
+  revenue_inr  numeric(14,2) NOT NULL
 );
-INSERT INTO project VALUES
-  (1, 'BR', 'active',    4200000000),
-  (2, 'BR', 'active',     380000000),
-  (3, 'BR', 'completed',  900000000),
-  (4, 'HR', 'active',    1750000000),
-  (5, 'RJ', 'active',     960000000),
-  (6, 'RJ', 'suspended',  500000000),
-  (7, 'UP', 'active',    6100000000),
-  (8, 'UP', 'active',     250000000),
-  (9, 'HR', 'completed', 3000000000);
+INSERT INTO course VALUES
+  (1, 'KA', 'live',     4200000),
+  (2, 'KA', 'live',      380000),
+  (3, 'KA', 'archived',  900000),
+  (4, 'TN', 'live',     1750000),
+  (5, 'RJ', 'live',      960000),
+  (6, 'RJ', 'draft',     500000),
+  (7, 'MH', 'live',     6100000),
+  (8, 'MH', 'live',      250000),
+  (9, 'TN', 'archived', 3000000);
 ```
 ::check
 ```sql
 SELECT state_code,
-       count(*) AS active_projects,
-       round(sum(sanctioned_inr) / 10000000, 2) AS sanctioned_crore
-FROM project
-WHERE status = 'active'
+       count(*) AS live_courses,
+       round(sum(revenue_inr) / 100000, 2) AS revenue_lakh
+FROM course
+WHERE status = 'live'
 GROUP BY state_code
-ORDER BY sanctioned_crore DESC;
+ORDER BY revenue_lakh DESC;
 ```
 ::acceptance
-- UP comes first with 2 projects and 635.00 crore.
-- Completed and suspended projects are excluded.
-- BR shows 2 projects and 458.00 crore.
+- MH comes first with 2 courses and 63.50 lakh.
+- Archived and draft courses are excluded.
+- KA shows 2 courses and 45.80 lakh; TN shows 1 course and 17.50 lakh.
 ::hint
 Filter first, then group by state.
 ::hint
-`count(*)` and `sum(sanctioned_inr)` per group.
+`count(*)` and `sum(revenue_inr)` per group.
 ::hint
-1 crore = 10,000,000 rupees. Use `round(..., 2)`.
+1 lakh = 1,00,000 rupees. Use `round(..., 2)`.
 ::hint
 In production you would wrap it: `CREATE MATERIALIZED VIEW state_dashboard AS <your query>;` plus a unique index on `state_code` so `REFRESH MATERIALIZED VIEW CONCURRENTLY` works.
 ::solution
 ```sql
 SELECT state_code,
-       count(*) AS active_projects,
-       round(sum(sanctioned_inr) / 10000000, 2) AS sanctioned_crore
-FROM project
-WHERE status = 'active'
+       count(*) AS live_courses,
+       round(sum(revenue_inr) / 100000, 2) AS revenue_lakh
+FROM course
+WHERE status = 'live'
 GROUP BY state_code
-ORDER BY sanctioned_crore DESC;
+ORDER BY revenue_lakh DESC;
 ```
 
 To turn it into the pattern:
 
 ```sql
 CREATE MATERIALIZED VIEW state_dashboard AS
-SELECT state_code, count(*) AS active_projects, round(sum(sanctioned_inr) / 10000000, 2) AS sanctioned_crore
-FROM project WHERE status = 'active' GROUP BY state_code;
+SELECT state_code, count(*) AS live_courses, round(sum(revenue_inr) / 100000, 2) AS revenue_lakh
+FROM course WHERE status = 'live' GROUP BY state_code;
 CREATE UNIQUE INDEX ON state_dashboard (state_code);
 -- every 5 minutes, from a scheduled job; readers are not blocked:
 REFRESH MATERIALIZED VIEW CONCURRENTLY state_dashboard;
 ```
 
-The dashboard reads a handful of precomputed rows instead of aggregating 80 million. The cost is staleness up to the refresh interval and the refresh's own load, which recomputes everything each time; for very large sources, an incrementally maintained summary table updated by triggers or events scales better.
+In production `revenue_inr` is itself an aggregate over millions of enrolment and payment rows, so the dashboard reads a handful of precomputed rows instead of aggregating all of them on every page load. The cost is staleness up to the refresh interval and the refresh's own load, which recomputes everything each time; for very large sources, an incrementally maintained summary table updated by triggers or events scales better.
 ::mistakes
-- Filtering with `HAVING status = 'active'` (status is not grouped).
-- Dividing by 1,00,000 (lakh) instead of 1,00,00,000 (crore).
+- Filtering with `HAVING status = 'live'` (status is not grouped).
+- Dividing by 1,00,00,000 (crore) instead of 1,00,000 (lakh).
 - Using `REFRESH ... CONCURRENTLY` without a unique index, which PostgreSQL rejects.
 :::
 
@@ -1470,7 +1471,7 @@ Persist the runner's state after each step and compensation, so a crash mid-comp
 
 Most of these patterns are infrastructure glue, which makes them easy to under-test. Useful tests:
 
-- **Valet key:** signature, expiry, scope and tampering tests (exercise 1), plus a test that the API refuses to issue URLs for projects the user cannot access.
+- **Valet key:** signature, expiry, scope and tampering tests (exercise 1), plus a test that the API refuses to issue URLs for courses the instructor does not teach.
 - **Leader election:** drive leases with a controllable clock (exercise 3). Simulate a pause: leader A acquires, time jumps past expiry, B acquires, A writes; assert A's write is rejected.
 - **Queue load levelling:** enqueue a burst of 500 messages into the in-memory queue with 3 consumers and a fake processor that counts concurrent executions; assert the maximum concurrency never exceeds 3 and all 500 complete.
 - **Throttling:** an integration test with `WebApplicationFactory` (or a `TestServer`) sending 25 rapid requests with one tenant header; assert 20 succeed and 5 get 429 with `Retry-After`, and that a second tenant is unaffected.
@@ -1480,8 +1481,8 @@ Most of these patterns are infrastructure glue, which makes them easy to under-t
 [Fact]
 public async Task Queue_check_degrades_at_70_percent()
 {
-    var queue = new SurveyQueue(Options.Create(new QueueOptions { Capacity = 10, Consumers = 1 }));
-    for (var i = 0; i < 7; i++) queue.TryEnqueue(new SurveyUploaded($"s{i}", $"p{i}", 1, DateTimeOffset.UtcNow));
+    var queue = new LectureQueue(Options.Create(new QueueOptions { Capacity = 10, Consumers = 1 }));
+    for (var i = 0; i < 7; i++) queue.TryEnqueue(new LectureUploaded($"s{i}", $"p{i}", 1, DateTimeOffset.UtcNow));
     var result = await new QueueHealthCheck(queue).CheckHealthAsync(new HealthCheckContext());
     Assert.Equal(HealthStatus.Degraded, result.Status);
 }
@@ -1565,16 +1566,16 @@ A: Later steps often depend on earlier ones, so undoing newest-first avoids inco
 
 :::quiz pass=70
 ::q single
-Site engineers upload 6 GB point-cloud files. The API pods run out of memory during uploads. Which pattern fixes the root cause?
+Instructors upload 6 GB raw lecture videos. The API pods run out of memory during uploads. Which pattern fixes the root cause?
 - [ ] Throttling
 - [x] Valet key
 - [ ] Competing consumers
 - [ ] Materialized view
 > The files should not pass through the API at all. A signed, scoped, short-lived URL lets clients upload straight to object storage.
 ::q single
-A message describing a 30 MB inspection report exceeds the broker's message size limit. Best fix?
+A message carrying a 30 MB assignment submission exceeds the broker's message size limit. Best fix?
 - [ ] Increase the broker's limit indefinitely.
-- [x] Store the report in blob storage and send a message with its path (claim check).
+- [x] Store the submission in blob storage and send a message with its path (claim check).
 - [ ] Split the report across 120 messages.
 - [ ] Use a materialized view.
 > Claim check keeps messages small and lets consumers fetch the payload only when needed.

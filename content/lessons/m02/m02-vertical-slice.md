@@ -22,7 +22,7 @@ references:
 
 Most of us learn to build web apps in layers: controllers in one folder, services in another, repositories in a third. That works. But when you add one feature, you end up touching five folders and three shared classes. Vertical Slice Architecture flips the organisation: **one folder per feature, holding everything that feature needs.**
 
-This is an introductory lesson. We build a small inspection-request API for a road project, compare it with the layered version, and learn when slices help and when they don't. The deeper DDD-flavoured version is in [Vertical slice architecture in practice](#/lesson/m08-vertical-slice).
+This is an introductory lesson. We build a small return-request API for an online marketplace, compare it with the layered version, and learn when slices help and when they don't. The deeper DDD-flavoured version is in [Vertical slice architecture in practice](#/lesson/m08-vertical-slice).
 
 ## Learning objectives
 
@@ -52,17 +52,17 @@ Another way is by **department**: the orthopaedics wing has its own reception de
 Software can be organised the same two ways.
 
 - **By technical layer (horizontal layers):** `Controllers/`, `Services/`, `Repositories/`, `Models/`. Every feature is spread across all of them.
-- **By feature (vertical slices):** `Features/SubmitInspection/`, `Features/ApproveInspection/`, `Features/GetOpenInspections/`. Each folder has its own request type, rules and data access.
+- **By feature (vertical slices):** `Features/SubmitReturn/`, `Features/ApproveReturn/`, `Features/GetOpenReturns/`. Each folder has its own request type, rules and data access.
 
 A "slice" is called *vertical* because, if you draw the layers as horizontal bands (UI on top, database at the bottom), one feature cuts straight down through all of them, like a slice of layered cake.
 
-The core rule is short: **things that change together should live together.** When a site engineer asks "add a photo to the inspection request", you open one folder, not five.
+The core rule is short: **things that change together should live together.** When the support team asks "let customers attach a photo to the return request", you open one folder, not five.
 
 ## First-principles explanation
 
 ### What it is
 
-Vertical Slice Architecture (VSA) is a way of organising an application around **use cases** (the things a user does, such as "submit an inspection request") instead of around technical roles. Each slice contains the code for one request from the edge of the system to the database and back. Slices share as little as possible. Each one is free to choose its own approach: one slice may use a rich domain object, another may run one SQL query and return a flat list.
+Vertical Slice Architecture (VSA) is a way of organising an application around **use cases** (the things a user does, such as "request a return") instead of around technical roles. Each slice contains the code for one request from the edge of the system to the database and back. Slices share as little as possible. Each one is free to choose its own approach: one slice may use a rich domain object, another may run one SQL query and return a flat list.
 
 The name and the modern popularity come mainly from Jimmy Bogard's writing, but the underlying idea is older: "package by feature" and the principle of **high cohesion, low coupling** (see [Coupling, cohesion, modularity and separation of concerns](#/lesson/m02-coupling-cohesion)).
 
@@ -70,8 +70,8 @@ The name and the modern popularity come mainly from Jimmy Bogard's writing, but 
 
 Layers are not wrong. They solve a real problem: keeping UI code out of database code. But in a growing business application, three costs appear.
 
-1. **Changes are scattered.** A typical feature request ("let engineers reject an inspection with a reason") touches the controller, a DTO, the service interface, the service class, the repository interface, the repository class and a mapper. That is 7 files in 5 folders for one change.
-2. **Shared services grow into god classes.** `InspectionService` starts with 3 methods. Two years later it has 40, injects 12 dependencies, and every feature's tests must construct all 12. A change for one feature can break another, because they share private helper methods.
+1. **Changes are scattered.** A typical feature request ("let sellers reject a return with a reason") touches the controller, a DTO, the service interface, the service class, the repository interface, the repository class and a mapper. That is 7 files in 5 folders for one change.
+2. **Shared services grow into god classes.** `ReturnService` starts with 3 methods. Two years later it has 40, injects 12 dependencies, and every feature's tests must construct all 12. A change for one feature can break another, because they share private helper methods.
 3. **Abstractions that nobody needed.** Every repository method is one-to-one with a service method, which is one-to-one with a controller action. The layers pass data down and back up without adding logic. You pay for the indirection on every change.
 
 Vertical slices attack all three: one change is in one folder, there is no shared service to grow, and each slice adds an abstraction only where it actually helps.
@@ -82,10 +82,10 @@ A slice usually has four small parts. In C# they often sit in one file or one fo
 
 | Part | Job | Example |
 |---|---|---|
-| **Request** (command or query) | The input data for this use case | `SubmitInspectionCommand(ProjectCode, Chainage, Activity, DueBy)` |
-| **Validator** | Rejects bad input before any work | Chainage must look like `12+400` |
-| **Handler** | Does the work: loads data, applies rules, saves | Creates the inspection, saves it, returns its id |
-| **Endpoint** | Maps HTTP to the handler | `POST /inspections` |
+| **Request** (command or query) | The input data for this use case | `SubmitReturnCommand(CityCode, OrderNumber, Reason, RequestedBy, PickupBy)` |
+| **Validator** | Rejects bad input before any work | Order number must look like `ORD-10000400` |
+| **Handler** | Does the work: loads data, applies rules, saves | Creates the return request, saves it, returns its id |
+| **Endpoint** | Maps HTTP to the handler | `POST /returns` |
 
 Requests that **change** data are commands; requests that only **read** are queries. This split is a light form of CQRS (separating reads from writes, covered in [CQRS fundamentals](#/lesson/m08-cqrs-fundamentals)). It matters because the two kinds have different needs. A command needs validation, business rules and a transaction. A query needs a fast projection, often straight from the database into a response record, with no domain object at all.
 
@@ -93,7 +93,7 @@ Not everything goes in slices. A small **shared kernel** holds things that are t
 
 ### Coupling within a slice, not across slices
 
-In a layered app, coupling runs **horizontally**: all controllers depend on all services through shared interfaces. In VSA, coupling runs **vertically**: the parts of one slice are tightly coupled to each other, on purpose, and loosely coupled to other slices. Slices should not call each other's handlers. If "approve inspection" needs to notify someone, it raises an event or calls a shared service, rather than calling the "send notification" slice's handler directly.
+In a layered app, coupling runs **horizontally**: all controllers depend on all services through shared interfaces. In VSA, coupling runs **vertically**: the parts of one slice are tightly coupled to each other, on purpose, and loosely coupled to other slices. Slices should not call each other's handlers. If "approve return" needs to notify the customer, it raises an event or calls a shared service, rather than calling the "send notification" slice's handler directly.
 
 ### What happens without it
 
@@ -122,7 +122,7 @@ Nothing breaks on day one. The cost shows up as the app grows. In a layered code
 | Easy to delete a feature (delete the folder) | Cross-cutting concerns need a deliberate mechanism (decorators, endpoint filters) |
 | Tests per use case | Business rules shared by several slices must live in the domain model, or they get copied and drift |
 
-The last row matters most. Vertical slices do **not** mean "no domain model". If the rule "an inspection can only be approved once" is checked in two slices, put it on the `Inspection` entity so there is one place to change it.
+The last row matters most. Vertical slices do **not** mean "no domain model". If the rule "a return can only be approved once" is checked in two slices, put it on the `ReturnRequest` entity so there is one place to change it.
 
 ## Visual explanation
 
@@ -132,175 +132,175 @@ The last row matters most. Vertical slices do **not** mean "no domain model". If
 flowchart TB
     subgraph Layered["Organised by layer"]
         direction TB
-        C1["Controllers: InspectionsController"] --> S1["Services: InspectionService (40 methods)"]
-        S1 --> R1["Repositories: InspectionRepository"]
+        C1["Controllers: ReturnsController"] --> S1["Services: ReturnService (40 methods)"]
+        S1 --> R1["Repositories: ReturnRepository"]
         R1 --> D1[("Database")]
     end
     subgraph Sliced["Organised by feature"]
         direction TB
-        F1["SubmitInspection: endpoint, validator, handler"] --> D2[("Database")]
-        F2["ApproveInspection: endpoint, handler"] --> D2
-        F3["GetOpenInspections: endpoint, query"] --> D2
-        F1 -.-> K["Shared kernel: Inspection entity, store, Result"]
+        F1["SubmitReturn: endpoint, validator, handler"] --> D2[("Database")]
+        F2["ApproveReturn: endpoint, handler"] --> D2
+        F3["GetOpenReturns: endpoint, query"] --> D2
+        F1 -.-> K["Shared kernel: ReturnRequest entity, store, Result"]
         F2 -.-> K
         F3 -.-> K
     end
 ```
 
-How to read it: on the left, every request passes through the same three horizontal boxes. The middle box, `InspectionService`, is shared by every use case, so it grows with each new feature. On the right, each feature is its own box that goes straight to the database. The dotted arrows show that slices depend on a small shared kernel, but there are **no arrows between slices**. Adding a fourth feature means adding a fourth box, without editing the other three.
+How to read it: on the left, every request passes through the same three horizontal boxes. The middle box, `ReturnService`, is shared by every use case, so it grows with each new feature. On the right, each feature is its own box that goes straight to the database. The dotted arrows show that slices depend on a small shared kernel, but there are **no arrows between slices**. Adding a fourth feature means adding a fourth box, without editing the other three.
 
 ### One request through a slice
 
 ```mermaid
 sequenceDiagram
-    participant E as Site engineer app
-    participant EP as POST /inspections endpoint
-    participant V as SubmitInspectionValidator
-    participant H as SubmitInspectionHandler
-    participant S as IInspectionStore
-    E->>EP: JSON body with project, chainage, activity, due date
+    participant E as Customer app
+    participant EP as POST /returns endpoint
+    participant V as SubmitReturnValidator
+    participant H as SubmitReturnHandler
+    participant S as IReturnStore
+    E->>EP: JSON body with city, order number, reason, pickup date
     EP->>H: HandleAsync(command)
     H->>V: Validate(command, today)
     V-->>H: no errors
-    H->>S: AddAsync(new inspection)
+    H->>S: AddAsync(new ReturnRequest)
     S-->>H: saved
     H-->>EP: Ok with id and status
     EP-->>E: 201 Created with Location header
 ```
 
-This is the full path for "submit an inspection". The endpoint does only HTTP work: it binds JSON into a command and turns the handler's result into a status code. The handler owns the use case: it asks the validator, builds the entity and saves it. If validation fails, the handler returns the errors and the endpoint replies `400` with a problem-details body. Notice that nothing here mentions approvals or reports. Those live in other slices.
+This is the full path for "request a return". The endpoint does only HTTP work: it binds the JSON body, adds the signed-in customer's id to build a command, and turns the handler's result into a status code. The handler owns the use case: it asks the validator, builds the entity and saves it. If validation fails, the handler returns the errors and the endpoint replies `400` with a problem-details body. Notice that nothing here mentions approvals or reports. Those live in other slices.
 
 ## Step-by-step example
 
-The scenario: a highway project's quality team raises **requests for inspection** (RFIs). A contractor's engineer says "the sub-base between chainage 12+400 and 12+600 is compacted, please inspect by Friday". A consultant's engineer approves or rejects it. The project manager wants a list of open, overdue requests.
+The scenario: an online marketplace (think of a store like Flipkart or Amazon) lets customers **request a return**. A customer in Bengaluru says "the shoes on order ORD-10000400 are the wrong size, please pick them up by Friday". A seller-support agent approves or rejects the request. The city operations manager wants a list of open requests whose pickup date has already passed, because every overdue return is an unhappy customer and, often, a support call.
 
 ### Step 1 — the layered starting point
 
 ```csharp
-// Controllers/InspectionsController.cs
+// Controllers/ReturnsController.cs
 [HttpPost] public async Task<IActionResult> Submit(SubmitDto dto) => Ok(await _service.SubmitAsync(dto));
 [HttpPost("{id}/approve")] public async Task<IActionResult> Approve(Guid id, ApproveDto dto) => ...;
-[HttpGet("open")] public async Task<IActionResult> Open(string project) => ...;
+[HttpGet("open")] public async Task<IActionResult> Open(string city) => ...;
 
-// Services/InspectionService.cs — shared by all three, plus 20 more methods later
+// Services/ReturnService.cs — shared by all three, plus 20 more methods later
 public async Task<Guid> SubmitAsync(SubmitDto dto) { Validate(dto); var e = _mapper.Map(dto); await _repo.AddAsync(e); return e.Id; }
 public async Task ApproveAsync(Guid id, ApproveDto dto) { ... }
-public async Task<List<OpenDto>> GetOpenAsync(string project) { var all = await _repo.GetAllAsync(); ... }
+public async Task<List<OpenDto>> GetOpenAsync(string city) { var all = await _repo.GetAllAsync(); ... }
 ```
 
-Three features, one service, one repository. `GetOpenAsync` loads **every** inspection and filters in memory, because the repository only offers `GetAllAsync`. Adding a better query means adding a repository method that only one service method uses.
+Three features, one service, one repository. `GetOpenAsync` loads **every** return request and filters in memory, because the repository only offers `GetAllAsync`. Adding a better query means adding a repository method that only one service method uses.
 
 ### Step 2 — draw the use cases
 
-List what users actually do. Here it is three: submit, approve, list open. Each becomes a folder under `Features/Inspections/`.
+List what users actually do. Here it is three: submit, approve, list open. Each becomes a folder under `Features/Returns/`.
 
 ### Step 3 — move each method into its slice
 
-For each service method, create a request record, a handler and an endpoint mapping. The validation logic used only by "submit" moves into the submit slice. The query for "open inspections" moves into its slice and filters at the source.
+For each service method, create a request record, a handler and an endpoint mapping. The validation logic used only by "submit" moves into the submit slice. The query for "open returns" moves into its slice and filters at the source.
 
 ### Step 4 — keep the shared rules in the entity
 
-"Only a submitted inspection can be approved" is a business rule about the `Inspection` itself. It goes on the entity as `Approve(...)`, so a future "bulk approve" slice gets the same rule for free.
+"Only a submitted return can be approved" is a business rule about the `ReturnRequest` itself. It goes on the entity as `Approve(...)`, so a future "bulk approve" slice gets the same rule for free.
 
 ### Step 5 — delete the service
 
-Once all three methods have moved, `InspectionService` and its interface are empty. Delete them. That deletion is the moment you know the refactor worked.
+Once all three methods have moved, `ReturnService` and its interface are empty. Delete them. That deletion is the moment you know the refactor worked.
 
 ## Production-style C# implementation
 
 Project structure:
 
 ```text
-SiteOps.Api/
+ShopEase.Api/
   Program.cs
   Shared/
-    Inspection.cs            (entity, shared by slices that change it)
-    InspectionStore.cs       (storage abstraction and in-memory implementation)
+    ReturnRequest.cs     (entity, shared by slices that change it)
+    ReturnStore.cs       (storage abstraction and in-memory implementation)
     HandlerResult.cs
   Features/
-    Inspections/
-      SubmitInspection.cs    (command, validator, handler, endpoint)
-      ApproveInspection.cs
-      GetOpenInspections.cs  (query, handler, endpoint)
-SiteOps.Tests/
-  Features/Inspections/SubmitInspectionTests.cs
-  Features/Inspections/ApproveInspectionTests.cs
+    Returns/
+      SubmitReturn.cs    (command, validator, handler, endpoint)
+      ApproveReturn.cs
+      GetOpenReturns.cs  (query, handler, endpoint)
+ShopEase.Tests/
+  Features/Returns/SubmitReturnTests.cs
+  Features/Returns/ApproveReturnTests.cs
   ArchitectureTests.cs
 ```
 
 One file per slice is a common convention for small slices. When a slice grows past roughly 150–200 lines, give it a folder with one file per part. That threshold is a team habit, not a rule.
 
-In production the store would be EF Core over PostgreSQL. Here it is an in-memory implementation behind an interface, so the code compiles and runs with no database.
+In production the store would be EF Core over PostgreSQL. Here it is an in-memory implementation behind an interface, so the code compiles and runs with no database. In PostgreSQL you would also add a partial unique index, `CREATE UNIQUE INDEX ux_open_return ON return_requests (order_number) WHERE status = 'Submitted';`, so a customer who double-taps "Request return" gets one open request, not two. Rules that must hold under concurrency belong in the database, not only in a handler's `if`.
 
-```csharp file=Shared/Inspection.cs
-namespace SiteOps.Shared;
+```csharp file=Shared/ReturnRequest.cs
+namespace ShopEase.Shared;
 
-public enum InspectionStatus { Submitted, Approved, Rejected }
+public enum ReturnStatus { Submitted, Approved, Rejected }
 
-/// <summary>A request for inspection (RFI) raised by the contractor for a stretch of road.</summary>
-public sealed class Inspection
+/// <summary>A customer's request to return an item from a delivered order.</summary>
+public sealed class ReturnRequest
 {
     public Guid Id { get; init; } = Guid.NewGuid();
-    public required string ProjectCode { get; init; }
-    public required string Chainage { get; init; }      // e.g. "12+400" = 12 km + 400 m
-    public required string Activity { get; init; }      // e.g. "GSB compaction, layer 2"
-    public required string SubmittedBy { get; init; }
-    public DateTimeOffset SubmittedAt { get; init; }
-    public DateOnly DueBy { get; init; }
-    public InspectionStatus Status { get; private set; } = InspectionStatus.Submitted;
+    public required string CityCode { get; init; }       // e.g. "BLR", used to route pickups to a city hub
+    public required string OrderNumber { get; init; }    // e.g. "ORD-10000400"
+    public required string Reason { get; init; }         // e.g. "Wrong size: ordered UK 9, received UK 7"
+    public required string RequestedBy { get; init; }    // customer id, taken from the signed-in user
+    public DateTimeOffset RequestedAt { get; init; }
+    public DateOnly PickupBy { get; init; }              // pickup date the customer chose
+    public ReturnStatus Status { get; private set; } = ReturnStatus.Submitted;
     public string? ReviewedBy { get; private set; }
     public string? Remarks { get; private set; }
 
     /// <summary>Shared business rule: only a submitted request can be approved, and only once.</summary>
-    public void Approve(string engineer, string? remarks)
+    public void Approve(string agent, string? remarks)
     {
-        if (Status != InspectionStatus.Submitted)
-            throw new InvalidOperationException($"Inspection {Id} is already {Status}.");
-        if (string.IsNullOrWhiteSpace(engineer))
-            throw new ArgumentException("Reviewer is required.", nameof(engineer));
-        Status = InspectionStatus.Approved;
-        ReviewedBy = engineer;
+        if (Status != ReturnStatus.Submitted)
+            throw new InvalidOperationException($"Return request {Id} is already {Status}.");
+        if (string.IsNullOrWhiteSpace(agent))
+            throw new ArgumentException("Reviewer is required.", nameof(agent));
+        Status = ReturnStatus.Approved;
+        ReviewedBy = agent;
         Remarks = remarks;
     }
 }
 ```
 
-```csharp file=Shared/InspectionStore.cs
+```csharp file=Shared/ReturnStore.cs
 using System.Collections.Concurrent;
 
-namespace SiteOps.Shared;
+namespace ShopEase.Shared;
 
-public interface IInspectionStore
+public interface IReturnStore
 {
-    Task AddAsync(Inspection inspection, CancellationToken ct);
-    Task<Inspection?> FindAsync(Guid id, CancellationToken ct);
+    Task AddAsync(ReturnRequest request, CancellationToken ct);
+    Task<ReturnRequest?> FindAsync(Guid id, CancellationToken ct);
     /// <summary>Read-side access. With EF Core this would be an IQueryable with AsNoTracking.</summary>
-    IEnumerable<Inspection> Query();
+    IEnumerable<ReturnRequest> Query();
     Task SaveChangesAsync(CancellationToken ct);
 }
 
-public sealed class InMemoryInspectionStore : IInspectionStore
+public sealed class InMemoryReturnStore : IReturnStore
 {
-    private readonly ConcurrentDictionary<Guid, Inspection> _items = new();
+    private readonly ConcurrentDictionary<Guid, ReturnRequest> _items = new();
 
-    public Task AddAsync(Inspection inspection, CancellationToken ct)
+    public Task AddAsync(ReturnRequest request, CancellationToken ct)
     {
-        if (!_items.TryAdd(inspection.Id, inspection))
-            throw new InvalidOperationException($"Duplicate inspection id {inspection.Id}.");
+        if (!_items.TryAdd(request.Id, request))
+            throw new InvalidOperationException($"Duplicate return request id {request.Id}.");
         return Task.CompletedTask;
     }
 
-    public Task<Inspection?> FindAsync(Guid id, CancellationToken ct) =>
-        Task.FromResult(_items.TryGetValue(id, out var i) ? i : null);
+    public Task<ReturnRequest?> FindAsync(Guid id, CancellationToken ct) =>
+        Task.FromResult(_items.TryGetValue(id, out var r) ? r : null);
 
-    public IEnumerable<Inspection> Query() => _items.Values;
+    public IEnumerable<ReturnRequest> Query() => _items.Values;
 
     public Task SaveChangesAsync(CancellationToken ct) => Task.CompletedTask;
 }
 ```
 
 ```csharp file=Shared/HandlerResult.cs
-namespace SiteOps.Shared;
+namespace ShopEase.Shared;
 
 /// <summary>What a command handler returns: a value, validation errors, or a named failure.</summary>
 public sealed record HandlerResult<T>(T? Value, IDictionary<string, string[]>? Errors, string? Failure)
@@ -314,66 +314,77 @@ public sealed record HandlerResult<T>(T? Value, IDictionary<string, string[]>? E
 
 Now the three slices. Each file holds every part of one use case, in reading order: request, validator, handler, endpoint.
 
-```csharp file=Features/Inspections/SubmitInspection.cs
+Notice who fills in `RequestedBy` and the approving agent: the **endpoint**, from the signed-in user (`ClaimsPrincipal`), never the JSON body. If the body could name the customer or the agent, anyone could request returns on someone else's orders or approve as someone else. The HTTP body carries only what the user is allowed to choose.
+
+```csharp file=Features/Returns/SubmitReturn.cs
+using System.Security.Claims;
 using System.Text.RegularExpressions;
-using SiteOps.Shared;
+using ShopEase.Shared;
 
-namespace SiteOps.Features.Inspections.Submit;
+namespace ShopEase.Features.Returns.Submit;
 
-public sealed record SubmitInspectionCommand(string ProjectCode, string Chainage, string Activity, string SubmittedBy, DateOnly DueBy);
-public sealed record SubmitInspectionResponse(Guid Id, string Status);
+/// <summary>What the customer sends over HTTP.</summary>
+public sealed record SubmitReturnRequest(string CityCode, string OrderNumber, string Reason, DateOnly PickupBy);
 
-public static partial class SubmitInspectionValidator
+/// <summary>What the handler runs: the request plus who is asking.</summary>
+public sealed record SubmitReturnCommand(string CityCode, string OrderNumber, string Reason, string RequestedBy, DateOnly PickupBy);
+public sealed record SubmitReturnResponse(Guid Id, string Status);
+
+public static partial class SubmitReturnValidator
 {
-    [GeneratedRegex(@"^\d{1,4}\+\d{3}$")]
-    private static partial Regex ChainagePattern();
+    [GeneratedRegex(@"^ORD-[0-9]{8}$")]
+    private static partial Regex OrderNumberPattern();
 
-    public static Dictionary<string, string[]> Validate(SubmitInspectionCommand c, DateOnly today)
+    public static Dictionary<string, string[]> Validate(SubmitReturnCommand c, DateOnly today)
     {
         var errors = new Dictionary<string, string[]>();
-        if (string.IsNullOrWhiteSpace(c.ProjectCode)) errors["ProjectCode"] = ["Project code is required."];
-        if (string.IsNullOrWhiteSpace(c.Chainage) || !ChainagePattern().IsMatch(c.Chainage))
-            errors["Chainage"] = ["Chainage must look like 12+400."];
-        if (string.IsNullOrWhiteSpace(c.Activity) || c.Activity.Length > 200)
-            errors["Activity"] = ["Activity is required and must be at most 200 characters."];
-        if (string.IsNullOrWhiteSpace(c.SubmittedBy)) errors["SubmittedBy"] = ["Submitter is required."];
-        if (c.DueBy < today) errors["DueBy"] = ["Due date cannot be in the past."];
+        if (string.IsNullOrWhiteSpace(c.CityCode)) errors["CityCode"] = ["City code is required."];
+        if (string.IsNullOrWhiteSpace(c.OrderNumber) || !OrderNumberPattern().IsMatch(c.OrderNumber))
+            errors["OrderNumber"] = ["Order number must look like ORD-10000400."];
+        if (string.IsNullOrWhiteSpace(c.Reason) || c.Reason.Length > 200)
+            errors["Reason"] = ["Reason is required and must be at most 200 characters."];
+        if (string.IsNullOrWhiteSpace(c.RequestedBy)) errors["RequestedBy"] = ["Customer is required."];
+        if (c.PickupBy < today) errors["PickupBy"] = ["Pickup date cannot be in the past."];
         return errors;
     }
 }
 
-public sealed class SubmitInspectionHandler(IInspectionStore store, TimeProvider clock)
+public sealed class SubmitReturnHandler(IReturnStore store, TimeProvider clock)
 {
-    public async Task<HandlerResult<SubmitInspectionResponse>> HandleAsync(SubmitInspectionCommand cmd, CancellationToken ct)
+    public async Task<HandlerResult<SubmitReturnResponse>> HandleAsync(SubmitReturnCommand cmd, CancellationToken ct)
     {
         var now = clock.GetUtcNow();
-        var errors = SubmitInspectionValidator.Validate(cmd, DateOnly.FromDateTime(now.UtcDateTime));
-        if (errors.Count > 0) return HandlerResult<SubmitInspectionResponse>.Invalid(errors);
+        var errors = SubmitReturnValidator.Validate(cmd, DateOnly.FromDateTime(now.UtcDateTime));
+        if (errors.Count > 0) return HandlerResult<SubmitReturnResponse>.Invalid(errors);
 
-        var inspection = new Inspection
+        var request = new ReturnRequest
         {
-            ProjectCode = cmd.ProjectCode.Trim().ToUpperInvariant(),
-            Chainage = cmd.Chainage,
-            Activity = cmd.Activity.Trim(),
-            SubmittedBy = cmd.SubmittedBy,
-            SubmittedAt = now,
-            DueBy = cmd.DueBy,
+            CityCode = cmd.CityCode.Trim().ToUpperInvariant(),
+            OrderNumber = cmd.OrderNumber,
+            Reason = cmd.Reason.Trim(),
+            RequestedBy = cmd.RequestedBy,
+            RequestedAt = now,
+            PickupBy = cmd.PickupBy,
         };
-        await store.AddAsync(inspection, ct);
+        await store.AddAsync(request, ct);
         await store.SaveChangesAsync(ct);
-        return HandlerResult<SubmitInspectionResponse>.Ok(new(inspection.Id, inspection.Status.ToString()));
+        return HandlerResult<SubmitReturnResponse>.Ok(new(request.Id, request.Status.ToString()));
     }
 }
 
-public static class SubmitInspectionEndpoint
+public static class SubmitReturnEndpoint
 {
-    public static RouteGroupBuilder MapSubmitInspection(this RouteGroupBuilder group)
+    public static RouteGroupBuilder MapSubmitReturn(this RouteGroupBuilder group)
     {
-        group.MapPost("/", async (SubmitInspectionCommand cmd, SubmitInspectionHandler handler, CancellationToken ct) =>
+        group.MapPost("/", async (SubmitReturnRequest body, ClaimsPrincipal user, SubmitReturnHandler handler, CancellationToken ct) =>
         {
+            var customerId = user.Identity?.Name;
+            if (string.IsNullOrEmpty(customerId)) return Results.Unauthorized();
+
+            var cmd = new SubmitReturnCommand(body.CityCode, body.OrderNumber, body.Reason, customerId, body.PickupBy);
             var result = await handler.HandleAsync(cmd, ct);
             return result.IsSuccess
-                ? Results.Created($"/inspections/{result.Value!.Id}", result.Value)
+                ? Results.Created($"/returns/{result.Value!.Id}", result.Value)
                 : Results.ValidationProblem(result.Errors!);
         });
         return group;
@@ -381,84 +392,88 @@ public static class SubmitInspectionEndpoint
 }
 ```
 
-```csharp file=Features/Inspections/ApproveInspection.cs
-using SiteOps.Shared;
+```csharp file=Features/Returns/ApproveReturn.cs
+using System.Security.Claims;
+using ShopEase.Shared;
 
-namespace SiteOps.Features.Inspections.Approve;
+namespace ShopEase.Features.Returns.Approve;
 
-public sealed record ApproveInspectionCommand(string Engineer, string? Remarks);
+public sealed record ApproveReturnRequest(string? Remarks);
 
-public sealed class ApproveInspectionHandler(IInspectionStore store, ILogger<ApproveInspectionHandler> logger)
+public sealed class ApproveReturnHandler(IReturnStore store, ILogger<ApproveReturnHandler> logger)
 {
     public const string NotFound = "not-found";
     public const string AlreadyReviewed = "already-reviewed";
 
-    public async Task<HandlerResult<string>> HandleAsync(Guid id, ApproveInspectionCommand cmd, CancellationToken ct)
+    public async Task<HandlerResult<string>> HandleAsync(Guid id, string agent, string? remarks, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(cmd.Engineer))
-            return HandlerResult<string>.Invalid(new Dictionary<string, string[]> { ["Engineer"] = ["Engineer is required."] });
+        if (string.IsNullOrWhiteSpace(agent))
+            return HandlerResult<string>.Invalid(new Dictionary<string, string[]> { ["Agent"] = ["Agent is required."] });
 
-        var inspection = await store.FindAsync(id, ct);
-        if (inspection is null) return HandlerResult<string>.Fail(NotFound);
-        if (inspection.Status != InspectionStatus.Submitted) return HandlerResult<string>.Fail(AlreadyReviewed);
+        var request = await store.FindAsync(id, ct);
+        if (request is null) return HandlerResult<string>.Fail(NotFound);
+        if (request.Status != ReturnStatus.Submitted) return HandlerResult<string>.Fail(AlreadyReviewed);
 
-        inspection.Approve(cmd.Engineer, cmd.Remarks);   // the rule itself lives on the entity
+        request.Approve(agent, remarks);   // the rule itself lives on the entity
         await store.SaveChangesAsync(ct);
-        logger.LogInformation("Inspection {Id} at {Chainage} approved by {Engineer}", id, inspection.Chainage, cmd.Engineer);
-        return HandlerResult<string>.Ok(inspection.Status.ToString());
+        logger.LogInformation("Return {Id} for {OrderNumber} approved by {Agent}", id, request.OrderNumber, agent);
+        return HandlerResult<string>.Ok(request.Status.ToString());
     }
 }
 
-public static class ApproveInspectionEndpoint
+public static class ApproveReturnEndpoint
 {
-    public static RouteGroupBuilder MapApproveInspection(this RouteGroupBuilder group)
+    public static RouteGroupBuilder MapApproveReturn(this RouteGroupBuilder group)
     {
-        group.MapPost("/{id:guid}/approve", async (Guid id, ApproveInspectionCommand cmd, ApproveInspectionHandler handler, CancellationToken ct) =>
+        group.MapPost("/{id:guid}/approve", async (Guid id, ApproveReturnRequest body, ClaimsPrincipal user,
+                                                   ApproveReturnHandler handler, CancellationToken ct) =>
         {
-            var r = await handler.HandleAsync(id, cmd, ct);
+            var r = await handler.HandleAsync(id, user.Identity?.Name ?? "", body.Remarks, ct);
             if (r.IsSuccess) return Results.Ok(new { id, status = r.Value });
             if (r.Errors is not null) return Results.ValidationProblem(r.Errors);
-            return r.Failure == ApproveInspectionHandler.NotFound
+            return r.Failure == ApproveReturnHandler.NotFound
                 ? Results.NotFound()
-                : Results.Problem("Inspection has already been reviewed.", statusCode: StatusCodes.Status409Conflict);
+                : Results.Problem("Return request has already been reviewed.", statusCode: StatusCodes.Status409Conflict);
         });
         return group;
     }
 }
 ```
 
-```csharp file=Features/Inspections/GetOpenInspections.cs
-using SiteOps.Shared;
+The status check in the handler protects against a second click, but not against two agents clicking "approve" at the same instant: both could load the row while it is still `Submitted`. In production, give the entity a concurrency token (with EF Core on PostgreSQL, map the system column `xmin` as a row version). The second `SaveChangesAsync` then throws `DbUpdateConcurrencyException`, which the endpoint turns into the same `409`.
 
-namespace SiteOps.Features.Inspections.GetOpen;
+```csharp file=Features/Returns/GetOpenReturns.cs
+using ShopEase.Shared;
 
-public sealed record OpenInspectionItem(Guid Id, string Chainage, string Activity, DateOnly DueBy, int DaysOverdue);
+namespace ShopEase.Features.Returns.GetOpen;
+
+public sealed record OpenReturnItem(Guid Id, string OrderNumber, string Reason, DateOnly PickupBy, int DaysOverdue);
 
 /// <summary>A read-only slice: no entity behaviour, just a projection straight into the response shape.</summary>
-public sealed class GetOpenInspectionsHandler(IInspectionStore store, TimeProvider clock)
+public sealed class GetOpenReturnsHandler(IReturnStore store, TimeProvider clock)
 {
-    public IReadOnlyList<OpenInspectionItem> Handle(string projectCode)
+    public IReadOnlyList<OpenReturnItem> Handle(string cityCode)
     {
         var today = DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
         return store.Query()
-            .Where(i => i.Status == InspectionStatus.Submitted
-                     && string.Equals(i.ProjectCode, projectCode, StringComparison.OrdinalIgnoreCase))
-            .Select(i => new OpenInspectionItem(i.Id, i.Chainage, i.Activity, i.DueBy,
-                         Math.Max(0, today.DayNumber - i.DueBy.DayNumber)))
+            .Where(r => r.Status == ReturnStatus.Submitted
+                     && string.Equals(r.CityCode, cityCode, StringComparison.OrdinalIgnoreCase))
+            .Select(r => new OpenReturnItem(r.Id, r.OrderNumber, r.Reason, r.PickupBy,
+                         Math.Max(0, today.DayNumber - r.PickupBy.DayNumber)))
             .OrderByDescending(x => x.DaysOverdue)
-            .ThenBy(x => x.DueBy)
+            .ThenBy(x => x.PickupBy)
             .ToList();
     }
 }
 
-public static class GetOpenInspectionsEndpoint
+public static class GetOpenReturnsEndpoint
 {
-    public static RouteGroupBuilder MapGetOpenInspections(this RouteGroupBuilder group)
+    public static RouteGroupBuilder MapGetOpenReturns(this RouteGroupBuilder group)
     {
-        group.MapGet("/open", (string project, GetOpenInspectionsHandler handler) =>
-            string.IsNullOrWhiteSpace(project)
-                ? Results.Problem("Query parameter 'project' is required.", statusCode: StatusCodes.Status400BadRequest)
-                : Results.Ok(handler.Handle(project)));
+        group.MapGet("/open", (string city, GetOpenReturnsHandler handler) =>
+            string.IsNullOrWhiteSpace(city)
+                ? Results.Problem("Query parameter 'city' is required.", statusCode: StatusCodes.Status400BadRequest)
+                : Results.Ok(handler.Handle(city)));
         return group;
     }
 }
@@ -467,27 +482,31 @@ public static class GetOpenInspectionsEndpoint
 Finally, wiring. Each slice registers its handler and maps its endpoint. Some teams auto-discover slices with reflection. With only a handful of slices, explicit lines are easier to read and search.
 
 ```csharp file=Program.cs
-using SiteOps.Features.Inspections.Approve;
-using SiteOps.Features.Inspections.GetOpen;
-using SiteOps.Features.Inspections.Submit;
-using SiteOps.Shared;
+using ShopEase.Features.Returns.Approve;
+using ShopEase.Features.Returns.GetOpen;
+using ShopEase.Features.Returns.Submit;
+using ShopEase.Shared;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<IInspectionStore, InMemoryInspectionStore>();   // EF Core DbContext (scoped) in production
+builder.Services.AddSingleton<IReturnStore, InMemoryReturnStore>();   // EF Core DbContext (scoped) in production
 
 // One line per slice. Handlers are scoped, matching the lifetime a DbContext would have.
-builder.Services.AddScoped<SubmitInspectionHandler>();
-builder.Services.AddScoped<ApproveInspectionHandler>();
-builder.Services.AddScoped<GetOpenInspectionsHandler>();
+builder.Services.AddScoped<SubmitReturnHandler>();
+builder.Services.AddScoped<ApproveReturnHandler>();
+builder.Services.AddScoped<GetOpenReturnsHandler>();
+
+// A real app adds authentication here, e.g. AddAuthentication().AddJwtBearer(...),
+// plus AddAuthorization() and RequireAuthorization() on the group (agents-only policy on /approve).
+// They are left out so this sample compiles without extra packages.
 
 var app = builder.Build();
 
-var inspections = app.MapGroup("/inspections").WithTags("Inspections");
-inspections.MapSubmitInspection()
-           .MapApproveInspection()
-           .MapGetOpenInspections();
+var returns = app.MapGroup("/returns").WithTags("Returns");
+returns.MapSubmitReturn()
+       .MapApproveReturn()
+       .MapGetOpenReturns();
 
 app.Run();
 ```
@@ -498,7 +517,7 @@ app.Run();
 
 Two built-in options keep validation and logging out of each handler:
 
-- **Endpoint filters** (`IEndpointFilter`) run around a minimal API handler. You can add one to the whole `/inspections` group with `group.AddEndpointFilter<...>()`.
+- **Endpoint filters** (`IEndpointFilter`) run around a minimal API handler. You can add one to the whole `/returns` group with `group.AddEndpointFilter<...>()`.
 - **Decorators**: wrap a generic `IHandler<TRequest, TResponse>` in a `ValidationDecorator` or `LoggingDecorator`. Exercise 4 builds one.
 
 ## Bad design vs good design
@@ -506,11 +525,11 @@ Two built-in options keep validation and logging out of each handler:
 **Bad: slices that call each other.**
 
 ```csharp
-public sealed class ApproveInspectionHandler(SubmitInspectionHandler submit, GetOpenInspectionsHandler open)
+public sealed class ApproveReturnHandler(SubmitReturnHandler submit, GetOpenReturnsHandler open)
 {
     public async Task Handle(Guid id)
     {
-        var stillOpen = open.Handle("NH-48").Any(x => x.Id == id);   // reusing another slice's query
+        var stillOpen = open.Handle("BLR").Any(x => x.Id == id);   // reusing another slice's query
         // ...
     }
 }
@@ -518,18 +537,18 @@ public sealed class ApproveInspectionHandler(SubmitInspectionHandler submit, Get
 
 Problems:
 
-- Approve now breaks when someone changes the "open inspections" response for the dashboard, for example by adding paging.
+- Approve now breaks when someone changes the "open returns" response for the dashboard, for example by adding paging.
 - The coupling is hidden: nothing in the folder structure tells you the slices depend on each other.
 - Each slice was meant to be deletable. Now neither can be deleted alone.
 
 **Bad: the shared kernel as a dumping ground.** A `Shared/Helpers.cs` file with 30 static methods, each used by one slice "in case someone needs it later". That is the old god service under a new name.
 
-**Good:** each slice reads what it needs from the store itself. Rules that several slices rely on live on the entity (`Inspection.Approve`). The shared folder holds only the entity, the store and the result type. If two slices need the same complex query, extract it into a named query object in the shared kernel, and only once the second slice actually exists.
+**Good:** each slice reads what it needs from the store itself. Rules that several slices rely on live on the entity (`ReturnRequest.Approve`). The shared folder holds only the entity, the store and the result type. If two slices need the same complex query, extract it into a named query object in the shared kernel, and only once the second slice actually exists.
 
 **Is the improvement always worth it?** No. For a 6-endpoint internal tool with one developer, a single controller and a `DbContext` are simpler. Slices pay off when the number of use cases and people grows. A useful heuristic: once a shared service passes about 10 public methods, or more than two people regularly edit it in the same week, consider slicing.
 
 :::callout type=tradeoff title="Duplication is cheaper than the wrong abstraction"
-Two slices that map an `Inspection` to slightly different response records will look like duplication. Leave it. They serve different screens and will change for different reasons. Merge code only when the two copies must change together for the same reason.
+Two slices that map a `ReturnRequest` to slightly different response records will look like duplication. Leave it. They serve different screens and will change for different reasons. Merge code only when the two copies must change together for the same reason.
 :::
 
 :::callout type=mistake title="Slices are not microservices"
@@ -538,7 +557,7 @@ A slice is a folder in one deployable app, sharing one database. Don't give each
 
 ## Practical playground
 
-Open the starter below. It has a tiny in-memory slice for submitting inspections and one for listing them. Run it, then add a third slice, "reject inspection with a reason", without editing the other two classes.
+Open the starter below. It has a tiny in-memory slice for requesting returns and one for listing open ones. Run it, then add a third slice, "reject a return with a reason", without editing the other two classes.
 
 :::playground type=csharp title="Add a slice without touching the others"
 ```csharp file=Program.cs
@@ -548,51 +567,51 @@ using System.Linq;
 
 public enum Status { Submitted, Approved, Rejected }
 
-public sealed class Rfi
+public sealed class ReturnRequest
 {
     public Guid Id { get; } = Guid.NewGuid();
-    public required string Chainage { get; init; }
-    public required string Activity { get; init; }
+    public required string OrderNumber { get; init; }
+    public required string Reason { get; init; }
     public Status Status { get; set; } = Status.Submitted;
-    public string? Reason { get; set; }
+    public string? RejectionNote { get; set; }
 }
 
-public sealed class Store { public List<Rfi> Items { get; } = new(); }
+public sealed class Store { public List<ReturnRequest> Items { get; } = new(); }
 
 // Slice 1: submit
-public sealed record SubmitRfi(string Chainage, string Activity);
-public sealed class SubmitRfiHandler(Store store)
+public sealed record SubmitReturn(string OrderNumber, string Reason);
+public sealed class SubmitReturnHandler(Store store)
 {
-    public Guid Handle(SubmitRfi cmd)
+    public Guid Handle(SubmitReturn cmd)
     {
-        var rfi = new Rfi { Chainage = cmd.Chainage, Activity = cmd.Activity };
-        store.Items.Add(rfi);
-        return rfi.Id;
+        var ret = new ReturnRequest { OrderNumber = cmd.OrderNumber, Reason = cmd.Reason };
+        store.Items.Add(ret);
+        return ret.Id;
     }
 }
 
 // Slice 2: list open
-public sealed record OpenRfi(string Chainage, string Activity);
-public sealed class ListOpenRfisHandler(Store store)
+public sealed record OpenReturn(string OrderNumber, string Reason);
+public sealed class ListOpenReturnsHandler(Store store)
 {
-    public IReadOnlyList<OpenRfi> Handle() =>
-        store.Items.Where(r => r.Status == Status.Submitted).Select(r => new OpenRfi(r.Chainage, r.Activity)).ToList();
+    public IReadOnlyList<OpenReturn> Handle() =>
+        store.Items.Where(r => r.Status == Status.Submitted).Select(r => new OpenReturn(r.OrderNumber, r.Reason)).ToList();
 }
 
-// TODO Slice 3: RejectRfi(Guid Id, string Reason) with a RejectRfiHandler.
-// Rules: reason is required, only a Submitted RFI can be rejected.
+// TODO Slice 3: RejectReturn(Guid Id, string Note) with a RejectReturnHandler.
+// Rules: the note is required, and only a Submitted return can be rejected (it sets RejectionNote).
 
 public static class Program
 {
     public static void Main()
     {
         var store = new Store();
-        var submit = new SubmitRfiHandler(store);
-        var a = submit.Handle(new SubmitRfi("12+400", "GSB compaction"));
-        var b = submit.Handle(new SubmitRfi("12+600", "WMM laying"));
+        var submit = new SubmitReturnHandler(store);
+        var a = submit.Handle(new SubmitReturn("ORD-10000400", "Wrong size: received UK 7"));
+        var b = submit.Handle(new SubmitReturn("ORD-10000600", "Screen cracked on arrival"));
         Console.WriteLine($"Submitted {a} and {b}");
-        foreach (var r in new ListOpenRfisHandler(store).Handle())
-            Console.WriteLine($"Open: {r.Chainage} {r.Activity}");
+        foreach (var r in new ListOpenReturnsHandler(store).Handle())
+            Console.WriteLine($"Open: {r.OrderNumber} {r.Reason}");
     }
 }
 ```
@@ -600,116 +619,116 @@ public static class Program
 
 ## Exercises
 
-:::exercise id=m02-vertical-slice-ex1 difficulty=beginner kind=code title="Write the overdue-inspections query slice"
-The project manager wants a list of overdue inspections for one project. Implement `GetOverdueInspectionsHandler.Handle`.
+:::exercise id=m02-vertical-slice-ex1 difficulty=beginner kind=code title="Write the overdue-returns query slice"
+The Bengaluru operations manager wants a list of overdue return requests for one city. Implement `GetOverdueReturnsHandler.Handle`.
 ::requirements
-- Include only inspections with status `Submitted` for the requested project (case-insensitive project code).
-- An inspection is overdue when its `DueBy` is **before** today. Due today is not overdue.
-- `DaysOverdue` = whole days between `DueBy` and today.
-- Sort by `DaysOverdue` descending, then by `Chainage` ascending (ordinal).
+- Include only return requests with status `Submitted` for the requested city (case-insensitive city code).
+- A request is overdue when its `PickupBy` date is **before** today. A pickup due today is not overdue yet.
+- `DaysOverdue` = whole days between `PickupBy` and today.
+- Sort by `DaysOverdue` descending, then by `OrderNumber` ascending (ordinal).
 ::acceptance
 - Due 3 days ago appears with `DaysOverdue = 3`.
-- Approved inspections and other projects are excluded.
-- An inspection due today does not appear.
-- Ties on days are ordered by chainage.
+- Approved requests and other cities are excluded.
+- A request with pickup due today does not appear.
+- Ties on days are ordered by order number.
 ::hint
 This is a query slice. You don't need any domain behaviour, only filter, project and sort.
 ::hint
 `DateOnly.DayNumber` gives an integer day count, so subtraction gives whole days.
 ::hint
-Chain `Where` (status, project, `DueBy < today`) then `Select` into `OverdueItem`, then `OrderByDescending(...).ThenBy(..., StringComparer.Ordinal)`.
+Chain `Where` (status, city, `PickupBy < today`) then `Select` into `OverdueItem`, then `OrderByDescending(...).ThenBy(..., StringComparer.Ordinal)`.
 ::hint
 ```csharp
-.Where(r => r.Status == RfiStatus.Submitted && string.Equals(r.ProjectCode, q.ProjectCode, StringComparison.OrdinalIgnoreCase) && r.DueBy < q.Today)
+.Where(r => r.Status == ReturnStatus.Submitted && string.Equals(r.CityCode, q.CityCode, StringComparison.OrdinalIgnoreCase) && r.PickupBy < q.Today)
 ```
 ::starter
-```csharp file=GetOverdueInspections.cs
+```csharp file=GetOverdueReturns.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public enum RfiStatus { Submitted, Approved, Rejected }
+public enum ReturnStatus { Submitted, Approved, Rejected }
 
-public sealed record RfiRow(Guid Id, string ProjectCode, string Chainage, DateOnly DueBy, RfiStatus Status);
+public sealed record ReturnRow(Guid Id, string CityCode, string OrderNumber, DateOnly PickupBy, ReturnStatus Status);
 
-public sealed record GetOverdueInspectionsQuery(string ProjectCode, DateOnly Today);
-public sealed record OverdueItem(Guid Id, string Chainage, DateOnly DueBy, int DaysOverdue);
+public sealed record GetOverdueReturnsQuery(string CityCode, DateOnly Today);
+public sealed record OverdueItem(Guid Id, string OrderNumber, DateOnly PickupBy, int DaysOverdue);
 
-public sealed class GetOverdueInspectionsHandler(IEnumerable<RfiRow> rows)
+public sealed class GetOverdueReturnsHandler(IEnumerable<ReturnRow> rows)
 {
-    public IReadOnlyList<OverdueItem> Handle(GetOverdueInspectionsQuery q) => throw new NotImplementedException();
+    public IReadOnlyList<OverdueItem> Handle(GetOverdueReturnsQuery q) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=GetOverdueInspectionsTests.cs
+```csharp file=GetOverdueReturnsTests.cs
 using System;
 using System.Linq;
 using Xunit;
 
-public class GetOverdueInspectionsTests
+public class GetOverdueReturnsTests
 {
     private static readonly DateOnly Today = new(2026, 10, 20);
-    private static RfiRow Row(string project, string ch, int dueOffsetDays, RfiStatus s = RfiStatus.Submitted) =>
-        new(Guid.NewGuid(), project, ch, Today.AddDays(dueOffsetDays), s);
+    private static ReturnRow Row(string city, string order, int dueOffsetDays, ReturnStatus s = ReturnStatus.Submitted) =>
+        new(Guid.NewGuid(), city, order, Today.AddDays(dueOffsetDays), s);
 
     [Fact]
     public void Returns_days_overdue()
     {
-        var h = new GetOverdueInspectionsHandler(new[] { Row("NH48", "12+400", -3) });
-        var item = Assert.Single(h.Handle(new GetOverdueInspectionsQuery("NH48", Today)));
+        var h = new GetOverdueReturnsHandler(new[] { Row("BLR", "ORD-10000400", -3) });
+        var item = Assert.Single(h.Handle(new GetOverdueReturnsQuery("BLR", Today)));
         Assert.Equal(3, item.DaysOverdue);
     }
 
     [Fact]
-    public void Excludes_approved_other_projects_and_due_today()
+    public void Excludes_approved_other_cities_and_due_today()
     {
-        var h = new GetOverdueInspectionsHandler(new[]
+        var h = new GetOverdueReturnsHandler(new[]
         {
-            Row("NH48", "1+000", -2, RfiStatus.Approved),
-            Row("SH12", "2+000", -5),
-            Row("NH48", "3+000", 0),
-            Row("nh48", "4+000", -1),
+            Row("BLR", "ORD-00000001", -2, ReturnStatus.Approved),
+            Row("HYD", "ORD-00000002", -5),
+            Row("BLR", "ORD-00000003", 0),
+            Row("blr", "ORD-00000004", -1),
         });
-        var result = h.Handle(new GetOverdueInspectionsQuery("NH48", Today));
-        Assert.Equal("4+000", Assert.Single(result).Chainage);
+        var result = h.Handle(new GetOverdueReturnsQuery("BLR", Today));
+        Assert.Equal("ORD-00000004", Assert.Single(result).OrderNumber);
     }
 
     [Fact]
-    public void Sorted_by_days_desc_then_chainage()
+    public void Sorted_by_days_desc_then_order_number()
     {
-        var h = new GetOverdueInspectionsHandler(new[]
+        var h = new GetOverdueReturnsHandler(new[]
         {
-            Row("NH48", "12+600", -2), Row("NH48", "12+400", -2), Row("NH48", "9+000", -7),
+            Row("BLR", "ORD-10000600", -2), Row("BLR", "ORD-10000400", -2), Row("BLR", "ORD-09000000", -7),
         });
-        var chainages = h.Handle(new GetOverdueInspectionsQuery("NH48", Today)).Select(x => x.Chainage).ToArray();
-        Assert.Equal(new[] { "9+000", "12+400", "12+600" }, chainages);
+        var orders = h.Handle(new GetOverdueReturnsQuery("BLR", Today)).Select(x => x.OrderNumber).ToArray();
+        Assert.Equal(new[] { "ORD-09000000", "ORD-10000400", "ORD-10000600" }, orders);
     }
 }
 ```
 ::solution
 Filter at the source, project straight into the response record, then sort. No entity methods, no service class.
 
-```csharp file=GetOverdueInspections.cs
+```csharp file=GetOverdueReturns.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public enum RfiStatus { Submitted, Approved, Rejected }
+public enum ReturnStatus { Submitted, Approved, Rejected }
 
-public sealed record RfiRow(Guid Id, string ProjectCode, string Chainage, DateOnly DueBy, RfiStatus Status);
+public sealed record ReturnRow(Guid Id, string CityCode, string OrderNumber, DateOnly PickupBy, ReturnStatus Status);
 
-public sealed record GetOverdueInspectionsQuery(string ProjectCode, DateOnly Today);
-public sealed record OverdueItem(Guid Id, string Chainage, DateOnly DueBy, int DaysOverdue);
+public sealed record GetOverdueReturnsQuery(string CityCode, DateOnly Today);
+public sealed record OverdueItem(Guid Id, string OrderNumber, DateOnly PickupBy, int DaysOverdue);
 
-public sealed class GetOverdueInspectionsHandler(IEnumerable<RfiRow> rows)
+public sealed class GetOverdueReturnsHandler(IEnumerable<ReturnRow> rows)
 {
-    public IReadOnlyList<OverdueItem> Handle(GetOverdueInspectionsQuery q) =>
-        rows.Where(r => r.Status == RfiStatus.Submitted
-                     && string.Equals(r.ProjectCode, q.ProjectCode, StringComparison.OrdinalIgnoreCase)
-                     && r.DueBy < q.Today)
-            .Select(r => new OverdueItem(r.Id, r.Chainage, r.DueBy, q.Today.DayNumber - r.DueBy.DayNumber))
+    public IReadOnlyList<OverdueItem> Handle(GetOverdueReturnsQuery q) =>
+        rows.Where(r => r.Status == ReturnStatus.Submitted
+                     && string.Equals(r.CityCode, q.CityCode, StringComparison.OrdinalIgnoreCase)
+                     && r.PickupBy < q.Today)
+            .Select(r => new OverdueItem(r.Id, r.OrderNumber, r.PickupBy, q.Today.DayNumber - r.PickupBy.DayNumber))
             .OrderByDescending(x => x.DaysOverdue)
-            .ThenBy(x => x.Chainage, StringComparer.Ordinal)
+            .ThenBy(x => x.OrderNumber, StringComparer.Ordinal)
             .ToList();
 }
 ```
@@ -717,197 +736,203 @@ public sealed class GetOverdueInspectionsHandler(IEnumerable<RfiRow> rows)
 With EF Core, the same `Where`/`Select` runs as SQL, so only the overdue rows leave the database. That is the key benefit of a query slice over a shared `GetAllAsync` repository method.
 ::mistakes
 - Using `<=` and counting "due today" as overdue.
-- Comparing project codes with `==`, which fails for `nh48` vs `NH48`.
-- Sorting chainage as a number-like string with culture rules. Ordinal sorting is predictable; real code would sort by a numeric chainage in metres.
+- Comparing city codes with `==`, which fails for `blr` vs `BLR`.
+- Sorting order numbers with the default culture-aware comparer. Ordinal comparison is predictable, and because order numbers have a fixed width (`ORD-` plus 8 digits) ordinal order is also numeric order.
+- Computing `today` from the server's UTC date. Between midnight and 05:30 IST, UTC is still on the previous day, so a Bengaluru pickup looks one day less overdue. Pass the city's local date in, as the query does here.
 ::extensions
-Store chainage as an integer in metres (12+400 becomes 12,400) and sort numerically. Add paging with `skip` and `take`.
+Add paging with `skip` and `take`, and a `minDaysOverdue` filter so the dashboard can show only requests more than 2 days late. In PostgreSQL, back the query with an index on `(city_code, pickup_by) WHERE status = 'Submitted'`.
 :::
 
 :::exercise id=m02-vertical-slice-ex2 difficulty=beginner kind=code title="Validate the submit command"
-Implement `SubmitRfiValidator.Validate`. It returns a dictionary of field name to error messages, in the format `Results.ValidationProblem` expects. An empty dictionary means valid.
+Implement `SubmitReturnValidator.Validate`. It returns a dictionary of field name to error messages, in the format `Results.ValidationProblem` expects. An empty dictionary means valid.
 ::requirements
-- `ProjectCode` is required.
-- `Chainage` must match `<1–4 digits>+<exactly 3 digits>`, such as `12+400` or `0+050`.
-- `Activity` is required and at most 200 characters.
-- `DueBy` must not be before `today`.
+- `CityCode` is required.
+- `OrderNumber` must be `ORD-` followed by exactly 8 digits, such as `ORD-10000400` or `ORD-00000042`.
+- `Reason` is required and at most 200 characters.
+- `PickupBy` must not be before `today`.
 ::acceptance
 - A valid command returns an empty dictionary.
-- `12400`, `12+40` and `+400` all fail with key `Chainage`.
+- `10000400`, `ORD-1000040`, `ORD-` and `ord-10000400` all fail with key `OrderNumber`.
 - Several problems produce several keys at once, not just the first one.
 ::hint
 Collect all errors. Don't return early on the first one, because the user wants to fix every field in one go.
 ::hint
-A regular expression is the simplest check for chainage: start, digits, a plus sign, three digits, end.
+A regular expression is the simplest check for an order number: start, the literal `ORD-`, eight digits, end.
 ::hint
-The pattern is `^\d{1,4}\+\d{3}$`. Remember to escape the `+`.
+The pattern is `^ORD-[0-9]{8}$`. Prefer `[0-9]` over `\d`: in .NET, `\d` also matches other Unicode digits such as Devanagari `४`.
 ::hint
 ```csharp
 var errors = new Dictionary<string, string[]>();
-if (string.IsNullOrWhiteSpace(c.ProjectCode)) errors["ProjectCode"] = new[] { "Required." };
+if (string.IsNullOrWhiteSpace(c.CityCode)) errors["CityCode"] = new[] { "Required." };
 ```
 ::starter
-```csharp file=SubmitRfiValidator.cs
+```csharp file=SubmitReturnValidator.cs
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 
-public sealed record SubmitRfiCommand(string ProjectCode, string Chainage, string Activity, DateOnly DueBy);
+public sealed record SubmitReturnCommand(string CityCode, string OrderNumber, string Reason, DateOnly PickupBy);
 
-public static class SubmitRfiValidator
+public static class SubmitReturnValidator
 {
-    public static Dictionary<string, string[]> Validate(SubmitRfiCommand c, DateOnly today) => throw new NotImplementedException();
+    public static Dictionary<string, string[]> Validate(SubmitReturnCommand c, DateOnly today) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=SubmitRfiValidatorTests.cs
+```csharp file=SubmitReturnValidatorTests.cs
 using System;
 using Xunit;
 
-public class SubmitRfiValidatorTests
+public class SubmitReturnValidatorTests
 {
     private static readonly DateOnly Today = new(2026, 10, 20);
-    private static SubmitRfiCommand Valid() => new("NH48", "12+400", "GSB compaction", Today);
+    private static SubmitReturnCommand Valid() => new("BLR", "ORD-10000400", "Wrong size: received UK 7", Today);
 
-    [Fact] public void Valid_command_has_no_errors() => Assert.Empty(SubmitRfiValidator.Validate(Valid(), Today));
+    [Fact] public void Valid_command_has_no_errors() => Assert.Empty(SubmitReturnValidator.Validate(Valid(), Today));
 
     [Theory]
-    [InlineData("12400")]
-    [InlineData("12+40")]
-    [InlineData("+400")]
-    [InlineData("12345+000")]
-    public void Bad_chainage(string ch) =>
-        Assert.True(SubmitRfiValidator.Validate(Valid() with { Chainage = ch }, Today).ContainsKey("Chainage"));
+    [InlineData("10000400")]
+    [InlineData("ORD-1000040")]
+    [InlineData("ORD-")]
+    [InlineData("ord-10000400")]
+    [InlineData("ORD-100004001")]
+    [InlineData("ORD-1000040٤")]
+    public void Bad_order_number(string order) =>
+        Assert.True(SubmitReturnValidator.Validate(Valid() with { OrderNumber = order }, Today).ContainsKey("OrderNumber"));
 
-    [Fact] public void Zero_km_chainage_is_valid() =>
-        Assert.Empty(SubmitRfiValidator.Validate(Valid() with { Chainage = "0+050" }, Today));
+    [Fact] public void Leading_zeros_are_valid() =>
+        Assert.Empty(SubmitReturnValidator.Validate(Valid() with { OrderNumber = "ORD-00000042" }, Today));
 
     [Fact]
     public void Reports_all_errors_at_once()
     {
-        var e = SubmitRfiValidator.Validate(new SubmitRfiCommand("", "bad", new string('x', 201), Today.AddDays(-1)), Today);
+        var e = SubmitReturnValidator.Validate(new SubmitReturnCommand("", "bad", new string('x', 201), Today.AddDays(-1)), Today);
         Assert.Equal(4, e.Count);
-        Assert.True(e.ContainsKey("ProjectCode") && e.ContainsKey("Chainage") && e.ContainsKey("Activity") && e.ContainsKey("DueBy"));
+        Assert.True(e.ContainsKey("CityCode") && e.ContainsKey("OrderNumber") && e.ContainsKey("Reason") && e.ContainsKey("PickupBy"));
     }
 }
 ```
 ::solution
-```csharp file=SubmitRfiValidator.cs
+```csharp file=SubmitReturnValidator.cs
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 
-public sealed record SubmitRfiCommand(string ProjectCode, string Chainage, string Activity, DateOnly DueBy);
+public sealed record SubmitReturnCommand(string CityCode, string OrderNumber, string Reason, DateOnly PickupBy);
 
-public static class SubmitRfiValidator
+public static class SubmitReturnValidator
 {
-    private static readonly Regex Chainage = new(@"^\d{1,4}\+\d{3}$", RegexOptions.Compiled);
+    private static readonly Regex OrderNumber = new(@"^ORD-[0-9]{8}$", RegexOptions.Compiled);
 
-    public static Dictionary<string, string[]> Validate(SubmitRfiCommand c, DateOnly today)
+    public static Dictionary<string, string[]> Validate(SubmitReturnCommand c, DateOnly today)
     {
         var errors = new Dictionary<string, string[]>();
-        if (string.IsNullOrWhiteSpace(c.ProjectCode)) errors["ProjectCode"] = new[] { "Project code is required." };
-        if (string.IsNullOrWhiteSpace(c.Chainage) || !Chainage.IsMatch(c.Chainage))
-            errors["Chainage"] = new[] { "Chainage must look like 12+400." };
-        if (string.IsNullOrWhiteSpace(c.Activity) || c.Activity.Length > 200)
-            errors["Activity"] = new[] { "Activity is required and must be at most 200 characters." };
-        if (c.DueBy < today) errors["DueBy"] = new[] { "Due date cannot be in the past." };
+        if (string.IsNullOrWhiteSpace(c.CityCode)) errors["CityCode"] = new[] { "City code is required." };
+        if (string.IsNullOrWhiteSpace(c.OrderNumber) || !OrderNumber.IsMatch(c.OrderNumber))
+            errors["OrderNumber"] = new[] { "Order number must look like ORD-10000400." };
+        if (string.IsNullOrWhiteSpace(c.Reason) || c.Reason.Length > 200)
+            errors["Reason"] = new[] { "Reason is required and must be at most 200 characters." };
+        if (c.PickupBy < today) errors["PickupBy"] = new[] { "Pickup date cannot be in the past." };
         return errors;
     }
 }
 ```
 
-The validator sits in the submit slice because only submit uses these rules. If an "edit RFI" slice later needs the same chainage rule, move just that rule into a shared `Chainage` value object, which is a better home than a shared validator.
+The validator sits in the submit slice because only submit uses these rules. If a "cancel order" or "track order" slice later needs the same order-number rule, move just that rule into a shared `OrderNumber` value object, which is a better home than a shared validator.
 ::mistakes
 - Returning after the first error.
-- Forgetting the `^` and `$` anchors, so `x12+400y` passes.
+- Forgetting the `^` and `$` anchors, so `xORD-10000400y` passes.
+- Using `\d`, which accepts non-ASCII digits such as Arabic-Indic `٤` (the last test case).
 - Using `DateTime.Now` inside the validator instead of passing `today`, which makes tests depend on the clock.
 :::
 
-:::exercise id=m02-vertical-slice-ex3 difficulty=intermediate kind=design title="Re-slice a layered contractor-billing module"
-A contractor-billing module is organised like this:
+:::exercise id=m02-vertical-slice-ex3 difficulty=intermediate kind=design title="Re-slice a layered seller-payout module"
+The same marketplace pays its sellers every week. Each payout is created from the week's delivered orders minus commissions, returns and fees, submitted for review, and then approved or rejected by the finance team. The seller-payout module is organised like this:
 
 ```text
-Controllers/BillsController.cs        (Create, Submit, Certify, Reject, GetById, ListPending, ExportPdf)
-Services/IBillService.cs, BillService.cs   (14 public methods, 9 constructor dependencies)
-Repositories/IBillRepository.cs, BillRepository.cs
+Controllers/PayoutsController.cs        (Create, Submit, Approve, Reject, GetById, ListPending, ExportPdf)
+Services/IPayoutService.cs, PayoutService.cs   (14 public methods, 9 constructor dependencies)
+Repositories/IPayoutRepository.cs, PayoutRepository.cs
 Dtos/ (11 DTO classes)
-Mappers/BillMapper.cs
-Validators/BillValidator.cs  (one class with rules for create, submit and certify mixed together)
+Mappers/PayoutMapper.cs
+Validators/PayoutValidator.cs  (one class with rules for create, submit and approve mixed together)
 ```
 
-Propose a vertical-slice structure. Show the folder tree, say what goes into the shared kernel and why, and explain where the rule "a bill can only be certified after it was submitted, and the certified amount cannot exceed the claimed amount" lives.
+Propose a vertical-slice structure. Show the folder tree, say what goes into the shared kernel and why, and explain where the rule "a payout can only be approved after it was submitted, and the approved amount cannot exceed the requested amount" lives.
 ::acceptance
-- One slice per use case, with names that are verbs (`CertifyBill`, not `BillCertification`).
+- One slice per use case, with names that are verbs (`ApprovePayout`, not `PayoutApproval`).
 - The shared kernel is small and each item in it has a reason.
-- The certification rule lives in exactly one place that every slice which changes a bill goes through.
+- The approval rule lives in exactly one place that every slice which changes a payout goes through.
 - PDF export is treated as a query slice, and you note any extra dependency it alone needs.
 ::hint
 Start by listing the seven controller actions. Each is a candidate slice.
 ::hint
 Which of the 9 dependencies does each slice actually need? A PDF renderer is only needed by export.
 ::hint
-Rules about a bill's lifecycle belong on the `Bill` entity, not in a slice and not in a shared validator.
+Rules about a payout's lifecycle belong on the `Payout` entity, not in a slice and not in a shared validator.
 ::hint
-Shape: `Features/Bills/{CreateBill, SubmitBill, CertifyBill, RejectBill, GetBill, ListPendingBills, ExportBillPdf}` plus `Shared/{Bill.cs, BillStatus.cs, BillingDbContext.cs, Money.cs}`.
+Shape: `Features/Payouts/{CreatePayout, SubmitPayout, ApprovePayout, RejectPayout, GetPayout, ListPendingPayouts, ExportPayoutPdf}` plus `Shared/{Payout.cs, PayoutStatus.cs, PayoutsDbContext.cs, Money.cs}`.
 ::solution
 ```text
-Billing/
+Payouts/
   Shared/
-    Bill.cs            entity with Submit(), Certify(amount, by), Reject(reason)
-    BillStatus.cs
-    Money.cs           value object, rounding rules for INR
-    BillingDbContext.cs
-  Features/Bills/
-    CreateBill.cs        command + validator + handler + endpoint
-    SubmitBill.cs
-    CertifyBill.cs
-    RejectBill.cs
-    GetBill.cs           query, projects to BillDetails
-    ListPendingBills.cs  query, paged, AsNoTracking
-    ExportBillPdf/       folder, because it has a template file and an IPdfRenderer dependency
-      ExportBillPdf.cs
-      BillPdfTemplate.cshtml
+    Payout.cs            entity with Submit(), Approve(amount, by), Reject(reason)
+    PayoutStatus.cs
+    Money.cs             value object, rounding rules for INR (paise)
+    PayoutsDbContext.cs
+  Features/Payouts/
+    CreatePayout.cs        command + validator + handler + endpoint
+    SubmitPayout.cs
+    ApprovePayout.cs
+    RejectPayout.cs
+    GetPayout.cs           query, projects to PayoutDetails
+    ListPendingPayouts.cs  query, paged, AsNoTracking
+    ExportPayoutPdf/       folder, because it has a template file and an IPdfRenderer dependency
+      ExportPayoutPdf.cs
+      PayoutStatementTemplate.cshtml
 ```
 
 ```mermaid
 classDiagram
-    class Bill {
-        +BillStatus Status
-        +decimal ClaimedAmount
-        +decimal CertifiedAmount
+    class Payout {
+        +PayoutStatus Status
+        +decimal RequestedAmount
+        +decimal ApprovedAmount
         +Submit()
-        +Certify(decimal amount, string by)
+        +Approve(decimal amount, string by)
         +Reject(string reason)
     }
-    class CertifyBillHandler {
-        +HandleAsync(CertifyBillCommand cmd) Task
+    class ApprovePayoutHandler {
+        +HandleAsync(ApprovePayoutCommand cmd) Task
     }
-    class SubmitBillHandler {
-        +HandleAsync(SubmitBillCommand cmd) Task
+    class SubmitPayoutHandler {
+        +HandleAsync(SubmitPayoutCommand cmd) Task
     }
-    class ExportBillPdfHandler {
+    class ExportPayoutPdfHandler {
         +HandleAsync(Guid id) Task
     }
     class IPdfRenderer {
         <<interface>>
     }
-    CertifyBillHandler --> Bill : calls Certify
-    SubmitBillHandler --> Bill : calls Submit
-    ExportBillPdfHandler --> IPdfRenderer
+    ApprovePayoutHandler --> Payout : calls Approve
+    SubmitPayoutHandler --> Payout : calls Submit
+    ExportPayoutPdfHandler --> IPdfRenderer
 ```
 
-**Shared kernel reasons.** `Bill` is changed by four slices, so its invariants must be in one place. `Money` exists because rounding rules for INR must be identical everywhere. The `DbContext` is infrastructure that every slice uses.
+The diagram shows the key idea: the two command handlers only call methods on `Payout`, so the lifecycle rules live in the entity, while the export handler is the only class that knows about `IPdfRenderer`.
 
-**The certification rule** lives in `Bill.Certify`: it throws (or returns a failure) if `Status != Submitted` or `amount > ClaimedAmount`. `CertifyBillHandler` only loads the bill, calls `Certify`, and saves.
+**Shared kernel reasons.** `Payout` is changed by four slices, so its invariants must be in one place. `Money` exists because rounding rules for INR must be identical everywhere: a payout of ₹48,312.675 must round the same way on screen, in the PDF and in the bank file. The `DbContext` is infrastructure that every slice uses.
 
-**What disappears:** `BillService`, `IBillService`, `IBillRepository` and `BillMapper`. Each slice maps its own response. The 9-dependency constructor becomes 1–2 dependencies per handler. `IPdfRenderer` is now injected only into the export slice.
+**The approval rule** lives in `Payout.Approve`: it throws (or returns a failure) if `Status != Submitted` or `amount > RequestedAmount`. `ApprovePayoutHandler` only loads the payout, calls `Approve`, and saves. Because approving money is sensitive, the handler should also record who approved it (from the signed-in user) and rely on a concurrency token so two finance users cannot approve the same payout twice.
 
-**Validation:** the old `BillValidator` splits into per-slice input validators (shape of the request). Lifecycle rules move to the entity.
+**What disappears:** `PayoutService`, `IPayoutService`, `IPayoutRepository` and `PayoutMapper`. Each slice maps its own response. The 9-dependency constructor becomes 1–2 dependencies per handler. `IPdfRenderer` is now injected only into the export slice.
+
+**Validation:** the old `PayoutValidator` splits into per-slice input validators (shape of the request). Lifecycle rules move to the entity.
 ::alternatives
-If the team already uses Clean Architecture with separate projects, you can keep the `Domain` project for `Bill` and `Money` and put slices inside the `Application` project. That is a common hybrid.
+If the team already uses Clean Architecture with separate projects, you can keep the `Domain` project for `Payout` and `Money` and put slices inside the `Application` project. That is a common hybrid.
 ::mistakes
-- Making `BillLifecycle` a slice. It isn't a use case.
-- Putting the certification rule in `CertifyBillValidator`, so a future `BulkCertifyBills` slice skips it.
+- Making `PayoutLifecycle` a slice. It isn't a use case.
+- Putting the approval rule in `ApprovePayoutValidator`, so a future `BulkApprovePayouts` slice skips it.
 - Moving all 11 DTOs into `Shared/Dtos` "for reuse", which recreates the layered structure.
 :::
 
@@ -967,27 +992,27 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-public sealed record RejectRfi(string Reason);
+public sealed record RejectReturn(string Reason);
 
 public class ValidationDecoratorTests
 {
-    private sealed class CountingHandler : IHandler<RejectRfi, string>
+    private sealed class CountingHandler : IHandler<RejectReturn, string>
     {
         public int Calls;
-        public Task<string> HandleAsync(RejectRfi r, CancellationToken ct) { Calls++; return Task.FromResult("Rejected"); }
+        public Task<string> HandleAsync(RejectReturn r, CancellationToken ct) { Calls++; return Task.FromResult("Rejected"); }
     }
 
-    private sealed class Rule(string message, bool fails) : IValidator<RejectRfi>
+    private sealed class Rule(string message, bool fails) : IValidator<RejectReturn>
     {
-        public IReadOnlyList<string> Validate(RejectRfi r) => fails ? new[] { message } : new string[0];
+        public IReadOnlyList<string> Validate(RejectReturn r) => fails ? new[] { message } : new string[0];
     }
 
     [Fact]
     public async Task Valid_request_calls_inner()
     {
         var inner = new CountingHandler();
-        var sut = new ValidationDecorator<RejectRfi, string>(inner, new IValidator<RejectRfi>[] { new Rule("x", false) });
-        Assert.Equal("Rejected", await sut.HandleAsync(new RejectRfi("Honeycombing seen"), CancellationToken.None));
+        var sut = new ValidationDecorator<RejectReturn, string>(inner, new IValidator<RejectReturn>[] { new Rule("x", false) });
+        Assert.Equal("Rejected", await sut.HandleAsync(new RejectReturn("Photos show the item was used"), CancellationToken.None));
         Assert.Equal(1, inner.Calls);
     }
 
@@ -995,9 +1020,9 @@ public class ValidationDecoratorTests
     public async Task Invalid_request_never_reaches_inner()
     {
         var inner = new CountingHandler();
-        var sut = new ValidationDecorator<RejectRfi, string>(inner,
-            new IValidator<RejectRfi>[] { new Rule("Reason required", true), new Rule("ok", false), new Rule("Too short", true) });
-        var ex = await Assert.ThrowsAsync<RequestValidationException>(() => sut.HandleAsync(new RejectRfi(""), CancellationToken.None));
+        var sut = new ValidationDecorator<RejectReturn, string>(inner,
+            new IValidator<RejectReturn>[] { new Rule("Reason required", true), new Rule("ok", false), new Rule("Too short", true) });
+        var ex = await Assert.ThrowsAsync<RequestValidationException>(() => sut.HandleAsync(new RejectReturn(""), CancellationToken.None));
         Assert.Equal(new[] { "Reason required", "Too short" }, ex.Errors);
         Assert.Equal(0, inner.Calls);
     }
@@ -1006,8 +1031,8 @@ public class ValidationDecoratorTests
     public async Task No_validators_passes_through()
     {
         var inner = new CountingHandler();
-        var sut = new ValidationDecorator<RejectRfi, string>(inner, new IValidator<RejectRfi>[0]);
-        await sut.HandleAsync(new RejectRfi("x"), CancellationToken.None);
+        var sut = new ValidationDecorator<RejectReturn, string>(inner, new IValidator<RejectReturn>[0]);
+        await sut.HandleAsync(new RejectReturn("x"), CancellationToken.None);
         Assert.Equal(1, inner.Calls);
     }
 }
@@ -1053,11 +1078,11 @@ public sealed class ValidationDecorator<TRequest, TResponse>(
 Registration in ASP.NET Core without extra libraries:
 
 ```csharp
-builder.Services.AddScoped<RejectRfiHandler>();
-builder.Services.AddScoped<IValidator<RejectRfi>, RejectRfiValidator>();
-builder.Services.AddScoped<IHandler<RejectRfi, string>>(sp =>
-    new ValidationDecorator<RejectRfi, string>(sp.GetRequiredService<RejectRfiHandler>(),
-                                               sp.GetServices<IValidator<RejectRfi>>()));
+builder.Services.AddScoped<RejectReturnHandler>();
+builder.Services.AddScoped<IValidator<RejectReturn>, RejectReturnValidator>();
+builder.Services.AddScoped<IHandler<RejectReturn, string>>(sp =>
+    new ValidationDecorator<RejectReturn, string>(sp.GetRequiredService<RejectReturnHandler>(),
+                                               sp.GetServices<IValidator<RejectReturn>>()));
 ```
 
 Then map `RequestValidationException` to a `400` in one exception handler. Each slice now only writes a validator class. The "run validation first" rule exists once.
@@ -1072,16 +1097,16 @@ An `IEndpointFilter` on the route group does the same job at the HTTP edge, and 
 :::exercise id=m02-vertical-slice-ex5 difficulty=advanced kind=code title="An architecture rule: slices must not reference each other"
 Folder structure is a convention, and conventions decay. Write a checker that takes a dependency map (type name → types it references) and reports every place where one slice depends on another.
 ::requirements
-- Slice types live in namespaces shaped `<Root>.Features.<Area>.<Slice>` and anything below. The slice key is `<Area>.<Slice>`, e.g. `SiteOps.Features.Inspections.Approve.ApproveInspectionHandler` belongs to `Inspections.Approve`.
+- Slice types live in namespaces shaped `<Root>.Features.<Area>.<Slice>` and anything below. The slice key is `<Area>.<Slice>`, e.g. `ShopEase.Features.Returns.Approve.ApproveReturnHandler` belongs to `Returns.Approve`.
 - A slice **may** reference its own slice, `<Root>.Shared.*`, and anything outside `<Root>` (e.g. `System.*`).
 - A slice **may** reference another slice's `Contracts` sub-namespace (`<Root>.Features.<Area>.<Slice>.Contracts.*`), which is the published surface.
 - Anything else from slice to slice is a violation. Types outside `Features` are not checked.
 - Return violations sorted by `FromType`, then `ToType` (ordinal), with no duplicates.
 ::acceptance
-- `Approve` referencing `GetOpen.GetOpenInspectionsHandler` is reported, with both slice keys.
-- `Approve` referencing `GetOpen.Contracts.OpenInspectionItem` is allowed.
-- References to `SiteOps.Shared.Inspection` or `System.Guid` are allowed.
-- A namespace with too few segments under `Features` (e.g. `SiteOps.Features.Helpers`) is itself treated as not a slice, so it is never checked and never a target.
+- `Approve` referencing `GetOpen.GetOpenReturnsHandler` is reported, with both slice keys.
+- `Approve` referencing `GetOpen.Contracts.OpenReturnItem` is allowed.
+- References to `ShopEase.Shared.ReturnRequest` or `System.Guid` are allowed.
+- A namespace with too few segments under `Features` (e.g. `ShopEase.Features.Helpers`) is itself treated as not a slice, so it is never checked and never a target.
 ::hint
 Write one small function, `SliceOf(typeName)`, that returns the slice key or `null`. Most of the logic follows from it.
 ::hint
@@ -1120,45 +1145,45 @@ using Xunit;
 
 public class SliceBoundaryCheckerTests
 {
-    private const string Approve = "SiteOps.Features.Inspections.Approve.ApproveInspectionHandler";
-    private static readonly SliceBoundaryChecker Sut = new("SiteOps");
+    private const string Approve = "ShopEase.Features.Returns.Approve.ApproveReturnHandler";
+    private static readonly SliceBoundaryChecker Sut = new("ShopEase");
 
     private static IReadOnlyDictionary<string, IReadOnlyCollection<string>> Map(string from, params string[] to) =>
         new Dictionary<string, IReadOnlyCollection<string>> { [from] = to };
 
-    [Fact] public void Slice_key() => Assert.Equal("Inspections.Approve", Sut.SliceOf(Approve));
-    [Fact] public void Not_a_slice() => Assert.Null(Sut.SliceOf("SiteOps.Features.Helpers"));
-    [Fact] public void Shared_is_not_a_slice() => Assert.Null(Sut.SliceOf("SiteOps.Shared.Inspection"));
+    [Fact] public void Slice_key() => Assert.Equal("Returns.Approve", Sut.SliceOf(Approve));
+    [Fact] public void Not_a_slice() => Assert.Null(Sut.SliceOf("ShopEase.Features.Helpers"));
+    [Fact] public void Shared_is_not_a_slice() => Assert.Null(Sut.SliceOf("ShopEase.Shared.ReturnRequest"));
 
     [Fact]
     public void Cross_slice_reference_is_reported()
     {
-        var v = Assert.Single(Sut.Check(Map(Approve, "SiteOps.Features.Inspections.GetOpen.GetOpenInspectionsHandler")));
-        Assert.Equal("Inspections.Approve", v.FromSlice);
-        Assert.Equal("Inspections.GetOpen", v.ToSlice);
+        var v = Assert.Single(Sut.Check(Map(Approve, "ShopEase.Features.Returns.GetOpen.GetOpenReturnsHandler")));
+        Assert.Equal("Returns.Approve", v.FromSlice);
+        Assert.Equal("Returns.GetOpen", v.ToSlice);
     }
 
     [Fact]
     public void Contracts_shared_and_system_are_allowed() =>
         Assert.Empty(Sut.Check(Map(Approve,
-            "SiteOps.Features.Inspections.GetOpen.Contracts.OpenInspectionItem",
-            "SiteOps.Shared.Inspection",
+            "ShopEase.Features.Returns.GetOpen.Contracts.OpenReturnItem",
+            "ShopEase.Shared.ReturnRequest",
             "System.Guid",
-            "SiteOps.Features.Inspections.Approve.ApproveInspectionCommand")));
+            "ShopEase.Features.Returns.Approve.ApproveReturnCommand")));
 
     [Fact]
     public void Sorted_and_deduplicated()
     {
         var map = new Dictionary<string, IReadOnlyCollection<string>>
         {
-            ["SiteOps.Features.Bills.Certify.H"] = new[] { "SiteOps.Features.Bills.Submit.Z", "SiteOps.Features.Bills.Submit.A", "SiteOps.Features.Bills.Submit.A" },
-            ["SiteOps.Features.Bills.Approve.H"] = new[] { "SiteOps.Features.Bills.Submit.A" },
+            ["ShopEase.Features.Payouts.Reject.H"] = new[] { "ShopEase.Features.Payouts.Submit.Z", "ShopEase.Features.Payouts.Submit.A", "ShopEase.Features.Payouts.Submit.A" },
+            ["ShopEase.Features.Payouts.Approve.H"] = new[] { "ShopEase.Features.Payouts.Submit.A" },
         };
         var v = Sut.Check(map);
         Assert.Equal(3, v.Count);
-        Assert.Equal("SiteOps.Features.Bills.Approve.H", v[0].FromType);
-        Assert.Equal("SiteOps.Features.Bills.Submit.A", v[1].ToType);
-        Assert.Equal("SiteOps.Features.Bills.Submit.Z", v[2].ToType);
+        Assert.Equal("ShopEase.Features.Payouts.Approve.H", v[0].FromType);
+        Assert.Equal("ShopEase.Features.Payouts.Submit.A", v[1].ToType);
+        Assert.Equal("ShopEase.Features.Payouts.Submit.Z", v[2].ToType);
     }
 }
 ```
@@ -1214,11 +1239,11 @@ public sealed class SliceBoundaryChecker(string rootNamespace)
 
 In a real test project you would build the map from the compiled assembly. Reflection gives you constructor parameter types, field types and method signatures cheaply. For full coverage (types used only inside method bodies) teams use an IL-reading library such as NetArchTest or ArchUnitNET, and run the rule in CI so a violation fails the build.
 ::mistakes
-- Treating `SiteOps.Features.Helpers` as a slice called `Helpers.<TypeName>`.
-- Using `StartsWith("SiteOps.Features.Inspections.Approve")`, which also matches `...ApproveAll`.
+- Treating `ShopEase.Features.Helpers` as a slice called `Helpers.<TypeName>`.
+- Using `StartsWith("ShopEase.Features.Returns.Approve")`, which also matches `...ApproveAll`.
 - Reporting the same pair twice when a type references another through several members.
 ::extensions
-Allow an explicit allow-list of pairs (`"Bills.Certify -> Bills.Submit.Contracts"`) with a reason string, so exceptions are documented in code review.
+Allow an explicit allow-list of pairs (`"Payouts.Approve -> Payouts.Submit.Contracts"`) with a reason string, so exceptions are documented in code review.
 :::
 
 ## Automated testing
@@ -1228,44 +1253,44 @@ Slices make the test structure obvious: **one test class per slice**, named afte
 **1. Handler tests with real in-memory infrastructure.** Because each handler has one or two dependencies, you rarely need mocks.
 
 ```csharp
-public class SubmitInspectionTests
+public class SubmitReturnTests
 {
     private sealed class FixedClock(DateTimeOffset now) : TimeProvider { public override DateTimeOffset GetUtcNow() => now; }
 
     [Fact]
     public async Task Saves_and_returns_id()
     {
-        var store = new InMemoryInspectionStore();
-        var handler = new SubmitInspectionHandler(store, new FixedClock(new DateTimeOffset(2026, 10, 20, 9, 0, 0, TimeSpan.Zero)));
-        var result = await handler.HandleAsync(new("nh48", "12+400", "GSB compaction", "contractor.qe", new DateOnly(2026, 10, 23)), default);
+        var store = new InMemoryReturnStore();
+        var handler = new SubmitReturnHandler(store, new FixedClock(new DateTimeOffset(2026, 10, 20, 9, 0, 0, TimeSpan.Zero)));
+        var result = await handler.HandleAsync(new("blr", "ORD-10000400", "Wrong size: received UK 7", "cust-81234", new DateOnly(2026, 10, 23)), default);
 
         Assert.True(result.IsSuccess);
         var saved = await store.FindAsync(result.Value!.Id, default);
-        Assert.Equal("NH48", saved!.ProjectCode);   // normalised by the handler
+        Assert.Equal("BLR", saved!.CityCode);   // normalised by the handler
     }
 
     [Fact]
-    public async Task Past_due_date_is_rejected()
+    public async Task Past_pickup_date_is_rejected()
     {
-        var handler = new SubmitInspectionHandler(new InMemoryInspectionStore(), new FixedClock(new DateTimeOffset(2026, 10, 20, 9, 0, 0, TimeSpan.Zero)));
-        var result = await handler.HandleAsync(new("NH48", "12+400", "GSB", "qe", new DateOnly(2026, 10, 1)), default);
-        Assert.True(result.Errors!.ContainsKey("DueBy"));
+        var handler = new SubmitReturnHandler(new InMemoryReturnStore(), new FixedClock(new DateTimeOffset(2026, 10, 20, 9, 0, 0, TimeSpan.Zero)));
+        var result = await handler.HandleAsync(new("BLR", "ORD-10000400", "Damaged box", "cust-81234", new DateOnly(2026, 10, 1)), default);
+        Assert.True(result.Errors!.ContainsKey("PickupBy"));
     }
 }
 ```
 
-**2. Entity tests for shared rules.** `Inspection.Approve` twice must throw. Test it once on the entity, not in every slice.
+**2. Entity tests for shared rules.** `ReturnRequest.Approve` twice must throw. Test it once on the entity, not in every slice.
 
-**3. Endpoint tests.** With `WebApplicationFactory<Program>` (from `Microsoft.AspNetCore.Mvc.Testing`) you can send a real HTTP request to `POST /inspections` and assert the `201` and `Location` header. Keep a few of these per slice to catch routing and binding mistakes.
+**3. Endpoint tests.** With `WebApplicationFactory<Program>` (from `Microsoft.AspNetCore.Mvc.Testing`) you can send a real HTTP request to `POST /returns` and assert the `201` and `Location` header. Keep a few of these per slice to catch routing and binding mistakes.
 
 **4. Architecture tests.** Exercise 5's rule, run against the real assembly in CI, keeps slices independent as the team grows.
 
-Edge cases worth a test: approving an unknown id (`404`), approving twice (`409`), project codes in different cases, and a request with every field invalid (all errors returned together).
+Edge cases worth a test: approving an unknown id (`404`), approving twice (`409`), city codes in different cases, a request with no signed-in user (`401`), and a request with every field invalid (all errors returned together).
 
 ## Real-world application
 
 - **Line-of-business apps** (HR, procurement, project management) are the natural home for slices: dozens of screens, each with its own form, rules and report.
-- **Infrastructure project platforms** often have modules such as inspections, measurement books, bills and correspondence. Inside each module, use cases like "raise RFI", "close NCR" or "certify RA bill" map neatly to slices, while the module boundary itself follows the [modular monolith](#/lesson/m02-modular-monolith) approach.
+- **E-commerce and food-delivery back offices** often have modules such as returns, seller payouts, catalogue and customer support. Inside each module, use cases like "request return", "approve payout" or "pause restaurant listing" map neatly to slices, while the module boundary itself follows the [modular monolith](#/lesson/m02-modular-monolith) approach.
 - **Public sample apps**: the .NET community has several open-source VSA templates built on minimal APIs. Read one to see how others organise slices, but don't copy a template's folder layout without asking whether your app needs it.
 - **Combining styles**: many teams use slices for the application layer and a shared domain project for entities and value objects. Vertical slices and [Clean Architecture](#/lesson/m02-clean-onion) are compatible. What they disagree about is whether every use case must pass through the same layers of abstraction.
 
@@ -1283,7 +1308,7 @@ Layers group code by technical role (controllers, services, repositories), so on
 ::q intermediate
 Where do business rules that several slices need go?
 ::a
-Into the domain model, usually as methods on the entity or as value objects. For example, `Inspection.Approve()` enforces "only once, only from Submitted", and any slice that approves goes through it. Slices should hold use-case orchestration and input validation, not invariants. If rules only live in slices, two slices drift apart and you get inconsistent behaviour.
+Into the domain model, usually as methods on the entity or as value objects. For example, `ReturnRequest.Approve()` enforces "only once, only from Submitted", and any slice that approves goes through it. Slices should hold use-case orchestration and input validation, not invariants. If rules only live in slices, two slices drift apart and you get inconsistent behaviour.
 ::q intermediate
 How do you handle cross-cutting concerns like validation, logging and transactions?
 ::a
@@ -1334,28 +1359,28 @@ A: A uniform pipeline and request-to-handler dispatch. It costs indirection, a d
 
 :::quiz pass=70
 ::q single
-A product owner asks to "let consultants reject an RFI with a reason". In a well-structured vertical-slice app, what is the expected change?
-- [ ] Edit the shared `InspectionService`, its interface, the controller and the repository.
-- [x] Add a new `RejectInspection` slice and, if needed, a `Reject` method on the `Inspection` entity.
-- [ ] Copy the `ApproveInspection` slice and change it to call the approve handler with a flag.
+A product owner asks to "let support agents reject a return request with a reason". In a well-structured vertical-slice app, what is the expected change?
+- [ ] Edit the shared `ReturnService`, its interface, the controller and the repository.
+- [x] Add a new `RejectReturn` slice and, if needed, a `Reject` method on the `ReturnRequest` entity.
+- [ ] Copy the `ApproveReturn` slice and change it to call the approve handler with a flag.
 - [ ] Add a new microservice for rejections.
 > A new use case is a new slice. The lifecycle rule (only Submitted can be rejected) goes on the entity, so it is shared correctly.
 ::q single
-`ApproveInspectionHandler` injects `GetOpenInspectionsHandler` to check whether an inspection is still open. What is the main problem?
+`ApproveReturnHandler` injects `GetOpenReturnsHandler` to check whether a return request is still open. What is the main problem?
 - [ ] It is slower.
 - [x] It couples two slices, so a change to the dashboard query can break approval.
 - [ ] Handlers can't be injected.
 - [ ] Nothing, reuse is always good.
-> Slices should not depend on each other. Approval should load the inspection and check its status, or call a method on the entity.
+> Slices should not depend on each other. Approval should load the return request and check its status, or call a method on the entity.
 ::q multi
 Which belong in the shared kernel of a slice-based app? (Select all that apply.)
-- [x] The `Inspection` entity with its invariants, used by four slices.
+- [x] The `ReturnRequest` entity with its invariants, used by four slices.
 - [x] The database context.
 - [ ] A response DTO used by one dashboard query.
 - [ ] A helper method used by one slice "in case others need it".
 > Share what is genuinely common and must change in one place. One-slice code stays in that slice.
 ::q single
-Two slices map `Inspection` into response records that look 80 % the same. What should you do?
+Two slices map `ReturnRequest` into response records that look 80 % the same. What should you do?
 - [ ] Always merge them into one shared DTO.
 - [x] Keep them separate unless they must change together for the same reason.
 - [ ] Delete one of the endpoints.
@@ -1369,8 +1394,8 @@ Your internal tool has 7 endpoints over 3 tables, one developer, and no complex 
 - [ ] One microservice per table.
 > The benefits of slices come from many use cases and many contributors. Here the extra structure is pure cost.
 ::q single
-How should a query slice for "open inspections on project NH48" read data?
-- [ ] Load all inspections through a shared repository and filter in memory.
+How should a query slice for "open returns in city BLR" read data?
+- [ ] Load all return requests through a shared repository and filter in memory.
 - [x] Filter and project at the source (for example a no-tracking LINQ query that runs as SQL) into the response shape.
 - [ ] Call the submit handler to get the list.
 - [ ] Use the domain entity's methods to compute the list.

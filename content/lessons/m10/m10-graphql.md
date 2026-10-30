@@ -43,17 +43,17 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Imagine ordering lunch for a project site office.
+Imagine the "My courses" screen of an online learning app, the kind a college student opens between lectures. Think of the app collecting the screen's data the way you collect lunch at a busy college canteen.
 
-**The REST way** is a set menu at several counters. Counter 1 gives you "the list of packages" — but each plate comes with everything: name, budget, location, 30 other fields you didn't need (*over-fetching*). It doesn't include the contractor's name, so you walk to counter 2 for each package's contractor, then to counter 3 for each package's milestones (*under-fetching*: one response wasn't enough, so you make more trips).
+**The REST way** is a set menu at several counters. Counter 1 gives you "the list of my courses" — but each plate comes with everything: name, syllabus, fee, language, 30 other fields the screen doesn't need (*over-fetching*). It doesn't include the instructor's name, so you walk to counter 2 for each course's instructor, then to counter 3 for each course's assignments (*under-fetching*: one response wasn't enough, so you make more trips).
 
 **The GraphQL way** is a single counter with an order form. You write exactly what you want:
 
-> For my 10 packages: the code, the progress percentage, the contractor's name, and the next two milestones.
+> For my 10 courses: the code, the progress percentage, the instructor's name, and the next two assignments.
 
 You hand it over once and get back one tray with exactly that, arranged the way you wrote it.
 
-The catch is behind the counter. The kitchen now receives custom orders it can't predict. If a cook fetches each contractor's details one at a time — walking to the store room 10 times for 10 packages — the kitchen gets slow (*the N+1 problem*). A smart cook collects all 10 contractor names first and makes one trip (*DataLoader batching*). And the kitchen needs rules, or someone will order "every package, with every milestone, with every defect, with every photo of every defect" and block the kitchen for everyone (*query depth and cost limits*).
+The catch is behind the counter. The kitchen now receives custom orders it can't predict. If a cook fetches each instructor's details one at a time — walking to the store room 10 times for 10 courses — the kitchen gets slow (*the N+1 problem*). A smart cook collects all 10 instructor names first and makes one trip (*DataLoader batching*). And the kitchen needs rules, or someone will order "every course, with every assignment, with every submission, with every comment on every submission" and block the kitchen for everyone (*query depth and cost limits*).
 
 ## First-principles explanation
 
@@ -66,41 +66,42 @@ GraphQL is a query language for APIs plus a runtime that executes those queries 
 - **The client selects fields**. The response mirrors the query's shape exactly.
 - **Introspection**: the schema is queryable, which powers tooling (autocomplete, typed client generation).
 
-A schema for our scenario — a contractor-portfolio dashboard for highway packages:
+A schema for our scenario — a student dashboard on an online course platform (think of a university's e-learning portal, or a site like Coursera or SWAYAM):
 
 ```graphql
 type Query {
-  packages(first: Int = 10, after: String): PackageConnection!
-  package(code: ID!): Package
+  courses(first: Int = 10, after: String): CourseConnection!
+  course(code: ID!): Course
 }
 
-type Package {
+type Course {
   code: ID!
   name: String!
-  physicalProgress: Float!          # percent complete, 0–100
-  contractor: Contractor!
-  milestones(first: Int = 5): [Milestone!]!
-  openDefects(severity: Severity): Int!
+  progress: Float!          # percent complete, 0–100
+  instructor: Instructor!
+  assignments(first: Int = 5): [Assignment!]!
+  pendingAssignments(status: AssignmentStatus = PENDING): Int!
+  unreadAnnouncements: Int!
 }
 
-type Contractor { id: ID!  name: String!  city: String! }
+type Instructor { id: ID!  name: String!  city: String! }
 
-type Milestone { name: String!  due: Date!  done: Boolean! }
+type Assignment { name: String!  due: Date!  submitted: Boolean! }
 
-enum Severity { LOW MEDIUM HIGH CRITICAL }
+enum AssignmentStatus { PENDING SUBMITTED GRADED LATE }
 
-type PackageConnection {
-  edges: [PackageEdge!]!
+type CourseConnection {
+  edges: [CourseEdge!]!
   pageInfo: PageInfo!
 }
-type PackageEdge { cursor: String!  node: Package! }
+type CourseEdge { cursor: String!  node: Course! }
 type PageInfo { hasNextPage: Boolean!  endCursor: String }
 
 type Mutation {
   recordProgress(input: RecordProgressInput!): RecordProgressPayload!
 }
-input RecordProgressInput { packageCode: ID!  physicalProgress: Float!  asOf: Date! }
-type RecordProgressPayload { package: Package  errors: [UserError!]! }
+input RecordProgressInput { courseCode: ID!  progress: Float!  asOf: Date! }
+type RecordProgressPayload { course: Course  errors: [UserError!]! }
 type UserError { field: String  message: String! }
 
 scalar Date
@@ -109,14 +110,14 @@ scalar Date
 And a query the mobile app sends:
 
 ```graphql
-query PortfolioScreen {
-  packages(first: 10) {
+query DashboardScreen {
+  courses(first: 10) {
     edges {
       node {
         code
-        physicalProgress
-        contractor { name }
-        milestones(first: 2) { name due done }
+        progress
+        instructor { name }
+        assignments(first: 2) { name due submitted }
       }
     }
     pageInfo { hasNextPage endCursor }
@@ -132,25 +133,25 @@ Notes on the schema design:
 
 ### Over-fetching and under-fetching, with numbers
 
-The portfolio screen with a REST API designed resource by resource (estimates for illustration):
+The dashboard screen with a REST API designed resource by resource (estimates for illustration):
 
-- `GET /v1/packages?limit=10` → 10 packages × ~2 KB of fields each = 20 KB, of which the screen uses ~3 fields (*over-fetching*).
-- For each package, `GET /v1/contractors/{id}` → 10 calls (*under-fetching*).
-- For each package, `GET /v1/packages/{code}/milestones?limit=2` → 10 calls.
+- `GET /v1/courses?limit=10` → 10 courses × ~2 KB of fields each = 20 KB, of which the screen uses ~3 fields (*over-fetching*).
+- For each course, `GET /v1/instructors/{id}` → 10 calls (*under-fetching*).
+- For each course, `GET /v1/courses/{code}/assignments?limit=2` → 10 calls.
 
-That is **21 requests**. On 4G with an 80 ms RTT, even with HTTP/2 multiplexing the calls are in **3 dependent waves** (packages first, then contractors and milestones in parallel): ≥ 3 × 80 = 240 ms of pure latency, plus per-request overhead. With HTTP/1.1 and 6 connections it's worse.
+That is **21 requests**. On 4G with an 80 ms RTT, even with HTTP/2 multiplexing the calls are in **3 dependent waves** (courses first, then instructors and assignments in parallel): ≥ 3 × 80 = 240 ms of pure latency, plus per-request overhead. With HTTP/1.1 and 6 connections it's worse.
 
 With GraphQL: **1 request**, ~3 KB response, ~1 RTT plus server time.
 
-REST can fix this too — a purpose-built `GET /v1/portfolio-screen` endpoint (a **Backend for Frontend**, [see BFF](#/lesson/m16-gateway-bff)), or `?fields=` and `?include=contractor` parameters. That's often the simplest answer when you have one or two clients. GraphQL shines when **many different clients and screens** need different slices of a connected data graph and you don't want to build an endpoint per screen.
+REST can fix this too — a purpose-built `GET /v1/dashboard-screen` endpoint (a **Backend for Frontend**, [see BFF](#/lesson/m16-gateway-bff)), or `?fields=` and `?include=instructor` parameters. That's often the simplest answer when you have one or two clients. GraphQL shines when **many different clients and screens** need different slices of a connected data graph and you don't want to build an endpoint per screen.
 
 ### How execution works: resolvers
 
 The server parses the query text into a syntax tree, **validates** it against the schema (unknown fields, wrong argument types, and limit rules are rejected before any data is touched), then **executes** it. Execution walks the selection tree; each field has a **resolver** — a function that returns that field's value given its parent object:
 
-- `Query.packages(first: 10)` → reads 10 packages.
-- `Package.contractor` → called **once per package**, with that package as parent.
-- `Package.milestones(first: 2)` → called **once per package**.
+- `Query.courses(first: 10)` → reads 10 courses.
+- `Course.instructor` → called **once per course**, with that course as parent.
+- `Course.assignments(first: 2)` → called **once per course**.
 - Scalar fields like `code` → usually just read a property.
 
 Top-level `Query` fields may run in parallel; top-level `Mutation` fields run **serially**, in order, as the spec requires.
@@ -160,11 +161,11 @@ The response:
 ```json
 {
   "data": {
-    "packages": {
+    "courses": {
       "edges": [
-        { "node": { "code": "NH48-PKG3", "physicalProgress": 62.5,
-                    "contractor": { "name": "Deccan Infra Ltd" },
-                    "milestones": [ { "name": "Bridge deck pour", "due": "2026-11-15", "done": false } ] } }
+        { "node": { "code": "DSA-101", "progress": 62.5,
+                    "instructor": { "name": "Priya Raman" },
+                    "assignments": [ { "name": "Linked list lab", "due": "2026-11-15", "submitted": false } ] } }
       ],
       "pageInfo": { "hasNextPage": true, "endCursor": "YXJyYXk6OQ==" }
     }
@@ -174,12 +175,12 @@ The response:
 
 ### Errors are part of the data
 
-If `milestones` fails for one package, a GraphQL server can still return everything else, with an `errors` array that points at the failing path:
+If `assignments` fails for one course, a GraphQL server can still return everything else, with an `errors` array that points at the failing path:
 
 ```json
 {
-  "data": { "packages": { "edges": [ { "node": { "code": "NH48-PKG3", "milestones": null } } ] } },
-  "errors": [ { "message": "Milestone service unavailable", "path": ["packages", "edges", 0, "node", "milestones"] } ]
+  "data": { "courses": { "edges": [ { "node": { "code": "DSA-101", "assignments": null } } ] } },
+  "errors": [ { "message": "Assignment service unavailable", "path": ["courses", "edges", 0, "node", "assignments"] } ]
 }
 ```
 
@@ -187,41 +188,41 @@ This **partial success** is powerful for dashboards (one broken widget doesn't b
 
 ### The N+1 problem, server side
 
-GraphQL moves the client's 21 round trips *inside* your server. The naive resolver for `Package.contractor`:
+GraphQL moves the client's 21 round trips *inside* your server. The naive resolver for `Course.instructor`:
 
 ```csharp
-// Runs once per package: 10 packages → 10 queries
-public Task<Contractor> GetContractor([Parent] Package p, AppDb db) =>
-    db.Contractors.SingleAsync(c => c.Id == p.ContractorId);
+// Runs once per course: 10 courses → 10 queries
+public Task<Instructor> GetInstructor([Parent] Course p, AppDb db) =>
+    db.Instructors.SingleAsync(c => c.Id == p.InstructorId);
 ```
 
-For `packages(first: 10)` that's 1 query for packages + 10 for contractors + 10 for milestones = **21 database queries** per request. With `first: 50` it's 101. With nested lists (packages → milestones → assignees) it grows multiplicatively. At 200 requests per second, 21 queries each is 4,200 queries per second — mostly tiny, latency-bound round trips that keep connection-pool slots busy ([see connection pooling](#/lesson/m09-connection-pooling)).
+For `courses(first: 10)` that's 1 query for courses + 10 for instructors + 10 for assignments = **21 database queries** per request. With `first: 50` it's 101. With nested lists (courses → assignments → assignees) it grows multiplicatively. At 200 requests per second, 21 queries each is 4,200 queries per second — mostly tiny, latency-bound round trips that keep connection-pool slots busy ([see connection pooling](#/lesson/m09-connection-pooling)).
 
 ### DataLoader: batch and cache per request
 
 **DataLoader** (named after the original JavaScript library from Facebook) fixes this with two ideas:
 
-1. **Batching.** Resolvers don't fetch; they ask a loader for a key (`contractorLoader.LoadAsync(17)`) and get a promise (a `Task`). The loader collects all keys requested while the current level of the query is being resolved, then makes **one** call: `SELECT * FROM contractor WHERE id = ANY(@ids)`. Each waiting resolver receives its own item.
-2. **Per-request caching (deduplication).** If 10 packages share 3 contractors, the batch contains 3 ids, not 10, and repeated loads of the same key within the request return the same task.
+1. **Batching.** Resolvers don't fetch; they ask a loader for a key (`instructorLoader.LoadAsync(17)`) and get a promise (a `Task`). The loader collects all keys requested while the current level of the query is being resolved, then makes **one** call: `SELECT * FROM instructor WHERE id = ANY(@ids)`. Each waiting resolver receives its own item.
+2. **Per-request caching (deduplication).** If 10 courses share 3 instructors, the batch contains 3 ids, not 10, and repeated loads of the same key within the request return the same task.
 
-Result: 1 (packages) + 1 (contractors) + 1 (milestones) = **3 queries**, whatever `first` is. The cache is **per request**, not global: it exists to deduplicate within one query's execution, not to replace a real cache, and sharing it between users would leak data and serve stale values.
+Result: 1 (courses) + 1 (instructors) + 1 (assignments) = **3 queries**, whatever `first` is. The cache is **per request**, not global: it exists to deduplicate within one query's execution, not to replace a real cache, and sharing it between users would leak data and serve stale values.
 
-Batching changes your repository contract: every loader needs a "get many by keys" method that returns results keyed by id (`IReadOnlyDictionary<int, Contractor>`), and for one-to-many relations, a lookup (`ILookup<string, Milestone>`). Missing keys must map to `null`, not shift positions.
+Batching changes your repository contract: every loader needs a "get many by keys" method that returns results keyed by id (`IReadOnlyDictionary<int, Instructor>`), and for one-to-many relations, a lookup (`ILookup<string, Assignment>`). Missing keys must map to `null`, not shift positions.
 
 ### Why caching is harder
 
-REST gets HTTP caching almost for free: `GET /v1/packages/NH48-PKG3` has a URL, a CDN can key on it, `ETag`s work ([see HTTP fundamentals](#/lesson/m10-http-fundamentals)). GraphQL breaks this:
+REST gets HTTP caching almost for free: `GET /v1/courses/DSA-101` has a URL, a CDN can key on it, `ETag`s work ([see HTTP fundamentals](#/lesson/m10-http-fundamentals)). GraphQL breaks this:
 
 - Queries usually go as `POST` to one URL. HTTP caches don't cache `POST`.
 - Every client query is a different shape, so even a `GET /graphql?query=...` URL has low reuse.
-- One response mixes public data (contractor name) and private data (my assigned defects), with different freshness.
+- One response mixes public data (instructor name) and private data (my grades), with different freshness.
 
 Techniques that recover caching:
 
 | Technique | How it works | Good for |
 |---|---|---|
 | **Persisted / trusted documents** | At build time, the client registers each query; at runtime it sends only a hash (`GET /graphql?id=sha256:ab12...&variables=...`). | CDN caching of public queries; also a security allowlist |
-| **Client normalised cache** (Apollo Client, Relay, urql) | The client stores objects by `__typename` + `id`, so a `Contractor:17` fetched by one query satisfies another. | Fewer requests from one app |
+| **Client normalised cache** (Apollo Client, Relay, urql) | The client stores objects by `__typename` + `id`, so a `Instructor:17` fetched by one query satisfies another. | Fewer requests from one app |
 | **Server-side response cache** | Cache whole responses keyed by (document hash, variables, user scope). | Expensive, popular, public queries |
 | **Field- or entity-level cache** | Cache resolver results or loader batches in Redis with TTLs. | Hot entities shared across many queries |
 | **`@cacheControl`-style hints** | Schema annotations compute a response's max-age from its least cacheable field (supported by some servers). | Mixed public/private responses |
@@ -234,14 +235,14 @@ Clients control the query, so a single request can be enormously expensive:
 
 ```graphql
 query Bomb {
-  packages(first: 100) { edges { node {
-    milestones(first: 100) { name
-      package { milestones(first: 100) { name
-        package { milestones(first: 100) { name } } } } } } } }
+  courses(first: 100) { edges { node {
+    assignments(first: 100) { name
+      course { assignments(first: 100) { name
+        course { assignments(first: 100) { name } } } } } } } }
 }
 ```
 
-That's 100 × 100 × 100 × 100 = 100 million milestone resolutions from one small request — an accidental or deliberate denial of service. Defences, in layers:
+That's 100 × 100 × 100 × 100 = 100 million assignment resolutions from one small request — an accidental or deliberate denial of service. Defences, in layers:
 
 1. **Pagination caps.** Every list field takes `first`, with a maximum (say 50). No unbounded lists in the schema.
 2. **Depth limit.** Reject queries nested deeper than, say, 8–10 levels during validation.
@@ -251,7 +252,7 @@ That's 100 × 100 × 100 × 100 = 100 million milestone resolutions from one sma
 6. **Rate limiting by cost**, not by request count: 1 request costing 5,000 points should count as much as 50 requests costing 100 ([see rate limiting](#/lesson/m10-rate-limiting)).
 7. **Introspection** off in production for private APIs, as one layer of reducing surface — not as a security boundary.
 
-Also remember **authorisation per field and per object**: a query can reach any object through relationships (`package → contractor → bankAccounts`), so checks belong in resolvers or a policy layer, not only at the endpoint.
+Also remember **authorisation per field and per object**: a query can reach any object through relationships (`course → instructor → payoutAccount`), so checks belong in resolvers or a policy layer, not only at the endpoint.
 
 ### Versioning and evolution
 
@@ -296,11 +297,12 @@ flowchart LR
     Val --> Exec["Execute resolvers"]
     Exec --> DL["Per-request DataLoaders"]
     DL -->|"WHERE id = ANY(ids)"| DB[("PostgreSQL")]
-    DL -->|"batch endpoint"| MS["Milestone service (REST)"]
+    DL -->|"batch endpoint"| MS["Assignment service (REST)"]
     Exec --> Redis[("Entity cache (Redis)")]
 ```
 
-Apps send **registered (persisted) queries** by hash with `GET`, so the **CDN** can cache public results such as the contractor directory; personalised queries go as `POST` straight to the **GraphQL server**. Every request is first **parsed and validated**, which is where depth and cost limits reject abusive queries before any data access. **Execution** calls resolvers, which never hit the database directly for related objects; they go through **per-request DataLoaders**, which batch keys into one `ANY(@ids)` SQL query or one call to the milestone service's batch endpoint. A shared **Redis entity cache** holds hot, slow-changing objects across requests. The DataLoader cache dies with the request; the Redis cache does not.
+Apps send **registered (persisted) queries** by hash with `GET`, so the **CDN** can cache public results such as the course catalogue and instructor directory;
+ personalised queries go as `POST` straight to the **GraphQL server**. Every request is first **parsed and validated**, which is where depth and cost limits reject abusive queries before any data access. **Execution** calls resolvers, which never hit the database directly for related objects; they go through **per-request DataLoaders**, which batch keys into one `ANY(@ids)` SQL query or one call to the assignment service's batch endpoint. A shared **Redis entity cache** holds hot, slow-changing objects across requests. The DataLoader cache dies with the request; the Redis cache does not.
 
 ### Sequence: naive resolvers versus DataLoader
 
@@ -309,125 +311,125 @@ sequenceDiagram
     participant C as App
     participant G as GraphQL server
     participant D as Database
-    C->>G: query packages(first 3) with contractor name
-    G->>D: SELECT packages LIMIT 3
-    D-->>G: 3 packages (contractors 17, 17, 42)
-    Note over G,D: Naive resolvers - one query per package
-    G->>D: SELECT contractor WHERE id = 17
-    G->>D: SELECT contractor WHERE id = 17
-    G->>D: SELECT contractor WHERE id = 42
+    C->>G: query courses(first 3) with instructor name
+    G->>D: SELECT courses LIMIT 3
+    D-->>G: 3 courses (instructors 17, 17, 42)
+    Note over G,D: Naive resolvers - one query per course
+    G->>D: SELECT instructor WHERE id = 17
+    G->>D: SELECT instructor WHERE id = 17
+    G->>D: SELECT instructor WHERE id = 42
     Note over G,D: With DataLoader - keys collected, deduplicated, batched
-    G->>D: SELECT contractor WHERE id = ANY(17, 42)
-    D-->>G: 2 contractors
-    G-->>C: data with 3 packages and contractor names
+    G->>D: SELECT instructor WHERE id = ANY(17, 42)
+    D-->>G: 2 instructors
+    G-->>C: data with 3 courses and instructor names
 ```
 
-The first query returns three packages that reference contractors 17, 17 and 42. Naive resolvers run once per package and issue three separate queries — two of them identical. With a DataLoader, each resolver only *registers* its key; when the level finishes, the loader deduplicates to {17, 42} and issues **one** query, then hands each resolver its contractor. With 50 packages the naive path makes 50 queries; the loader still makes one.
+The first query returns three courses that reference instructors 17, 17 and 42. Naive resolvers run once per course and issue three separate queries — two of them identical. With a DataLoader, each resolver only *registers* its key; when the level finishes, the loader deduplicates to {17, 42} and issues **one** query, then hands each resolver its instructor. With 50 courses the naive path makes 50 queries; the loader still makes one.
 
 ## Step-by-step example
 
-**Goal**: serve the portfolio screen for 5,000 field and office users across 120 packages.
+**Goal**: serve the dashboard screen for a college's e-learning portal: 5,000 students and teachers across 120 courses.
 
-**Step 1 — estimate load.** 5,000 users × 20 screen loads/day = 100,000 queries/day ≈ 1.2 per second on average; office-hour peak, say 10× → ~12 queries per second. Small. The risk isn't volume, it's *cost per query*.
+**Step 1 — estimate load.** 5,000 users × 20 screen loads/day = 100,000 queries/day ≈ 1.2 per second on average; evening study-hour peak, say 10× → ~12 queries per second. Small. The risk isn't volume, it's *cost per query*.
 
-**Step 2 — count resolver work per query.** `packages(first: 10)` with contractor and 2 milestones: naive = 21 DB round trips; at ~1 ms each inside one data centre plus pool waits, maybe 25–40 ms (estimate). With DataLoaders: 3 round trips.
+**Step 2 — count resolver work per query.** `courses(first: 10)` with instructor and 2 assignments: naive = 21 DB round trips; at ~1 ms each inside one data centre plus pool waits, maybe 25–40 ms (estimate). With DataLoaders: 3 round trips.
 
-**Step 3 — set limits.** Max `first` = 50. Depth ≤ 8. Cost: each field 1, list fields multiply children by `first` (default 10). Ignoring the connection wrapper fields, the portfolio query costs 1 + 10 × (code 1 + physicalProgress 1 + contractor (1 + 1) + milestones (1 + 2 × 3)) = 1 + 10 × 11 = 111 points (we'll compute this in code). Budget: 1,000 for first-party apps.
+**Step 3 — set limits.** Max `first` = 50. Depth ≤ 8. Cost: each field 1, list fields multiply children by `first` (default 10). Ignoring the connection wrapper fields, the dashboard query costs 1 + 10 × (code 1 + progress 1 + instructor (1 + 1) + assignments (1 + 2 × 3)) = 1 + 10 × 11 = 111 points (we'll compute this in code). Budget: 1,000 for first-party apps.
 
-**Step 4 — decide caching.** The contractor directory (public, changes weekly): persisted query via `GET`, CDN `max-age=3600`. The portfolio screen (per user's packages): no CDN; DataLoaders plus a Redis cache for contractors with a 10-minute TTL.
+**Step 4 — decide caching.** The course catalogue and instructor directory (public, changes weekly): persisted query via `GET`, CDN `max-age=3600`. The dashboard screen (per student's courses and progress): no CDN; DataLoaders plus a Redis cache for instructors with a 10-minute TTL.
 
 **Step 5 — monitoring.** Log each operation's name, cost, duration and error count; alert on `errors` rate per operation, not only HTTP 5xx.
 
 ## Production-style C# implementation
 
-Production .NET GraphQL servers usually use **Hot Chocolate** or **GraphQL.NET**. Those packages aren't available in this course's offline checker, so the compiled code below implements the two pieces that matter most for system design — a **batching DataLoader** and **depth/cost analysis** — plus a small executor and endpoint that model what a GraphQL server does with a parsed selection tree. Then we show the equivalent Hot Chocolate setup.
+Production .NET GraphQL servers usually use **Hot Chocolate** or **GraphQL.NET**. Those libraries aren't available in this course's offline checker, so the compiled code below implements the two pieces that matter most for system design — a **batching DataLoader** and **depth/cost analysis** — plus a small executor and endpoint that model what a GraphQL server does with a parsed selection tree. Then we show the equivalent Hot Chocolate setup.
 
 ```text
-Portfolio.Api/
+Learning.Api/
   Program.cs
-  Portfolio/Models.cs
-  Portfolio/Repositories.cs
+  Learning/Models.cs
+  Learning/Repositories.cs
   GraphQL/BatchDataLoader.cs
   GraphQL/QueryAnalysis.cs
-  GraphQL/PortfolioExecutor.cs
+  GraphQL/DashboardExecutor.cs
 ```
 
-```csharp file=Portfolio/Models.cs
-namespace Portfolio.Domain;
+```csharp file=Learning/Models.cs
+namespace Learning.Domain;
 
-public sealed record Package(string Code, string Name, int ContractorId, decimal PhysicalProgress);
+public sealed record Course(string Code, string Name, int InstructorId, decimal Progress);
 
-public sealed record Contractor(int Id, string Name, string City);
+public sealed record Instructor(int Id, string Name, string City);
 
-public sealed record Milestone(string PackageCode, string Name, DateOnly Due, bool Done);
+public sealed record Assignment(string CourseCode, string Name, DateOnly Due, bool Submitted);
 ```
 
-```csharp file=Portfolio/Repositories.cs
-namespace Portfolio.Domain;
+```csharp file=Learning/Repositories.cs
+namespace Learning.Domain;
 
-public interface IPackageRepository
+public interface ICourseRepository
 {
-    Task<IReadOnlyList<Package>> ListAsync(int first, CancellationToken ct);
+    Task<IReadOnlyList<Course>> ListAsync(int first, CancellationToken ct);
 }
 
 /// <summary>Batch-shaped contracts: one call for many keys. This is what DataLoaders need.</summary>
-public interface IContractorRepository
+public interface IInstructorRepository
 {
-    Task<IReadOnlyDictionary<int, Contractor>> GetByIdsAsync(IReadOnlyList<int> ids, CancellationToken ct);
+    Task<IReadOnlyDictionary<int, Instructor>> GetByIdsAsync(IReadOnlyList<int> ids, CancellationToken ct);
 }
 
-public interface IMilestoneRepository
+public interface IAssignmentRepository
 {
-    Task<IReadOnlyDictionary<string, IReadOnlyList<Milestone>>> GetByPackageCodesAsync(IReadOnlyList<string> codes, CancellationToken ct);
+    Task<IReadOnlyDictionary<string, IReadOnlyList<Assignment>>> GetByCourseCodesAsync(IReadOnlyList<string> codes, CancellationToken ct);
 }
 
 /// <summary>In-memory data with call counters, so tests and logs can show N+1 versus batched access.</summary>
-public sealed class InMemoryPortfolioStore : IPackageRepository, IContractorRepository, IMilestoneRepository
+public sealed class InMemoryLearningStore : ICourseRepository, IInstructorRepository, IAssignmentRepository
 {
-    private readonly List<Package> _packages =
+    private readonly List<Course> _courses =
     [
-        new("NH48-PKG3", "Pune–Satara six-laning", 17, 62.5m),
-        new("NH48-PKG4", "Satara–Kolhapur six-laning", 17, 41.0m),
-        new("NH44-PKG1", "Nagpur ring road", 42, 78.2m),
+        new("DSA-101", "Data Structures in C#", 17, 62.5m),
+        new("DSA-102", "Algorithms in C#", 17, 41.0m),
+        new("SQL-201", "PostgreSQL for Developers", 42, 78.2m),
     ];
-    private readonly Dictionary<int, Contractor> _contractors = new()
+    private readonly Dictionary<int, Instructor> _instructors = new()
     {
-        [17] = new(17, "Deccan Infra Ltd", "Pune"),
-        [42] = new(42, "Vidarbha Roadways", "Nagpur"),
+        [17] = new(17, "Priya Raman", "Pune"),
+        [42] = new(42, "Arjun Mehta", "Nagpur"),
     };
-    private readonly List<Milestone> _milestones =
+    private readonly List<Assignment> _assignments =
     [
-        new("NH48-PKG3", "Bridge deck pour", new DateOnly(2026, 11, 15), false),
-        new("NH48-PKG3", "Toll plaza civil works", new DateOnly(2027, 1, 30), false),
-        new("NH44-PKG1", "Interchange opening", new DateOnly(2026, 12, 1), false),
+        new("DSA-101", "Linked list lab", new DateOnly(2026, 11, 15), false),
+        new("DSA-101", "Hash map quiz", new DateOnly(2027, 1, 30), false),
+        new("SQL-201", "Index tuning project", new DateOnly(2026, 12, 1), false),
     ];
 
-    public int ContractorCalls { get; private set; }
-    public int MilestoneCalls { get; private set; }
+    public int InstructorCalls { get; private set; }
+    public int AssignmentCalls { get; private set; }
 
-    public Task<IReadOnlyList<Package>> ListAsync(int first, CancellationToken ct) =>
-        Task.FromResult<IReadOnlyList<Package>>(_packages.Take(first).ToList());
+    public Task<IReadOnlyList<Course>> ListAsync(int first, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<Course>>(_courses.Take(first).ToList());
 
-    public Task<IReadOnlyDictionary<int, Contractor>> GetByIdsAsync(IReadOnlyList<int> ids, CancellationToken ct)
+    public Task<IReadOnlyDictionary<int, Instructor>> GetByIdsAsync(IReadOnlyList<int> ids, CancellationToken ct)
     {
-        ContractorCalls++;   // SQL: SELECT * FROM contractor WHERE id = ANY(@ids)
-        IReadOnlyDictionary<int, Contractor> found = ids.Where(_contractors.ContainsKey).Distinct().ToDictionary(id => id, id => _contractors[id]);
+        InstructorCalls++;   // SQL: SELECT * FROM instructor WHERE id = ANY(@ids)
+        IReadOnlyDictionary<int, Instructor> found = ids.Where(_instructors.ContainsKey).Distinct().ToDictionary(id => id, id => _instructors[id]);
         return Task.FromResult(found);
     }
 
-    public Task<IReadOnlyDictionary<string, IReadOnlyList<Milestone>>> GetByPackageCodesAsync(IReadOnlyList<string> codes, CancellationToken ct)
+    public Task<IReadOnlyDictionary<string, IReadOnlyList<Assignment>>> GetByCourseCodesAsync(IReadOnlyList<string> codes, CancellationToken ct)
     {
-        MilestoneCalls++;    // SQL: SELECT * FROM milestone WHERE package_code = ANY(@codes) ORDER BY due
-        IReadOnlyDictionary<string, IReadOnlyList<Milestone>> result = codes.Distinct().ToDictionary(
+        AssignmentCalls++;    // SQL: SELECT * FROM assignment WHERE course_code = ANY(@codes) ORDER BY due
+        IReadOnlyDictionary<string, IReadOnlyList<Assignment>> result = codes.Distinct().ToDictionary(
             code => code,
-            code => (IReadOnlyList<Milestone>)_milestones.Where(m => m.PackageCode == code).OrderBy(m => m.Due).ToList());
+            code => (IReadOnlyList<Assignment>)_assignments.Where(m => m.CourseCode == code).OrderBy(m => m.Due).ToList());
         return Task.FromResult(result);
     }
 }
 ```
 
 ```csharp file=GraphQL/BatchDataLoader.cs
-namespace Portfolio.GraphQL;
+namespace Learning.GraphQL;
 
 /// <summary>Per-request batching loader. Resolvers call LoadAsync; the executor calls DispatchAsync
 /// once per execution level, which fetches all pending keys in ONE call. Not thread-safe by design:
@@ -471,7 +473,7 @@ public sealed class BatchDataLoader<TKey, TValue>(
 ```
 
 ```csharp file=GraphQL/QueryAnalysis.cs
-namespace Portfolio.GraphQL;
+namespace Learning.GraphQL;
 
 /// <summary>A parsed field selection. A real server builds this tree from the query text.</summary>
 public sealed record FieldSelection(string Name, IReadOnlyList<FieldSelection>? Children = null, int? First = null)
@@ -514,43 +516,43 @@ public sealed class QueryAnalyzer(IReadOnlySet<string> listFields, QueryLimits l
 }
 ```
 
-```csharp file=GraphQL/PortfolioExecutor.cs
-using Portfolio.Domain;
+```csharp file=GraphQL/DashboardExecutor.cs
+using Learning.Domain;
 
-namespace Portfolio.GraphQL;
+namespace Learning.GraphQL;
 
 public sealed class UnknownFieldException(string field) : Exception($"Cannot query field '{field}'.");
 
-/// <summary>Executes { packages(first) { code name physicalProgress contractor { ... } milestones(first) { ... } } }
-/// level by level: resolve packages, register all child loads, dispatch each loader once, then fill rows.</summary>
-public sealed class PortfolioExecutor(IPackageRepository packages, IContractorRepository contractors, IMilestoneRepository milestones)
+/// <summary>Executes { courses(first) { code name progress instructor { ... } assignments(first) { ... } } }
+/// level by level: resolve courses, register all child loads, dispatch each loader once, then fill rows.</summary>
+public sealed class DashboardExecutor(ICourseRepository courses, IInstructorRepository instructors, IAssignmentRepository assignments)
 {
-    public async Task<List<Dictionary<string, object?>>> ExecutePackagesAsync(FieldSelection packagesField, CancellationToken ct)
+    public async Task<List<Dictionary<string, object?>>> ExecuteCoursesAsync(FieldSelection coursesField, CancellationToken ct)
     {
-        var contractorLoader = new BatchDataLoader<int, Contractor>(contractors.GetByIdsAsync);
-        var milestoneLoader = new BatchDataLoader<string, IReadOnlyList<Milestone>>(milestones.GetByPackageCodesAsync);
+        var instructorLoader = new BatchDataLoader<int, Instructor>(instructors.GetByIdsAsync);
+        var assignmentLoader = new BatchDataLoader<string, IReadOnlyList<Assignment>>(assignments.GetByCourseCodesAsync);
 
-        var list = await packages.ListAsync(packagesField.First ?? 10, ct);
+        var list = await courses.ListAsync(coursesField.First ?? 10, ct);
         var rows = new List<Dictionary<string, object?>>(list.Count);
         var deferred = new List<Func<Task>>();   // fill-ins that run after the loaders dispatch
 
         foreach (var p in list)
         {
             var row = new Dictionary<string, object?>();
-            foreach (var field in packagesField.Fields)
+            foreach (var field in coursesField.Fields)
             {
                 switch (field.Name)
                 {
                     case "code": row["code"] = p.Code; break;
                     case "name": row["name"] = p.Name; break;
-                    case "physicalProgress": row["physicalProgress"] = p.PhysicalProgress; break;
-                    case "contractor":
-                        var contractorTask = contractorLoader.LoadAsync(p.ContractorId);
-                        deferred.Add(async () => row["contractor"] = ProjectContractor(await contractorTask, field));
+                    case "progress": row["progress"] = p.Progress; break;
+                    case "instructor":
+                        var instructorTask = instructorLoader.LoadAsync(p.InstructorId);
+                        deferred.Add(async () => row["instructor"] = ProjectInstructor(await instructorTask, field));
                         break;
-                    case "milestones":
-                        var milestonesTask = milestoneLoader.LoadAsync(p.Code);
-                        deferred.Add(async () => row["milestones"] = ProjectMilestones(await milestonesTask, field));
+                    case "assignments":
+                        var assignmentsTask = assignmentLoader.LoadAsync(p.Code);
+                        deferred.Add(async () => row["assignments"] = ProjectAssignments(await assignmentsTask, field));
                         break;
                     default: throw new UnknownFieldException(field.Name);
                 }
@@ -558,13 +560,13 @@ public sealed class PortfolioExecutor(IPackageRepository packages, IContractorRe
             rows.Add(row);
         }
 
-        await contractorLoader.DispatchAsync(ct);   // one batch for all contractors on this level
-        await milestoneLoader.DispatchAsync(ct);    // one batch for all milestone lists
+        await instructorLoader.DispatchAsync(ct);   // one batch for all instructors on this level
+        await assignmentLoader.DispatchAsync(ct);    // one batch for all assignment lists
         foreach (var fill in deferred) await fill(); // tasks are complete; runs sequentially, no shared-state races
         return rows;
     }
 
-    private static Dictionary<string, object?>? ProjectContractor(Contractor? c, FieldSelection selection)
+    private static Dictionary<string, object?>? ProjectInstructor(Instructor? c, FieldSelection selection)
     {
         if (c is null) return null;
         var result = new Dictionary<string, object?>();
@@ -579,7 +581,7 @@ public sealed class PortfolioExecutor(IPackageRepository packages, IContractorRe
         return result;
     }
 
-    private static List<Dictionary<string, object?>> ProjectMilestones(IReadOnlyList<Milestone>? all, FieldSelection selection) =>
+    private static List<Dictionary<string, object?>> ProjectAssignments(IReadOnlyList<Assignment>? all, FieldSelection selection) =>
         (all ?? []).Take(selection.First ?? 5).Select(m =>
         {
             var result = new Dictionary<string, object?>();
@@ -588,7 +590,7 @@ public sealed class PortfolioExecutor(IPackageRepository packages, IContractorRe
                 {
                     "name" => m.Name,
                     "due" => m.Due,
-                    "done" => m.Done,
+                    "submitted" => m.Submitted,
                     _ => throw new UnknownFieldException(f.Name),
                 };
             return result;
@@ -597,28 +599,28 @@ public sealed class PortfolioExecutor(IPackageRepository packages, IContractorRe
 ```
 
 ```csharp file=Program.cs
-using Portfolio.Domain;
-using Portfolio.GraphQL;
+using Learning.Domain;
+using Learning.GraphQL;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddProblemDetails();
-builder.Services.AddSingleton<InMemoryPortfolioStore>();
-builder.Services.AddSingleton<IPackageRepository>(sp => sp.GetRequiredService<InMemoryPortfolioStore>());
-builder.Services.AddSingleton<IContractorRepository>(sp => sp.GetRequiredService<InMemoryPortfolioStore>());
-builder.Services.AddSingleton<IMilestoneRepository>(sp => sp.GetRequiredService<InMemoryPortfolioStore>());
-builder.Services.AddScoped<PortfolioExecutor>();   // scoped: loaders live for one request
+builder.Services.AddSingleton<InMemoryLearningStore>();
+builder.Services.AddSingleton<ICourseRepository>(sp => sp.GetRequiredService<InMemoryLearningStore>());
+builder.Services.AddSingleton<IInstructorRepository>(sp => sp.GetRequiredService<InMemoryLearningStore>());
+builder.Services.AddSingleton<IAssignmentRepository>(sp => sp.GetRequiredService<InMemoryLearningStore>());
+builder.Services.AddScoped<DashboardExecutor>();   // scoped: loaders live for one request
 builder.Services.AddSingleton(new QueryAnalyzer(
-    new HashSet<string> { "packages", "milestones" },
+    new HashSet<string> { "courses", "assignments" },
     new QueryLimits(MaxDepth: 8, MaxCost: 1_000, MaxFirst: 50, DefaultListSize: 10)));
 
 var app = builder.Build();
 app.UseExceptionHandler();
 
 // Teaching endpoint: accepts an already-parsed selection tree. A real server accepts GraphQL text at /graphql.
-app.MapPost("/graphql-model", async (FieldSelection root, QueryAnalyzer analyzer, PortfolioExecutor executor, ILogger<Program> log, CancellationToken ct) =>
+app.MapPost("/graphql-model", async (FieldSelection root, QueryAnalyzer analyzer, DashboardExecutor executor, ILogger<Program> log, CancellationToken ct) =>
 {
-    if (root.Name != "packages")
+    if (root.Name != "courses")
         return Results.Ok(new { errors = new[] { new { message = $"Cannot query field '{root.Name}' on type 'Query'." } } });
 
     var analysis = analyzer.Analyze(root);
@@ -628,8 +630,8 @@ app.MapPost("/graphql-model", async (FieldSelection root, QueryAnalyzer analyzer
 
     try
     {
-        var rows = await executor.ExecutePackagesAsync(root, ct);
-        return Results.Ok(new { data = new { packages = rows } });
+        var rows = await executor.ExecuteCoursesAsync(root, ct);
+        return Results.Ok(new { data = new { courses = rows } });
     }
     catch (UnknownFieldException ex)
     {
@@ -645,42 +647,45 @@ public partial class Program;
 How this maps to a real GraphQL server:
 
 - `FieldSelection` is the **selection set** the parser produces; `QueryAnalyzer` is a **validation rule** (Hot Chocolate and GraphQL.NET both ship depth and cost rules).
-- `PortfolioExecutor` resolves **level by level** and dispatches loaders between levels — the same strategy real executors use to make batching work automatically.
+- `DashboardExecutor` resolves **level by level** and dispatches loaders between levels — the same strategy real executors use to make batching work automatically.
 - `BatchDataLoader` is **scoped to a request** via the scoped executor. Registering a loader as a singleton would share its cache across users: a data leak and a stale-data bug.
 
-The same server with **Hot Chocolate** (API names as of recent versions; check the docs for the version you use):
+The same server with **Hot Chocolate** 14 or later, using its source-generated style (attribute and option names change between major versions; check the docs for the version you use):
 
 ```csharp
 // Program.cs
 builder.Services
     .AddGraphQLServer()
-    .AddQueryType<Query>()
-    .AddTypeExtension<PackageExtensions>()
-    .AddDataLoader<ContractorByIdDataLoader>()
+    .AddTypes()                                   // generated: registers [QueryType], [ObjectType<T>] and [DataLoader] code
     .AddMaxExecutionDepthRule(8)
     .ModifyCostOptions(o => { o.MaxFieldCost = 1_000; o.EnforceCostLimits = true; })
     .ModifyPagingOptions(o => { o.MaxPageSize = 50; o.DefaultPageSize = 10; });
 app.MapGraphQL();   // POST/GET /graphql
 
-// Resolvers
-public sealed class Query
+// Root query
+[QueryType]
+public static partial class CourseQueries
 {
     [UsePaging]
-    public IQueryable<Package> GetPackages(AppDb db) => db.Packages.OrderBy(p => p.Code);
+    public static IQueryable<Course> GetCourses(AppDb db) => db.Courses.OrderBy(c => c.Code);
 }
 
-[ExtendObjectType<Package>]
-public sealed class PackageExtensions
+// Extra fields on Course, resolved through a loader
+[ObjectType<Course>]
+public static partial class CourseNode
 {
-    public Task<Contractor> GetContractorAsync([Parent] Package p, ContractorByIdDataLoader loader, CancellationToken ct) =>
-        loader.LoadAsync(p.ContractorId, ct);
+    public static Task<Instructor?> GetInstructorAsync(
+        [Parent] Course course, IInstructorByIdDataLoader loader, CancellationToken ct) =>
+        loader.LoadAsync(course.InstructorId, ct);
 }
 
-public sealed class ContractorByIdDataLoader(AppDb db, IBatchScheduler scheduler, DataLoaderOptions options)
-    : BatchDataLoader<int, Contractor>(scheduler, options)
+// The source generator turns this method into IInstructorByIdDataLoader (batching + per-request cache)
+internal static class InstructorDataLoaders
 {
-    protected override async Task<IReadOnlyDictionary<int, Contractor>> LoadBatchAsync(IReadOnlyList<int> ids, CancellationToken ct) =>
-        await db.Contractors.Where(c => ids.Contains(c.Id)).ToDictionaryAsync(c => c.Id, ct);
+    [DataLoader]
+    public static Task<Dictionary<int, Instructor>> GetInstructorByIdAsync(
+        IReadOnlyList<int> ids, AppDb db, CancellationToken ct) =>
+        db.Instructors.Where(i => ids.Contains(i.Id)).ToDictionaryAsync(i => i.Id, ct);   // SQL: WHERE id = ANY(@ids)
 }
 ```
 
@@ -692,16 +697,16 @@ The shape is the same as our model: resolvers ask a loader for a key; the framew
 
 ```graphql
 type Query {
-  allPackages: [Package]                 # unbounded, nullable list of nullable items
-  defectsForEverything: [Defect]
+  allCourses: [Course]                 # unbounded, nullable list of nullable items
+  submissionsForEverything: [Submission]
 }
-type Package {
+type Course {
   id: Int                                # database id, nullable
-  contractor: Contractor                 # resolver does SELECT ... WHERE id = @id per package
-  defects: [Defect]                      # all defects, no pagination
+  instructor: Instructor                 # resolver does SELECT ... WHERE id = @id per course
+  submissions: [Submission]              # every submission ever, no pagination
 }
 type Mutation {
-  updatePackage(id: Int, name: String, progress: Float, status: String): Boolean
+  updateCourse(id: Int, name: String, progress: Float, status: String): Boolean
 }
 ```
 
@@ -709,7 +714,7 @@ Problems: unbounded lists invite huge responses; nullable-everything gives clien
 
 **Good**: the schema at the top of this lesson — connections with `first`/`after` caps, non-null where truly guaranteed, enums, input objects, payloads with `UserError`s, DataLoaders behind every relationship, and depth/cost limits at validation time.
 
-**Is GraphQL itself worth it here?** For one mobile app and one dashboard owned by one team, a BFF with two REST endpoints (`GET /v1/portfolio-screen`, `GET /v1/packages/{code}/details`) gets most of the benefit with plain HTTP caching and no cost analysis. Choose GraphQL when the number of client screens and teams makes "one endpoint per screen" unmanageable.
+**Is GraphQL itself worth it here?** For one mobile app and one dashboard owned by one team, a BFF with two REST endpoints (`GET /v1/dashboard-screen`, `GET /v1/courses/{code}/details`) gets most of the benefit with plain HTTP caching and no cost analysis. Choose GraphQL when the number of client screens and teams makes "one endpoint per screen" unmanageable.
 
 :::callout type=warning title="The DataLoader cache is per request"
 Never register a DataLoader (or anything holding its cache) as a singleton. A shared loader cache returns one user's data to another and never sees updates. For cross-request caching, use a real cache with TTLs and invalidation.
@@ -721,24 +726,24 @@ A depth-3 query with three sibling lists of `first: 1000` can cost far more than
 
 ## Practical playground
 
-The starter graph is a GraphQL gateway that resolves the portfolio screen by calling three REST services per package, with no batching or caching. Improve it in the HLD canvas: add batching to the downstream calls, decide what can go through a CDN with persisted queries, add an entity cache, and put cost-based rate limiting in front. Annotate each edge with calls per GraphQL request before and after.
+The starter graph is a GraphQL gateway that resolves the dashboard screen by calling three REST services per course, with no batching or caching. Improve it in the HLD canvas: add batching to the downstream calls, decide what can go through a CDN with persisted queries, add an entity cache, and put cost-based rate limiting in front. Annotate each edge with calls per GraphQL request before and after.
 
-:::playground type=hld title="Make the portfolio GraphQL gateway efficient"
+:::playground type=hld title="Make the learning-dashboard GraphQL gateway efficient"
 ```json
 {
   "nodes": [
     { "id": "apps", "type": "client", "label": "Mobile + web apps", "props": { "rps": 12 } },
     { "id": "gql", "type": "api-gateway", "label": "GraphQL gateway (naive resolvers)", "props": { "instances": 2 } },
-    { "id": "pkg", "type": "app-server", "label": "Package service (REST)" },
-    { "id": "con", "type": "app-server", "label": "Contractor service (REST, GET by id only)" },
-    { "id": "mil", "type": "app-server", "label": "Milestone service (REST)" },
+    { "id": "pkg", "type": "app-server", "label": "Course service (REST)" },
+    { "id": "con", "type": "app-server", "label": "Instructor service (REST, GET by id only)" },
+    { "id": "mil", "type": "app-server", "label": "Assignment service (REST)" },
     { "id": "db", "type": "database", "label": "PostgreSQL" }
   ],
   "edges": [
     { "from": "apps", "to": "gql", "kind": "sync", "label": "POST /graphql" },
     { "from": "gql", "to": "pkg", "kind": "sync", "label": "1 call" },
-    { "from": "gql", "to": "con", "kind": "sync", "label": "1 call per package" },
-    { "from": "gql", "to": "mil", "kind": "sync", "label": "1 call per package" },
+    { "from": "gql", "to": "con", "kind": "sync", "label": "1 call per course" },
+    { "from": "gql", "to": "mil", "kind": "sync", "label": "1 call per course" },
     { "from": "pkg", "to": "db", "kind": "sync" },
     { "from": "con", "to": "db", "kind": "sync" },
     { "from": "mil", "to": "db", "kind": "sync" }
@@ -750,50 +755,50 @@ The starter graph is a GraphQL gateway that resolves the portfolio screen by cal
 ## Exercises
 
 :::exercise id=m10-graphql-ex1 difficulty=beginner kind=written title="Count the round trips: REST screen versus one GraphQL query"
-A site engineer's "My day" screen shows: the engineer's name; their 5 assigned inspections (title, chainage, severity); for each inspection, the package name and the count of open defects.
+A student's "This week" screen shows: the student's name; their 5 upcoming assignments (title, due date, maximum marks); for each assignment, the course name and the count of unanswered questions in that assignment's discussion thread.
 
 The existing REST API (open it in the **API design playground**, `#/playground/api`, and model these endpoints if you want to see the lint view) has:
 
 - `GET /v1/me` → 4 KB of profile fields.
-- `GET /v1/inspections?assignee=me&limit=5` → 5 × 3 KB.
-- `GET /v1/packages/{code}` → 6 KB each.
-- `GET /v1/inspections/{id}/defects?status=open` → full defect objects, average 4 defects × 2 KB.
+- `GET /v1/assignments?assignee=me&due=upcoming&limit=5` → 5 × 3 KB.
+- `GET /v1/courses/{code}` → 6 KB each (syllabus, fees, instructors, ...).
+- `GET /v1/assignments/{id}/questions?status=open` → full question objects, average 4 questions × 2 KB.
 
 1. Count the requests, dependent waves and bytes for one screen load. With a 100 ms RTT, what's the minimum latency?
 2. Write the GraphQL query for the screen (invent sensible field names).
 3. Name one REST-only alternative that would also fix the problem, and say when you'd prefer it.
 ::acceptance
-- Counts 1 + 1 + 5 + 5 = 12 requests (or 11 if packages are deduplicated) in 2–3 dependent waves, and roughly 4 + 15 + 30 + 40 = 89 KB.
+- Counts 1 + 1 + 5 + 5 = 12 requests (or fewer if several assignments belong to the same course and course calls are deduplicated) in 2–3 dependent waves, and roughly 4 + 15 + 30 + 40 = 89 KB.
 - Minimum latency ≥ 2 waves × 100 ms (3 waves if `/me` is needed before the list), stated with reasoning.
-- The GraphQL query selects only the needed fields, uses `first: 5`, and asks for a defect *count*, not defect objects.
+- The GraphQL query selects only the needed fields, uses `first: 5`, and asks for a question *count*, not question objects.
 - Proposes a BFF/screen endpoint or `include`/`fields` parameters, with a reason to prefer it (one client, cacheability, simplicity).
 ::hint
 Draw which calls depend on the result of an earlier call. Calls with no dependency can run in parallel in the same wave.
 ::hint
-Package codes come from the inspections, so package and defect calls can't start until the inspection list returns.
+Course codes and assignment ids come from the assignment list, so course and question calls can't start until that list returns.
 ::hint
-Over-fetching: the screen needs a number of open defects, but the API returns full defect objects.
+Over-fetching: the screen needs a number of open questions, but the API returns full question objects.
 ::hint
 ```graphql
-query MyDay { me { name assignedInspections(first: 5) { edges { node { title chainage severity package { name } openDefectCount } } } } }
+query ThisWeek { me { name upcomingAssignments(first: 5) { edges { node { title due maxMarks course { name } openQuestionCount } } } } }
 ```
 ::solution
-**1. REST cost.** Wave 1: `/v1/me` and `/v1/inspections?assignee=me` (the list can use "me" without waiting) — 2 requests. Wave 2: 5 package calls + 5 defect calls in parallel — 10 requests (fewer package calls if inspections share packages). Total **12 requests in 2 waves**; at 100 ms RTT, at least **200 ms** of network latency before server time, more on HTTP/1.1 where 10 parallel requests exceed 6 connections. Bytes: 4 + 15 + 30 + 40 = **~89 KB**, of which the screen uses perhaps 2 KB.
+**1. REST cost.** Wave 1: `/v1/me` and `/v1/assignments?assignee=me` (the list can use "me" without waiting) — 2 requests. Wave 2: 5 course calls + 5 question calls in parallel — 10 requests (fewer course calls if assignments share courses). Total **12 requests in 2 waves**; at 100 ms RTT, at least **200 ms** of network latency before server time, more on HTTP/1.1 where 10 parallel requests exceed 6 connections. Bytes: 4 + 15 + 30 + 40 = **~89 KB**, of which the screen uses perhaps 2 KB.
 
 **2. GraphQL.**
 
 ```graphql
-query MyDay {
+query ThisWeek {
   me {
     name
-    assignedInspections(first: 5) {
+    upcomingAssignments(first: 5) {
       edges {
         node {
           title
-          chainage
-          severity
-          package { name }
-          openDefectCount
+          due
+          maxMarks
+          course { name }
+          openQuestionCount
         }
       }
     }
@@ -801,12 +806,12 @@ query MyDay {
 }
 ```
 
-One request, one RTT (~100 ms) plus server time, and a response of roughly 1–2 KB. The server must use DataLoaders for `package` and a batched count query for `openDefectCount` (`SELECT inspection_id, count(*) ... WHERE inspection_id = ANY(@ids) AND status = 'open' GROUP BY inspection_id`).
+One request, one RTT (~100 ms) plus server time, and a response of roughly 1–2 KB. The server must use DataLoaders for `course` and a batched count query for `openQuestionCount` (`SELECT assignment_id, count(*) FROM question WHERE assignment_id = ANY(@ids) AND status = 'open' GROUP BY assignment_id`).
 
-**3. REST alternative.** A BFF endpoint `GET /v1/me/day` that returns exactly this screen, or `GET /v1/inspections?assignee=me&limit=5&include=package&fields=title,chainage,severity` plus an `openDefectCount` field on inspections. Prefer it when there's one client app, when the response is cacheable per user with `ETag`, or when the team doesn't want to run GraphQL infrastructure (cost limits, DataLoaders, new monitoring).
+**3. REST alternative.** A BFF endpoint `GET /v1/me/week` that returns exactly this screen, or `GET /v1/assignments?assignee=me&limit=5&include=course&fields=title,due,maxMarks` plus an `openQuestionCount` field on assignments. Prefer it when there's one client app, when the response is cacheable per user with `ETag`, or when the team doesn't want to run GraphQL infrastructure (cost limits, DataLoaders, new monitoring).
 ::mistakes
 - Counting all 12 calls as sequential (1.2 s) — independent calls run in parallel.
-- Writing a GraphQL query that fetches `defects { ... }` and counts on the client, keeping the over-fetching.
+- Writing a GraphQL query that fetches `questions { ... }` and counts on the client, keeping the over-fetching.
 - Forgetting the server-side cost: the GraphQL query is one round trip for the client but many lookups for the server.
 :::
 
@@ -818,8 +823,8 @@ Implement depth calculation and a depth-limit check over a parsed selection tree
 - `DepthLimit.Check(Selection root, int maxDepth)` returns `null` if allowed, or an error message containing both the actual depth and the maximum.
 - `maxDepth < 1` throws `ArgumentOutOfRangeException`.
 ::acceptance
-- `packages { code }` has depth 2.
-- `packages { code contractor { name } }` has depth 3 (the deepest branch counts, not the sum).
+- `courses { code }` has depth 2.
+- `courses { code instructor { name } }` has depth 3 (the deepest branch counts, not the sum).
 - With `maxDepth = 3`, a depth-4 query returns a message mentioning 4 and 3.
 ::hint
 This is the height of a tree. Recursion is the natural fit.
@@ -855,22 +860,22 @@ public class DepthLimitTests
 
     [Fact] public void Leaf_is_depth_one() => Assert.Equal(1, DepthLimit.Depth(L("code")));
 
-    [Fact] public void One_level() => Assert.Equal(2, DepthLimit.Depth(S("packages", L("code"))));
+    [Fact] public void One_level() => Assert.Equal(2, DepthLimit.Depth(S("courses", L("code"))));
 
     [Fact] public void Deepest_branch_counts() =>
-        Assert.Equal(3, DepthLimit.Depth(S("packages", L("code"), S("contractor", L("name")), L("name"))));
+        Assert.Equal(3, DepthLimit.Depth(S("courses", L("code"), S("instructor", L("name")), L("name"))));
 
     [Fact]
     public void Too_deep_is_rejected_with_numbers()
     {
-        var q = S("packages", S("milestones", S("package", L("code"))));
+        var q = S("courses", S("assignments", S("course", L("code"))));
         var error = DepthLimit.Check(q, 3);
         Assert.NotNull(error);
         Assert.Contains("4", error);
         Assert.Contains("3", error);
     }
 
-    [Fact] public void Within_limit_is_allowed() => Assert.Null(DepthLimit.Check(S("packages", L("code")), 3));
+    [Fact] public void Within_limit_is_allowed() => Assert.Null(DepthLimit.Check(S("courses", L("code")), 3));
 
     [Fact] public void Invalid_max_throws() => Assert.Throws<ArgumentOutOfRangeException>(() => DepthLimit.Check(L("x"), 0));
 }
@@ -899,7 +904,7 @@ public static class DepthLimit
 }
 ```
 
-Depth limits stop "cyclic" queries (`package → milestones → package → milestones ...`) cheaply. Real servers also count fragments after expanding them, since a fragment can hide nesting.
+Depth limits stop "cyclic" queries (`course → assignments → course → assignments ...`) cheaply. Real servers also count fragments after expanding them, since a fragment can hide nesting.
 ::mistakes
 - Summing children's depths instead of taking the maximum.
 - Counting the operation (`query { ... }`) as a level inconsistently between client docs and server — document your definition.
@@ -958,7 +963,7 @@ using Xunit;
 
 public class LoaderTests
 {
-    private static readonly Dictionary<int, string> Contractors = new() { [17] = "Deccan Infra", [42] = "Vidarbha Roadways", [99] = "Konkan Bridges" };
+    private static readonly Dictionary<int, string> Instructors = new() { [17] = "Priya Raman", [42] = "Arjun Mehta", [99] = "Sara Thomas" };
 
     private sealed class Counting
     {
@@ -966,7 +971,7 @@ public class LoaderTests
         public Task<IReadOnlyDictionary<int, string>> Fetch(IReadOnlyList<int> keys)
         {
             Batches.Add(keys.ToArray());
-            IReadOnlyDictionary<int, string> found = keys.Where(Contractors.ContainsKey).ToDictionary(k => k, k => Contractors[k]);
+            IReadOnlyDictionary<int, string> found = keys.Where(Instructors.ContainsKey).ToDictionary(k => k, k => Instructors[k]);
             return Task.FromResult(found);
         }
     }
@@ -985,8 +990,8 @@ public class LoaderTests
 
         Assert.Single(c.Batches);
         Assert.Equal(new[] { 17, 42, 99 }, c.Batches[0]);
-        Assert.Equal("Deccan Infra", names[0]);
-        Assert.Equal("Konkan Bridges", names[4]);
+        Assert.Equal("Priya Raman", names[0]);
+        Assert.Equal("Sara Thomas", names[4]);
     }
 
     [Fact]
@@ -1091,16 +1096,16 @@ Depth limits miss wide queries. Implement cost analysis that multiplies the cost
 - `First` greater than `maxPageSize` or less than 1 throws `ArgumentOutOfRangeException` naming the field.
 - `Check(Field root, long budget)` returns `null` if `Cost(root) <= budget`, otherwise a message containing the cost and the budget.
 ::acceptance
-- `packages(first: 10) { code }` costs 1 + 10 × 1 = 11.
-- `packages(first: 10) { code contractor { name } milestones(first: 2) { name due } }` costs 1 + 10 × (1 + 2 + (1 + 2 × 2)) = 81.
+- `courses(first: 10) { code }` costs 1 + 10 × 1 = 11.
+- `courses(first: 10) { code instructor { name } assignments(first: 2) { name due } }` costs 1 + 10 × (1 + 2 + (1 + 2 × 2)) = 81.
 - A list without `first` uses the default page size.
 - `first: 500` with max 50 throws.
 ::hint
 Write the recursion exactly as the formula; test with the 11 example first.
 ::hint
-`contractor { name }` is not a list: 1 + 1 × 1 = 2.
+`instructor { name }` is not a list: 1 + 1 × 1 = 2.
 ::hint
-`milestones(first: 2) { name due }` = 1 + 2 × (1 + 1) = 5. Add `code` (1) and `contractor { name }` (2) for an inner sum of 8, so the total is 1 + 10 × 8 = 81.
+`assignments(first: 2) { name due }` = 1 + 2 × (1 + 1) = 5. Add `code` (1) and `instructor { name }` (2) for an inner sum of 8, so the total is 1 + 10 × 8 = 81.
 ::hint
 ```csharp
 long multiplier = _listFields.Contains(f.Name) ? f.First ?? _defaultPageSize : 1;
@@ -1142,34 +1147,34 @@ public class CostCalculatorTests
 {
     private static Field F(string name, params Field[] children) => new(name, children);
     private static Field List(string name, int? first, params Field[] children) => new(name, children, first);
-    private static CostCalculator Calc() => new(new HashSet<string> { "packages", "milestones" }, defaultPageSize: 10, maxPageSize: 50);
+    private static CostCalculator Calc() => new(new HashSet<string> { "courses", "assignments" }, defaultPageSize: 10, maxPageSize: 50);
 
-    [Fact] public void Simple_list() => Assert.Equal(11, Calc().Cost(List("packages", 10, F("code"))));
+    [Fact] public void Simple_list() => Assert.Equal(11, Calc().Cost(List("courses", 10, F("code"))));
 
     [Fact]
     public void Nested_lists_multiply() =>
-        Assert.Equal(81, Calc().Cost(List("packages", 10, F("code"), F("contractor", F("name")), List("milestones", 2, F("name"), F("due")))));
+        Assert.Equal(81, Calc().Cost(List("courses", 10, F("code"), F("instructor", F("name")), List("assignments", 2, F("name"), F("due")))));
 
-    [Fact] public void Default_page_size_applies() => Assert.Equal(21, Calc().Cost(List("packages", null, F("code"), F("name"))));
+    [Fact] public void Default_page_size_applies() => Assert.Equal(21, Calc().Cost(List("courses", null, F("code"), F("name"))));
 
-    [Fact] public void Non_list_has_multiplier_one() => Assert.Equal(3, Calc().Cost(F("contractor", F("name"), F("city"))));
+    [Fact] public void Non_list_has_multiplier_one() => Assert.Equal(3, Calc().Cost(F("instructor", F("name"), F("city"))));
 
     [Fact]
     public void Page_size_above_max_throws()
     {
-        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => Calc().Cost(List("packages", 500, F("code"))));
-        Assert.Contains("packages", ex.Message);
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => Calc().Cost(List("courses", 500, F("code"))));
+        Assert.Contains("courses", ex.Message);
     }
 
     [Fact]
     public void Budget_check_reports_numbers()
     {
-        var wide = List("packages", 50, List("milestones", 50, F("name")));   // 1 + 50 × (1 + 50 × 1) = 2551
+        var wide = List("courses", 50, List("assignments", 50, F("name")));   // 1 + 50 × (1 + 50 × 1) = 2551
         var message = Calc().Check(wide, 1000);
         Assert.NotNull(message);
         Assert.Contains("2551", message);
         Assert.Contains("1000", message);
-        Assert.Null(Calc().Check(List("packages", 10, F("code")), 1000));
+        Assert.Null(Calc().Check(List("courses", 10, F("code")), 1000));
     }
 }
 ```
@@ -1220,42 +1225,42 @@ This is a simplified version of the cost models in GraphQL servers and public Gr
 :::
 
 :::exercise id=m10-graphql-ex5 difficulty=advanced kind=hld title="A GraphQL gateway over existing REST services"
-A state public works department wants one GraphQL API for its citizen app (public road-project status) and its officers' app (assigned inspections, approvals). Behind it are four existing REST services: Projects, Contractors, Inspections, Documents. Traffic estimates: citizen app 3,000 queries per second at peak during monsoon (road closure checks), mostly the same few public queries; officers' app 50 queries per second, all personalised.
+A large online course platform wants one GraphQL API for two apps: its public catalogue app (course listings, seats left, class timetables, instructor profiles; no login needed) and its learners' and teachers' app (my submissions, my grades, the teacher's grading queue). Behind it are four existing REST services: Courses, Instructors, Submissions and Materials (lecture notes and files). Traffic estimates: the catalogue app peaks at 3,000 queries per second during enrolment week, mostly the same few public queries; the learners' and teachers' app runs at 50 queries per second, all personalised.
 
 Design the gateway: batching to downstream services, caching for public and private queries, protection against expensive queries, and authorisation. Show calls per query before and after, with arithmetic.
 ::acceptance
-- Public citizen queries are persisted (trusted documents) and cacheable at a CDN via `GET`, with a TTL justified by how fast road status changes.
+- Public catalogue queries are persisted (trusted documents) and cacheable at a CDN via `GET`, with a TTL justified by how fast catalogue data (seats left, timetables) changes.
 - Downstream services get batch endpoints (or the gateway uses DataLoaders over existing list filters), with calls-per-query arithmetic.
-- Officer queries bypass shared caches; authorisation is enforced per object/field, not only at the gateway.
+- Learner and teacher queries bypass shared caches; authorisation is enforced per object/field, not only at the gateway.
 - Depth, cost and page-size limits are stated with numbers; third-party or unregistered queries get stricter limits or are rejected.
-- At least two failure modes (one downstream service down, cache stampede on a monsoon alert) with mitigations, including partial results.
+- At least two failure modes (one downstream service down, cache stampede when enrolment opens) with mitigations, including partial results.
 ::hint
 What fraction of the 3,000 queries per second are identical? That decides whether a CDN can absorb them.
 ::hint
-Contractors service only has `GET /contractors/{id}`. What change (or loader) avoids one call per project?
+The Instructors service only has `GET /instructors/{id}`. What change (or loader) avoids one call per course?
 ::hint
-If the Documents service is down, should the whole query fail? Think about nullable fields and the `errors` array.
+If the Materials service is down, should the whole query fail? Think about nullable fields and the `errors` array.
 ::hint
 Add `cdn` (persisted public queries), `api-gateway` (GraphQL with limits), `cache` (entity cache), `rate-limiter` (cost-based), and batch edges to each service.
 ::starter
 ```json
 {
   "nodes": [
-    { "id": "citizen", "type": "client", "label": "Citizen app", "props": { "rps": 3000 } },
-    { "id": "officer", "type": "client", "label": "Officers' app", "props": { "rps": 50 } },
+    { "id": "catalogue", "type": "client", "label": "Public catalogue app", "props": { "rps": 3000 } },
+    { "id": "learner", "type": "client", "label": "Learners' and teachers' app", "props": { "rps": 50 } },
     { "id": "gql", "type": "api-gateway", "label": "GraphQL gateway", "props": { "instances": 2 } },
-    { "id": "proj", "type": "app-server", "label": "Projects service" },
-    { "id": "con", "type": "app-server", "label": "Contractors service (GET by id)" },
-    { "id": "insp", "type": "app-server", "label": "Inspections service" },
-    { "id": "docs", "type": "app-server", "label": "Documents service" }
+    { "id": "crs", "type": "app-server", "label": "Courses service" },
+    { "id": "ins", "type": "app-server", "label": "Instructors service (GET by id)" },
+    { "id": "sub", "type": "app-server", "label": "Submissions service" },
+    { "id": "mat", "type": "app-server", "label": "Materials service" }
   ],
   "edges": [
-    { "from": "citizen", "to": "gql", "kind": "sync" },
-    { "from": "officer", "to": "gql", "kind": "sync" },
-    { "from": "gql", "to": "proj", "kind": "sync" },
-    { "from": "gql", "to": "con", "kind": "sync" },
-    { "from": "gql", "to": "insp", "kind": "sync" },
-    { "from": "gql", "to": "docs", "kind": "sync" }
+    { "from": "catalogue", "to": "gql", "kind": "sync" },
+    { "from": "learner", "to": "gql", "kind": "sync" },
+    { "from": "gql", "to": "crs", "kind": "sync" },
+    { "from": "gql", "to": "ins", "kind": "sync" },
+    { "from": "gql", "to": "sub", "kind": "sync" },
+    { "from": "gql", "to": "mat", "kind": "sync" }
   ]
 }
 ```
@@ -1263,50 +1268,49 @@ Add `cdn` (persisted public queries), `api-gateway` (GraphQL with limits), `cach
 ```json
 {
   "nodes": [
-    { "id": "citizen", "type": "client", "label": "Citizen app (trusted documents only)", "props": { "rps": 3000 } },
-    { "id": "officer", "type": "client", "label": "Officers' app (OIDC tokens)", "props": { "rps": 50 } },
+    { "id": "catalogue", "type": "client", "label": "Public catalogue app (trusted documents only)", "props": { "rps": 3000 } },
+    { "id": "learner", "type": "client", "label": "Learners' and teachers' app (OIDC tokens)", "props": { "rps": 50 } },
     { "id": "cdn", "type": "cdn", "label": "CDN: GET /graphql?id=hash, max-age=60", "props": { "ttlSeconds": 60 } },
     { "id": "rl", "type": "rate-limiter", "label": "Cost-based limiter (points per minute per client)" },
     { "id": "gql", "type": "api-gateway", "label": "GraphQL gateway: depth 8, cost 1000, first max 50, DataLoaders", "props": { "instances": 3, "multiAz": true } },
-    { "id": "redis", "type": "cache", "label": "Entity cache: contractors 10 min, projects 60 s" },
-    { "id": "proj", "type": "app-server", "label": "Projects service (+ GET /projects?ids=)" },
-    { "id": "con", "type": "app-server", "label": "Contractors service (+ GET /contractors?ids=)" },
-    { "id": "insp", "type": "app-server", "label": "Inspections service (authz by officer)" },
-    { "id": "docs", "type": "app-server", "label": "Documents service (nullable in schema)" },
+    { "id": "redis", "type": "cache", "label": "Entity cache: instructors 10 min, courses 60 s" },
+    { "id": "crs", "type": "app-server", "label": "Courses service (+ GET /courses?ids=)" },
+    { "id": "ins", "type": "app-server", "label": "Instructors service (+ GET /instructors?ids=)" },
+    { "id": "sub", "type": "app-server", "label": "Submissions service (authz by learner or teacher)" },
+    { "id": "mat", "type": "app-server", "label": "Materials service (nullable in schema)" },
     { "id": "mon", "type": "monitoring", "label": "Per-operation cost, latency, errors[]" }
   ],
   "edges": [
-    { "from": "citizen", "to": "cdn", "kind": "sync", "label": "~95% hits" },
+    { "from": "catalogue", "to": "cdn", "kind": "sync", "label": "~95% hits" },
     { "from": "cdn", "to": "gql", "kind": "sync", "label": "~150 rps misses" },
-    { "from": "officer", "to": "rl", "kind": "sync", "label": "POST, private" },
+    { "from": "learner", "to": "rl", "kind": "sync", "label": "POST, private" },
     { "from": "rl", "to": "gql", "kind": "sync" },
     { "from": "gql", "to": "redis", "kind": "sync" },
-    { "from": "gql", "to": "proj", "kind": "sync", "label": "1 batch per level" },
-    { "from": "gql", "to": "con", "kind": "sync", "label": "1 batch per level" },
-    { "from": "gql", "to": "insp", "kind": "sync", "label": "1 batch, user token forwarded" },
-    { "from": "gql", "to": "docs", "kind": "sync", "label": "timeout 300 ms" },
+    { "from": "gql", "to": "crs", "kind": "sync", "label": "1 batch per level" },
+    { "from": "gql", "to": "ins", "kind": "sync", "label": "1 batch per level" },
+    { "from": "gql", "to": "sub", "kind": "sync", "label": "1 batch, user token forwarded" },
+    { "from": "gql", "to": "mat", "kind": "sync", "label": "timeout 300 ms" },
     { "from": "gql", "to": "mon", "kind": "async" }
   ]
 }
 ```
 
-**Caching public queries.** Citizen queries are a small set of registered documents ("road status by district", "closures near me" by district). They go as `GET /graphql?id=<sha256>&variables={"district":"Pune"}` so the CDN keys on URL. Road status changes over minutes, so `max-age=60` is acceptable (and purge on a closure alert if the CDN supports it). If ~95 % of 3,000 rps hit the CDN (assumption), the gateway sees ~150 rps of public traffic.
+**Caching public queries.** Catalogue queries are a small set of registered documents ("courses by department", "timetable for a course"). They go as `GET /graphql?id=<sha256>&variables={"department":"computer-science"}` so the CDN keys on the URL. Seats left and timetables change over minutes, not milliseconds, so `max-age=60` is acceptable; the enrolment mutation itself re-checks seats in the database, so a slightly stale "12 seats left" never oversells a class. If ~95 % of 3,000 rps hit the CDN (assumption), the gateway sees ~150 rps of public traffic.
 
-**Batching arithmetic.** A citizen query for 20 projects with contractor names, naive: 1 (projects) + 20 (contractors) = 21 downstream calls. With a contractors batch endpoint and a DataLoader: 2 calls, and with the Redis entity cache for contractors (10-minute TTL) often 1. At 150 rps of misses: naive 3,150 downstream calls per second vs ~300.
+**Batching arithmetic.** A catalogue query for 20 courses with instructor names, naive: 1 (courses) + 20 (instructors) = 21 downstream calls. With an instructors batch endpoint and a DataLoader: 2 calls, and with the Redis entity cache for instructors (10-minute TTL) often 1. At 150 rps of misses: naive 150 × 21 = 3,150 downstream calls per second versus 150 × 2 = ~300.
 
-**Officer queries.** Always `POST`, never CDN-cached, `Cache-Control: private, no-store` on responses. The gateway forwards the officer's identity to the Inspections service, which enforces "only inspections in my division" — authorisation per object, not only "is logged in" at the gateway, because GraphQL lets queries reach objects through any relationship.
+**Learner and teacher queries.** Always `POST`, never CDN-cached, `Cache-Control: private, no-store` on responses. The gateway forwards the user's identity to the Submissions service, which enforces "only my own submissions" for learners and "only courses I teach" for teachers. That is authorisation per object, not only "is logged in" at the gateway, because GraphQL lets queries reach objects through any relationship.
 
-**Limits.** Depth ≤ 8, cost ≤ 1,000 points, `first` ≤ 50 on every list, execution timeout 2 s, downstream timeouts 300–500 ms. Citizen traffic accepts only trusted documents; unregistered queries are rejected for the citizen client id. Officers get a cost budget of, say, 20,000 points per minute per user.
+**Limits.** Depth ≤ 8, cost ≤ 1,000 points, `first` ≤ 50 on every list, execution timeout 2 s, downstream timeouts 300–500 ms. Catalogue traffic accepts only trusted documents; unregistered queries are rejected for the catalogue client id. Signed-in users get a cost budget of, say, 20,000 points per minute per user.
 
-**Failure modes.** (1) Documents service down: `documents` fields are nullable, so the gateway returns partial data with an `errors` entry; the app shows "documents unavailable" and the rest works. (2) Monsoon alert causes a spike and a CDN purge: thousands of misses at once (stampede). Mitigate with request coalescing at the CDN or gateway (one origin fetch per key), `stale-while-revalidate`, and a short Redis cache on the gateway. (3) A gateway instance fails: three instances across zones behind the CDN and load balancer.
+**Failure modes.** (1) Materials service down: `materials` fields are nullable, so the gateway returns partial data with an `errors` entry; the app shows "notes unavailable" and the rest works. (2) Enrolment opens at 10:00 and the team purges the CDN to show fresh seat counts: thousands of misses arrive at once (a stampede). Mitigate with request coalescing at the CDN or gateway (one origin fetch per key), `stale-while-revalidate`, and a short Redis cache on the gateway. (3) A gateway instance fails: three instances across zones behind the CDN and load balancer.
 ::mistakes
-- Letting the CDN cache `POST` officer responses or caching by query text without the user's scope.
-- Relying on the gateway to authorise "is this officer's inspection" while the Inspections service trusts the gateway blindly with no identity.
+- Letting the CDN cache `POST` responses of signed-in users, or caching by query text without the user's scope.
+- Relying on the gateway to authorise "is this my submission" while the Submissions service trusts the gateway blindly with no identity.
 - Making every downstream-backed field non-null, so one slow service blanks the whole screen.
 :::
-
 :::exercise id=m10-graphql-ex6 difficulty=advanced kind=written title="Review a schema before it ships"
-A team proposes this schema for a public contractor-billing API. List at least six problems, explain the consequence of each, and propose a corrected schema.
+A school group proposes this schema for a public fee-billing API (parents see and pay term-fee bills; the accounts office issues them). List at least six problems, explain the consequence of each, and propose a corrected schema.
 
 ```graphql
 type Query {
@@ -1318,12 +1322,12 @@ type Bill {
   id: Int
   amount: Float
   status: String
-  contractor: Contractor
+  student: Student
   lineItems: [LineItem]
   payments: [Payment]
 }
 type Mutation {
-  createBill(contractorId: Int, amount: Float, items: String): Boolean
+  createBill(studentId: Int, amount: Float, items: String): Boolean
   setBillStatus(id: Int, status: String): Bill
 }
 ```
@@ -1339,18 +1343,18 @@ Read each field and ask: how big can this get, what type is really meant, and wh
 ::hint
 Money in floating point: what is 0.1 + 0.2?
 ::hint
-Compare `setBillStatus(status: "PAID")` with an `approveBill` mutation: which one can carry its own permissions and errors?
+Compare `setBillStatus(status: "PAID")` with an `issueBill` or `recordPayment` mutation: which one can carry its own permissions and errors?
 ::hint
-Payloads: `type ApproveBillPayload { bill: Bill  errors: [UserError!]! }`.
+Payloads: `type IssueBillPayload { bill: Bill  errors: [UserError!]! }`.
 ::solution
 **Problems and consequences**
 
 1. **Unbounded lists** (`bills`, `lineItems`, `payments`, `searchEverything`): responses and server work grow without limit; a single query can DoS the server. → Connections with `first` (max 50) and `after`.
 2. **`Float` for money**: binary floating point can't represent ₹0.10 exactly; sums drift. → `amount: Money!` where `Money { amountMinor: Long!, currency: Currency! }`, or a `Decimal` scalar serialised as a string.
-3. **`status: String`**: any typo is valid; clients can't switch exhaustively. → `enum BillStatus { DRAFT SUBMITTED APPROVED PAID REJECTED }`.
-4. **`setBillStatus`**: a generic setter hides business rules and permissions (who may mark paid?). → `submitBill`, `approveBill`, `rejectBill(reason)`, `recordPayment(input)` — each with its own authorisation and errors.
+3. **`status: String`**: any typo is valid; clients can't switch exhaustively. → `enum BillStatus { DRAFT ISSUED PARTIALLY_PAID PAID CANCELLED }`.
+4. **`setBillStatus`**: a generic setter hides business rules and permissions (who may mark a bill paid? a parent must never be able to). → `issueBill`, `cancelBill(reason)`, `recordPayment(input)` — each with its own authorisation and errors.
 5. **`Boolean` results and loose args** (`items: String`!): clients learn nothing about what changed or why it failed; adding an argument later is awkward. → `createBill(input: CreateBillInput!): CreateBillPayload!` with `bill` and `errors: [UserError!]!`.
-6. **Nullability everywhere**: clients must null-check everything, and the server gives no guarantees. Decide per field: `id: ID!`, `status: BillStatus!`; keep fields backed by other services (e.g. `contractor`) nullable or handle errors deliberately, since a non-null failure nulls the parent.
+6. **Nullability everywhere**: clients must null-check everything, and the server gives no guarantees. Decide per field: `id: ID!`, `status: BillStatus!`; keep fields backed by other services (e.g. `student`) nullable or handle errors deliberately, since a non-null failure nulls the parent.
 7. **`Int` database ids**: leak volume and invite enumeration; tie clients to storage. → Opaque `ID!` (e.g. global ids).
 8. **`searchEverything`**: unbounded cost across types, hard to secure. → Remove from the public schema, or `searchBills(query: String!, first: Int = 10): BillConnection!` backed by a search index with its own cost weight.
 
@@ -1366,19 +1370,19 @@ type Bill {
   number: String!
   status: BillStatus!
   amount: Money!
-  contractor: Contractor
+  student: Student
   lineItems(first: Int = 50, after: String): LineItemConnection!
   payments(first: Int = 20, after: String): PaymentConnection!
 }
 type Money { amountMinor: Long!  currency: Currency! }
-enum BillStatus { DRAFT SUBMITTED APPROVED PAID REJECTED }
+enum BillStatus { DRAFT ISSUED PARTIALLY_PAID PAID CANCELLED }
 type Mutation {
   createBill(input: CreateBillInput!): CreateBillPayload!
-  approveBill(input: ApproveBillInput!): ApproveBillPayload!
+  issueBill(input: IssueBillInput!): IssueBillPayload!
   recordPayment(input: RecordPaymentInput!): RecordPaymentPayload!
 }
 type UserError { field: [String!]  code: String!  message: String! }
-type ApproveBillPayload { bill: Bill  errors: [UserError!]! }
+type IssueBillPayload { bill: Bill  errors: [UserError!]! }
 ```
 
 (`Long` and `Currency` are custom scalars/enums you would define.) Add `@deprecated` rather than removing fields once clients exist, and publish the cost weights.
@@ -1395,23 +1399,23 @@ type ApproveBillPayload { bill: Bill  errors: [UserError!]! }
 
 ```csharp
 [Fact]
-public async Task Portfolio_query_uses_one_batch_per_relationship()
+public async Task Dashboard_query_uses_one_batch_per_relationship()
 {
-    var store = new InMemoryPortfolioStore();
-    var executor = new PortfolioExecutor(store, store, store);
-    var query = new FieldSelection("packages", First: 3, Children:
+    var store = new InMemoryLearningStore();
+    var executor = new DashboardExecutor(store, store, store);
+    var query = new FieldSelection("courses", First: 3, Children:
     [
         new("code"),
-        new("contractor", [new("name")]),
-        new("milestones", [new("name"), new("due")], First: 2),
+        new("instructor", [new("name")]),
+        new("assignments", [new("name"), new("due")], First: 2),
     ]);
 
-    var rows = await executor.ExecutePackagesAsync(query, CancellationToken.None);
+    var rows = await executor.ExecuteCoursesAsync(query, CancellationToken.None);
 
     Assert.Equal(3, rows.Count);
-    Assert.Equal(1, store.ContractorCalls);   // not 3
-    Assert.Equal(1, store.MilestoneCalls);    // not 3
-    Assert.Equal("Deccan Infra Ltd", ((Dictionary<string, object?>)rows[1]["contractor"]!)["name"]);
+    Assert.Equal(1, store.InstructorCalls);   // not 3
+    Assert.Equal(1, store.AssignmentCalls);    // not 3
+    Assert.Equal("Priya Raman", ((Dictionary<string, object?>)rows[1]["instructor"]!)["name"]);
 }
 ```
 
@@ -1419,14 +1423,14 @@ With a real server and EF Core, the equivalent test counts SQL commands with a `
 
 3. **Schema snapshot tests.** Export the schema SDL in CI and diff it; removed fields, type changes and nullability changes are breaking ([see versioning](#/lesson/m10-versioning-contracts)). Tools such as GraphQL Inspector automate this.
 4. **Limit tests.** Send a deep query, a wide query and a query with `first: 10000`, and assert they are rejected during validation with clear errors — and that no data access happened.
-5. **Authorisation tests per path.** For sensitive objects, test reaching them through every relationship (`bill → contractor → bankAccount`, `contractor → bills → payments`), not just the top-level field.
+5. **Authorisation tests per path.** For sensitive objects, test reaching them through every relationship (`course → instructor → payoutAccount`, `instructor → courses → submissions → grade`), not just the top-level field.
 
 ## Real-world application
 
 - **Large consumer apps** adopted GraphQL to serve many mobile screens and app versions from one schema; the original motivation at Facebook was exactly the mobile over/under-fetching problem.
 - **Public developer APIs** (for example, code-hosting and e-commerce platforms) offer GraphQL alongside REST and publish explicit cost/point-based rate limits — a public example of the cost analysis in this lesson.
 - **Enterprise "data graphs"** put a GraphQL gateway (sometimes federated across teams' subgraphs) in front of many REST or gRPC services, mainly to serve UIs.
-- **Infrastructure project dashboards** — packages, contractors, milestones, inspections, payments — are a natural graph; GraphQL fits when many portals (ministry, state, contractor, consultant) need different slices. For a single portal, a BFF is usually simpler.
+- **Online learning platforms**: courses, instructors, assignments, submissions, grades and payments are a natural graph; GraphQL fits when many apps (student mobile app, teacher portal, admin console, partner colleges) need different slices. For a single portal, a BFF is usually simpler.
 - **Service-to-service** traffic rarely uses GraphQL; gRPC or REST is the norm there.
 
 ## Interview questions
@@ -1439,11 +1443,11 @@ Over-fetching (REST returns fixed representations with fields the client doesn't
 ::q beginner
 What is a resolver?
 ::a
-A function that produces the value of one field, given its parent object, arguments and context. The server walks the query's selection tree and calls the resolver for each selected field: `Query.packages` returns packages, then `Package.contractor` runs once per package, and so on. Scalar fields often resolve to a property. Because relationship resolvers run per parent object, naive implementations cause N+1 data access.
+A function that produces the value of one field, given its parent object, arguments and context. The server walks the query's selection tree and calls the resolver for each selected field: `Query.courses` returns courses, then `Course.instructor` runs once per course, and so on. Scalar fields often resolve to a property. Because relationship resolvers run per parent object, naive implementations cause N+1 data access.
 ::q intermediate
 Explain the N+1 problem in GraphQL and how DataLoader solves it.
 ::a
-For `packages(first: 50) { contractor { name } }`, a naive `contractor` resolver runs a query per package: 1 + 50 queries. DataLoader makes resolvers request keys from a per-request loader instead; it collects all keys requested while a level executes, deduplicates them, and issues one batched call (`WHERE id = ANY(@ids)`), then resolves each waiting resolver with its item. Result: one query per relationship per level, independent of page size. The loader's cache is per request (for dedupe and consistency within a query), never global; the batch function must return results keyed by id so missing rows don't misalign.
+For `courses(first: 50) { instructor { name } }`, a naive `instructor` resolver runs a query per course: 1 + 50 queries. DataLoader makes resolvers request keys from a per-request loader instead; it collects all keys requested while a level executes, deduplicates them, and issues one batched call (`WHERE id = ANY(@ids)`), then resolves each waiting resolver with its item. Result: one query per relationship per level, independent of page size. The loader's cache is per request (for dedupe and consistency within a query), never global; the batch function must return results keyed by id so missing rows don't misalign.
 ::q intermediate
 Why is HTTP caching harder with GraphQL, and what can you do about it?
 ::a
@@ -1495,14 +1499,14 @@ A: Null propagates to the nearest nullable parent, possibly removing a whole obj
 
 :::quiz pass=70
 ::q single
-A dashboard query `packages(first: 50) { contractor { name } }` makes 51 database queries. What is the standard fix?
+A dashboard query `courses(first: 50) { instructor { name } }` makes 51 database queries. What is the standard fix?
 - [ ] Increase the database connection pool.
-- [x] Resolve `contractor` through a per-request DataLoader that batches ids into one query.
-- [ ] Make `contractor` a scalar field.
+- [x] Resolve `instructor` through a per-request DataLoader that batches ids into one query.
+- [ ] Make `instructor` a scalar field.
 - [ ] Cache the whole response in a CDN.
-> The problem is per-parent data access. Batching turns 50 contractor queries into one.
+> The problem is per-parent data access. Batching turns 50 instructor queries into one.
 ::q single
-Your team registers the contractor DataLoader as a singleton to "share the cache". What goes wrong?
+Your team registers the instructor DataLoader as a singleton to "share the cache". What goes wrong?
 - [ ] Nothing; it improves performance.
 - [x] Cached values leak across users and requests and never refresh after updates.
 - [ ] DataLoaders can't be registered in DI.
@@ -1510,15 +1514,16 @@ Your team registers the contractor DataLoader as a singleton to "share the cache
 > The DataLoader cache is meant for one request. Cross-request caching needs a real cache with TTLs, invalidation and per-user scoping.
 ::q single
 Which query is the most expensive under a cost model with list multipliers?
-- [ ] `package(code: "X") { contractor { name city } }` (depth 3)
-- [ ] `packages(first: 10) { code }`
-- [x] `packages(first: 50) { milestones(first: 50) { name } inspections(first: 50) { title } }`
-- [ ] `package(code: "X") { milestones(first: 5) { name } }`
+- [ ] `course(code: "X") { instructor { name city } }` (depth 3)
+- [ ] `courses(first: 10) { code }`
+- [x] `courses(first: 50) { assignments(first: 50) { name } discussions(first: 50) { title } }`
+- [ ] `course(code: "X") { assignments(first: 5) { name } }`
 > 1 + 50 × ((1 + 50) + (1 + 50)) = 5,101 points, even though it's only depth 3. Depth limits alone would allow it.
 ::q single
-A citizen app sends the same "road closures in my district" GraphQL query thousands of times per second. What best reduces origin load?
+A public course-catalogue app sends the same "courses in my department" GraphQL query thousands of times per second during enrolment week. What best reduces origin load?
 - [ ] Switch the query to POST.
-- [x] Register it as a persisted query and send it by hash with GET so a CDN can cache it per district.
+- [x] Register it as a persisted query and send it by hash with GET so a CDN can cache it per department.
+
 - [ ] Increase the depth limit.
 - [ ] Disable introspection.
 > GET with a stable URL (hash + variables) makes the response cacheable by ordinary HTTP caches.
@@ -1538,9 +1543,9 @@ One team, one web app, five screens, mostly public data that changes hourly. Wha
 > GraphQL's benefits grow with the number of clients and screens. Here, simple REST plus a CDN is cheaper to build and run.
 ::q single
 Which schema change is breaking for existing clients?
-- [ ] Adding a new optional field `Package.region`.
+- [ ] Adding a new optional field `Course.region`.
 - [ ] Adding a new enum value that clients don't receive yet.
-- [x] Removing the field `Package.physicalProgress`.
+- [x] Removing the field `Course.progress`.
 - [ ] Marking a field `@deprecated`.
 > Clients that select the removed field will fail validation. Deprecate, measure usage, then remove.
 :::

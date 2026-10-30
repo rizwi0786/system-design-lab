@@ -519,7 +519,6 @@ public sealed class InMemoryBucketStore(TimeProvider clock) : IBucketStore
 ```
 
 ```csharp file=Throttle/HybridRateLimiter.cs
-using System.Collections.Concurrent;
 using System.Threading.RateLimiting;
 using Microsoft.Extensions.Logging;
 
@@ -530,7 +529,31 @@ public sealed record LimitDecision(bool Allowed, RateLimitRule? Rule, double Rem
 public sealed class HybridRateLimiter(IBucketStore store, ILogger<HybridRateLimiter> log, int instanceCount = 1)
 {
     public static readonly TimeSpan StoreTimeout = TimeSpan.FromMilliseconds(20);
-    private readonly ConcurrentDictionary<string, TokenBucketRateLimiter> _local = new();
+
+    // One partitioned limiter for all local buckets: it replenishes every partition from a single internal timer
+    // and disposes partitions that sit idle, so fallback buckets for 100,000 API keys don't mean 100,000 timers
+    // (a ConcurrentDictionary of auto-replenishing TokenBucketRateLimiters would, and GetOrAdd could leak extras).
+    private readonly PartitionedRateLimiter<LocalBucket> _local = PartitionedRateLimiter.Create<LocalBucket, string>(
+        b => RateLimitPartition.GetTokenBucketLimiter(b.Key, _ => LocalOptions(b.Rule, instanceCount)));
+
+    private readonly record struct LocalBucket(string Key, RateLimitRule Rule);
+
+    /// <summary>This instance's share of a rule: rate ÷ instances. Low rates use a longer period, never a rounded-up rate.</summary>
+    internal static TokenBucketRateLimiterOptions LocalOptions(RateLimitRule rule, int instances)
+    {
+        var perInstance = rule.RatePerSecond / Math.Max(1, instances);
+        var (tokens, period) = perInstance >= 10
+            ? ((int)Math.Round(perInstance / 10), TimeSpan.FromMilliseconds(100))   // e.g. 125/s → 13 per 100 ms
+            : (1, TimeSpan.FromSeconds(1 / perInstance));                              // e.g. 0.25/s → 1 per 4 s
+        return new TokenBucketRateLimiterOptions
+        {
+            TokenLimit = Math.Max(1, rule.Burst / Math.Max(1, instances)),
+            TokensPerPeriod = tokens,
+            ReplenishmentPeriod = period,
+            QueueLimit = 0,
+            AutoReplenishment = false, // the partitioned limiter replenishes centrally
+        };
+    }
 
     public async Task<LimitDecision> CheckAsync(RuleSet rules, RequestInfo request, CancellationToken ct)
     {
@@ -575,18 +598,11 @@ public sealed class HybridRateLimiter(IBucketStore store, ILogger<HybridRateLimi
 
     private LimitDecision CheckLocalShare(string key, RateLimitRule rule, bool degraded)
     {
-        var limiter = _local.GetOrAdd(key, _ => new TokenBucketRateLimiter(new TokenBucketRateLimiterOptions
-        {
-            TokenLimit = Math.Max(1, rule.Burst / instanceCount),
-            TokensPerPeriod = Math.Max(1, (int)Math.Round(rule.RatePerSecond / instanceCount / 10)),
-            ReplenishmentPeriod = TimeSpan.FromMilliseconds(100),
-            QueueLimit = 0,
-            AutoReplenishment = true,
-        }));
-        using var lease = limiter.AttemptAcquire(1);
-        var remaining = limiter.GetStatistics()?.CurrentAvailablePermits ?? 0;
-        return new LimitDecision(lease.IsAcquired, rule, remaining,
-            lease.IsAcquired ? TimeSpan.Zero : TimeSpan.FromMilliseconds(100), degraded);
+        var bucket = new LocalBucket(key, rule);
+        using var lease = _local.AttemptAcquire(bucket, 1);
+        var remaining = _local.GetStatistics(bucket)?.CurrentAvailablePermits ?? 0;
+        var retry = lease.TryGetMetadata(MetadataName.RetryAfter, out var after) ? after : TimeSpan.FromMilliseconds(100);
+        return new LimitDecision(lease.IsAcquired, rule, remaining, lease.IsAcquired ? TimeSpan.Zero : retry, degraded);
     }
 }
 ```
@@ -607,6 +623,7 @@ public sealed class RateLimitMiddleware(RequestDelegate next, HybridRateLimiter 
             ctx.Request.Path.Value ?? "/",
             string.IsNullOrEmpty(apiKey) ? null : apiKey,
             ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown", // behind proxies: configure ForwardedHeaders first
+            // Demo only: production takes the plan from the authenticated key's record, never from the key's text.
             apiKey.StartsWith("pk_pro_", StringComparison.Ordinal) ? "pro" : "free");
 
         var snapshot = rules.Current;
@@ -688,6 +705,7 @@ Things to notice:
 
 - `RuleSet.Resolve` picks one rule per scope by specificity and skips api-key rules for anonymous requests, so the IP rule still protects login.
 - `HybridRateLimiter` checks local rules before shared ones, uses a 20 ms timeout on the store, and applies each rule's failure mode. "Open" falls back to a bounded local bucket, not to "unlimited".
+- Local buckets live in one `PartitionedRateLimiter`, which replenishes all partitions from one timer and drops idle ones. `LocalOptions` divides the rate by the instance count without rounding small rates up: Free's 10/s over 40 instances is 1 token every 4 s per instance, not "at least 1 per 100 ms" (which would be 10/s per instance, 40× the plan).
 - Shadow rules are evaluated and logged but never deny, which is how a new limit is trialled safely.
 - The built-in concurrency limiter returns `503`, because exceeding instance capacity is an overload condition, not a client fault.
 
@@ -732,6 +750,7 @@ The decision path has no queues: a rate limiter must answer immediately. Queues 
 ## Security
 
 - **Identity for limits must be trustworthy**: limit by authenticated API key where possible. IP-based limits are weaker (NAT gateways put thousands of mobile users in India behind a few carrier IPs; attackers rotate IPs), so combine IP limits with account-level limits for login (attempts per username as well as per IP).
+- **Limit on a verified identity**: validate the API key (a cached lookup) before the per-key check, and treat unknown or invalid keys as anonymous, limited by IP. Otherwise an attacker invents a fresh key per request, gets a full bucket every time, and fills Redis with millions of one-off keys.
 - **Forwarded headers**: only accept `X-Forwarded-For` or `Forwarded` from known proxy addresses (ASP.NET Core's `ForwardedHeadersOptions.KnownProxies` / `KnownNetworks`), otherwise attackers set their own "IP" per request and bypass IP limits.
 - **Credential stuffing and OTP abuse**: fail closed, use exponential lockouts per account, and add CAPTCHA or step-up challenges after limits are hit.
 - **Don't leak too much**: limit headers telling attackers exactly how many login attempts remain may help them pace attacks; omit them on sensitive endpoints.

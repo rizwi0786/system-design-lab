@@ -565,7 +565,7 @@ using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Optional extra source. Its position sets its precedence: after env vars, so it beats them.
+// Optional extra source. Its position sets its precedence: added after env vars and the command line, so it beats both.
 builder.Configuration.AddJsonFile("payouts.overrides.json", optional: true, reloadOnChange: true);
 
 // Production secrets (requires the Key Vault configuration package, see the lesson text):

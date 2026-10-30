@@ -10,7 +10,7 @@ prerequisites: [m19-defending-choices, m19-overengineering, m14-owasp, m14-dr]
 related: [m02-adr, m14-least-privilege-audit, m14-sli-slo-sla, m14-observability, m19-mock-interviews, m19-changing-requirements]
 tags: [design-review, checklists, security, feedback, architecture-review, interview]
 patterns: [Checklist, Architecture Decision Record]
-summary: "A repeatable way to review a design: read requirements first, walk the critical flows, kill a box, then run seven checklists (requirements, scale, failure, security, data, operations, cost). Learn to write feedback that is specific, ranked and kind, follow a complete worked review of a contractor-billing system, and build a C# review tool that ranks comments and lints feedback tone."
+summary: "A repeatable way to review a design: read requirements first, walk the critical flows, kill a box, then run seven checklists (requirements, scale, failure, security, data, operations, cost). Learn to write feedback that is specific, ranked and kind, follow a complete worked review of a health-insurance claims system, and build a C# review tool that ranks comments and lints feedback tone."
 references:
   - title: "Microsoft Learn — Azure Well-Architected Framework"
     url: https://learn.microsoft.com/azure/well-architected/
@@ -44,15 +44,15 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-On large infrastructure projects in India, a bridge designed by one consultant is often checked by an independent **proof-checking consultant** before construction. The proof checker does not redraw the bridge. They take the design, check it against the codes and the site conditions, and send back a list: "the bearing at pier 3 is under-designed for the seismic zone (must fix)", "the drainage spout spacing is unusual, please confirm (question)", "the label on sheet 14 is wrong (minor)".
+Before a university exam, the question paper set by one teacher is usually checked by a second teacher, the **moderator**. The moderator does not rewrite the paper. They take it, check it against the syllabus and the exam rules, and send back a list: "question 7 has two correct answers (must fix)", "question 3 looks long for 10 minutes, please confirm (question)", "there is a typo in question 12 (minor)".
 
-Three things make a good proof checker:
+Three things make a good moderator:
 
-1. **They start from the requirements**: span, load class, seismic zone, river flood level. A bridge is only right or wrong relative to what it must carry.
-2. **They focus on what would fail**, not on whether they would have chosen a different girder shape.
-3. **They write findings the designer can act on**: what is wrong, why it matters, what would fix it.
+1. **They start from the requirements**: the syllabus, the duration, the total marks, the mix of easy and hard questions. A paper is only right or wrong relative to what it must test.
+2. **They focus on what would fail students**, not on whether they would have phrased a question differently.
+3. **They write findings the setter can act on**: what is wrong, why it matters, what would fix it.
 
-A software design review (architecture review) is the same job. The design document is the drawing. The checklists are the codes. The review comments are the proof checker's list. And just like on a bridge, a problem found on paper costs a fraction of one found after construction.
+A software design review (architecture review) is the same job. The design document is the question paper. The checklists are the exam rules. The review comments are the moderator's list. And just like a paper, a problem found before the exam costs a fraction of one found after 2,000 students have sat it.
 
 ## First-principles explanation
 
@@ -84,7 +84,7 @@ Follow the same order every time. It stops you from fixating on the first thing 
 |---|---|---|
 | **Blocker** | Must change before building. Risk of data loss, security breach, legal breach or a design that cannot meet a hard requirement. | Bank details written to logs. |
 | **Major** | Should change before launch. Real risk of incidents or significant rework. | Synchronous call to a slow third party in the approval path. |
-| **Minor** | Worth doing, not urgent. | No alert for bills stuck more than 7 days. |
+| **Minor** | Worth doing, not urgent. | No alert for claims stuck more than 7 days. |
 | **Nit** | Style or naming. Take it or leave it. | Inconsistent naming of states. |
 | **Question** | You don't know whether it's a problem. | "What availability does month-end need?" |
 
@@ -113,10 +113,11 @@ Keep each checklist short. The point is to make sure you looked, not to fill a f
 
 **4. Security**
 - Who are the actors, and how is each authenticated?
-- Is authorisation checked on every resource, including object-level checks ("can this user see **this** bill?"), not just roles?
+- Is authorisation checked on every resource, including object-level checks ("can this user see **this** claim?"), not just roles?
 - Where does sensitive data (personal data, financial data, credentials) flow, and is it encrypted in transit and at rest, minimised, and kept out of logs?
 - Are inputs validated, uploads scanned and size-limited, and outbound calls restricted (to prevent SSRF)?
 - Are secrets in a secret store, and is there an audit trail for sensitive actions?
+- For anything that handles money, health or other personal data, spend five minutes on a lightweight threat model: list the trust boundaries (browser to API, API to third parties, staff to admin tools) and ask the STRIDE questions at each one (spoofing, tampering, repudiation, information disclosure, denial of service, elevation of privilege).
 
 **5. Data**
 - Who owns each piece of data, and is there exactly one source of truth?
@@ -150,7 +151,7 @@ Rules that keep feedback useful:
 - **Tie it to a requirement.** "Given the 99.9 % target..." makes the comment a fact about the system, not your taste.
 - **Offer, don't dictate.** "One option is..." leaves room for a better idea from the author, who knows the context better than you.
 - **Separate must-fix from preference.** Mark nits as nits. If everything is urgent, nothing is.
-- **Lead with real strengths.** Specific praise ("the explicit state machine for bill status makes the audit requirement easy") tells the author what to keep.
+- **Lead with real strengths.** Specific praise ("the explicit state machine for claim status makes the audit requirement easy") tells the author what to keep.
 - **Ask when you don't know.** A question is a perfectly good comment.
 - **Avoid absolute and dismissive words** ("obviously", "just", "simply", "clearly"). They make the reader defensive and are rarely true.
 
@@ -194,84 +195,84 @@ flowchart LR
 
 The method is a pipeline. Requirements come first so that every later finding can be tied to one. Mapping gives you the list of boxes to walk and kill. Walking and killing find most real problems, because incidents happen along flows and at failure boundaries; the checklists then catch what those two techniques miss, such as retention or cost. Prioritising before writing is what keeps the review readable. The verdict at the end is mechanical once severities are assigned, which removes a lot of argument.
 
-### The design under review: BillFlow v1
+### The design under review: ClaimFlow v1
 
-Our worked review is of **BillFlow**, a system for contractors on road projects to submit running-account (RA) bills with measurement sheets and site photos. A site engineer verifies, the project management consultant (PMC) approves, and the client's ERP releases payment. Stated load: 600 contractors, about 3,000 bills a month, attachments of 20–200 MB per bill, heavy use in the last 5 days of each month.
+Our worked review is of **ClaimFlow**, a system for a health insurer's 600 network hospitals to submit cashless insurance claims with discharge summaries, itemised hospital bills and scan images. A medical reviewer verifies each claim, a claims manager approves it, and the insurer's ERP (finance system) releases payment to the hospital's bank account. Stated load: 600 hospitals, about 3,000 claims a month, attachments of 20–200 MB per claim (scans are large), heavy use in the last 5 days of each month before the monthly settlement cut-off.
 
 ```mermaid
 flowchart LR
-    CP["Contractor portal"] --> API["BillFlow API, 1 instance"]
-    EN["Engineer and PMC users"] --> API
+    CP["Hospital portal"] --> API["ClaimFlow API, 1 instance"]
+    EN["Reviewers and claims managers"] --> API
     API --> DB[("PostgreSQL, single instance")]
     API --> FS["Attachments on API local disk"]
-    API --> ERP["Client ERP payment API, called inline on approval"]
+    API --> ERP["Insurer ERP payment API, called inline on approval"]
     API --> SMTP["SMTP, emails sent inline"]
     API --> LOG["Logs with full request bodies"]
     DB --> BK["Nightly backup to the same server"]
 ```
 
-As drawn: one API instance serves contractors and reviewers, writes bills to a single PostgreSQL instance, stores attachments on its own local disk, and on final approval calls the ERP payment API inside the request. Emails go out inline over SMTP. Logs capture full request bodies (which include contractor bank details). Backups run nightly to the same server. Several problems are already visible from the diagram alone; the walk and the checklists will find the rest.
+As drawn: one API instance serves hospitals and reviewers, writes claims to a single PostgreSQL instance, stores attachments on its own local disk, and on final approval calls the ERP payment API inside the request. Emails go out inline over SMTP. Logs capture full request bodies (which include hospital bank details and patient diagnoses). Backups run nightly to the same server. Several problems are already visible from the diagram alone; the walk and the checklists will find the rest.
 
 ### Walking the approval flow
 
 ```mermaid
 sequenceDiagram
-    participant P1 as PMC user A
-    participant P2 as PMC user B
-    participant API as BillFlow API
+    participant P1 as Claims manager A
+    participant P2 as Claims manager B
+    participant API as ClaimFlow API
     participant DB as PostgreSQL
-    participant ERP as Client ERP
-    P1->>API: POST /bills/881/approve
-    P2->>API: POST /bills/881/approve
-    API->>DB: read bill 881, status EngineerVerified
-    API->>DB: read bill 881, status EngineerVerified
+    participant ERP as Insurer ERP
+    P1->>API: POST /claims/881/approve
+    P2->>API: POST /claims/881/approve
+    API->>DB: read claim 881, status MedicallyVerified
+    API->>DB: read claim 881, status MedicallyVerified
     API->>DB: update status Approved for A
-    API->>ERP: release payment for bill 881
+    API->>ERP: release payment for claim 881
     API->>DB: update status Approved for B
-    API->>ERP: release payment for bill 881 again
+    API->>ERP: release payment for claim 881 again
     ERP-->>API: timeout on second call
     API-->>P2: 500, user retries
 ```
 
-Walking the approval flow with two concurrent approvers exposes the most serious correctness bug. Both requests read the bill as "EngineerVerified", both pass the check, both update it to "Approved", and both call the ERP. Nothing in the design makes the status change conditional, and nothing gives the ERP call an idempotency key. The second ERP call times out, the user sees an error and retries, which could cause a third call. A review that only read the diagram might have missed this; walking the flow with "what if this is called twice?" finds it in a minute.
+Walking the approval flow with two concurrent approvers exposes the most serious correctness bug. Both requests read the claim as "MedicallyVerified", both pass the check, both update it to "Approved", and both call the ERP. Nothing in the design makes the status change conditional, and nothing gives the ERP call an idempotency key. The second ERP call times out, the user sees an error and retries, which could cause a third call. A review that only read the diagram might have missed this; walking the flow with "what if this is called twice?" finds it in a minute.
 
 ## Step-by-step example
 
-Here is the complete review of BillFlow v1, as you would send it.
+Here is the complete review of ClaimFlow v1, as you would send it.
 
 ### Step 1 — requirements and expectations
 
-From the design doc: 600 contractors, 3,000 bills a month, 20–200 MB attachments, month-end peak, "high availability" (unquantified), payments must be released once per approved bill, bank details are stored, audit trail required by the client.
+From the design doc: 600 hospitals, 3,000 claims a month, 20–200 MB attachments, month-end peak, "high availability" (unquantified), payments must be released once per approved claim, bank details are stored, audit trail required by the regulator.
 
-Expectations before reading the architecture: object storage for attachments (up to 600 GB a month: 3,000 × 200 MB in the worst case), an explicit bill state machine with concurrency control, an idempotent payment release, encrypted bank details kept out of logs, project-scoped authorisation, backups stored elsewhere, and modest compute (3,000 bills a month is about 100 a day, with a month-end peak of perhaps 500 a day).
+Expectations before reading the architecture: object storage for attachments (up to 600 GB a month: 3,000 × 200 MB in the worst case), an explicit claim state machine with concurrency control, an idempotent payment release, encrypted bank details kept out of logs, assignment-scoped authorisation, backups stored elsewhere, and modest compute (3,000 claims a month is about 100 a day, with a month-end peak of perhaps 500 a day).
 
 ### Step 2 — strengths (always first)
 
-- The bill status is an explicit state machine (Submitted, EngineerVerified, Approved, PaymentReleased, Rejected) with an audit table recording who changed what and when. This directly meets the client's audit requirement.
-- The data model separates bill header, measurement lines and attachments cleanly.
+- The claim status is an explicit state machine (Submitted, MedicallyVerified, Approved, PaymentReleased, Rejected) with an audit table recording who changed what and when. This directly meets the regulator's audit requirement.
+- The data model separates claim header, bill line items (room, procedures, medicines) and attachments cleanly.
 - Load is modest and the design does not over-build: no microservices or brokers that the numbers don't justify.
 
 ### Step 3 — findings
 
 | # | Severity | Area | Observation | Impact | Suggestion |
 |---|---|---|---|---|---|
-| B1 | Blocker | Security, Data | Request bodies, including bank account numbers and IFSC codes, are written to logs. | Financial data is exposed to anyone with log access and copied into log retention and backups; likely breach of the client's data-protection obligations. | Log ids, not bodies. Redact sensitive fields in the logging pipeline, encrypt bank details at rest, and purge existing logs. |
+| B1 | Blocker | Security, Data | Request bodies, including hospital bank account numbers, IFSC codes and patient diagnoses, are written to logs. | Financial and health data is exposed to anyone with log access and copied into log retention and backups; a likely breach of the insurer's data-protection obligations. | Log ids, not bodies. Redact sensitive fields in the logging pipeline, encrypt bank details at rest, restrict who can read logs, and purge existing logs. |
 | B2 | Blocker | Data, Failure | Backups are written to the same server as the database. | A disk or server loss destroys the data and its backups together; there is effectively no backup. RPO and RTO are undefined. | Use managed PostgreSQL with automated backups and point-in-time recovery to separate storage, and run a quarterly restore test. State RPO and RTO in the doc. |
 | B3 | Blocker | Data, Scale | Attachments are stored on the API server's local disk. | Files are lost if the instance is replaced, and the API cannot run more than one instance. Up to 600 GB a month will fill the disk. | Store attachments in object storage; upload directly from the browser with short-lived pre-signed URLs; store only the object key in the database. |
-| M1 | Major | Data | Two approvers can approve the same bill concurrently; the status update is not conditional (see the sequence diagram). | Double approval and double payment release. | Make the transition conditional: `UPDATE bills SET status='Approved', version=version+1 WHERE id=@id AND status='EngineerVerified' AND version=@v`, and treat zero rows updated as "already handled". |
-| M2 | Major | Failure | The ERP payment call is synchronous inside the approval request, with no idempotency key. | ERP slowness at month-end makes approvals fail; retries can release payment twice. | Write the approval and an outbox row in one transaction; a worker calls the ERP with the bill id as the idempotency key and records the result. The UI shows "payment pending". |
-| M3 | Major | Security | Authorisation checks only the role (Engineer, PMC), not the project. | An engineer on one project can verify bills on another by changing the bill id in the URL (broken object-level access control, OWASP A01). | Check resource ownership on every request: the user must be assigned to the bill's project. Add tests that try cross-project access. |
+| M1 | Major | Data | Two approvers can approve the same claim concurrently; the status update is not conditional (see the sequence diagram). | Double approval and double payment release. | Make the transition conditional: `UPDATE claims SET status='Approved', version=version+1 WHERE id=@id AND status='MedicallyVerified' AND version=@v`, and treat zero rows updated as "already handled". |
+| M2 | Major | Failure | The ERP payment call is synchronous inside the approval request, with no idempotency key. | ERP slowness at month-end makes approvals fail; retries can release payment twice. | Write the approval and an outbox row in one transaction; a worker calls the ERP with the claim id as the idempotency key and records the result. The UI shows "payment pending". |
+| M3 | Major | Security | Authorisation checks only the role (Reviewer, Manager), not the assignment. | A reviewer can open and verify any claim, including claims from a hospital they are barred from reviewing (conflict of interest), by changing the claim id in the URL (broken object-level access control, OWASP A01). | Check resource ownership on every request: reviewers only see claims assigned to them, and hospital users only their own hospital's claims. Add tests that try cross-assignment and cross-hospital access. |
 | M4 | Major | Failure, Operations | One API instance, single database instance, and "high availability" not quantified. | Any deploy or crash is an outage, most painful in the month-end window. | Agree an availability target for month-end. At minimum: two API instances behind a load balancer and a database with a standby. |
 | m1 | Minor | Failure | Emails are sent inline over SMTP. | Slow mail servers slow down submissions and approvals. | Send emails from the same outbox worker. |
-| m2 | Minor | Operations | No metrics or alerts for bills stuck in a state. | Bills waiting 20 days go unnoticed until a contractor complains. | Add an SLI "bills awaiting action more than 7 days" with a daily report and an alert above a threshold. |
+| m2 | Minor | Operations | No metrics or alerts for claims stuck in a state. | Claims waiting 20 days go unnoticed until a hospital complains. | Add an SLI "claims awaiting action more than 7 days" with a daily report and an alert above a threshold. |
 | m3 | Minor | Cost | 200 MB uploads pass through the API. | API bandwidth and memory pressure at month-end; larger instances than needed. | Resolved by the pre-signed upload in B3. |
-| Q1 | Question | Requirements | What availability does the month-end window need, and what happens contractually if bills cannot be submitted on the last day? | Determines how far to go on M4. | — |
-| Q2 | Question | Security | Are uploaded files scanned for malware before engineers open them? | Engineers open contractor-supplied files. | — |
-| N1 | Nit | Data | State names mix "Verified" and "EngineerVerified". | Confusing in reports. | Pick one. |
+| Q1 | Question | Requirements | What availability does the month-end window need, and what happens if hospitals miss the settlement cut-off because the portal is down? | Determines how far to go on M4. | — |
+| Q2 | Question | Security | Are uploaded files scanned for malware before reviewers open them? | Reviewers open hospital-supplied files. | — |
+| N1 | Nit | Data | State names mix "Verified" and "MedicallyVerified". | Confusing in reports. | Pick one. |
 
 ### Step 4 — the summary
 
-> **Verdict: changes required.** The state machine and audit design are strong and match the client's audit requirement well. Three blockers must be fixed before build: bank details in logs (B1), backups on the same server (B2), and attachments on local disk (B3). Of the majors, the double-approval race (M1) and the non-idempotent ERP call (M2) together can release a payment twice, so I'd treat them as one piece of work. Project-scoped authorisation (M3) is a one-day change with tests. I've left two questions about month-end availability and malware scanning; the answers decide how far to go on M4. Happy to pair on the outbox and the conditional update.
+> **Verdict: changes required.** The state machine and audit design are strong and match the regulator's audit requirement well. Three blockers must be fixed before build: bank details in logs (B1), backups on the same server (B2), and attachments on local disk (B3). Of the majors, the double-approval race (M1) and the non-idempotent ERP call (M2) together can release a payment twice, so I'd treat them as one piece of work. Assignment-scoped authorisation (M3) is a one-day change with tests. I've left two questions about month-end availability and malware scanning; the answers decide how far to go on M4. Happy to pair on the outbox and the conditional update.
 
 ### Step 5 — what the review deliberately did **not** say
 
@@ -473,7 +474,7 @@ Here the "design" being judged is the review itself.
 
 > "This is way too simple, obviously it won't scale. Why didn't you use microservices and Kafka? Also logging is bad, backups are bad, and you just put files on disk?? Needs a total rethink. Also rename the states."
 
-Problems: no requirements cited; "won't scale" is false for 100 bills a day; the microservices and Kafka suggestion is overengineering; the real blockers (bank details in logs, backups on the same server) are buried in a list with "rename the states"; no impact or suggestion for any finding; the tone guarantees a defensive response; and the double-payment race is missed entirely because nobody walked the flow.
+Problems: no requirements cited; "won't scale" is false for 100 claims a day; the microservices and Kafka suggestion is overengineering; the real blockers (bank details in logs, backups on the same server) are buried in a list with "rename the states"; no impact or suggestion for any finding; the tone guarantees a defensive response; and the double-payment race is missed entirely because nobody walked the flow.
 
 **Good review:** the worked review above. It starts with strengths, ties each finding to a requirement, ranks by severity, gives impact and a concrete suggestion for every serious finding, groups related findings (M1 and M2), asks questions where the reviewer doesn't know, and drops low-value nits.
 
@@ -487,17 +488,17 @@ If the author reads only three comments, which three should they be? Put those f
 
 ## Practical playground
 
-The starter is BillFlow v1. Fix the blockers and majors from the review in the canvas: move attachments to object storage with direct uploads, add a second API instance and a database standby with off-server backups, introduce an outbox worker for ERP calls and emails, and add monitoring for stuck bills. Label each change with the review finding id (B1, M2 and so on). Then compare with the reference solution in exercise 5.
+The starter is ClaimFlow v1. Fix the blockers and majors from the review in the canvas: move attachments to object storage with direct uploads, add a second API instance and a database standby with off-server backups, introduce an outbox worker for ERP calls and emails, and add monitoring for stuck claims. Label each change with the review finding id (B1, M2 and so on). Then compare with the reference solution in exercise 5.
 
-:::playground type=hld title="Fix BillFlow v1 from the review findings"
+:::playground type=hld title="Fix ClaimFlow v1 from the review findings"
 ```json
 {
   "nodes": [
-    { "id": "cp", "type": "client", "label": "Contractor portal (600 contractors)", "props": { "rps": 10 } },
-    { "id": "rev", "type": "client", "label": "Engineers and PMC", "props": { "rps": 5 } },
-    { "id": "api", "type": "app-server", "label": "BillFlow API, attachments on local disk", "props": { "instances": 1 } },
+    { "id": "cp", "type": "client", "label": "Hospital portal (600 hospitals)", "props": { "rps": 10 } },
+    { "id": "rev", "type": "client", "label": "Reviewers and claims managers", "props": { "rps": 5 } },
+    { "id": "api", "type": "app-server", "label": "ClaimFlow API, attachments on local disk", "props": { "instances": 1 } },
     { "id": "db", "type": "database", "label": "PostgreSQL single instance, backups on same server" },
-    { "id": "erp", "type": "external", "label": "Client ERP payment API" },
+    { "id": "erp", "type": "external", "label": "Insurer ERP payment API" },
     { "id": "smtp", "type": "external", "label": "SMTP" }
   ],
   "edges": [
@@ -551,7 +552,7 @@ Implement `ReviewMath.Order`, which sorts comments by severity (blocker first) t
 - Ids compare with ordinal string comparison.
 - An empty list is `Approve`.
 ::acceptance
-- BillFlow's 13 findings produce `ChangesRequired`.
+- ClaimFlow's 13 findings produce `ChangesRequired`.
 - Only majors and minors produce `ApproveWithChanges`.
 - Only questions and nits produce `Approve`.
 - Ordering puts B1, B2, B3 before M1, and Q1 last.
@@ -588,14 +589,14 @@ public class ReviewMathTests
 {
     private static Comment C(string id, Severity s) => new(id, s, "text");
 
-    private static readonly Comment[] BillFlow =
+    private static readonly Comment[] ClaimFlow =
     {
         C("Q1", Severity.Question), C("M2", Severity.Major), C("B2", Severity.Blocker), C("m1", Severity.Minor),
         C("N1", Severity.Nit), C("B1", Severity.Blocker), C("M1", Severity.Major), C("B3", Severity.Blocker),
         C("M3", Severity.Major), C("M4", Severity.Major), C("m2", Severity.Minor), C("m3", Severity.Minor), C("Q2", Severity.Question)
     };
 
-    [Fact] public void BillFlow_requires_changes() => Assert.Equal(Verdict.ChangesRequired, ReviewMath.Decide(BillFlow));
+    [Fact] public void ClaimFlow_requires_changes() => Assert.Equal(Verdict.ChangesRequired, ReviewMath.Decide(ClaimFlow));
 
     [Fact]
     public void Majors_without_blockers_approve_with_changes() =>
@@ -610,7 +611,7 @@ public class ReviewMathTests
     [Fact]
     public void Orders_by_severity_then_id()
     {
-        var ids = ReviewMath.Order(BillFlow).Select(c => c.Id).ToArray();
+        var ids = ReviewMath.Order(ClaimFlow).Select(c => c.Id).ToArray();
         Assert.Equal(new[] { "B1", "B2", "B3", "M1", "M2", "M3", "M4", "m1", "m2", "m3", "N1", "Q1", "Q2" }, ids);
     }
 }
@@ -813,34 +814,34 @@ What does the browser do if an upload fails mid-exam on a poor connection?
 - Not computing bandwidth, so the API tier looks fine.
 :::
 
-:::exercise id=m19-design-review-ex5 difficulty=advanced kind=hld title="Produce BillFlow v2 from the review"
-Using the worked review's findings, produce BillFlow v2. Every change must carry the finding id it resolves in its label. Do not add anything the findings and requirements do not justify.
+:::exercise id=m19-design-review-ex5 difficulty=advanced kind=hld title="Produce ClaimFlow v2 from the review"
+Using the worked review's findings, produce ClaimFlow v2. Every change must carry the finding id it resolves in its label. Do not add anything the findings and requirements do not justify.
 ::acceptance
 - B1: sensitive fields redacted from logs and encrypted at rest (show the log pipeline and a secret or key store).
 - B2: managed database with standby and point-in-time recovery to separate storage.
 - B3: object storage with direct pre-signed uploads and malware scanning (Q2).
 - M1 and M2: conditional state transition and an outbox worker calling the ERP with an idempotency key.
-- M3: project-scoped authorisation shown at the API.
+- M3: assignment-scoped authorisation shown at the API.
 - M4: at least two API instances behind a load balancer.
-- m2: monitoring for stuck bills.
+- m2: monitoring for stuck claims.
 - No broker cluster, microservices or multi-region.
 ::hint
 Start by deleting the local-disk attachment store and the inline ERP and SMTP edges.
 ::hint
-The outbox worker handles both ERP calls and emails; at about 100 bills a day, no broker is needed.
+The outbox worker handles both ERP calls and emails; at about 100 claims a day, no broker is needed.
 ::hint
 Malware scanning can be triggered by an object-storage event into a scanning worker that marks the attachment clean or quarantined.
 ::hint
-Put "M3: project membership check on every bill route" in the API's label.
+Put "M3: assignment check on every claim route" in the API's label.
 ::starter
 ```json
 {
   "nodes": [
-    { "id": "cp", "type": "client", "label": "Contractor portal (600 contractors)", "props": { "rps": 10 } },
-    { "id": "rev", "type": "client", "label": "Engineers and PMC", "props": { "rps": 5 } },
-    { "id": "api", "type": "app-server", "label": "BillFlow API, attachments on local disk", "props": { "instances": 1 } },
+    { "id": "cp", "type": "client", "label": "Hospital portal (600 hospitals)", "props": { "rps": 10 } },
+    { "id": "rev", "type": "client", "label": "Reviewers and claims managers", "props": { "rps": 5 } },
+    { "id": "api", "type": "app-server", "label": "ClaimFlow API, attachments on local disk", "props": { "instances": 1 } },
     { "id": "db", "type": "database", "label": "PostgreSQL single instance, backups on same server" },
-    { "id": "erp", "type": "external", "label": "Client ERP payment API" },
+    { "id": "erp", "type": "external", "label": "Insurer ERP payment API" },
     { "id": "smtp", "type": "external", "label": "SMTP" }
   ],
   "edges": [
@@ -856,19 +857,19 @@ Put "M3: project membership check on every bill route" in the API's label.
 ```json
 {
   "nodes": [
-    { "id": "cp", "type": "client", "label": "Contractor portal (600 contractors)", "props": { "rps": 10 } },
-    { "id": "rev", "type": "client", "label": "Engineers and PMC", "props": { "rps": 5 } },
+    { "id": "cp", "type": "client", "label": "Hospital portal (600 hospitals)", "props": { "rps": 10 } },
+    { "id": "rev", "type": "client", "label": "Reviewers and claims managers", "props": { "rps": 5 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer + TLS (M4)" },
-    { "id": "api", "type": "app-server", "label": "BillFlow API: M3 project membership check, M1 conditional status update", "props": { "instances": 2 } },
+    { "id": "api", "type": "app-server", "label": "ClaimFlow API: M3 assignment check, M1 conditional status update", "props": { "instances": 2 } },
     { "id": "db", "type": "database", "label": "Managed PostgreSQL + standby, PITR to separate storage (B2), bank details encrypted (B1)", "props": { "multiAz": true } },
     { "id": "kv", "type": "external", "label": "Key vault: encryption keys and secrets (B1)" },
     { "id": "obj", "type": "object-storage", "label": "Attachments, direct pre-signed upload (B3, m3)" },
     { "id": "scan", "type": "worker", "label": "Malware scan on upload event, quarantine (Q2)" },
-    { "id": "ob", "type": "worker", "label": "Outbox worker: ERP release with bill id idempotency key (M2), emails (m1)" },
-    { "id": "erp", "type": "external", "label": "Client ERP payment API" },
+    { "id": "ob", "type": "worker", "label": "Outbox worker: ERP release with claim id idempotency key (M2), emails (m1)" },
+    { "id": "erp", "type": "external", "label": "Insurer ERP payment API" },
     { "id": "smtp", "type": "external", "label": "SMTP" },
     { "id": "logs", "type": "monitoring", "label": "Logs with redaction, ids only (B1)" },
-    { "id": "mon", "type": "monitoring", "label": "SLI: bills waiting over 7 days, outbox age, ERP failures (m2)" }
+    { "id": "mon", "type": "monitoring", "label": "SLI: claims waiting over 7 days, outbox age, ERP failures (m2)" }
   ],
   "edges": [
     { "from": "cp", "to": "lb", "kind": "sync" },
@@ -890,9 +891,9 @@ Put "M3: project membership check on every bill route" in the API's label.
 }
 ```
 
-Reasoning: each node exists because a finding or requirement demands it, and each label says which. The outbox worker is the only asynchronous machinery: at about 100 bills a day, a broker would add operations without adding a guarantee. The conditional update (M1) and the idempotency key (M2) together guarantee one payment per bill even under concurrent approval and retries. The malware scanner answers Q2 under the assumption that the answer was "no scanning today". Two API instances and a managed standby meet a month-end availability target that is likely around 99.9 %; if Q1's answer is stricter, the next step is a second zone for the API, not a second region.
+Reasoning: each node exists because a finding or requirement demands it, and each label says which. The outbox worker is the only asynchronous machinery: at about 100 claims a day, a broker would add operations without adding a guarantee. The conditional update (M1) and the idempotency key (M2) together guarantee one payment per claim even under concurrent approval and retries. The malware scanner answers Q2 under the assumption that the answer was "no scanning today". Two API instances and a managed standby meet a month-end availability target that is likely around 99.9 %; if Q1's answer is stricter, the next step is a second zone for the API, not a second region.
 ::mistakes
-- Adding a message broker for ERP calls at 100 bills a day.
+- Adding a message broker for ERP calls at 100 claims a day.
 - Fixing M1 with an application-level lock in one instance's memory, which fails with two instances.
 - Leaving the inline SMTP edge in place.
 :::
@@ -928,7 +929,7 @@ Who owns the "near-real-time" requirement? Bring them in rather than arguing bet
 
 ## Automated testing
 
-The review tool's logic is small but easy to break silently: a reordered enum changes every verdict, and a careless regex flags half the English language. Test the builder with the BillFlow findings, the linter with tricky words, and the "uncovered areas" logic with explicit checks.
+The review tool's logic is small but easy to break silently: a reordered enum changes every verdict, and a careless regex flags half the English language. Test the builder with the ClaimFlow findings, the linter with tricky words, and the "uncovered areas" logic with explicit checks.
 
 ```csharp
 public class ReviewReportBuilderTests
@@ -936,7 +937,7 @@ public class ReviewReportBuilderTests
     private static ReviewReportBuilder Builder() => new(new FeedbackLinter());
 
     [Fact]
-    public void BillFlow_needs_changes_and_lists_blockers_first()
+    public void ClaimFlow_needs_changes_and_lists_blockers_first()
     {
         var comments = new[]
         {
@@ -944,7 +945,7 @@ public class ReviewReportBuilderTests
             new ReviewComment("B1", ReviewArea.Security, Severity.Blocker, "Bank details in logs.", "Data exposure.", "Redact."),
             new ReviewComment("Q1", ReviewArea.Requirements, Severity.Question, "What availability does month-end need?"),
         };
-        var report = Builder().Build(new ReviewRequest("BillFlow v1", comments, new[] { ReviewArea.Cost, ReviewArea.Operations }));
+        var report = Builder().Build(new ReviewRequest("ClaimFlow v1", comments, new[] { ReviewArea.Cost, ReviewArea.Operations }));
 
         Assert.Equal(Verdict.ChangesRequired, report.Verdict);
         Assert.Equal("B1", report.Comments[0].Id);
@@ -973,7 +974,7 @@ Two more tests worth having: a snapshot of `StandardChecklist.Items` ids (so ite
 
 - **Architecture review boards.** Many organisations require a review before a new system or a major change goes to production. The seven areas map closely onto the pillars of public frameworks such as the Azure Well-Architected Framework (reliability, security, cost optimisation, operational excellence, performance efficiency).
 - **Pull requests for infrastructure.** Infrastructure-as-code changes get the same checklists in miniature: what does this change break if it fails, who can access it, what does it cost?
-- **Vendor and tender evaluations.** When a client receives a design from a vendor, the review method gives a structured, defensible response: findings with severity, impact and suggestion, rather than a vague "not satisfactory".
+- **Vendor evaluations.** When a company receives a design from an outside vendor, the review method gives a structured, defensible response: findings with severity, impact and suggestion, rather than a vague "not satisfactory".
 - **Incident follow-ups.** Post-incident reviews often reveal a finding that a design review could have caught: "no idempotency on the payment callback", "backups on the same host". Adding such findings to your checklist is how a team's review practice improves.
 - **Interviews.** The "critique this design" round tests exactly this lesson: method, prioritisation and tone.
 
@@ -1071,9 +1072,9 @@ Which belong on a security checklist for a design review? (Select all that apply
 - [ ] The choice of front-end framework.
 > Framework choice is not a security architecture concern by itself; the other three are classic findings.
 ::q single
-Two approvers can approve the same bill at the same time, and approval triggers a payment. Which fix addresses the race in a design with several API instances?
+Two approvers can approve the same claim at the same time, and approval triggers a payment. Which fix addresses the race in a design with several API instances?
 - [ ] An in-memory lock in the API.
-- [x] A conditional update (`WHERE status = 'EngineerVerified' AND version = @v`) plus an idempotency key on the payment call.
+- [x] A conditional update (`WHERE status = 'MedicallyVerified' AND version = @v`) plus an idempotency key on the payment call.
 - [ ] Asking users not to click twice.
 - [ ] A larger database instance.
 > An in-memory lock only works within one instance. The database condition makes the transition happen once, and the idempotency key protects the external call.

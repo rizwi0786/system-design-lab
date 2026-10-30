@@ -24,7 +24,7 @@ references:
     url: https://www.enterpriseintegrationpatterns.com/patterns/messaging/MessageChannel.html
 ---
 
-Most web requests do two kinds of work: the part the user is waiting for, and the part they are not. When a site engineer uploads a photo of a cracked culvert, they need to see "uploaded" in under a second. They do not need the AI defect tags, the thumbnail set and the weekly report entry right now. A message queue lets the API do the first part, write a small note saying "please do the rest", and answer immediately. Other machines pick up those notes and do the slow work at their own pace. This lesson explains how that waiting line works, why it makes systems calmer under load, and where it can go wrong.
+Most web requests do two kinds of work: the part the user is waiting for, and the part they are not. When someone lists an old phone for sale on a second-hand marketplace and uploads its photos, they need to see "uploaded" in under a second. They do not need the AI category and moderation tags, the thumbnail set and the entry in tomorrow's "new near you" digest right now. A message queue lets the API do the first part, write a small note saying "please do the rest", and answer immediately. Other machines pick up those notes and do the slow work at their own pace. This lesson explains how that waiting line works, why it makes systems calmer under load, and where it can go wrong.
 
 ## Learning objectives
 
@@ -81,30 +81,30 @@ Popular brokers include RabbitMQ, Amazon SQS, Azure Service Bus and Google Cloud
 
 ### Why it exists: three problems with doing everything synchronously
 
-**Problem 1: bursts.** Traffic is rarely flat. A construction-monitoring app used across 2,000 project sites sees most photo uploads between 5 pm and 7 pm, when engineers finish the shift and sync their tablets. If every upload triggers AI tagging inside the request, you need enough tagging servers for the 6 pm peak, and they sit idle the other 22 hours.
+**Problem 1: bursts.** Traffic is rarely flat. A second-hand marketplace app sees most photo uploads between 8 pm and 10 pm, when people get home from work and list the things they want to sell. If every upload triggers AI tagging inside the request, you need enough tagging servers for the 9 pm peak, and they sit idle the other 22 hours.
 
 **Problem 2: fragile chains.** If the API calls the tagging service synchronously and the tagging service is down for five minutes, every upload fails for five minutes. With a queue, uploads keep succeeding; the messages wait; tagging catches up when the service returns. The availability of the API no longer depends on the availability of the tagging service (see [availability](#/lesson/m11-availability)).
 
-**Problem 3: slow responses.** AI tagging takes about 1.5 seconds per photo (an estimate for this example). Users should not wait 1.5 seconds for work whose result they will look at tomorrow.
+**Problem 3: slow responses.** AI tagging takes about 1.5 seconds per photo (an estimate for this example). Sellers should not wait 1.5 seconds per photo for work whose result nobody needs this minute.
 
 ### Load levelling with real numbers
 
 Let us size the photo pipeline. All numbers are estimates for a realistic example, not measurements.
 
-- 2,000 sites × 40 photos per site per day = **80,000 photos/day**.
+- 20,000 new listings per day × 4 photos per listing = **80,000 photos/day**.
 - Average rate: 80,000 ÷ 86,400 s ≈ **0.93 photos/s**.
-- But 70 % arrive between 5 pm and 7 pm: 56,000 photos in 7,200 s ≈ **7.8 photos/s** at peak.
+- But 70 % arrive between 8 pm and 10 pm: 56,000 photos in 7,200 s ≈ **7.8 photos/s** at peak.
 - One tagging worker handles 1 photo per 1.5 s ≈ **0.67 photos/s**.
 
-**Without a queue** you need 7.8 ÷ 0.67 ≈ **12 workers** running all the time to keep up with the peak, or users see failures at 6 pm.
+**Without a queue** you need 7.8 ÷ 0.67 ≈ **12 workers** running all the time to keep up with the peak, or sellers see failures at 9 pm.
 
 **With a queue and 3 workers** (3 × 0.67 = 2 photos/s):
 
 - During the peak, the backlog grows by 7.8 − 2 = 5.8 photos/s. After 7,200 s the queue holds about 5.8 × 7,200 ≈ **41,800 messages**.
-- After 7 pm, the remaining 24,000 photos arrive over 22 hours ≈ 0.3 photos/s, so the backlog shrinks at 2 − 0.3 = 1.7 photos/s.
-- Drain time: 41,800 ÷ 1.7 ≈ 24,600 s ≈ **6.8 hours**. The queue is empty by about 2 am.
+- After 10 pm, the remaining 24,000 photos arrive over 22 hours ≈ 0.3 photos/s, so the backlog shrinks at 2 − 0.3 = 1.7 photos/s.
+- Drain time: 41,800 ÷ 1.7 ≈ 24,600 s ≈ **6.8 hours**. The queue is empty by about 5 am.
 
-Three workers instead of twelve. The price is **latency**: a photo uploaded at 6:59 pm gets its tags around 2 am. For defect tags that the project manager reviews the next morning, that is fine. For a "photo rejected: too blurry" warning that the engineer must see while still on site, it is not, and that check should stay synchronous or get its own fast queue.
+Three workers instead of twelve. The price is **latency**: a photo uploaded at 9:59 pm gets its tags around 5 am. For category tags that feed search filters and moderation labels the trust-and-safety team reviews the next morning, that is fine (the listing is visible with its photos meanwhile). For a "photo rejected: too blurry" warning that the seller must see while still holding the item, it is not, and that check should stay synchronous or get its own fast queue.
 
 This idea is called **queue-based load levelling**: the queue turns a spiky arrival rate into a smooth processing rate. The rule that makes it work is simple: **over a full cycle (a day here), average consumer capacity must exceed average arrival rate.** Here 2 photos/s > 0.93 photos/s, so the queue always empties eventually. If capacity were below the average, the backlog would grow every day until something broke.
 
@@ -129,7 +129,7 @@ Redelivery has an unavoidable side effect: **duplicates**. If a consumer finishe
 
 To process faster, you run several consumers on the same queue. Each message goes to exactly one of them. This is the **competing consumers** pattern, and it is how you scale a queue horizontally: one worker gives 0.67 photos/s, three give 2, ten give 6.7.
 
-The trade-off is **ordering**. A queue hands messages out in order, but with three consumers, message 2 may finish before message 1 because consumer A got a large photo. Redelivery makes it worse: if message 1's consumer crashes, message 1 comes back *after* messages 2 to 50. If order matters for some data (all updates to one project's budget, for example), you need a design that keeps those messages on one consumer: a partitioned log like Kafka, single-active-consumer queues, or message sessions/groups keyed by project. For photo tagging, order does not matter, which is exactly why it is a good fit for a plain queue.
+The trade-off is **ordering**. A queue hands messages out in order, but with three consumers, message 2 may finish before message 1 because consumer A got a large photo. Redelivery makes it worse: if message 1's consumer crashes, message 1 comes back *after* messages 2 to 50. If order matters for some data (all price changes to one listing, for example), you need a design that keeps those messages on one consumer: a partitioned log like Kafka, single-active-consumer queues, or message sessions/groups keyed by listing. For photo tagging, order does not matter, which is exactly why it is a good fit for a plain queue.
 
 ### Buffering is not infinite: backpressure
 
@@ -162,7 +162,7 @@ Keep messages small and self-describing:
 
 - A **message id** (a GUID) chosen by the producer. Consumers use it to detect duplicates.
 - A **type and version**, such as `photo.uploaded.v1`, so consumers can evolve.
-- The **minimum data** needed, or a reference to it. Never put a 6 MB photo in a message; put it in [object storage](#/lesson/m11-object-storage) and send its path. This is the **claim check** pattern. Many brokers have size limits (Amazon SQS, for example, has long had a 256 KB limit, recently raised; check current documentation) and large messages slow everything down.
+- The **minimum data** needed, or a reference to it. Never put a 6 MB photo in a message; put it in [object storage](#/lesson/m11-object-storage) and send its path. This is the **claim check** pattern. Many brokers have size limits (Amazon SQS allowed 256 KB for years and raised the limit to 1 MiB in 2025; check current documentation for yours) and large messages slow everything down.
 - A **timestamp** and a **correlation id** for tracing.
 
 ### Monitoring a queue
@@ -199,7 +199,7 @@ Consumers can **autoscale on queue depth or age**: KEDA on Kubernetes and Azure 
 
 ```mermaid
 flowchart LR
-    T["Site tablet (producer side)"] -->|"1. upload photo"| API["Upload API"]
+    T["Seller app (producer side)"] -->|"1. upload photo"| API["Upload API"]
     API -->|"2. store bytes"| S3[("Object storage")]
     API -->|"3. publish photo.uploaded"| Q["photo-tagging queue (broker)"]
     API -->|"4. 202 Accepted"| T
@@ -213,7 +213,7 @@ flowchart LR
     MON -.->|"add or remove workers"| W3
 ```
 
-Follow the numbers. The tablet uploads the photo to the API (1), which stores the bytes in object storage (2) and publishes a small `photo.uploaded` message containing only the storage path (3). The API answers `202 Accepted` straight away (4); the user does not wait for tagging. The broker delivers each message to one of three competing workers (5). A worker reads the photo from storage (6), saves the tags in PostgreSQL (7), and only then acknowledges the message (8). Dotted lines are the control loop: monitoring reads queue depth and the oldest message's age and adds or removes workers. Notice that the API never talks to the workers; the queue is the only thing they share.
+Follow the numbers. The seller's app uploads the photo to the API (1), which stores the bytes in object storage (2) and publishes a small `photo.uploaded` message containing only the storage path (3). The API answers `202 Accepted` straight away (4); the user does not wait for tagging. The broker delivers each message to one of three competing workers (5). A worker reads the photo from storage (6), saves the tags in PostgreSQL (7), and only then acknowledges the message (8). Dotted lines are the control loop: monitoring reads queue depth and the oldest message's age and adds or removes workers. Notice that the API never talks to the workers; the queue is the only thing they share.
 
 ### Sequence: a normal delivery, then a crash and redelivery
 
@@ -247,9 +247,9 @@ We will grow a photo-tagging pipeline in four steps, starting with the simplest 
 ### Step 1: synchronous tagging (the starting point)
 
 ```csharp
-app.MapPost("/sites/{siteCode}/photos", async (string siteCode, PhotoUploadRequest req, IDefectTagger tagger, IPhotoTagStore store, CancellationToken ct) =>
+app.MapPost("/listings/{listingId}/photos", async (string listingId, PhotoUploadRequest req, IPhotoTagger tagger, IPhotoTagStore store, CancellationToken ct) =>
 {
-    var tags = await tagger.TagAsync(new PhotoUploaded(siteCode, req.BlobPath, req.UploadedBy, req.TakenAt), ct); // ~1.5 s
+    var tags = await tagger.TagAsync(new PhotoUploaded(listingId, req.BlobPath, req.UploadedBy, req.TakenAt), ct); // ~1.5 s
     await store.SaveAsync(req.BlobPath, tags, ct);
     return Results.Ok(tags);
 });
@@ -290,14 +290,14 @@ To survive consumer crashes, a delivery must be *leased*, not removed. The consu
 
 ### Step 4: a real broker
 
-Replace the in-memory implementation of `IMessageQueue<T>` with one backed by RabbitMQ, SQS or Service Bus. The endpoint and the worker do not change, because they depend only on the interface. Now queued messages survive restarts, all API instances publish to the same queue, and workers can run on separate machines and scale on queue age.
+Replace the in-memory implementation of `IMessageQueue<T>` with one backed by RabbitMQ, SQS or Service Bus. With RabbitMQ, that means a **quorum queue** (replicated with Raft across three nodes; classic mirrored queues were removed in RabbitMQ 4.0) and **publisher confirms**, so the API returns `202` only after the broker has safely stored the message. The endpoint and the worker do not change, because they depend only on the interface. Now queued messages survive restarts, all API instances publish to the same queue, and workers can run on separate machines and scale on queue age.
 
 ## Production-style C# implementation
 
 The code below models a broker queue in memory so it compiles and runs without infrastructure. It has the three behaviours that matter: bounded capacity with backpressure, leases with delivery tags and redelivery after a visibility timeout, and dead-lettering after too many deliveries. In production, `IMessageQueue<T>` would wrap a real broker client; the worker and endpoints stay the same.
 
 ```text
-SiteMedia.Api/
+ListingMedia.Api/
   Program.cs
   Messaging/MessagingContracts.cs
   Messaging/InMemoryQueue.cs
@@ -306,7 +306,7 @@ SiteMedia.Api/
 ```
 
 ```csharp file=Messaging/MessagingContracts.cs
-namespace SiteMedia.Messaging;
+namespace ListingMedia.Messaging;
 
 /// <summary>One delivery of a message. DeliveryTag is unique per delivery, MessageId per message.</summary>
 public sealed record Delivery<T>(Guid MessageId, long DeliveryTag, T Body, int DeliveryCount, DateTimeOffset EnqueuedAt);
@@ -358,7 +358,7 @@ using System.Collections.Concurrent;
 using System.Threading.Channels;
 using Microsoft.Extensions.Options;
 
-namespace SiteMedia.Messaging;
+namespace ListingMedia.Messaging;
 
 /// <summary>
 /// In-memory model of a broker queue: bounded, leased deliveries, redelivery on timeout, dead-lettering.
@@ -475,12 +475,12 @@ public sealed class InMemoryQueue<T> : IMessageQueue<T>, IDisposable
 ```csharp file=Photos/PhotoTagging.cs
 using System.Collections.Concurrent;
 
-namespace SiteMedia.Photos;
+namespace ListingMedia.Photos;
 
 /// <summary>The message: a reference to the photo (claim check), never the bytes.</summary>
-public sealed record PhotoUploaded(string SiteCode, string BlobPath, string UploadedBy, DateTimeOffset TakenAt);
+public sealed record PhotoUploaded(string ListingId, string BlobPath, string UploadedBy, DateTimeOffset TakenAt);
 
-public interface IDefectTagger
+public interface IPhotoTagger
 {
     Task<IReadOnlyList<string>> TagAsync(PhotoUploaded photo, CancellationToken ct);
 }
@@ -493,9 +493,9 @@ public interface IPhotoTagStore
 }
 
 /// <summary>Stands in for an AI model call that takes a while.</summary>
-public sealed class FakeDefectTagger(TimeProvider clock) : IDefectTagger
+public sealed class FakePhotoTagger(TimeProvider clock) : IPhotoTagger
 {
-    private static readonly string[] Labels = ["crack", "spalling", "honeycombing", "exposed-rebar", "water-ponding"];
+    private static readonly string[] Labels = ["phone", "furniture", "bicycle", "electronics", "needs-review"];
 
     public async Task<IReadOnlyList<string>> TagAsync(PhotoUploaded photo, CancellationToken ct)
     {
@@ -522,10 +522,10 @@ public sealed class InMemoryPhotoTagStore : IPhotoTagStore
 
 ```csharp file=Workers/PhotoTaggingWorker.cs
 using Microsoft.Extensions.Options;
-using SiteMedia.Messaging;
-using SiteMedia.Photos;
+using ListingMedia.Messaging;
+using ListingMedia.Photos;
 
-namespace SiteMedia.Workers;
+namespace ListingMedia.Workers;
 
 public sealed class WorkerOptions
 {
@@ -538,7 +538,7 @@ public sealed class WorkerOptions
 
 public sealed class PhotoTaggingWorker(
     IMessageQueue<PhotoUploaded> queue,
-    IDefectTagger tagger,
+    IPhotoTagger tagger,
     IPhotoTagStore store,
     IOptions<WorkerOptions> options,
     ILogger<PhotoTaggingWorker> logger) : BackgroundService
@@ -584,9 +584,9 @@ public sealed class PhotoTaggingWorker(
 ```
 
 ```csharp file=Program.cs
-using SiteMedia.Messaging;
-using SiteMedia.Photos;
-using SiteMedia.Workers;
+using ListingMedia.Messaging;
+using ListingMedia.Photos;
+using ListingMedia.Workers;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -594,20 +594,20 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.Configure<QueueOptions>(builder.Configuration.GetSection("Queue"));
 builder.Services.Configure<WorkerOptions>(builder.Configuration.GetSection("Worker"));
 builder.Services.AddSingleton<IMessageQueue<PhotoUploaded>, InMemoryQueue<PhotoUploaded>>();
-builder.Services.AddSingleton<IDefectTagger, FakeDefectTagger>();
+builder.Services.AddSingleton<IPhotoTagger, FakePhotoTagger>();
 builder.Services.AddSingleton<IPhotoTagStore, InMemoryPhotoTagStore>();
 builder.Services.AddHostedService<PhotoTaggingWorker>();
 
 var app = builder.Build();
 
-app.MapPost("/sites/{siteCode}/photos", async (string siteCode, PhotoUploadRequest req,
+app.MapPost("/listings/{listingId}/photos", async (string listingId, PhotoUploadRequest req,
     IMessageQueue<PhotoUploaded> queue, CancellationToken ct) =>
 {
     using var publishTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
     publishTimeout.CancelAfter(TimeSpan.FromSeconds(2));
     try
     {
-        await queue.PublishAsync(new PhotoUploaded(siteCode, req.BlobPath, req.UploadedBy, req.TakenAt), publishTimeout.Token);
+        await queue.PublishAsync(new PhotoUploaded(listingId, req.BlobPath, req.UploadedBy, req.TakenAt), publishTimeout.Token);
     }
     catch (OperationCanceledException) when (!ct.IsCancellationRequested)
     {
@@ -703,8 +703,8 @@ For each feature below, say whether you would put a message queue between the re
 
 1. A UPI payment app checks the user's PIN before a transfer.
 2. After an order is placed on a grocery app, a GST invoice PDF is generated and emailed.
-3. A project dashboard shows the current budget used on a highway package.
-4. A drone survey uploads 3,000 images that must be stitched into an orthomosaic (takes about 40 minutes).
+3. A shop owner's dashboard shows today's sales so far.
+4. A wedding photographer uploads 3,000 photos that must be turned into an AI-curated album (takes about 40 minutes).
 5. A user changes their profile photo and expects the new one on the next screen.
 6. A railway booking site sends a booking-confirmation SMS.
 ::acceptance
@@ -725,7 +725,7 @@ For item 5, the bytes can be saved synchronously while the resizing happens late
 | 1 | No | The transfer cannot continue without the answer; it must be synchronous and fast. | — |
 | 2 | Yes | The customer does not wait for the PDF; generation is slow and email providers rate-limit. | `{ messageId, orderId, type: "invoice.requested.v1" }` |
 | 3 | No | It is a read; the user wants current data now. Use a query, perhaps a cache. | — |
-| 4 | Yes | 40 minutes cannot fit in a request. Bursty and heavy. | `{ messageId, surveyId, imagesPrefix: "s3://surveys/2026-10-19/pkg-4/" }` |
+| 4 | Yes | 40 minutes cannot fit in a request. Bursty and heavy. | `{ messageId, albumId, imagesPrefix: "s3://albums/2026-10-19/album-4/" }` |
 | 5 | Partly | Save the original synchronously and show it immediately (scaled by the browser). Queue the thumbnail generation; the app switches to the thumbnail when ready. | `{ messageId, userId, blobPath }` |
 | 6 | Yes | SMS gateways are slow and sometimes down; the booking should not fail because of SMS. | `{ messageId, bookingId, phone, templateId }` |
 
@@ -1192,13 +1192,13 @@ SQS-style queues let the consumer *extend* a lease (`ChangeMessageVisibility`) f
 Add `Nack(tag, requeue)`: `requeue = true` puts it back immediately (counting a delivery), `false` dead-letters it.
 :::
 
-:::exercise id=m12-message-queues-ex5 difficulty=advanced kind=hld title="Design the site photo pipeline"
-The photo pipeline from this lesson must now serve 6,000 sites (3× today) and add a second consumer: a weekly progress report that needs every photo's tags. Requirements:
+:::exercise id=m12-message-queues-ex5 difficulty=advanced kind=hld title="Design the listing photo pipeline"
+The photo pipeline from this lesson must now serve 60,000 new listings a day (3× today) and add a second consumer: a search indexer that adds every new photo to the listing's search gallery. Requirements:
 
 - Uploads must keep succeeding when tagging is down for up to 2 hours.
 - 95 % of photos should be tagged within 8 hours.
-- The "too blurry, please retake" warning must reach the engineer in under 5 seconds.
-- Peak: 70 % of uploads between 5 pm and 7 pm.
+- The "too blurry, please retake" warning must reach the seller in under 5 seconds.
+- Peak: 70 % of uploads between 8 pm and 10 pm.
 
 Extend the starter graph and write down your numbers.
 ::acceptance
@@ -1206,20 +1206,20 @@ Extend the starter graph and write down your numbers.
 - Worker count is calculated from the peak and the 8-hour target, with arithmetic.
 - The 2-hour outage is handled with a backlog estimate.
 - Monitoring and a dead-letter queue are shown, with what you alert on.
-- The second consumer (reports) does not slow down or steal messages from tagging.
+- The second consumer (search indexing) does not slow down or steal messages from tagging.
 ::hint
-New volume: 6,000 × 40 = 240,000 photos/day; peak ≈ 168,000 in 7,200 s ≈ 23 photos/s.
+New volume: 60,000 × 4 = 240,000 photos/day; peak ≈ 168,000 in 7,200 s ≈ 23 photos/s.
 ::hint
 The blur check is fast and needed immediately. Should it be in a queue at all?
 ::hint
 If two different consumers each need every message, one queue with competing consumers is wrong: each message goes to only one of them. What do you need instead?
 ::hint
-For the 8-hour target, the backlog at 7 pm must drain within about 6 hours (2 hours of peak already used). Work out the capacity needed: backlog at 7 pm ÷ 6 h plus the trickle rate.
+For the 8-hour target, the backlog at 10 pm must drain within about 6 hours (2 hours of peak already used). Work out the capacity needed: backlog at 10 pm ÷ 6 h plus the trickle rate.
 ::starter
 ```json
 {
   "nodes": [
-    { "id": "tab", "type": "client", "label": "Site tablets", "props": { "rps": 23 } },
+    { "id": "tab", "type": "client", "label": "Seller phones", "props": { "rps": 23 } },
     { "id": "api", "type": "app-server", "label": "Upload API", "props": { "instances": 2 } },
     { "id": "s3", "type": "object-storage", "label": "Photo storage" },
     { "id": "q", "type": "queue", "label": "photo-tagging" },
@@ -1239,17 +1239,17 @@ For the 8-hour target, the backlog at 7 pm must drain within about 6 hours (2 ho
 ```json
 {
   "nodes": [
-    { "id": "tab", "type": "client", "label": "Site tablets", "props": { "rps": 23 } },
+    { "id": "tab", "type": "client", "label": "Seller phones", "props": { "rps": 23 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
     { "id": "api", "type": "app-server", "label": "Upload API + blur check (sync, ~200 ms)", "props": { "instances": 3 } },
     { "id": "s3", "type": "object-storage", "label": "Photo storage" },
     { "id": "ex", "type": "queue", "label": "photo.uploaded (fanout to 2 queues)" },
     { "id": "qt", "type": "queue", "label": "photo-tagging queue" },
-    { "id": "qr", "type": "queue", "label": "report-indexing queue" },
+    { "id": "qr", "type": "queue", "label": "search-indexing queue" },
     { "id": "wt", "type": "worker", "label": "Tagging workers (autoscale 4 to 30 on oldest age)", "props": { "instances": 8 } },
-    { "id": "wr", "type": "worker", "label": "Report indexer", "props": { "instances": 1 } },
+    { "id": "wr", "type": "worker", "label": "Search indexer", "props": { "instances": 1 } },
     { "id": "dlq", "type": "queue", "label": "photo-tagging.dlq" },
-    { "id": "db", "type": "database", "label": "PostgreSQL (tags, report index)" },
+    { "id": "db", "type": "database", "label": "PostgreSQL (tags, search gallery)" },
     { "id": "mon", "type": "monitoring", "label": "Oldest age, depth, DLQ count" }
   ],
   "edges": [
@@ -1271,14 +1271,14 @@ For the 8-hour target, the backlog at 7 pm must drain within about 6 hours (2 ho
 }
 ```
 
-**Blur check stays synchronous.** It is fast (estimated 200 ms on a small model or a Laplacian-variance check) and the user needs the answer while on site. Putting it in a queue would make the 5-second target depend on queue depth at 6 pm.
+**Blur check stays synchronous.** It is fast (estimated 200 ms on a small model or a Laplacian-variance check) and the seller needs the answer while still listing the item. Putting it in a queue would make the 5-second target depend on queue depth at 9 pm.
 
-**Fan-out for two consumers.** Tagging and report indexing each need *every* message, so the API publishes to a fanout exchange (or topic) that copies each message into two queues. Each queue has its own consumers, its own backlog and its own speed. A slow report indexer cannot delay tagging. [RabbitMQ exchanges](#/lesson/m12-rabbitmq) show how.
+**Fan-out for two consumers.** Tagging and search indexing each need *every* message, so the API publishes to a fanout exchange (or topic) that copies each message into two queues. Each queue has its own consumers, its own backlog and its own speed. A slow search indexer cannot delay tagging. [RabbitMQ exchanges](#/lesson/m12-rabbitmq) show how.
 
 **Worker sizing (estimates).**
 - 240,000 photos/day; peak 168,000 over 7,200 s ≈ 23.3/s; rest 72,000 over 79,200 s ≈ 0.9/s.
-- With *n* workers at 0.67/s each, backlog at 7 pm = (23.3 − 0.67n) × 7,200.
-- To be under 8 hours for 95 %, the 7 pm backlog must drain in about 6 h (21,600 s): (23.3 − 0.67n) × 7,200 ≤ (0.67n − 0.9) × 21,600.
+- With *n* workers at 0.67/s each, backlog at 10 pm = (23.3 − 0.67n) × 7,200.
+- To be under 8 hours for 95 %, the 10 pm backlog must drain in about 6 h (21,600 s): (23.3 − 0.67n) × 7,200 ≤ (0.67n − 0.9) × 21,600.
 - Solving: 167,800 − 4,824n ≤ 14,472n − 19,440 → 187,240 ≤ 19,296n → **n ≥ 10**. Plan 12 at peak for headroom, autoscaling between 4 and 30 on oldest-message age.
 
 **Two-hour tagging outage at peak.** About 23.3 × 7,200 ≈ 168,000 messages accumulate. At 1 KB each that is about 170 MB, easy for a broker. After recovery, scale workers to 30 (20/s) to drain in about 2.5 hours, keeping the 8-hour target for most photos. Uploads are unaffected because the API only depends on storage and the broker.
@@ -1328,7 +1328,7 @@ Edge cases worth a test: a message that always fails (reaches the DLQ after exac
 
 - **Order and notification pipelines.** A system like a large Indian e-commerce or food-delivery platform typically publishes "order placed" once and lets separate consumers send SMS, generate the GST invoice, notify the restaurant or warehouse and update analytics, each at its own pace.
 - **Government portals on deadline days.** Tax and filing portals see enormous spikes on the last day. Accepting a submission quickly and processing acknowledgements, validations and receipts from a queue is the standard way to survive these spikes; the receipt arrives by email later.
-- **Media processing.** Video platforms queue transcoding jobs; one upload becomes jobs for several resolutions. Construction and survey platforms queue drone-image stitching and photo analysis in the same way.
+- **Media processing.** Video platforms queue transcoding jobs; one upload becomes jobs for several resolutions. Marketplaces and photo-sharing apps queue thumbnailing, moderation and photo analysis in the same way.
 - **Managed services.** Amazon SQS, Azure Service Bus and Google Cloud Pub/Sub remove the operational work of running a broker. Many teams start there and move to self-managed RabbitMQ or Kafka only when they need specific features or lower cost at very high volume.
 - **Inside one service.** ASP.NET Core apps use `System.Threading.Channels` with a `BackgroundService` for audit-log batching, metrics aggregation and webhook dispatch, where a restart losing a few seconds of queued work is acceptable or recoverable.
 
@@ -1437,7 +1437,7 @@ Tagging takes up to 45 seconds for large photos, and the visibility timeout is 3
 - [ ] The broker extends the timeout automatically.
 > When the lease expires the broker assumes the consumer died. Keep handler time below the lease, renew the lease, or split the work.
 ::q single
-Two teams both need every `photo.uploaded` message: tagging and reporting. They each run consumers on the same queue. What happens?
+Two teams both need every `photo.uploaded` message: tagging and search indexing. They each run consumers on the same queue. What happens?
 - [ ] Each team gets every message.
 - [x] Each message is delivered to only one consumer, so each team sees roughly half the messages.
 - [ ] The broker refuses the second consumer.

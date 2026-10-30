@@ -44,26 +44,26 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Imagine you run a construction company in Gurgaon and need cement delivered to a site in Patna. There is no phone line. You can only send letters with a courier.
+Imagine you run a bakery in Gurgaon and buy flour from a mill in Patna. There is no phone line. You can only send letters with a courier.
 
-You send a letter: "Please deliver 200 bags of cement." A week passes. No reply.
+You send a letter: "Please deliver 200 kg of flour." A week passes. No reply.
 
 What happened? There are only a few possibilities, and **you cannot tell them apart**:
 
-1. The courier lost your letter. The supplier never saw it. No cement is coming.
-2. The supplier got the letter, loaded the truck, and sent a reply. The courier lost the *reply*. Cement is on the way.
-3. The supplier got the letter but is very busy. The truck has not left yet. A reply will come next week.
-4. The supplier's office burnt down. Nobody will ever answer.
+1. The courier lost your letter. The mill never saw it. No flour is coming.
+2. The mill got the letter, loaded the truck, and sent a reply. The courier lost the *reply*. Flour is on the way.
+3. The mill got the letter but is very busy. The truck has not left yet. A reply will come next week.
+4. The mill has shut down for good. Nobody will ever answer.
 
-If you send the letter again, you might get 400 bags. If you don't, you might get none. Waiting longer helps a bit, but you never know *how* long is long enough.
+If you send the letter again, you might get 400 kg. If you don't, you might get none. Waiting longer helps a bit, but you never know *how* long is long enough.
 
-That is a distributed system. Your computer is the head office, the other computer is the supplier, and the network is the courier. Messages can be lost, delayed or duplicated. The other side can be slow or dead, and from the outside those look the same. And there is no shared clock on the wall that both sides can read.
+That is a distributed system. Your computer is the bakery, the other computer is the mill, and the network is the courier. Messages can be lost, delayed or duplicated. The other side can be slow or dead, and from the outside those look the same. And there is no shared clock on the wall that both sides can read.
 
 Three words to remember:
 
-- **Partial failure**: some parts of the system work while others don't. The courier works, the supplier is down. Or the supplier works and the courier is down.
+- **Partial failure**: some parts of the system work while others don't. The courier works, the mill is down. Or the mill works and the courier is down.
 - **Unknown outcome**: after a timeout, you don't know whether the work happened.
-- **No global clock**: each office has its own watch, and the watches disagree.
+- **No global clock**: the bakery and the mill each have their own watch, and the watches disagree.
 
 ## First-principles explanation
 
@@ -84,7 +84,7 @@ Those differences are not bugs you can fix with better code. They are physics an
 
 ### The eight fallacies
 
-Around 1994, engineers at Sun Microsystems (Peter Deutsch, with the eighth added by James Gosling) listed eight assumptions that newcomers to distributed systems make. All are false. Each one causes a real class of outages.
+In 1994 Peter Deutsch at Sun Microsystems wrote down seven assumptions that newcomers to distributed systems make (building on earlier notes by Bill Joy and Tom Lyon), and James Gosling added the eighth around 1997. All are false. Each one causes a real class of outages.
 
 **1. The network is reliable.** Packets drop, links flap, a cloud load balancer silently closes idle connections after a few minutes. *Failure case*: an order service calls the inventory service with no timeout. A switch drops packets for 90 seconds. Every request thread waits, the thread pool empties, and the order service, which is perfectly healthy, stops answering health checks and is killed by the orchestrator. *Design response*: timeouts on every call, retries only for idempotent operations, and queues for work that can wait.
 
@@ -139,7 +139,7 @@ When a call times out, exactly one of these happened, and **you cannot tell whic
 
 So a timeout is not a failure. It is **"I don't know"**. Treating it as a failure ("payment failed, please try again") is how customers get charged twice. Treating it as success is how orders ship without payment.
 
-This is not a limitation of HTTP or of your library. It is a theorem-level fact. The **Two Generals problem** shows that two parties communicating over an unreliable channel can never be *certain* they agree, no matter how many acknowledgements they send: the last acknowledgement can always be lost. A related result, **FLP impossibility** (Fischer, Lynch and Paterson, 1985), proves that in a fully asynchronous network where one node may crash, no algorithm can guarantee that nodes always reach agreement in bounded time. Real systems get around this with timeouts and probabilities, which is why they *usually* work rather than *always*.
+This is not a limitation of HTTP or of your library. It is a theorem-level fact. The **Two Generals problem** shows that two parties communicating over an unreliable channel can never be *certain* they agree, no matter how many acknowledgements they send: the last acknowledgement can always be lost. A related result, **FLP impossibility** (Fischer, Lynch and Paterson, 1985), proves that in a fully asynchronous network where one node may crash, no deterministic algorithm can guarantee that nodes always reach agreement: some run can go on forever without deciding. Real systems get around this with timeouts and probabilities, which is why they *usually* work rather than *always*.
 
 There are only three honest ways to handle an unknown outcome:
 
@@ -786,9 +786,9 @@ Add `FromResponse(HttpResponseMessage)` that reads an `Idempotent-Replayed: true
 :::
 
 :::exercise id=m13-why-hard-ex2 difficulty=beginner kind=written title="Find the fallacies in a design note"
-A teammate writes this design note for a site-progress app used by engineers on highway projects across India:
+A teammate writes this design note for a home-services app (AC repair, plumbing, appliance installation) used by technicians across India, who photograph every job before and after:
 
-> "The mobile app uploads each day's 30–80 site photos (3 MB each) directly to our API, which forwards them synchronously to the document service, then to the AI tagging service, then saves a row in PostgreSQL. All three services are in our VPC so we don't need TLS between them. We call the tagging service by its IP address, which we put in `appsettings.json`. If any step fails we return 500 and the app shows 'Upload failed'. The default `HttpClient` timeout is fine."
+> "The mobile app uploads each day's 30–80 job photos (3 MB each) directly to our API, which forwards them synchronously to the document service, then to the AI tagging service, then saves a row in PostgreSQL. All three services are in our VPC so we don't need TLS between them. We call the tagging service by its IP address, which we put in `appsettings.json`. If any step fails we return 500 and the app shows 'Upload failed'. The default `HttpClient` timeout is fine."
 
 List at least five problems. For each, name the fallacy (or other idea from this lesson) and suggest a fix.
 ::acceptance
@@ -798,7 +798,7 @@ List at least five problems. For each, name the fallacy (or other idea from this
 ::hint
 Read the note once per fallacy: reliable network, zero latency, infinite bandwidth, secure network, fixed topology, one admin, zero transport cost, homogeneous network.
 ::hint
-How much data does one engineer upload per day? What does a 2G or patchy 4G connection at a remote site do to that?
+How much data does one technician upload per day? What does a patchy 4G connection in a basement or a small town do to that?
 ::hint
 "Return 500 and show Upload failed" — after which step? What state is the system in if step 3 fails after steps 1 and 2 succeeded?
 ::hint
@@ -806,12 +806,12 @@ Consider presigned uploads to object storage, a queue between steps, an idempote
 ::solution
 A model answer (any five, well argued, is a pass):
 
-1. **Bandwidth is infinite / the network is homogeneous.** 80 photos × 3 MB = 240 MB per engineer per day, over field connections that may give 1 Mbps or less. 240 MB × 8 = 1,920 Mb ÷ 1 Mbps ≈ 32 minutes of perfect upload. *Fix*: compress on the device, upload in the background with resumable chunked uploads directly to object storage using presigned URLs, and send only metadata to the API.
+1. **Bandwidth is infinite / the network is homogeneous.** 80 photos × 3 MB = 240 MB per technician per day, over mobile connections that may give 1 Mbps or less. 240 MB × 8 = 1,920 Mb ÷ 1 Mbps ≈ 32 minutes of perfect upload. *Fix*: compress on the device, upload in the background with resumable chunked uploads directly to object storage using presigned URLs, and send only metadata to the API.
 2. **The network is reliable / unknown outcome.** A photo upload that times out may have been stored. The app retries and creates duplicates. *Fix*: an idempotency key per photo (for example a hash of the file plus a device id), so retries are recognised.
 3. **Partial failure.** If tagging fails after the document service stored the file, the API returns 500 but the file exists. The user re-uploads and we have two copies, one untagged. *Fix*: store the file and the row first, then put "tag this photo" on a queue. Tagging is retried by a worker and doesn't block the upload.
 4. **Latency is zero.** Three synchronous hops plus AI tagging (maybe seconds) inside one request. *Fix*: make tagging asynchronous; the user only waits for the upload.
 5. **Topology doesn't change.** A hard-coded IP breaks the next time the tagging service is redeployed or scaled. *Fix*: service discovery or a DNS name with short TTL.
-6. **The network is secure.** A compromised pod in the VPC can read site photos (which may be confidential). *Fix*: TLS and service-to-service authentication (mTLS or tokens).
+6. **The network is secure.** A compromised pod in the VPC can read job photos, which show the inside of customers' homes and are private data. *Fix*: TLS and service-to-service authentication (mTLS or tokens).
 7. **Timeouts.** The default `HttpClient.Timeout` is 100 s. A slow tagging service ties up API threads. *Fix*: an explicit timeout per dependency, based on its p99.
 8. **There is one administrator.** If the AI tagging is a third-party API, its rate limits and outages are outside your control. *Fix*: queue, rate-limit and degrade gracefully (untagged photos are still useful).
 ::mistakes
@@ -1364,7 +1364,7 @@ public async Task Lost_reply_becomes_unknown_then_reconciles_to_succeeded()
 - **UPI and card payments** show a "pending" or "processing" state to users and resolve it later through status checks and bank reconciliation. Payment providers' public APIs typically accept an idempotency key and offer a "get payment status by your reference" endpoint for exactly this reason.
 - **Cloud SDKs** (for example the Azure and AWS SDKs) retry many operations automatically. They can only do so safely because those operations are idempotent or carry a client token.
 - **TCP** itself solves a small version of the problem: sequence numbers and acknowledgements make delivery reliable *within one connection*. It cannot tell you whether the application on the other side processed your request before the connection broke. That is why application-level idempotency is still needed.
-- **Infrastructure project platforms** that sync site data from field tablets with intermittent connectivity face the same unknown-outcome problem on every upload. A client-generated id per record, server-side deduplication, and a "pending sync" badge in the app are the usual design.
+- **Field-service and delivery apps** (technicians, couriers, delivery riders) that sync job updates and proof-of-delivery photos from phones with patchy connectivity face the same unknown-outcome problem on every upload. A client-generated id per record, server-side deduplication, and a "pending sync" badge in the app are the usual design.
 - **Database drivers**: if a `COMMIT` times out, you don't know whether the transaction committed. Application code that needs certainty writes a unique business key in the transaction and checks for it on reconnect.
 
 ## Interview questions
@@ -1490,5 +1490,5 @@ You have finished this lesson when you can:
 - [ ] Score at least 70 % on the knowledge check.
 - [ ] Complete exercises 1 and 3 with all tests passing.
 - [ ] Complete exercise 2 or 4 and compare with the model answer.
-- [ ] Explain to a colleague, with the cement-letter analogy, why a timeout is "I don't know".
+- [ ] Explain to a colleague, with the flour-order letter analogy, why a timeout is "I don't know".
 - [ ] Sketch the record-intent → call with key → Unknown → reconcile flow from memory.

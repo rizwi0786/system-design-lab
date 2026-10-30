@@ -113,7 +113,7 @@ Receipts are messages too. Each delivery produces up to two receipts (delivered,
 
 - At peak, assume 30 % of DAU are connected at once: 200 M × 0.3 = **60 million WebSocket connections**.
 - A tuned gateway can hold tens to hundreds of thousands of mostly idle sockets; the limit is memory per connection and file descriptors, not CPU. Use a conservative **100,000 per gateway** (estimate; load-test it).
-- Gateways needed = 60 M ÷ 100 k = **600**, plus 50 % headroom for a zone failure and deploys ≈ **900 gateway instances**.
+- Gateways needed = 60 M ÷ 100 k = **600**, plus 50 % headroom for a zone failure and deploys ≈ **900 gateway instances**. In normal running each holds about 60 M ÷ 900 ≈ **67,000 sockets**; the spare third is what absorbs a lost zone.
 
 ### Heartbeats: the hidden load
 
@@ -649,7 +649,10 @@ public sealed class MessageRouter(
         if (!members.Contains(command.SenderId)) return null;
 
         var result = store.Append(command);          // durable point: the single tick
-        if (result.WasDuplicate) return result;      // fan-out already happened for the original
+        // Returning early on a duplicate is only safe because, in production, the delivery events are
+        // written as outbox rows in the SAME transaction as the message. If the process died after the
+        // insert but before fan-out, the outbox relay still delivers; the retry must not depend on it.
+        if (result.WasDuplicate) return result;
 
         // In production this loop runs in delivery workers fed by a log keyed by recipient.
         foreach (var recipient in members)
@@ -703,7 +706,7 @@ What this means for the system design:
 - *Session registry*: a cache of "who is connected where"; losing it costs push fallbacks, not data.
 - *Prekey bundles*: cacheable, except one-time prekeys, which must be handed out exactly once (`DELETE … RETURNING` in the database).
 
-**Queues.** The delivery log is partitioned by recipient so each user's deliveries are ordered. With 620,000 deliveries/s and a conservative 5,000 events/s per partition per consumer (estimate), we need about 124 partitions; pick 256 for growth and even spread. Receipts go on the same log keyed by the *sender* who will receive them. Presence and typing events use a separate, lossy channel (Redis pub/sub or direct gateway-to-gateway), because losing a "typing…" is harmless and they are very chatty.
+**Queues.** The delivery log is partitioned by recipient so each user's deliveries are ordered. Size it for the everyday peak, not the average: 280,000 sends/s × 6.7 ≈ **1.9 million deliveries/s**. At a conservative 5,000 events/s per partition per consumer (estimate), that is about 375 partitions; pick 512 for growth and even spread. Festival bursts above that are absorbed as a few seconds of consumer lag, not by adding partitions on the night (adding partitions to a keyed topic moves keys and breaks per-user order during the change). Receipts go on the same log keyed by the *sender* who will receive them. Presence and typing events use a separate, lossy channel (Redis pub/sub or direct gateway-to-gateway), because losing a "typing…" is harmless and they are very chatty.
 
 **Scaling each tier.**
 
@@ -723,7 +726,7 @@ What this means for the system design:
 | Failure | What users see | Mitigation |
 |---|---|---|
 | Network drops after server stored a message, before the ack | Clock icon, then a retry | Same `clientMessageId` returns same seq; no duplicate |
-| Gateway crash | 100,000 sockets drop | Clients reconnect with jitter; inbox rows already written, so sync catches up |
+| Gateway crash | About 67,000 sockets drop (up to 100,000 on a full gateway) | Clients reconnect with jitter; inbox rows already written, so sync catches up |
 | Session registry entry stale (user moved gateway) | Delivery to old gateway fails | Fall back to push; inbox has it; lease expiry cleans up |
 | Delivery worker crash mid-batch | Duplicate frames after restart | Consumer offsets committed after inbox write; client dedupes by `(conversationId, seq)` |
 | Message shard primary fails | Sends to those conversations fail for seconds | Synchronous replica plus automatic failover; client retries with the same id |
@@ -775,7 +778,7 @@ Trace the send path with OpenTelemetry (trace id in frame metadata), sampled hea
 
 ### When a simpler design is enough
 
-A company-internal chat for 5,000 employees, or a support chat on a tender portal, does not need any of this. One ASP.NET Core app with SignalR (backed by a Redis backplane if you run two instances), one PostgreSQL database with the `message` table above, and full history is enough. 5,000 users × 50 messages a day is 250,000 messages a day, about 3 per second. Add E2EE only if the threat model demands it, because it removes server-side search and compliance export, which enterprises often need.
+A company-internal chat for 5,000 employees, or the customer-support chat of a food-delivery app, does not need any of this. One ASP.NET Core app with SignalR (backed by a Redis backplane if you run two instances), one PostgreSQL database with the `message` table above, and full history is enough. 5,000 users × 50 messages a day is 250,000 messages a day, about 3 per second. Add E2EE only if the threat model demands it, because it removes server-side search and compliance export, which enterprises often need.
 
 ## Alternatives and trade-offs
 
@@ -829,8 +832,13 @@ app.MapPost("/v1/conversations/{conversationId:long}/messages",
     });
 
 app.MapPost("/v1/conversations/{conversationId:long}/receipts",
-    (long conversationId, ReceiptRequest body, HttpContext http, ReceiptTracker receipts) =>
-        Results.Ok(receipts.Apply(conversationId, CurrentUser(http), body.DeliveredUpTo, body.ReadUpTo)));
+    (long conversationId, ReceiptRequest body, HttpContext http, ReceiptTracker receipts, IMembership membership) =>
+    {
+        var user = CurrentUser(http);
+        // Receipts are writes too: a non-member must not move anyone's ticks.
+        if (!membership.MembersOf(conversationId).Contains(user)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+        return Results.Ok(receipts.Apply(conversationId, user, body.DeliveredUpTo, body.ReadUpTo));
+    });
 
 app.MapGet("/v1/sync", (long after, HttpContext http, IOfflineInbox inbox, IMessageStore store) =>
 {
@@ -1387,8 +1395,8 @@ Reference architecture:
     { "id": "gw", "type": "websocket-gateway", "label": "WebSocket gateways (60 M sockets)", "props": { "instances": 900 } },
     { "id": "chat", "type": "app-server", "label": "Chat service (seq, membership, acks)", "props": { "instances": 120 } },
     { "id": "msg", "type": "database", "label": "Message store, sharded by conversation_id", "props": { "replicas": 2, "multiAz": true } },
-    { "id": "log", "type": "stream", "label": "Delivery log, key = recipient user_id (256 partitions)" },
-    { "id": "dw", "type": "worker", "label": "Delivery workers", "props": { "instances": 128 } },
+    { "id": "log", "type": "stream", "label": "Delivery log, key = recipient user_id (512 partitions)" },
+    { "id": "dw", "type": "worker", "label": "Delivery workers", "props": { "instances": 256 } },
     { "id": "inbox", "type": "database", "label": "Inbox store, sharded by user_id", "props": { "replicas": 2, "multiAz": true } },
     { "id": "reg", "type": "cache", "label": "Session registry (Redis, 90 s leases)", "props": { "ttlSeconds": 90 } },
     { "id": "mcache", "type": "cache", "label": "Membership cache" },
@@ -1424,8 +1432,8 @@ Reasoning:
 
 - **Durable point**: the transaction that assigns the seq and inserts into the message store, together with an outbox row for the delivery event. The sender is acked after that commit. Everything downstream is retried until it succeeds.
 - **Partition keys**: message store by `conversation_id` (ordering and sync are per conversation); inbox by `user_id` (sync is per user); delivery log by recipient `user_id` (per-user delivery order); receipts flow on the same log keyed by the user who must see them.
-- **Gateway death**: its 100,000 clients reconnect with jitter elsewhere and sync from their inbox cursor. In-flight frames fall back to push; nothing is lost because the inbox row was written first.
-- **Sizing**: 900 gateways from the estimate; the stateless chat service is sized by a load test; 256 log partitions leave room for consumer parallelism.
+- **Gateway death**: its roughly 67,000 clients (60 M ÷ 900) reconnect with jitter elsewhere and sync from their inbox cursor. In-flight frames fall back to push; nothing is lost because the inbox row was written first.
+- **Sizing**: 900 gateways from the estimate; the stateless chat service is sized by a load test; 512 log partitions cover the everyday peak of about 1.9 M deliveries/s at 5,000 per partition, with room for consumer parallelism (each delivery worker owns two partitions).
 - **Media** never touches gateways or the chat service: the client uploads ciphertext with a presigned URL and sends the link and key inside the E2EE message.
 ::mistakes
 - Putting business logic in gateways, so every release drops millions of sockets.
@@ -1459,7 +1467,7 @@ While it was off, delivery workers wrote one inbox entry per message per device,
 ::q advanced
 A zone with 300 gateways fails during the evening peak. What happens, and how do you design for it?
 ::a
-About 30 million sockets drop. No messages are lost: the message store and inbox are replicated across zones, and deliveries to dead gateways fall back to push. The danger is the reconnect storm: 30 M TLS handshakes and token checks in seconds can overload the surviving gateways and the auth service (a cascading failure). Mitigate with client jitter and exponential backoff, TLS session resumption, gateway admission control (reject above a CPU threshold with retry-after), 50 % headroom across zones, and locally verified signed tokens. Stale registry entries expire with their 90 s lease. Watch connects per second and handshake latency.
+About 20 million sockets drop (a third of 60 M, at roughly 67,000 per gateway). No messages are lost: the message store and inbox are replicated across zones, and deliveries to dead gateways fall back to push. The danger is the reconnect storm: 20 M TLS handshakes and token checks in seconds can overload the surviving gateways and the auth service (a cascading failure). Mitigate with client jitter and exponential backoff, TLS session resumption, gateway admission control (reject above a CPU threshold with retry-after), 50 % headroom across zones, and locally verified signed tokens. Stale registry entries expire with their 90 s lease. Watch connects per second and handshake latency.
 ::q advanced
 How does end-to-end encryption change the system design, beyond adding crypto on the client?
 ::a
@@ -1538,7 +1546,7 @@ A 500-member group exchanges 2,000 messages a day. Why store receipts as per-mem
 - [ ] Watermarks let you show read receipts when the user disabled them.
 > 2,000 × 499 ≈ 1 M receipt rows a day versus 500 watermark rows. Dense seqs make "read up to N" equivalent to all those rows.
 ::q single
-After a zone outage, 30 M clients reconnect at once and the remaining gateways start failing TLS handshakes. Which change helps most?
+After a zone outage, 20 M clients reconnect at once and the remaining gateways start failing TLS handshakes. Which change helps most?
 - [ ] Shorter heartbeat interval
 - [ ] Bigger database instances
 - [x] Client reconnect jitter with exponential backoff, plus gateway admission control

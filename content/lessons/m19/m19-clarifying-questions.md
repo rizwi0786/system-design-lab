@@ -87,7 +87,7 @@ Group your questions so you cover the ground quickly and the interviewer can fol
 | **1. Users and core features** | Who are the users? What are the 2–4 must-have actions? | The APIs, the data model, which flows you design |
 | **2. Scale** | Daily active users? Actions per user per day? Read/write ratio? Data size per item? Growth? | Capacity numbers: RPS, storage, bandwidth, and so whether you need caching, sharding or queues |
 | **3. Quality targets (NFRs)** | Latency target? Availability? Can data be stale? Can we lose data? Ordering? | Consistency model, replication, caching strategy, sync versus async |
-| **4. Constraints** | Existing stack? Regions and data residency? Compliance (payments, health, government)? Budget? Team size? | Technology choices, deployment, security design |
+| **4. Constraints** | Existing stack? Regions and data residency? Compliance (payments, health, children's data)? Who may see what? Budget? Team size? | Technology choices, deployment, security and privacy design |
 | **5. Scope** | What's explicitly out of scope? Admin tools? Analytics? Mobile and web? | Where you *don't* spend time |
 
 Most interviews need **4–8 questions** in total, picked from these buckets. You don't need every bucket for every problem. A rate limiter has almost no "users and features" questions. A booking system has many.
@@ -236,6 +236,24 @@ Use these as starting points, not scripts. Pick the 4–8 that matter for the pr
 | Personalised or global suggestions? | Per-user data, privacy |
 | Typo tolerance, multiple languages? | Search engine choice |
 
+**Unique ID generator** (see [the case study](#/lesson/m17-unique-id-generator))
+
+| Question | Why it matters |
+|---|---|
+| Must ids be sortable by time? Strictly or roughly? | Snowflake-style ids versus random UUIDs |
+| How many ids per second, across how many nodes? | Bits for sequence and node id |
+| Can ids be guessable, or exposed to users? | Random component, privacy |
+| How long must the scheme last? | Epoch and timestamp bits |
+
+**Nearby search, flash sale, crawler, job scheduler**
+
+| Prompt | Question that changes the design |
+|---|---|
+| Nearby places ([proximity service](#/lesson/m17-proximity-service)) | How often do places move or change? Static restaurants allow a precomputed geo index; moving drivers need an in-memory one. |
+| [Flash sale](#/lesson/m17-flash-sale) | How many units, how many buyers at the opening second, and is overselling ever acceptable? Decides the waiting room and the inventory counter. |
+| [Web crawler](#/lesson/m17-web-crawler) | How many pages, how fresh, and how polite per site? Decides the frontier, per-host rate limits and dedup. |
+| [Job scheduler](#/lesson/m17-job-scheduler) | Can a job run twice? How late may it start? Decides leases, idempotent jobs and the polling interval. |
+
 **LLD prompts (parking lot, elevator, vending machine, library)**
 
 In LLD rounds, questions are about **entities, rules and edge cases**, not scale:
@@ -247,6 +265,8 @@ In LLD rounds, questions are about **entities, rules and edge cases**, not scale
 | What happens at the edges? (lot full, exact change unavailable, lost book) | Error handling, states |
 | Concurrency? (two cars at two gates claiming one spot) | Locking or atomic allocation |
 | What's likely to change? (new vehicle type, new payment method) | Where to put interfaces |
+
+For an [LRU cache](#/lesson/m18-lru-cache), ask about capacity, thread safety and whether entries expire. For an [expense-splitting app](#/lesson/m18-splitwise), ask how splits work (equal, exact, percentage), how rounding of paise is handled and whether debts are simplified.
 
 ### Common mistakes
 
@@ -305,46 +325,46 @@ This shows the rhythm. Each question is short and specific. When the interviewer
 
 ## Step-by-step example
 
-Prompt: **"Design a system that alerts contractors about new government tenders that match their interests."**
+Prompt: **"Design a system that alerts job seekers about new job postings that match their saved searches."**
 
 ### Step 1 — restate in one sentence
 
-"So: tenders are published on several government portals. Contractors register their interests, and we notify them when a matching tender appears."
+"So: jobs are posted on several job boards and company career pages. Job seekers save searches, and we notify them when a matching job appears."
 
 ### Step 2 — ask grouped questions (about 3 minutes)
 
-- **Users and features**: "What defines a match: category, region, value range, keywords? Do contractors need to see the tender document in our app, or just a link?" *Answer: category, state, value range and keywords. Link plus a summary is enough.*
-- **Scale**: "How many contractors and how many new tenders a day?" *Answer: you decide.*
-  → **Assumption:** "I'll assume 200,000 registered contractors, each with about 5 saved searches, and about 8,000 new tenders a day across portals."
-- **Quality**: "How quickly after publication must the alert arrive?" *Answer: within an hour is fine. Some urgent categories within 15 minutes.*
-- **Constraints**: "Do portals offer an API, or do we scrape?" *Answer: mixed. Some have RSS or APIs, others need scraping.*
-- **Scope**: "Should I cover bid submission, or only discovery and alerts?" *Answer: only discovery and alerts.*
+- **Users and features**: "What defines a match: role category, city, salary range, keywords? Do job seekers need to see the full job description in our app, or just a link?" *Answer: category, city, salary range and keywords. Link plus a summary is enough.*
+- **Scale**: "How many job seekers and how many new job postings a day?" *Answer: you decide.*
+  → **Assumption:** "I'll assume 200,000 registered job seekers, each with about 5 saved searches, and about 8,000 new job postings a day across job sources."
+- **Quality**: "How quickly after publication must the alert arrive?" *Answer: within an hour is fine. Urgent hiring and walk-in drives within 15 minutes.*
+- **Constraints**: "Do the job boards offer an API, or do we scrape?" *Answer: mixed. Some have RSS feeds or partner APIs, others need scraping, within their terms of use and robots.txt.*
+- **Scope**: "Should I cover applying for jobs, or only discovery and alerts?" *Answer: only discovery and alerts.*
 
 ### Step 3 — write the four lists
 
 **FRs**
 
-1. Ingest new tenders from multiple portals (API, RSS, scraping).
-2. Contractors create, edit and delete saved searches (category, state, value range, keywords).
-3. Match each new tender against saved searches.
+1. Ingest new job postings from multiple job sources (API, RSS, scraping).
+2. Job seekers create, edit and delete saved searches (category, city, salary range, keywords).
+3. Match each new posting against saved searches.
 4. Notify by email and push, with a daily digest option.
 
 **NFRs**
 
 - Alert within 60 minutes of publication at p95. Urgent categories within 15 minutes.
-- No tender silently missed: every portal fetch is monitored, and failures alert the ops team within 30 minutes.
-- No duplicate alerts for the same tender and saved search.
-- 99.5 % availability for the contractor web app. Ingestion can tolerate short outages if it catches up.
+- No posting silently missed: every source fetch is monitored, and failures alert the ops team within 30 minutes.
+- No duplicate alerts for the same posting and saved search.
+- 99.5 % availability for the job seeker web app. Ingestion can tolerate short outages if it catches up.
 
-**Out of scope**: bid submission, document storage, payments for premium plans.
+**Out of scope**: applying for jobs, resume hosting, payments for premium plans.
 
-**Assumptions**: 200,000 contractors, 1 M saved searches, 8,000 tenders a day.
+**Assumptions**: 200,000 job seekers, 1 M saved searches, 8,000 job postings a day.
 
 ### Step 4 — derive first numbers
 
-- Tenders: 8,000 a day ÷ 86,400 ≈ 0.1 per second. Tiny.
-- Matching: a naive approach checks every tender against every saved search: 8,000 × 1 M = 8 billion checks a day ≈ 93,000 per second. That's the hot spot.
-- **Decision:** invert the problem. Index saved searches by category and state, so each tender is compared only with searches in its category and state, perhaps a few thousand rather than a million. Keyword matching runs only on that small set.
+- Job postings: 8,000 a day ÷ 86,400 ≈ 0.1 per second. Tiny.
+- Matching: a naive approach checks every posting against every saved search: 8,000 × 1 M = 8 billion checks a day ≈ 93,000 per second. That's the hot spot.
+- **Decision:** invert the problem. Index saved searches by category and city, so each posting is compared only with searches in its category and city, perhaps a few thousand rather than a million. Keyword matching runs only on that small set.
 - Notifications: assume 2 % of searches match each day ≈ 20,000 alerts a day. Small.
 
 Now you know where the design effort goes: **matching and reliable ingestion**, not raw scale. That came directly from the questions.
@@ -926,20 +946,20 @@ In an interview, say the hint out loud, not just the number: "Peak is about 70,0
 :::
 
 :::exercise id=m19-clarifying-questions-ex4 difficulty=intermediate kind=written title="Turn a transcript into a requirements sheet"
-Here's a clarification transcript for "Design a system for daily progress reports on highway construction sites":
+Here's a clarification transcript for "Design a system for daily class reports in a network of rural schools":
 
 > **Candidate:** Who submits reports, and who reads them?
-> **Interviewer:** Site engineers submit, project managers and the client's team read.
+> **Interviewer:** Teachers submit, head teachers and the district education office read.
 > **Candidate:** What's in a report?
-> **Interviewer:** Quantities done per activity, labour and machinery counts, photos, issues.
-> **Candidate:** How many sites?
-> **Interviewer:** About 150 active sites, each with 3–5 engineers submitting.
+> **Interviewer:** Attendance per class, topics covered, mid-day meals served, photos, issues.
+> **Candidate:** How many schools?
+> **Interviewer:** About 150 schools, each with 3–5 teachers submitting.
 > **Candidate:** When are they submitted?
-> **Interviewer:** End of day, mostly 6–8 pm. Some sites have poor connectivity.
+> **Interviewer:** End of day, mostly 6–8 pm. Some villages have poor connectivity.
 > **Candidate:** Do reports need approval?
-> **Interviewer:** Yes, the site manager approves before the client sees it. Approved reports must never change.
+> **Interviewer:** Yes, the head teacher approves before the district office sees it. Approved reports must never change.
 > **Candidate:** Monthly summaries?
-> **Interviewer:** Yes, the client wants a monthly progress report generated from the dailies.
+> **Interviewer:** Yes, the district office wants a monthly report per school generated from the dailies.
 > **Candidate:** Anything else?
 > **Interviewer:** Up to you.
 
@@ -960,22 +980,23 @@ Roll-up from dailies to monthly suggests a batch job or a pre-aggregated table.
 ::solution
 **FRs**
 
-1. Site engineers create a daily report: activity quantities, labour, machinery, photos and issues.
-2. Site manager approves or returns a report with comments.
-3. PMs and client users view approved reports per site and date.
-4. System generates a monthly progress report per site from approved dailies.
+1. Teachers create a daily report: attendance per class, topics covered, meals served, photos and issues.
+2. The head teacher approves or returns a report with comments.
+3. District office users view approved reports per school and date.
+4. System generates a monthly report per school from approved dailies.
 
 **NFRs**
 
 - Approved reports are immutable: no update or delete is possible through any API. Corrections are new linked "amendment" records. All changes are audited.
 - Submission works offline. Reports queue on the device and sync when connectivity returns, with no data loss for up to 48 hours offline.
 - Report submission accepted within 5 s at p95 on a 1 Mbit/s link, excluding photo uploads, which continue in the background.
-- Approved reports are visible to the client within 1 minute of approval.
+- Approved reports are visible to the district office within 1 minute of approval.
+- Photos of children are visible only to staff of that school and the district office, and are never public (privacy of minors).
 - Monthly report generated within 1 hour after month close.
 
-**Out of scope**: payroll from labour counts, machinery maintenance tracking, client billing.
+**Out of scope**: teacher payroll from attendance, textbook inventory, fee collection.
 
-**Assumptions**: 150 sites × 4 engineers = 600 reports a day. 10 photos each at about 2 MB after compression. Text part about 20 KB. Retention 10 years (contract and audit needs). Peak 6–8 pm.
+**Assumptions**: 150 schools × 4 teachers = 600 reports a day. 10 photos each at about 2 MB after compression. Text part about 20 KB. Retention 10 years (audit needs). Peak 6–8 pm.
 
 **Estimate**
 
@@ -988,38 +1009,38 @@ Roll-up from dailies to monthly suggests a batch job or a pre-aggregated table.
 - Storing photos in the database.
 :::
 
-:::exercise id=m19-clarifying-questions-ex5 difficulty=advanced kind=hld title="Same prompt, different answers: tender alerts"
-Use the tender-alert example from this lesson. The interviewer gives you **two different sets of answers** to the same questions. Design for **Variant A**, starting from the starter graph, then explain in your notes exactly which parts would change for **Variant B**, and why.
+:::exercise id=m19-clarifying-questions-ex5 difficulty=advanced kind=hld title="Same prompt, different answers: job alerts"
+Use the job-alert example from this lesson. The interviewer gives you **two different sets of answers** to the same questions. Design for **Variant A**, starting from the starter graph, then explain in your notes exactly which parts would change for **Variant B**, and why.
 
-- **Variant A**: 200,000 contractors, 1 M saved searches, 8,000 tenders a day, alerts within 60 minutes (15 for urgent categories), email and push only.
-- **Variant B**: 5,000 contractors, 20,000 saved searches, 300 tenders a day, alerts by next morning, email only, built and run by one developer.
+- **Variant A**: 200,000 job seekers, 1 M saved searches, 8,000 job postings a day, alerts within 60 minutes (15 for urgent categories), email and push only.
+- **Variant B**: 5,000 job seekers, 20,000 saved searches, 300 job postings a day, alerts by next morning, email only, built and run by one developer.
 ::acceptance
-- Variant A design covers ingestion from multiple portals, matching, notification and monitoring of missed fetches.
-- Matching is designed to avoid comparing every tender with every saved search.
-- Duplicate alerts are prevented (idempotency on tender and search).
+- Variant A design covers ingestion from multiple job sources, matching, notification and monitoring of missed fetches.
+- Matching is designed to avoid comparing every posting with every saved search.
+- Duplicate alerts are prevented (idempotency on posting and search).
 - Notes for Variant B remove components rather than adding them, and name what each removal saves.
 - The link from each answer to each design choice is stated explicitly.
 ::hint
 In Variant A, how many comparisons would naive matching do per day? What index would cut it down?
 ::hint
-Ingestion is flaky, since portals change and scrapers break. What would tell you a portal silently stopped yielding tenders?
+Ingestion is flaky, since job sources change and scrapers break. What would tell you a source silently stopped yielding postings?
 ::hint
-Dedup key: (tender_id, saved_search_id). A unique constraint does the job.
+Dedup key: (posting_id, saved_search_id). A unique constraint does the job.
 ::hint
 Variant B: 300 × 20,000 = 6 M comparisons a day. That's seconds of CPU in a single nightly job.
 ::hint
-Variant A shape: scheduler → fetchers → raw store → normaliser → tenders DB → match workers (index by category and state) → alerts table (unique key) → notification workers → email and push providers, plus monitoring.
+Variant A shape: scheduler → fetchers → raw store → normaliser → postings DB → match workers (index by category and city) → alerts table (unique key) → notification workers → email and push providers, plus monitoring.
 ::starter
 ```json
 {
   "nodes": [
-    { "id": "portals", "type": "external", "label": "Government tender portals" },
-    { "id": "app", "type": "app-server", "label": "Tender alert app" },
+    { "id": "job sources", "type": "external", "label": "Job boards and career pages" },
+    { "id": "app", "type": "app-server", "label": "Job alert app" },
     { "id": "db", "type": "database", "label": "PostgreSQL" },
-    { "id": "users", "type": "client", "label": "Contractors (web and mobile)" }
+    { "id": "users", "type": "client", "label": "Job seekers (web and mobile)" }
   ],
   "edges": [
-    { "from": "app", "to": "portals", "kind": "sync", "label": "fetch tenders" },
+    { "from": "app", "to": "job sources", "kind": "sync", "label": "fetch postings" },
     { "from": "app", "to": "db", "kind": "sync" },
     { "from": "users", "to": "app", "kind": "sync" }
   ]
@@ -1028,38 +1049,38 @@ Variant A shape: scheduler → fetchers → raw store → normaliser → tenders
 ::solution
 **Variant A: what the answers imply**
 
-- 8,000 tenders × 1 M searches = 8 B naive comparisons a day, so **index saved searches by (category, state)**. Each tender is checked against only the searches in its bucket, often a few thousand, then filtered by value range and keywords.
-- 60 minutes (15 for urgent) means **frequent scheduled fetches** per portal (every 5–10 minutes for urgent categories), not a nightly batch.
-- Flaky portals means **raw-response storage** (to re-parse after fixing a scraper) and **per-portal freshness monitoring**: alert if a portal yields zero tenders during working hours longer than usual.
+- 8,000 postings × 1 M searches = 8 B naive comparisons a day, so **index saved searches by (category, city)**. Each posting is checked against only the searches in its bucket, often a few thousand, then filtered by salary range and keywords.
+- 60 minutes (15 for urgent) means **frequent scheduled fetches** per source (every 5–10 minutes for urgent categories), not a nightly batch.
+- Flaky sources means **raw-response storage** (to re-parse after fixing a scraper) and **per-source freshness monitoring**: alert if a source yields zero postings during working hours longer than usual.
 - Email and push at about 20,000 alerts a day means **a queue plus notification workers**, with provider retries.
 
 ```json
 {
   "nodes": [
-    { "id": "sched", "type": "scheduler", "label": "Fetch scheduler (per portal, 5-30 min)" },
-    { "id": "portals", "type": "external", "label": "Government tender portals (API, RSS, HTML)" },
-    { "id": "fetch", "type": "worker", "label": "Portal fetchers and scrapers", "props": { "instances": 3 } },
+    { "id": "sched", "type": "scheduler", "label": "Fetch scheduler (per source, 5-30 min)" },
+    { "id": "job sources", "type": "external", "label": "Job boards and career pages (API, RSS, HTML)" },
+    { "id": "fetch", "type": "worker", "label": "Source fetchers and scrapers", "props": { "instances": 3 } },
     { "id": "raw", "type": "object-storage", "label": "Raw responses (for re-parsing)" },
-    { "id": "norm", "type": "worker", "label": "Normaliser and dedup (portal + tender ref)" },
-    { "id": "db", "type": "database", "label": "PostgreSQL: tenders, saved_searches (indexed by category, state), alerts (unique tender_id, search_id)", "props": { "replicas": 1, "multiAz": true } },
-    { "id": "mq", "type": "queue", "label": "New-tender events" },
+    { "id": "norm", "type": "worker", "label": "Normaliser and dedup (source + posting ref)" },
+    { "id": "db", "type": "database", "label": "PostgreSQL: postings, saved_searches (indexed by category, city), alerts (unique posting_id, search_id)", "props": { "replicas": 1, "multiAz": true } },
+    { "id": "mq", "type": "queue", "label": "New-posting events" },
     { "id": "match", "type": "worker", "label": "Matchers", "props": { "instances": 2 } },
     { "id": "nq", "type": "queue", "label": "Alert deliveries (urgent and normal lanes)" },
     { "id": "notify", "type": "worker", "label": "Notification workers", "props": { "instances": 2 } },
     { "id": "email", "type": "external", "label": "Email provider" },
     { "id": "push", "type": "external", "label": "Push provider" },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
-    { "id": "api", "type": "app-server", "label": "Contractor API (saved searches, alert history)", "props": { "instances": 2 } },
-    { "id": "users", "type": "client", "label": "Contractors (web and mobile)" },
-    { "id": "mon", "type": "monitoring", "label": "Per-portal freshness, scraper errors, queue age" }
+    { "id": "api", "type": "app-server", "label": "Job seeker API (saved searches, alert history)", "props": { "instances": 2 } },
+    { "id": "users", "type": "client", "label": "Job seekers (web and mobile)" },
+    { "id": "mon", "type": "monitoring", "label": "Per-source freshness, scraper errors, queue age" }
   ],
   "edges": [
     { "from": "sched", "to": "fetch", "kind": "async", "label": "fetch job" },
-    { "from": "fetch", "to": "portals", "kind": "sync" },
+    { "from": "fetch", "to": "job sources", "kind": "sync" },
     { "from": "fetch", "to": "raw", "kind": "sync", "label": "store raw" },
     { "from": "fetch", "to": "norm", "kind": "async" },
-    { "from": "norm", "to": "db", "kind": "sync", "label": "upsert tender" },
-    { "from": "norm", "to": "mq", "kind": "async", "label": "tender created" },
+    { "from": "norm", "to": "db", "kind": "sync", "label": "upsert posting" },
+    { "from": "norm", "to": "mq", "kind": "async", "label": "posting created" },
     { "from": "mq", "to": "match", "kind": "async" },
     { "from": "match", "to": "db", "kind": "sync", "label": "candidate searches, insert alerts" },
     { "from": "match", "to": "nq", "kind": "async" },
@@ -1075,14 +1096,14 @@ Variant A shape: scheduler → fetchers → raw store → normaliser → tenders
 }
 ```
 
-Key points: the unique key on `alerts(tender_id, saved_search_id)` makes matching idempotent, so a re-run after a crash can't double-notify. Separate urgent and normal lanes stop a big batch from delaying urgent alerts. Raw storage plus freshness alerts address the "no tender silently missed" requirement.
+Key points: the unique key on `alerts(posting_id, saved_search_id)` makes matching idempotent, so a re-run after a crash can't double-notify. Separate urgent and normal lanes stop a big batch from delaying urgent alerts. Raw storage plus freshness alerts address the "no posting silently missed" requirement.
 
 **Variant B: what changes and why**
 
 - 300 × 20,000 = 6 M comparisons a day, a few seconds of CPU. **Remove the matcher workers, both queues and the event flow.** Run one nightly job: fetch, normalise, match, insert alerts, send emails. Saves three component types and their monitoring.
 - "Next morning" means **no frequent scheduler**. A single cron-style run at 5 am, plus a retry at 6 am.
 - One developer means **one deployable app** (API plus the nightly job as a hosted background service), one PostgreSQL database, and a managed email service. No load balancer needed beyond what the hosting platform provides.
-- Keep: raw-response storage (cheap insurance when scrapers break), the unique alert key (still prevents duplicates on re-runs), and a simple freshness check that emails the developer if a portal returned nothing.
+- Keep: raw-response storage (cheap insurance when scrapers break), the unique alert key (still prevents duplicates on re-runs), and a simple freshness check that emails the developer if a source returned nothing.
 - Push notifications are out, so remove the push provider.
 
 The lesson: the *questions* were identical. The *answers* moved the design from an event-driven pipeline to a nightly job. That's why clarifying comes first.
@@ -1092,7 +1113,7 @@ The lesson: the *questions* were identical. The *answers* moved the design from 
 - For Variant B, keeping the queues "for future scale". The requirements don't justify them, and one developer has to run them.
 - Not stating which answer drove which change.
 ::extensions
-Add a Variant C: the client now requires alerts within 2 minutes for all categories, and two portals offer webhooks. Which parts of Variant A change?
+Add a Variant C: the product team now requires alerts within 2 minutes for all categories, and two job boards offer webhooks. Which parts of Variant A change?
 :::
 
 ## Automated testing
@@ -1131,7 +1152,7 @@ For your own practice, the best test is a partner: after your five minutes of cl
 ## Real-world application
 
 - **Requirement workshops** with clients use exactly this method: grouped questions, numbers, explicit assumptions confirmed in writing, and an out-of-scope list. In consulting, the out-of-scope list is often what prevents disputes later.
-- **Government and infrastructure projects** often come with a long tender document. Clarifying questions become formal pre-bid queries. Each answer changes the scope, so record them as numbered assumptions.
+- **Requests for proposal (RFPs)** from large clients often arrive as long documents. Clarifying questions become formal written queries, and each answer changes the scope, so record them as numbered assumptions.
 - **Service level objectives**: measurable NFRs ("99.9 % of redirects succeed within 100 ms each month") are the start of SLOs, which you then monitor. See [SLIs, SLOs and SLAs](#/lesson/m14-sli-slo-sla).
 - **Design reviews**: one of the most useful review comments is "which requirement is this component for?" It comes straight from the traceability habit in this lesson.
 - **Architecture decision records**: assumptions and constraints you uncover here belong in the context section of an [ADR](#/lesson/m02-adr).
@@ -1158,7 +1179,7 @@ Usually 4–8, grouped by bucket: users and features, scale, quality targets, co
 ::q advanced
 Halfway through the interview, the interviewer changes a requirement: alerts must now arrive within 1 minute instead of 1 hour. How do you handle it?
 ::a
-Update the requirements box first, so the change is visible. Then trace which design decisions depended on the old requirement. A 1-hour target allowed scheduled polling of portals every 10–30 minutes. A 1-minute target needs push-based ingestion (webhooks where available) or much more frequent polling, plus a faster matching path. I'd say explicitly what changes, what stays, and the new cost: more fetch traffic and possibly being rate-limited by portals. Then I'd adjust the diagram. Handling the change calmly and systematically is itself what's being tested.
+Update the requirements box first, so the change is visible. Then trace which design decisions depended on the old requirement. A 1-hour target allowed scheduled polling of job sources every 10–30 minutes. A 1-minute target needs push-based ingestion (webhooks where available) or much more frequent polling, plus a faster matching path. I'd say explicitly what changes, what stays, and the new cost: more fetch traffic and possibly being rate-limited by job sources. Then I'd adjust the diagram. Handling the change calmly and systematically is itself what's being tested.
 ::q advanced
 How do clarifying questions differ between an LLD and an HLD round?
 ::a

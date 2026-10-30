@@ -24,7 +24,7 @@ references:
     url: https://owasp.org/Top10/A01_2021-Broken_Access_Control/
 ---
 
-A contractor on a highway project logs in to the project portal to upload a running bill. The login works. Then he changes `bills/1042` to `bills/1043` in the address bar and sees a competitor's bill, with rates and quantities. The login was fine. What failed was the second question the server should have asked. This lesson separates those two questions, because confusing them is behind a large share of real security incidents. OWASP ranks broken access control as the number one web application risk.
+A patient logs in to a diagnostic lab's website to download her blood-test report. The login works. Then she changes `reports/1042` to `reports/1043` in the address bar and sees a stranger's report, with name, age, phone number and test results. The login was fine. What failed was the second question the server should have asked. This lesson separates those two questions, because confusing them is behind a large share of real security incidents. OWASP ranks broken access control as the number one web application risk.
 
 ## Learning objectives
 
@@ -58,13 +58,13 @@ Three things to notice:
 - **They use different information.** Authentication uses *proof* (your face, your ID card). Authorization uses *rules* (visitors can use floors 1 to 3, staff can use all floors, only IT can enter the server room).
 - **A badge is a shortcut.** The guard does not re-check your ID at every door. The badge stands in for "reception already checked this person". In software that badge is a **session cookie** or a **token**.
 
-Now the highway portal bug from the introduction makes sense. The contractor was correctly authenticated: reception let him in. But the bill page never checked whether *this* contractor owns bill 1043. That is like the 7th-floor door opening for any badge at all.
+Now the lab portal bug from the introduction makes sense. The patient was correctly authenticated: reception let her in. But the report page never checked whether report 1043 belongs to *this* patient. That is like the 7th-floor door opening for any badge at all.
 
 ## First-principles explanation
 
 ### What authentication is
 
-Authentication is the process of **verifying a claim of identity** using evidence. The user says "I am ravi@contractor.in", and supplies proof. The proof is called a **credential**. There are three classic kinds:
+Authentication is the process of **verifying a claim of identity** using evidence. The user says "I am ravi@example.com", and supplies proof. The proof is called a **credential**. There are three classic kinds:
 
 | Factor | Plain English | Examples |
 |---|---|---|
@@ -76,7 +76,7 @@ Authentication is the process of **verifying a claim of identity** using evidenc
 
 Machines authenticate too. A billing service calling a payments API proves its identity with an **API key**, a **client certificate** (mutual TLS), or a **client secret** exchanged for a token (OAuth client credentials, covered in [OAuth 2.0 and OpenID Connect](#/lesson/m14-oauth-oidc)).
 
-The output of authentication is an **identity**: a structured description of the caller. In .NET this is a `ClaimsPrincipal` holding one or more `ClaimsIdentity` objects, each a list of **claims** (name and value pairs such as `sub = 7f3a…`, `email = ravi@contractor.in`, `role = Contractor`). A claim is a statement *about* the caller made by someone you trust (your login code, or an identity provider).
+The output of authentication is an **identity**: a structured description of the caller. In .NET this is a `ClaimsPrincipal` holding one or more `ClaimsIdentity` objects, each a list of **claims** (name and value pairs such as `sub = 7f3a…`, `email = ravi@example.com`, `role = Patient`). A claim is a statement *about* the caller made by someone you trust (your login code, or an identity provider).
 
 ### What authorization is
 
@@ -84,15 +84,15 @@ Authorization is the process of **deciding whether an identified caller may perf
 
 1. **Subject**: who is asking (the `ClaimsPrincipal`).
 2. **Action**: what they want to do (read, approve, delete).
-3. **Resource**: what they want to do it to (bill 1043, project P-17).
-4. **Context**: anything else that matters (time, IP range, whether the project is closed).
+3. **Resource**: what they want to do it to (report 1043, patient P-9).
+4. **Context**: anything else that matters (time, IP range, whether the report has been signed yet).
 
-The simplest rule only looks at the subject ("is this user an Admin?"). Realistic rules look at the resource too ("is this user the contractor who *owns* this bill?"). That second kind is where most bugs live, because it cannot be decided by an attribute on the controller. The code has to load the resource first. [Role-based and policy-based authorization](#/lesson/m14-rbac-pbac) covers this in depth.
+The simplest rule only looks at the subject ("is this user an Admin?"). Realistic rules look at the resource too ("is this the patient the report *belongs* to?"). That second kind is where most bugs live, because it cannot be decided by an attribute on the controller. The code has to load the resource first. [Role-based and policy-based authorization](#/lesson/m14-rbac-pbac) covers this in depth.
 
 ### Why they must be separate
 
 - **Different change rates.** How people log in changes rarely (add MFA, add Google sign-in). Who may do what changes weekly (a new approval step, a new role).
-- **Different owners.** Authentication is often outsourced to an identity provider such as Microsoft Entra ID, Auth0, Keycloak or Google. Authorization almost never can be, because only your application knows that a contractor may see his own bills but not others'.
+- **Different owners.** Authentication is often outsourced to an identity provider such as Microsoft Entra ID, Auth0, Keycloak or Google. Authorization almost never can be, because only your application knows that a patient may see her own reports but not anyone else's.
 - **Different failure meaning.** A failed authentication means "I don't know who you are". A failed authorization means "I know exactly who you are, and the answer is no". HTTP has a status code for each.
 
 ### How credentials become a "badge": sessions versus tokens
@@ -101,7 +101,7 @@ Checking a password costs real work. A good password hash is deliberately slow, 
 
 **1. Server-side session (reference).** The server creates a random id (say 128 bits from a cryptographic random generator), stores `session_id → user_id, expires_at` in memory, Redis or a database table, and sends the id to the browser in a cookie. On each request it looks up the id.
 
-**2. Self-contained token (value).** The server puts the identity itself into a signed blob, such as a JSON Web Token: `{"sub":"u-42","role":"Contractor","exp":1760950000}` plus a signature. On each request it verifies the signature and the expiry. No lookup is needed. [JWT validation and limitations](#/lesson/m14-jwt) covers the details.
+**2. Self-contained token (value).** The server puts the identity itself into a signed blob, such as a JSON Web Token: `{"sub":"u-42","role":"Patient","exp":1760950000}` plus a signature. On each request it verifies the signature and the expiry. No lookup is needed. [JWT validation and limitations](#/lesson/m14-jwt) covers the details.
 
 ASP.NET Core's cookie authentication is actually a third shape in between: by default it puts the *whole* `ClaimsPrincipal`, encrypted and signed with Data Protection keys, inside the cookie. It behaves like a self-contained token that happens to travel in a cookie, unless you plug in an `ITicketStore` to keep it on the server.
 
@@ -122,7 +122,7 @@ In ASP.NET Core both steps are middleware, and order matters:
 
 1. `UseAuthentication()` runs the configured **authentication handler**. It reads the cookie or `Authorization` header, validates it, and sets `HttpContext.User`. If there is no credential, the user is simply anonymous. It does **not** reject the request.
 2. `UseAuthorization()` looks at the endpoint's metadata (`[Authorize]`, `.RequireAuthorization("policy")`) and evaluates the policy. If the user is anonymous and the policy needs an authenticated user, it calls **Challenge** (which becomes 401, or a redirect to the login page for cookies). If the user is authenticated but fails the policy, it calls **Forbid** (403).
-3. Inside your endpoint, **resource-based checks** run after loading the data: `IAuthorizationService.AuthorizeAsync(User, bill, "EditBill")`.
+3. Inside your endpoint, **resource-based checks** run after loading the data: `IAuthorizationService.AuthorizeAsync(User, report, "ViewReport")`.
 
 ### 401 versus 403 versus 404
 
@@ -130,16 +130,16 @@ The names are confusing. HTTP calls 401 "Unauthorized" when it really means "una
 
 - **401 Unauthorized**: "I don't know who you are." The credential is missing, expired or invalid. The response must include a `WWW-Authenticate` header saying how to authenticate (for example `Bearer error="invalid_token"`). The client should log in or refresh its token and retry.
 - **403 Forbidden**: "I know who you are, and you can't do this." Retrying with the same credential will not help. Logging in again will not help either.
-- **404 Not Found** instead of 403: when merely confirming that the resource exists leaks information. If contractor A requests contractor B's bill 1043, answering 403 tells A that bill 1043 exists. Many systems, including GitHub for private repositories, answer 404 for resources the caller may not even know about.
+- **404 Not Found** instead of 403: when merely confirming that the resource exists leaks information. If patient A requests patient B's report 1043, answering 403 tells A that report 1043 exists. Many systems, including GitHub for private repositories, answer 404 for resources the caller may not even know about.
 
 A practical rule: **401 when authentication failed, 403 when the caller may know the resource exists but can't perform this action, 404 when the caller should not learn the resource exists.**
 
 ### What happens without a clear separation
 
-- **"Logged in" treated as "allowed".** An endpoint has `[Authorize]` and nothing else, so every authenticated user, including a contractor's junior clerk, can call it.
-- **Authorization only in the UI.** The "Approve" button is hidden for contractors, but `POST /bills/1043/approve` works for anyone who sends it with curl.
-- **Insecure direct object reference (IDOR).** The endpoint trusts the id in the URL without checking ownership. This is exactly the highway portal bug.
-- **Identity taken from the request body.** `{"approvedBy":"chief.engineer"}` is accepted as the approver's identity instead of reading it from `HttpContext.User`.
+- **"Logged in" treated as "allowed".** An endpoint has `[Authorize]` and nothing else, so every authenticated user, including every patient, can call it.
+- **Authorization only in the UI.** The "Sign off" button is hidden for patients, but `POST /reports/1043/sign` works for anyone who sends it with curl.
+- **Insecure direct object reference (IDOR).** The endpoint trusts the id in the URL without checking ownership. This is exactly the lab portal bug.
+- **Identity taken from the request body.** `{"signedBy":"dr.mehta"}` is accepted as the signing doctor's identity instead of reading it from `HttpContext.User`.
 
 ### When a simpler alternative is enough
 
@@ -156,60 +156,60 @@ flowchart LR
     U["Browser / mobile app"] -->|"1. login with password + OTP"| IDP["Identity provider"]
     IDP -->|"2. session cookie or token"| U
     U -->|"3. request with cookie or Bearer token"| GW["API gateway (L7)"]
-    GW -->|"4. coarse check: valid token?"| API["Billing API"]
-    API -->|"5. fine check: owns bill 1043?"| DB[("PostgreSQL")]
+    GW -->|"4. coarse check: valid token?"| API["Reports API"]
+    API -->|"5. fine check: is report 1043 hers?"| DB[("PostgreSQL")]
     API -.->|"6. decision log"| AUD["Audit log"]
 ```
 
-Read it from left to right. **Arrow 1**: the user proves their identity once, to the identity provider (which may be your own login endpoint or an external service). **Arrow 2**: the provider hands back the "badge", a cookie or a token. **Arrow 3**: every later request carries that badge, never the password. **Arrow 4**: the gateway can reject requests with no valid badge early (cheap authentication, and a very coarse authorization such as "only staff may reach /admin"). **Arrow 5**: the API makes the real authorization decision, because only it can load bill 1043 and compare its `contractor_id` with the caller. **Arrow 6**: the decision, especially a denial, is written to an audit log. The key idea: authentication can be centralised, but fine-grained authorization lives next to the data.
+Read it from left to right. **Arrow 1**: the user proves their identity once, to the identity provider (which may be your own login endpoint or an external service). **Arrow 2**: the provider hands back the "badge", a cookie or a token. **Arrow 3**: every later request carries that badge, never the password. **Arrow 4**: the gateway can reject requests with no valid badge early (cheap authentication, and a very coarse authorization such as "only staff may reach /admin"). **Arrow 5**: the API makes the real authorization decision, because only it can load report 1043 and compare its `patient_id` with the caller. **Arrow 6**: the decision, especially a denial, is written to an audit log. The key idea: authentication can be centralised, but fine-grained authorization lives next to the data.
 
 ### One request, step by step
 
 ```mermaid
 sequenceDiagram
-    participant C as Contractor browser
+    participant C as Patient browser
     participant AN as Authentication middleware
     participant AZ as Authorization middleware
-    participant E as GET bills by id endpoint
+    participant E as GET reports by id endpoint
     participant S as IAuthorizationService
-    C->>AN: GET /bills/1043 with cookie
+    C->>AN: GET /reports/1043 with cookie
     AN->>AN: decrypt cookie and build ClaimsPrincipal
-    AN->>AZ: User = contractor C-7
+    AN->>AZ: User = patient P-7
     AZ->>AZ: policy needs authenticated user
     AZ->>E: allowed to reach endpoint
-    E->>E: load bill 1043 owned by C-9
-    E->>S: AuthorizeAsync(user, bill, ViewBill)
+    E->>E: load report 1043 of patient P-9
+    E->>S: AuthorizeAsync(user, report, ViewReport)
     S-->>E: Failed
     E-->>C: 404 Not Found
 ```
 
-Notice the two separate "no"s that could have happened. If the cookie were missing or invalid, the authorization middleware would have challenged and the browser would get 401 (or a login redirect). Here the cookie was fine, the coarse policy passed, and the endpoint itself made the resource-based check after loading the bill. Because a contractor should not learn that other contractors' bill numbers exist, the endpoint answers 404 rather than 403.
+Notice the two separate "no"s that could have happened. If the cookie were missing or invalid, the authorization middleware would have challenged and the browser would get 401 (or a login redirect). Here the cookie was fine, the coarse policy passed, and the endpoint itself made the resource-based check after loading the report. Because a patient should not learn that other patients' report numbers exist, the endpoint answers 404 rather than 403.
 
 ## Step-by-step example
 
-We'll secure the highway project portal in four steps. Users are site engineers, contractors and the project's chief engineer. Machines include a nightly job from the client's ERP that pulls approved bills.
+We'll secure the lab's report portal in four steps. Users are patients, lab technicians and the pathologist who signs reports. Machines include a nightly job from the hospital's billing system that pulls signed reports.
 
 ### Step 1 — the naive version
 
 ```csharp
-app.MapGet("/bills/{id:int}", (int id, BillRepository repo) => repo.Get(id));
-app.MapPost("/bills/{id:int}/approve", (int id, ApproveRequest req, BillRepository repo) =>
-    repo.Approve(id, approvedBy: req.ApprovedBy));
+app.MapGet("/reports/{id:int}", (int id, ReportRepository repo) => repo.Get(id));
+app.MapPost("/reports/{id:int}/sign", (int id, SignRequest req, ReportRepository repo) =>
+    repo.Sign(id, signedBy: req.SignedBy));
 ```
 
-Two problems: anyone on the internet can read any bill, and the approver's name comes from the request body.
+Two problems: anyone on the internet can read any patient's report, and the signing doctor's name comes from the request body.
 
 ### Step 2 — authenticate everyone
 
-Add cookie authentication for people and an API key scheme for the ERP job. Mark the endpoints with `.RequireAuthorization()`. Now anonymous callers get 401. But every logged-in contractor can still read every bill, and any contractor can approve.
+Add cookie authentication for people and an API key scheme for the billing job. Mark the endpoints with `.RequireAuthorization()`. Now anonymous callers get 401. But every logged-in patient can still read every report, and any patient can sign one off.
 
 ### Step 3 — coarse authorization with a policy
 
-Add a policy `ApproveBills` that requires the claim `permission = bills:approve`, which only the chief engineer's account has. Approving now returns 403 for contractors. The approver identity comes from `User`, never from the body.
+Add a policy `SignReports` that requires the claim `permission = reports:sign`, which only the pathologist's account has. Signing now returns 403 for patients and technicians. The signer's identity comes from `User`, never from the body.
 
 ### Step 4 — fine-grained, resource-based authorization
 
-Inside `GET /bills/{id}`, load the bill and check: staff may see all bills, a contractor only bills where `bill.ContractorId == user's contractor_id claim`. Failed checks return 404. Every denial is logged with the user id, the bill id and the reason.
+Inside `GET /reports/{id}`, load the report and check: lab staff may see all reports, a patient only reports where `report.PatientId == user's patient_id claim`. Failed checks return 404. Every denial is logged with the user id, the report id and the reason.
 
 The full code is next.
 
@@ -222,10 +222,10 @@ Portal.Api/
     PortalClaims.cs
     ApiKeyAuthenticationHandler.cs
     InMemoryApiKeyStore.cs
-    BillAuthorization.cs
-  Bills/
-    Bill.cs
-    InMemoryBillStore.cs
+    ReportAuthorization.cs
+  Reports/
+    LabReport.cs
+    InMemoryReportStore.cs
   Accounts/
     DemoUserDirectory.cs
 ```
@@ -237,10 +237,10 @@ namespace Portal.Api.Security;
 public static class PortalClaims
 {
     public const string UserId = "sub";
-    public const string ContractorId = "contractor_id";
+    public const string PatientId = "patient_id";
     public const string Permission = "permission";
-    public const string ApproveBills = "bills:approve";
-    public const string ReadAllBills = "bills:read_all";
+    public const string SignReports = "reports:sign";
+    public const string ReadAllReports = "reports:read_all";
     public const string ApiKeyScheme = "ApiKey";
 }
 ```
@@ -317,83 +317,87 @@ public sealed class ApiKeyAuthenticationHandler(
 }
 ```
 
-```csharp file=Bills/Bill.cs
-namespace Portal.Api.Bills;
+```csharp file=Reports/LabReport.cs
+namespace Portal.Api.Reports;
 
-public enum BillStatus { Draft, Submitted, Approved }
+public enum ReportStatus { Draft, AwaitingSignOff, Signed }
 
-public sealed class Bill(int id, string contractorId, decimal amount)
+public sealed class LabReport(int id, string patientId, string testName)
 {
     public int Id { get; } = id;
-    public string ContractorId { get; } = contractorId;
-    public decimal Amount { get; } = amount;
-    public BillStatus Status { get; private set; } = BillStatus.Submitted;
-    public string? ApprovedBy { get; private set; }
+    public string PatientId { get; } = patientId;
+    public string TestName { get; } = testName;
+    public ReportStatus Status { get; private set; } = ReportStatus.AwaitingSignOff;
+    public string? SignedBy { get; private set; }
 
-    public void Approve(string approverUserId)
+    /// <summary>Returns false if the report is not waiting for sign-off (already signed, or still a draft).</summary>
+    public bool TrySign(string pathologistUserId)
     {
-        if (Status != BillStatus.Submitted) throw new InvalidOperationException($"Bill {Id} is {Status}, not Submitted.");
-        Status = BillStatus.Approved;
-        ApprovedBy = approverUserId;
+        if (Status != ReportStatus.AwaitingSignOff) return false;
+        Status = ReportStatus.Signed;
+        SignedBy = pathologistUserId;
+        return true;
     }
 }
 ```
 
-```csharp file=Bills/InMemoryBillStore.cs
+```csharp file=Reports/InMemoryReportStore.cs
 using System.Collections.Concurrent;
 
-namespace Portal.Api.Bills;
+namespace Portal.Api.Reports;
 
-public interface IBillStore
+public interface IReportStore
 {
-    Bill? Find(int id);
-    IReadOnlyList<Bill> ForContractor(string contractorId);
+    LabReport? Find(int id);
+    IReadOnlyList<LabReport> ForPatient(string patientId);
 }
 
-public sealed class InMemoryBillStore : IBillStore
+public sealed class InMemoryReportStore : IReportStore
 {
-    private readonly ConcurrentDictionary<int, Bill> _bills = new();
-    public InMemoryBillStore()
+    private readonly ConcurrentDictionary<int, LabReport> _reports = new();
+    public InMemoryReportStore()
     {
-        foreach (var b in new[] { new Bill(1042, "C-7", 1_85_000m), new Bill(1043, "C-9", 3_40_000m) }) _bills[b.Id] = b;
+        foreach (var r in new[] { new LabReport(1042, "P-7", "Complete blood count"), new LabReport(1043, "P-9", "Thyroid profile") })
+            _reports[r.Id] = r;
     }
-    public Bill? Find(int id) => _bills.GetValueOrDefault(id);
-    public IReadOnlyList<Bill> ForContractor(string contractorId) =>
-        _bills.Values.Where(b => b.ContractorId == contractorId).OrderBy(b => b.Id).ToList();
+    public LabReport? Find(int id) => _reports.GetValueOrDefault(id);
+    public IReadOnlyList<LabReport> ForPatient(string patientId) =>
+        _reports.Values.Where(r => r.PatientId == patientId).OrderBy(r => r.Id).ToList();
 }
 ```
 
-```csharp file=Security/BillAuthorization.cs
+```csharp file=Security/ReportAuthorization.cs
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Infrastructure;
-using Portal.Api.Bills;
+using Portal.Api.Reports;
 
 namespace Portal.Api.Security;
 
-public static class BillOperations
+public static class ReportOperations
 {
     public static readonly OperationAuthorizationRequirement View = new() { Name = nameof(View) };
 }
 
-/// <summary>Resource-based rule: staff with bills:read_all see everything, a contractor only their own bills.</summary>
-public sealed class BillAuthorizationHandler(ILogger<BillAuthorizationHandler> log)
-    : AuthorizationHandler<OperationAuthorizationRequirement, Bill>
+/// <summary>Resource-based rule: lab staff with reports:read_all see everything, a patient only their own reports.</summary>
+public sealed class ReportAuthorizationHandler(ILogger<ReportAuthorizationHandler> log)
+    : AuthorizationHandler<OperationAuthorizationRequirement, LabReport>
 {
     protected override Task HandleRequirementAsync(AuthorizationHandlerContext context,
-        OperationAuthorizationRequirement requirement, Bill bill)
+        OperationAuthorizationRequirement requirement, LabReport report)
     {
-        if (requirement.Name != BillOperations.View.Name) return Task.CompletedTask;
+        if (requirement.Name != ReportOperations.View.Name) return Task.CompletedTask;
         var user = context.User;
-        if (user.HasClaim(PortalClaims.Permission, PortalClaims.ReadAllBills) ||
-            user.FindFirstValue(PortalClaims.ContractorId) == bill.ContractorId)
+        var callerPatientId = user.FindFirstValue(PortalClaims.PatientId);
+        if (user.HasClaim(PortalClaims.Permission, PortalClaims.ReadAllReports) ||
+            (callerPatientId is not null && callerPatientId == report.PatientId))
         {
             context.Succeed(requirement);
         }
         else
         {
-            log.LogWarning("Denied {Operation} on bill {BillId} for user {UserId}",
-                requirement.Name, bill.Id, user.FindFirstValue(PortalClaims.UserId));
+            log.LogWarning("Denied {Operation} on report {ReportId} for user {UserId}",
+                requirement.Name, report.Id, user.FindFirstValue(PortalClaims.UserId));
         }
         return Task.CompletedTask;
     }
@@ -417,11 +421,11 @@ public interface IUserDirectory
 /// <summary>Demo only. Real password storage (PBKDF2, salts, lockout) is in the passwords lesson.</summary>
 public sealed class DemoUserDirectory : IUserDirectory
 {
-    private sealed record Account(string UserId, string Email, byte[] PasswordSha, string? ContractorId, string[] Permissions);
+    private sealed record Account(string UserId, string Email, byte[] PasswordSha, string? PatientId, string[] Permissions);
     private readonly List<Account> _accounts =
     [
-        new("u-1", "chief@project.in", Sha("demo-chief"), null, [PortalClaims.ApproveBills, PortalClaims.ReadAllBills]),
-        new("u-7", "ravi@contractor.in", Sha("demo-ravi"), "C-7", []),
+        new("u-1", "dr.mehta@lab.example.com", Sha("demo-pathologist"), null, [PortalClaims.SignReports, PortalClaims.ReadAllReports]),
+        new("u-7", "ravi@example.com", Sha("demo-ravi"), "P-7", []),
     ];
 
     public ClaimsIdentity? Validate(string email, string password, string authenticationType)
@@ -433,7 +437,7 @@ public sealed class DemoUserDirectory : IUserDirectory
         if (!CryptographicOperations.FixedTimeEquals(presented, expected) || account is null) return null;
 
         var claims = new List<Claim> { new(PortalClaims.UserId, account.UserId), new(ClaimTypes.Email, account.Email) };
-        if (account.ContractorId is not null) claims.Add(new(PortalClaims.ContractorId, account.ContractorId));
+        if (account.PatientId is not null) claims.Add(new(PortalClaims.PatientId, account.PatientId));
         claims.AddRange(account.Permissions.Select(p => new Claim(PortalClaims.Permission, p)));
         return new ClaimsIdentity(claims, authenticationType, PortalClaims.UserId, ClaimTypes.Role);
     }
@@ -448,17 +452,18 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Portal.Api.Accounts;
-using Portal.Api.Bills;
+using Portal.Api.Reports;
 using Portal.Api.Security;
 
 var builder = WebApplication.CreateBuilder(args);
 
 var apiKeys = new InMemoryApiKeyStore();
-apiKeys.Add(builder.Configuration["Erp:ApiKey"] ?? "dev-only-erp-key", new ApiClient("erp-nightly", [PortalClaims.ReadAllBills]));
+// The real key comes from a secret store; the fallback exists only so the demo runs locally.
+apiKeys.Add(builder.Configuration["Billing:ApiKey"] ?? "dev-only-billing-key", new ApiClient("billing-nightly", [PortalClaims.ReadAllReports]));
 builder.Services.AddSingleton<IApiKeyStore>(apiKeys);
-builder.Services.AddSingleton<IBillStore, InMemoryBillStore>();
+builder.Services.AddSingleton<IReportStore, InMemoryReportStore>();
 builder.Services.AddSingleton<IUserDirectory, DemoUserDirectory>();
-builder.Services.AddSingleton<IAuthorizationHandler, BillAuthorizationHandler>();
+builder.Services.AddSingleton<IAuthorizationHandler, ReportAuthorizationHandler>();
 
 builder.Services
     .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
@@ -476,11 +481,12 @@ builder.Services
     .AddScheme<AuthenticationSchemeOptions, ApiKeyAuthenticationHandler>(PortalClaims.ApiKeyScheme, _ => { });
 
 builder.Services.AddAuthorizationBuilder()
-    // Accept either a person (cookie) or the ERP job (API key) on bill endpoints.
+    // Accept either a person (cookie) or the billing job (API key) on report endpoints.
     .AddPolicy("Portal", p => p.AddAuthenticationSchemes(CookieAuthenticationDefaults.AuthenticationScheme, PortalClaims.ApiKeyScheme)
                                .RequireAuthenticatedUser())
-    .AddPolicy("ApproveBills", p => p.RequireAuthenticatedUser()
-                                     .RequireClaim(PortalClaims.Permission, PortalClaims.ApproveBills));
+    // No AddAuthenticationSchemes here: only the default (cookie) scheme is tried, so an API key can never sign.
+    .AddPolicy("SignReports", p => p.RequireAuthenticatedUser()
+                                    .RequireClaim(PortalClaims.Permission, PortalClaims.SignReports));
 
 var app = builder.Build();
 
@@ -498,22 +504,24 @@ app.MapPost("/login", async (LoginRequest req, IUserDirectory users, HttpContext
 app.MapPost("/logout", async (HttpContext http) => { await http.SignOutAsync(); return Results.NoContent(); })
    .RequireAuthorization();
 
-app.MapGet("/bills/{id:int}", async (int id, ClaimsPrincipal user, IBillStore bills, IAuthorizationService authz) =>
+app.MapGet("/reports/{id:int}", async (int id, ClaimsPrincipal user, IReportStore reports, IAuthorizationService authz) =>
 {
-    var bill = bills.Find(id);
-    if (bill is null) return Results.NotFound();
-    var result = await authz.AuthorizeAsync(user, bill, BillOperations.View);
-    // 404, not 403: a contractor should not learn that another contractor's bill number exists.
-    return result.Succeeded ? Results.Ok(new { bill.Id, bill.Amount, Status = bill.Status.ToString() }) : Results.NotFound();
+    var report = reports.Find(id);
+    if (report is null) return Results.NotFound();
+    var result = await authz.AuthorizeAsync(user, report, ReportOperations.View);
+    // 404, not 403: a patient should not learn that another patient's report number exists.
+    return result.Succeeded
+        ? Results.Ok(new { report.Id, report.TestName, Status = report.Status.ToString() })
+        : Results.NotFound();
 }).RequireAuthorization("Portal");
 
-app.MapPost("/bills/{id:int}/approve", (int id, ClaimsPrincipal user, IBillStore bills) =>
+app.MapPost("/reports/{id:int}/sign", (int id, ClaimsPrincipal user, IReportStore reports) =>
 {
-    var bill = bills.Find(id);
-    if (bill is null) return Results.NotFound();
-    bill.Approve(user.FindFirstValue(PortalClaims.UserId)!);   // identity from the principal, never from the body
-    return Results.NoContent();
-}).RequireAuthorization("ApproveBills");
+    var report = reports.Find(id);
+    if (report is null) return Results.NotFound();
+    // Identity comes from the principal, never from the body. A report that is not awaiting sign-off is a 409, not a 500.
+    return report.TrySign(user.FindFirstValue(PortalClaims.UserId)!) ? Results.NoContent() : Results.Conflict();
+}).RequireAuthorization("SignReports");
 
 app.Run();
 
@@ -524,25 +532,25 @@ Key points in this code:
 
 - **The handler only authenticates.** `ApiKeyAuthenticationHandler` returns `NoResult` when no key is present. That lets anonymous endpoints work and lets the authorization middleware decide whether a credential was required.
 - **API keys are stored hashed.** A leaked database dump then doesn't hand out working keys. A fast hash is fine because the keys are 256-bit random values, not human passwords.
-- **The policy names the permission, not the role.** `ApproveBills` checks `permission = bills:approve`. When the client later adds a "Deputy Chief Engineer" who may also approve, you grant the permission, not edit code.
-- **Resource-based check after loading.** `[Authorize]` can't know who owns bill 1043. The handler compares the bill's owner with the caller's claim.
-- **Cookie hardening.** `HttpOnly` stops JavaScript (and XSS payloads) reading the cookie, `Secure` keeps it off plain HTTP, `SameSite=Lax` blocks most cross-site request forgery for unsafe methods.
+- **The policy names the permission, not the role.** `SignReports` checks `permission = reports:sign`. When the lab later lets a senior microbiologist sign culture reports too, you grant the permission, not edit code.
+- **Resource-based check after loading.** `[Authorize]` can't know whose report 1043 is. The handler compares the report's patient with the caller's claim, and a missing `patient_id` claim never "matches".
+- **Cookie hardening.** `HttpOnly` stops JavaScript (and XSS payloads) reading the cookie, `Secure` keeps it off plain HTTP, `SameSite=Lax` blocks most cross-site request forgery for unsafe methods. `SignInAsync` issues a brand-new cookie at login, so an attacker can't plant a session id before the victim logs in (session fixation). If browser forms post to these endpoints from other origins you control, add antiforgery tokens as well; SameSite is a second line, not the only one.
 
 ## Bad design vs good design
 
 **Bad**: one `[Authorize]` attribute on the controller, an `IsAdmin` boolean column checked in Razor views to hide buttons, and endpoints that read `userId` from a query string.
 
 ```csharp
-// Every logged-in user can approve anything, and can claim to be anyone.
+// Every logged-in user can sign any report, and can claim to be anyone.
 [Authorize]
-[HttpPost("bills/{id}/approve")]
-public IActionResult Approve(int id, [FromQuery] string userId) { _repo.Approve(id, userId); return Ok(); }
+[HttpPost("reports/{id}/sign")]
+public IActionResult Sign(int id, [FromQuery] string userId) { _repo.Sign(id, userId); return Ok(); }
 ```
 
 Problems:
 
 - Hiding a button is not access control. The API accepts the request anyway.
-- `userId` is attacker-controlled. Approvals get recorded against the chief engineer.
+- `userId` is attacker-controlled. A forged sign-off gets recorded against the pathologist, on a medical document.
 - There is no ownership check, so IDOR is possible on every read endpoint.
 - Nothing is logged, so you can't even tell afterwards who did what.
 
@@ -553,26 +561,26 @@ Add a fallback policy so that a new endpoint someone forgets to annotate is prot
 :::
 
 :::callout type=tradeoff title="Centralise authentication, distribute authorization"
-Validating tokens at an API gateway saves every service from doing it, and lets you reject garbage traffic early. But the gateway can't load bill 1043. Keep coarse checks (valid token, right audience, route-level scopes) at the edge and resource checks in the service that owns the data. A gateway-only design quietly turns into "logged in means allowed".
+Validating tokens at an API gateway saves every service from doing it, and lets you reject garbage traffic early. But the gateway can't load report 1043. Keep coarse checks (valid token, right audience, route-level scopes) at the edge and resource checks in the service that owns the data. A gateway-only design quietly turns into "logged in means allowed".
 :::
 
 ## Practical playground
 
-The graph below is a portal where the gateway does everything: it validates the session and is the *only* place access is checked. Open it in the HLD canvas. Add the components that make fine-grained authorization possible (a policy check inside the Billing API, an audit log, a session store for instant revocation) and see how the request path changes.
+The graph below is a portal where the gateway does everything: it validates the session and is the *only* place access is checked. Open it in the HLD canvas. Add the components that make fine-grained authorization possible (a policy check inside the Reports API, an audit log, a session store for instant revocation) and see how the request path changes.
 
-:::playground type=hld title="Project portal: where do the checks live?"
+:::playground type=hld title="Lab report portal: where do the checks live?"
 ```json
 {
   "nodes": [
-    { "id": "users", "type": "client", "label": "Engineers and contractors", "props": { "rps": 150 } },
-    { "id": "erp", "type": "external", "label": "Client ERP nightly job" },
+    { "id": "users", "type": "client", "label": "Patients and lab staff", "props": { "rps": 150 } },
+    { "id": "billing", "type": "external", "label": "Hospital billing nightly job" },
     { "id": "gw", "type": "api-gateway", "label": "Gateway (checks login only)" },
-    { "id": "api", "type": "app-server", "label": "Billing API", "props": { "instances": 2 } },
+    { "id": "api", "type": "app-server", "label": "Reports API", "props": { "instances": 2 } },
     { "id": "db", "type": "database", "label": "PostgreSQL" }
   ],
   "edges": [
     { "from": "users", "to": "gw", "kind": "sync", "label": "cookie" },
-    { "from": "erp", "to": "gw", "kind": "sync", "label": "API key" },
+    { "from": "billing", "to": "gw", "kind": "sync", "label": "API key" },
     { "from": "gw", "to": "api", "kind": "sync", "label": "X-User-Id header" },
     { "from": "api", "to": "db", "kind": "sync" }
   ]
@@ -580,7 +588,7 @@ The graph below is a portal where the gateway does everything: it validates the 
 ```
 :::
 
-Questions to answer while you edit: can a caller reach the Billing API directly and set `X-User-Id` themselves? Where is the ownership check for bill 1043? If a contractor is removed from the project at 11:00, when do they lose access?
+Questions to answer while you edit: can a caller reach the Reports API directly and set `X-User-Id` themselves? Where is the ownership check for report 1043? If a lab technician leaves the lab at 11:00, when do they lose access?
 
 ## Exercises
 
@@ -595,9 +603,9 @@ Write `AccessDecider.Decide`, which turns the outcome of authentication and auth
 - Authentication is checked first: an anonymous caller asking for a missing resource still gets 401.
 ::acceptance
 - Anonymous + missing resource → 401 (don't reveal what exists to strangers).
-- Contractor reading a competitor's bill → 404.
-- Contractor trying to approve their own visible bill → 403.
-- Chief engineer approving → 200.
+- Patient reading another patient's report → 404.
+- Patient trying to sign off their own visible report → 403.
+- Pathologist signing a report → 200.
 ::hint
 Order the checks the way the middleware pipeline does: authentication first, then existence, then visibility, then the action.
 ::hint
@@ -674,7 +682,7 @@ public static class AccessDecider
 }
 ```
 
-The order matters. Checking existence before authentication would let an anonymous attacker probe which bill numbers exist (404 versus 401 tells them). Merging the two 404 cases is deliberate: from the outside, "doesn't exist" and "exists but not yours" must look identical.
+The order matters. Checking existence before authentication would let an anonymous attacker probe which report numbers exist (404 versus 401 tells them). Merging the two 404 cases is deliberate: from the outside, "doesn't exist" and "exists but not yours" must look identical.
 ::mistakes
 - Returning 403 for an expired token. The client then shows "access denied" instead of refreshing the token.
 - Checking `ResourceExists` first, which leaks existence to anonymous callers.
@@ -686,12 +694,12 @@ Add a `RateLimited` flag that yields 429, and decide where in the order it belon
 :::exercise id=m14-authn-vs-authz-ex2 difficulty=beginner kind=written title="Authentication or authorization?"
 For each incident, say whether it is primarily an authentication failure or an authorization failure, and name one fix.
 
-1. An attacker uses a password from an old breach of another site to log in as a site engineer.
-2. A logged-in contractor downloads `GET /drawings/88.pdf`, a drawing for a package he is not working on.
-3. The mobile app hides the "Delete project" button for non-admins, but the API accepts the request from anyone logged in.
+1. An attacker uses a password from an old breach of another site to log in as a lab technician.
+2. A logged-in technician at the Pune branch downloads `GET /scans/88.pdf`, an X-ray belonging to a Chennai branch patient she has never treated.
+3. The mobile app hides the "Delete patient record" button for non-admins, but the API accepts the request from anyone logged in.
 4. An API accepts any token whose signature is valid, including tokens issued for a different application.
 5. A former employee's session still works two weeks after they left.
-6. A support agent can view every customer's PAN number, though their job only needs the last 4 digits.
+6. A support agent can view every patient's full Aadhaar number, though their job only needs the last 4 digits.
 ::acceptance
 - Each item is classified and the reasoning is one or two sentences.
 - At least one item is recognised as involving both.
@@ -704,13 +712,13 @@ Item 4 is subtle: the token proves who issued it, but not *for whom* it was issu
 Item 5 is about the lifetime of the "badge", which is part of authentication, but the root cause is often a missing offboarding step.
 ::solution
 1. **Authentication** (credential stuffing). Fixes: MFA, checking passwords against known-breached lists, rate limiting and lockout per account and per IP.
-2. **Authorization** (IDOR / missing object-level check). Fix: resource-based check that the drawing's package is in the contractor's assignments. Return 404.
+2. **Authorization** (IDOR / missing object-level check). Fix: resource-based check that the scan's patient is registered at the technician's branch (or assigned to her). Return 404.
 3. **Authorization** enforced only in the UI. Fix: a policy on the API endpoint. The UI hiding is just convenience.
 4. **Authentication**, specifically incomplete token validation: the audience (`aud`) was not checked, so a token minted for another app is accepted. Fix: validate issuer *and* audience. See [JWT validation](#/lesson/m14-jwt).
 5. **Both.** The credential (session) outlived the identity. Fix: offboarding disables the account in the identity provider, sessions are server-side or tokens are short-lived with refresh checks, and a "revoke all sessions" action exists.
-6. **Authorization** (excess privilege). Fix: least privilege, field-level masking, and audit logging of full-PAN views. See [Least privilege and audit trails](#/lesson/m14-least-privilege-audit).
+6. **Authorization** (excess privilege). Fix: least privilege, field-level masking, and audit logging of full-Aadhaar views. See [Least privilege and audit trails](#/lesson/m14-least-privilege-audit).
 ::mistakes
-- Calling item 2 an authentication problem because "the user shouldn't have been logged in". He should have; he just shouldn't see that file.
+- Calling item 2 an authentication problem because "the user shouldn't have been logged in". She should have; she just shouldn't see that file.
 - Treating item 4 as harmless because the signature was valid.
 :::
 
@@ -873,7 +881,7 @@ public sealed class SessionStore
 }
 ```
 
-The idle timeout limits the damage of a laptop left unlocked at a site office. The absolute timeout limits the damage of a stolen cookie that an attacker keeps "warm" by making requests every few minutes. In production this store lives in Redis or PostgreSQL so every API instance sees the same sessions, and keys are stored as a hash of the id so a dump of the store can't be replayed.
+The idle timeout limits the damage of a computer left unlocked at the lab's reception desk. The absolute timeout limits the damage of a stolen cookie that an attacker keeps "warm" by making requests every few minutes. In production this store lives in Redis or PostgreSQL so every API instance sees the same sessions, and keys are stored as a hash of the id so a dump of the store can't be replayed.
 ::alternatives
 ASP.NET Core cookie authentication with `SlidingExpiration` plus an `ITicketStore` implementation gives you the same behaviour inside the framework. Use this hand-rolled version only to understand the mechanics or for non-HTTP channels.
 ::mistakes
@@ -893,7 +901,7 @@ Write `LoginService.TryLogin`. It must give the same answer for "no such email" 
 ::acceptance
 - Unknown email and wrong password produce identical results.
 - After 5 failures, the correct password is rejected until 15 minutes pass.
-- `"Ravi@Contractor.in "` and `"ravi@contractor.in"` count against the same lockout.
+- `"Ravi@Example.com "` and `"ravi@example.com"` count against the same lockout.
 - Failures older than 15 minutes don't count.
 ::hint
 Keep a list of failure timestamps per email. Prune old ones before counting.
@@ -953,7 +961,7 @@ public sealed class FakeChecker : IPasswordChecker
     public string? Check(string email, string password)
     {
         Calls++;
-        return email == "ravi@contractor.in" && password == "correct-horse" ? "u-7" : null;
+        return email == "ravi@example.com" && password == "correct-horse" ? "u-7" : null;
     }
 }
 
@@ -962,7 +970,7 @@ public class LoginServiceTests
     [Fact]
     public void Correct_password_succeeds()
     {
-        var r = new LoginService(new FakeChecker(), new StepClock()).TryLogin("ravi@contractor.in", "correct-horse");
+        var r = new LoginService(new FakeChecker(), new StepClock()).TryLogin("ravi@example.com", "correct-horse");
         Assert.True(r.Success);
         Assert.Equal("u-7", r.UserId);
     }
@@ -972,7 +980,7 @@ public class LoginServiceTests
     {
         var svc = new LoginService(new FakeChecker(), new StepClock());
         var a = svc.TryLogin("nobody@x.in", "whatever");
-        var b = svc.TryLogin("ravi@contractor.in", "wrong");
+        var b = svc.TryLogin("ravi@example.com", "wrong");
         Assert.Equal(a, b);
         Assert.Equal(LoginService.GenericFailure, a.Message);
     }
@@ -982,9 +990,9 @@ public class LoginServiceTests
     {
         var checker = new FakeChecker();
         var svc = new LoginService(checker, new StepClock());
-        for (var i = 0; i < 5; i++) svc.TryLogin("ravi@contractor.in", "wrong");
+        for (var i = 0; i < 5; i++) svc.TryLogin("ravi@example.com", "wrong");
         var callsBefore = checker.Calls;
-        var r = svc.TryLogin("ravi@contractor.in", "correct-horse");
+        var r = svc.TryLogin("ravi@example.com", "correct-horse");
         Assert.False(r.Success);
         Assert.Equal(LoginService.GenericFailure, r.Message);
         Assert.Equal(callsBefore, checker.Calls);   // no password check while locked
@@ -994,8 +1002,8 @@ public class LoginServiceTests
     public void Email_is_normalised_for_lockout()
     {
         var svc = new LoginService(new FakeChecker(), new StepClock());
-        for (var i = 0; i < 5; i++) svc.TryLogin("  Ravi@Contractor.IN ", "wrong");
-        Assert.False(svc.TryLogin("ravi@contractor.in", "correct-horse").Success);
+        for (var i = 0; i < 5; i++) svc.TryLogin("  Ravi@Example.COM ", "wrong");
+        Assert.False(svc.TryLogin("ravi@example.com", "correct-horse").Success);
     }
 
     [Fact]
@@ -1003,19 +1011,19 @@ public class LoginServiceTests
     {
         var clock = new StepClock();
         var svc = new LoginService(new FakeChecker(), clock);
-        for (var i = 0; i < 5; i++) svc.TryLogin("ravi@contractor.in", "wrong");
+        for (var i = 0; i < 5; i++) svc.TryLogin("ravi@example.com", "wrong");
         clock.Now += TimeSpan.FromMinutes(16);
-        Assert.True(svc.TryLogin("ravi@contractor.in", "correct-horse").Success);
+        Assert.True(svc.TryLogin("ravi@example.com", "correct-horse").Success);
     }
 
     [Fact]
     public void Success_resets_failures()
     {
         var svc = new LoginService(new FakeChecker(), new StepClock());
-        for (var i = 0; i < 4; i++) svc.TryLogin("ravi@contractor.in", "wrong");
-        Assert.True(svc.TryLogin("ravi@contractor.in", "correct-horse").Success);
-        for (var i = 0; i < 4; i++) svc.TryLogin("ravi@contractor.in", "wrong");
-        Assert.True(svc.TryLogin("ravi@contractor.in", "correct-horse").Success);
+        for (var i = 0; i < 4; i++) svc.TryLogin("ravi@example.com", "wrong");
+        Assert.True(svc.TryLogin("ravi@example.com", "correct-horse").Success);
+        for (var i = 0; i < 4; i++) svc.TryLogin("ravi@example.com", "wrong");
+        Assert.True(svc.TryLogin("ravi@example.com", "correct-horse").Success);
     }
 }
 ```
@@ -1075,12 +1083,12 @@ Records compare by value, so the test `Assert.Equal(a, b)` proves the two failur
 ASP.NET Core Identity has built-in lockout (`MaxFailedAccessAttempts`, `DefaultLockoutTimeSpan`). Use it if you use Identity. Add a per-IP rate limiter (`AddRateLimiter`) as well, because per-account lockout alone doesn't stop one attacker trying one password across 100,000 accounts (password spraying).
 ::mistakes
 - Saying "account locked" in the message, which confirms the account exists.
-- Locking permanently, which lets an attacker lock out the chief engineer the night before a bill deadline (denial of service). Use a time-based lock.
+- Locking permanently, which lets an attacker lock out the on-call pathologist in the middle of a night shift (denial of service). Use a time-based lock.
 - Counting failures only for existing accounts.
 :::
 
-:::exercise id=m14-authn-vs-authz-ex5 difficulty=advanced kind=hld title="Single sign-on for six project apps"
-An infrastructure consultancy runs six web apps (project portal, document management, drone survey viewer, HR, timesheets, tender tracker). Each has its own user table and login page. There are 6,000 employees and about 14,000 contractor users. Most people log in between 09:00 and 10:00 IST.
+:::exercise id=m14-authn-vs-authz-ex5 difficulty=advanced kind=hld title="Single sign-on for six hospital apps"
+A hospital chain runs six web apps (patient records, lab information system, pharmacy, radiology viewer, HR, staff rostering). Each has its own user table and login page. There are 6,000 employees and about 14,000 external users (visiting consultants, agency nurses, partner-lab staff). Most people sign in at the morning shift change, between 08:00 and 09:00 IST.
 
 Design a target architecture where people sign in once, offboarding takes effect within 5 minutes across all apps, and each app still decides what users can do inside it. Estimate login and token-validation load.
 ::acceptance
@@ -1101,12 +1109,12 @@ Logins: 20,000 users, most in one hour, maybe 2 apps each before SSO kicks in. V
 ```json
 {
   "nodes": [
-    { "id": "staff", "type": "client", "label": "Employees and contractors", "props": { "rps": 400 } },
-    { "id": "portal", "type": "app-server", "label": "Project portal (own login)" },
-    { "id": "dms", "type": "app-server", "label": "Document management (own login)" },
+    { "id": "staff", "type": "client", "label": "Employees and external staff", "props": { "rps": 400 } },
+    { "id": "portal", "type": "app-server", "label": "Patient records (own login)" },
+    { "id": "dms", "type": "app-server", "label": "Lab information system (own login)" },
     { "id": "hr", "type": "app-server", "label": "HR (own login)" },
-    { "id": "db1", "type": "database", "label": "Portal users table" },
-    { "id": "db2", "type": "database", "label": "DMS users table" },
+    { "id": "db1", "type": "database", "label": "Records users table" },
+    { "id": "db2", "type": "database", "label": "Lab users table" },
     { "id": "db3", "type": "database", "label": "HR users table" }
   ],
   "edges": [
@@ -1123,15 +1131,15 @@ Logins: 20,000 users, most in one hour, maybe 2 apps each before SSO kicks in. V
 ```json
 {
   "nodes": [
-    { "id": "staff", "type": "client", "label": "Employees and contractors", "props": { "rps": 400 } },
+    { "id": "staff", "type": "client", "label": "Employees and external staff", "props": { "rps": 400 } },
     { "id": "idp", "type": "external", "label": "Identity provider (OIDC, MFA, directory)" },
     { "id": "hrsrc", "type": "app-server", "label": "HR system (source of truth for joiners and leavers)" },
     { "id": "gw", "type": "api-gateway", "label": "Gateway (token validation, JWKS cached)" },
-    { "id": "portal", "type": "app-server", "label": "Project portal", "props": { "instances": 2 } },
-    { "id": "dms", "type": "app-server", "label": "Document management", "props": { "instances": 2 } },
+    { "id": "portal", "type": "app-server", "label": "Patient records", "props": { "instances": 2 } },
+    { "id": "dms", "type": "app-server", "label": "Lab information system", "props": { "instances": 2 } },
     { "id": "hr", "type": "app-server", "label": "HR app", "props": { "instances": 2 } },
-    { "id": "pdb", "type": "database", "label": "Portal DB (project memberships, roles)" },
-    { "id": "ddb", "type": "database", "label": "DMS DB (folder ACLs)" },
+    { "id": "pdb", "type": "database", "label": "Records DB (ward and care-team memberships)" },
+    { "id": "ddb", "type": "database", "label": "Lab DB (branch and department access)" },
     { "id": "sess", "type": "cache", "label": "Session store (Redis)", "props": { "ttlSeconds": 28800 } },
     { "id": "audit", "type": "database", "label": "Central audit log" },
     { "id": "mon", "type": "monitoring", "label": "Login and denial metrics" }
@@ -1144,8 +1152,8 @@ Logins: 20,000 users, most in one hour, maybe 2 apps each before SSO kicks in. V
     { "from": "gw", "to": "hr", "kind": "sync" },
     { "from": "portal", "to": "idp", "kind": "sync", "label": "OIDC code flow, refresh every 5 min" },
     { "from": "portal", "to": "sess", "kind": "sync" },
-    { "from": "portal", "to": "pdb", "kind": "sync", "label": "who may see which project" },
-    { "from": "dms", "to": "ddb", "kind": "sync", "label": "folder permissions" },
+    { "from": "portal", "to": "pdb", "kind": "sync", "label": "who may see which patient" },
+    { "from": "dms", "to": "ddb", "kind": "sync", "label": "branch permissions" },
     { "from": "hrsrc", "to": "idp", "kind": "async", "label": "leaver disables account (SCIM)" },
     { "from": "idp", "to": "portal", "kind": "async", "label": "back-channel logout" },
     { "from": "portal", "to": "audit", "kind": "async" },
@@ -1158,8 +1166,8 @@ Logins: 20,000 users, most in one hour, maybe 2 apps each before SSO kicks in. V
 **Estimates (all are estimates).**
 
 ```text
-Users: 20,000. Assume 80 % sign in during the 09:00–10:00 peak → 16,000 IdP logins in 1 hour
-16,000 ÷ 3,600 s ≈ 4.5 logins/s average in that hour, ×4 for the 09:25–09:35 burst ≈ 18 logins/s
+Users: 20,000. Assume 80 % sign in during the 08:00–09:00 shift-change peak → 16,000 IdP logins in 1 hour
+16,000 ÷ 3,600 s ≈ 4.5 logins/s average in that hour, ×4 for the 10-minute burst just before 08:00 ≈ 18 logins/s
 Each login opens about 2 apps → 36 silent OIDC redirects/s (cheap: no password, existing IdP session)
 Active users at peak: 12,000 × 4 requests/minute ÷ 60 ≈ 800 requests/s
 Token validation: 800/s × one signature check each = trivial CPU with a cached JWKS
@@ -1169,10 +1177,10 @@ Refresh every 5 minutes: 12,000 sessions ÷ 300 s ≈ 40 refresh calls/s to the 
 **Reasoning.**
 
 - **Shared**: proving identity. One identity provider, one MFA enrolment, one password policy. Apps use OpenID Connect authorization code flow, so no app ever sees a password.
-- **Per app**: authorization. The portal keeps `project_membership(user_sub, project_id, role)`. The DMS keeps folder ACLs. Apps key their data by the IdP's stable `sub` (or object id), never by email, because emails change.
+- **Per app**: authorization. Patient records keeps `care_team_membership(user_sub, patient_id, role)`. The lab system keeps branch and department access. Apps key their data by the IdP's stable `sub` (or object id), never by email, because emails change.
 - **Offboarding in 5 minutes**: the HR system disables the leaver in the identity provider (SCIM provisioning or a scheduled sync). Apps keep server-side sessions and refresh against the IdP every 5 minutes. A disabled user's refresh fails, and the app kills the session. Back-channel logout (OIDC) makes it near-instant where the IdP supports it. The 5-minute refresh is the safety net.
 - **What breaks first**: the identity provider becomes a single point of failure for all six apps. Mitigate with a managed IdP's SLA, and let existing sessions continue (fail open for *already authenticated* sessions for a bounded time) while new logins fail during an IdP outage. That is a business decision to document.
-- **Contractors**: put them in a separate tenant, realm or group with stricter session lifetime and mandatory MFA, and expire their accounts automatically at contract end date.
+- **External staff**: put visiting consultants and agency nurses in a separate tenant, realm or group with stricter session lifetime and mandatory MFA, and expire their accounts automatically at the end of their engagement.
 - **Simpler alternative**: if the company already has Microsoft 365, use Entra ID as the IdP and the ASP.NET Core OIDC handler in each app. That is configuration work, not a platform build. Only build your own identity service if regulation or a product need forces it.
 ::mistakes
 - Centralising authorization too: a single "permissions service" that knows every app's rules becomes a bottleneck for every product change.
@@ -1187,38 +1195,39 @@ Security rules are business rules. Test them like business rules, at three level
 **1. Unit-test authorization handlers.** An `AuthorizationHandler` is a plain class. Build a `ClaimsPrincipal` and an `AuthorizationHandlerContext` by hand:
 
 ```csharp
-public class BillAuthorizationHandlerTests
+public class ReportAuthorizationHandlerTests
 {
-    private static ClaimsPrincipal Contractor(string id) =>
-        new(new ClaimsIdentity([new Claim("sub", "u-" + id), new Claim("contractor_id", id)], "test"));
+    private static ClaimsPrincipal Patient(string id) =>
+        new(new ClaimsIdentity([new Claim("sub", "u-" + id), new Claim("patient_id", id)], "test"));
 
     [Fact]
-    public async Task Contractor_cannot_view_other_contractors_bill()
+    public async Task Patient_cannot_view_another_patients_report()
     {
-        var bill = new Bill(1043, "C-9", 100m);
-        var ctx = new AuthorizationHandlerContext([BillOperations.View], Contractor("C-7"), bill);
-        await new BillAuthorizationHandler(NullLogger<BillAuthorizationHandler>.Instance).HandleAsync(ctx);
+        var report = new LabReport(1043, "P-9", "Thyroid profile");
+        var ctx = new AuthorizationHandlerContext([ReportOperations.View], Patient("P-7"), report);
+        await new ReportAuthorizationHandler(NullLogger<ReportAuthorizationHandler>.Instance).HandleAsync(ctx);
         Assert.False(ctx.HasSucceeded);
     }
 }
 ```
 
-**2. Integration-test the pipeline.** With `WebApplicationFactory<Program>` (package `Microsoft.AspNetCore.Mvc.Testing`), register a test authentication handler that turns a header like `X-Test-User: C-7` into a principal. Then assert real HTTP behaviour:
+**2. Integration-test the pipeline.** With `WebApplicationFactory<Program>` (package `Microsoft.AspNetCore.Mvc.Testing`), register a test authentication handler that turns a header like `X-Test-User: P-7` into a principal. Then assert real HTTP behaviour:
 
 - No credential → 401 with a `WWW-Authenticate` header.
-- Contractor C-7 → `GET /bills/1043` is 404, `GET /bills/1042` is 200.
-- Contractor → `POST /bills/1042/approve` is 403.
+- Patient P-7 → `GET /reports/1043` is 404, `GET /reports/1042` is 200.
+- Patient → `POST /reports/1042/sign` is 403.
+- Pathologist signing an already signed report → 409.
 
 **3. An endpoint inventory test.** Enumerate `EndpointDataSource.Endpoints` and assert that every endpoint has either `IAuthorizeData` or `IAllowAnonymous` metadata. This catches the "new endpoint, forgot the attribute" mistake in CI, before it reaches production.
 
-Edge cases worth a test each: expired cookie, tampered cookie, API key with trailing whitespace, a user whose `contractor_id` claim is missing (must be denied, not treated as "matches null"), and two schemes on one endpoint.
+Edge cases worth a test each: expired cookie, tampered cookie, API key with trailing whitespace, a user whose `patient_id` claim is missing (must be denied, not treated as "matches null"), and two schemes on one endpoint.
 
 ## Real-world application
 
 - **Banking and UPI apps** authenticate the device once (device binding plus SIM verification) and then require a UPI PIN for each payment. The PIN is a step-up authentication for a high-risk action, separate from the app login.
 - **Government portals** such as DigiLocker-style services delegate authentication to a national identity or OTP step, while each department's application authorizes what that citizen can see.
 - **SaaS products** (GitHub, Jira-style tools) use one login for many organisations. Authorization is per organisation and per repository or project, which is why GitHub answers 404 for private repositories you can't access.
-- **Infrastructure project platforms** typically mix humans (engineers, contractors, client officials) and machines (drone upload agents, ERP jobs). The machines get their own credentials and narrow permissions, never a shared human account.
+- **Hospital and lab platforms** typically mix humans (doctors, nurses, lab staff, patients) and machines (lab analysers uploading results, billing and insurance jobs). The machines get their own credentials and narrow permissions, never a shared human account.
 - **ASP.NET Core itself** separates the two cleanly: `IAuthenticationHandler` per scheme (cookies, JWT bearer, OIDC, certificates, custom) and `IAuthorizationHandler` per requirement.
 
 ## Interview questions
@@ -1239,11 +1248,11 @@ A session is a random id that points to server-side state. Checks need a lookup,
 ::q intermediate
 What is an IDOR and how do you prevent it in ASP.NET Core?
 ::a
-Insecure direct object reference: the endpoint takes an object id from the request and returns or changes that object without checking that the caller may access it. Prevent it with resource-based authorization: load the object, then call `IAuthorizationService.AuthorizeAsync(User, resource, requirement)` with a handler that checks ownership or membership. Better still, scope queries by the caller (`WHERE id = @id AND contractor_id = @callerContractor`) so the object is never loaded for the wrong user. Add integration tests that try other users' ids. Non-guessable ids (UUIDs) reduce discovery but are not access control.
+Insecure direct object reference: the endpoint takes an object id from the request and returns or changes that object without checking that the caller may access it. Prevent it with resource-based authorization: load the object, then call `IAuthorizationService.AuthorizeAsync(User, resource, requirement)` with a handler that checks ownership or membership. Better still, scope queries by the caller (`WHERE id = @id AND patient_id = @callerPatient`) so the object is never loaded for the wrong user. Add integration tests that try other users' ids. Non-guessable ids (UUIDs) reduce discovery but are not access control.
 ::q advanced
 Your gateway validates JWTs. A colleague proposes removing all authorization from the microservices behind it "because the gateway already checks". What do you say?
 ::a
-The gateway can check *authentication* and route-level scopes, but not object-level rules: it doesn't know who owns bill 1043. Removing service-side checks turns every authenticated user into a super-user for any object id. It also makes the services trust anything that reaches them, so one misconfigured network rule or a compromised internal service bypasses everything (no defence in depth). Keep the gateway for cheap early rejection, and keep fine-grained authorization in each service next to its data, with services still validating tokens (or a signed internal identity) themselves.
+The gateway can check *authentication* and route-level scopes, but not object-level rules: it doesn't know whose report 1043 is. Removing service-side checks turns every authenticated user into a super-user for any object id. It also makes the services trust anything that reaches them, so one misconfigured network rule or a compromised internal service bypasses everything (no defence in depth). Keep the gateway for cheap early rejection, and keep fine-grained authorization in each service next to its data, with services still validating tokens (or a signed internal identity) themselves.
 ::q advanced
 Design offboarding so a leaver loses access to 10 apps within 5 minutes.
 ::a
@@ -1292,17 +1301,17 @@ A mobile app sends an access token that expired 2 minutes ago. What should the A
 - [ ] 200 with an error message in the body
 > An expired credential is an authentication failure. 401 tells the client to refresh the token or log in again. 403 would wrongly tell it that retrying is pointless.
 ::q single
-A logged-in site engineer changes `/measurements/5501` to `/measurements/5502` and sees another package's data. Which control is missing?
+A logged-in patient on a pharmacy app changes `/prescriptions/5501` to `/prescriptions/5502` and sees another customer's prescription. Which control is missing?
 - [ ] Multi-factor authentication
 - [ ] HTTPS
-- [x] A resource-based authorization check on the measurement's package
+- [x] A resource-based authorization check that the prescription belongs to the caller
 - [ ] A longer session timeout
-> The engineer is correctly authenticated. The server failed to check whether this user may access *this object*, a classic IDOR.
+> The customer is correctly authenticated. The server failed to check whether this user may access *this object*, a classic IDOR.
 ::q multi
 Which are authentication mechanisms? (Select all that apply.)
 - [x] Password plus a TOTP code from an authenticator app
 - [x] A client certificate in mutual TLS
-- [ ] A policy requiring the `bills:approve` permission
+- [ ] A policy requiring the `reports:sign` permission
 - [x] An API key in a header
 > A policy is an authorization rule. The others prove who the caller is.
 ::q single
@@ -1313,19 +1322,19 @@ You must guarantee that a fired employee loses access within 60 seconds. Which d
 - [ ] Rotating the signing key once a month
 > A session lookup sees the deletion on the very next request. Self-contained 24-hour tokens stay valid until they expire unless you add a deny list.
 ::q single
-The approve endpoint takes `{"billId": 1042, "approvedBy": "u-1"}` and records `approvedBy`. What is wrong?
+The sign-off endpoint takes `{"reportId": 1042, "signedBy": "u-1"}` and records `signedBy`. What is wrong?
 - [ ] Nothing, as long as the endpoint has `[Authorize]`
-- [x] The approver identity is attacker-controlled. It must come from the authenticated principal.
+- [x] The signer identity is attacker-controlled. It must come from the authenticated principal.
 - [ ] The id should be a GUID
 - [ ] It should use PUT instead of POST
 > Anything in the body can be forged. The authenticated `HttpContext.User` is the only trustworthy source of "who did this".
 ::q single
-Your API gateway validates tokens. Where should the rule "contractors may only see their own bills" be enforced?
+Your API gateway validates tokens. Where should the rule "patients may only see their own lab reports" be enforced?
 - [ ] Only at the gateway
-- [x] In the billing service, after loading the bill (with the gateway doing coarse checks)
+- [x] In the reports service, after loading the report (with the gateway doing coarse checks)
 - [ ] In the mobile app
 - [ ] In the identity provider
-> Only the service that owns the data knows each bill's owner. The gateway can't evaluate object-level rules.
+> Only the service that owns the data knows which patient each report belongs to. The gateway can't evaluate object-level rules.
 ::q single
 A login page says "No account with that email" for unknown emails and "Wrong password" otherwise. Why is this a problem?
 - [ ] It is slower

@@ -7,7 +7,7 @@ status: reviewed
 template: hld-case
 minutes: 120
 prerequisites: [m11-capacity-estimation, m12-sagas, m12-outbox, m10-idempotency, m09-locking]
-related: [m17-payment-system, m17-food-delivery, m17-movie-booking, m16-search-architecture, m12-cache-failures, m16-cqrs]
+related: [m17-flash-sale, m17-payment-system, m17-food-delivery, m17-movie-booking, m16-search-architecture, m12-cache-failures, m16-cqrs]
 tags: [hld, case-study, catalog, search, cart, checkout, inventory, flash-sale, saga]
 patterns: [Saga]
 summary: Design an Amazon-style e-commerce backend — catalog and search, carts, a checkout saga with inventory reservations that expire, payments, the order pipeline and flash sales for a hot SKU — with capacity maths, a PostgreSQL data model and C# for reservations, checkout and a flash-sale admission gate.
@@ -324,7 +324,8 @@ The cart is a small document per customer: `[{sku, qty, addedAt, priceSeen}]`. D
 
 - **No stock reservation at add-to-cart.** People add things they never buy; reserving at that point would lock up stock for days. The cart can show "price dropped" or "only 2 left" warnings by comparing with current data.
 - **Storage**: a key-value store (Redis with persistence, DynamoDB-style table) or PostgreSQL with a JSONB column. 60 GB of carts and ~175 writes/s fit either. Anonymous carts live on the device and merge into the account cart at login.
-- **Concurrency**: two devices editing the same cart is rare; last-write-wins with a version check is enough.
+- **Concurrency**: two devices editing the same cart is rare; last-write-wins with a version check is enough. The demo below increments `Version` but does not compare it on write; a production store would do a compare-and-set (a Redis `WATCH`/transaction or `UPDATE … WHERE version = $expected` in PostgreSQL).
+- **Durability**: a cart is customer data, not a cache entry. If you keep carts in Redis behind `IDistributedCache`, give that Redis persistence (AOF) and a `noeviction` memory policy, or a memory spike will silently empty people's carts. Otherwise keep them in PostgreSQL.
 
 ```csharp file=Cart/CartStore.cs
 using System.Text.Json;
@@ -566,8 +567,12 @@ public sealed class CheckoutService(InventoryLedger inventory, IPaymentGateway p
     private readonly ConcurrentDictionary<Guid, Task<CheckoutResult>> _byCheckout = new();
 
     /// <summary>Idempotent per checkout id: concurrent or repeated calls share one result.</summary>
+    /// <remarks>
+    /// The shared saga must not run on the first caller's CancellationToken: if that client disconnected,
+    /// every retry would inherit a cancelled saga, possibly after stock was held. Each caller only stops waiting.
+    /// </remarks>
     public Task<CheckoutResult> PlaceAsync(CheckoutRequest request, CancellationToken ct) =>
-        _byCheckout.GetOrAdd(request.CheckoutId, _ => RunSagaAsync(request, ct));
+        _byCheckout.GetOrAdd(request.CheckoutId, _ => RunSagaAsync(request, CancellationToken.None)).WaitAsync(ct);
 
     private async Task<CheckoutResult> RunSagaAsync(CheckoutRequest r, CancellationToken ct)
     {
@@ -585,6 +590,7 @@ public sealed class CheckoutService(InventoryLedger inventory, IPaymentGateway p
 
         if (!inventory.Commit(orderId))                               // the hold expired while the customer was paying
         {
+            // Production first tries to re-reserve (see Failure handling); this demo goes straight to compensation.
             await payments.VoidAsync(orderId, payment.AuthorizationId!, ct);   // compensate step 3
             return new CheckoutResult(orderId, CheckoutOutcome.ReservationExpired);
         }
@@ -595,7 +601,7 @@ public sealed class CheckoutService(InventoryLedger inventory, IPaymentGateway p
 }
 ```
 
-Caching the `Task` per checkout id means a double tap that arrives while the first saga is still running waits for the same result rather than starting a second saga. Across multiple instances, the unique `checkout_id` in the order table plays the same role.
+Caching the `Task` per checkout id means a double tap that arrives while the first saga is still running waits for the same result rather than starting a second saga. The saga itself runs without the caller's cancellation token; a client that hangs up only stops waiting (`WaitAsync(ct)`). Across multiple instances, the unique `checkout_id` in the order table plays the same role, and the in-memory dictionary would need an expiry in a long-running process.
 
 ### 5. The order pipeline
 
@@ -623,6 +629,8 @@ A multi-item order may split into several **shipments** from different warehouse
 
 ### 6. Flash sales: protecting the store from one product
 
+This section is the e-commerce view of the problem; the [flash sale case study](#/lesson/m17-flash-sale) goes deeper into hot rows, Redis counters, queue fairness and bot defence.
+
 10,000 units, 100,000 requests/s at noon. If each request runs the reservation `UPDATE` on the same `inventory` row, every request queues for the same row lock; latency explodes, connection pools fill, and **normal checkout for every other product** stalls because it shares the database. The design goal is: **decide who gets a unit without touching the database for the 99 % who won't**.
 
 Layers, from the edge inward:
@@ -631,7 +639,7 @@ Layers, from the edge inward:
 2. **Bot and abuse filtering** at the edge: rate limits per IP and device, CAPTCHA or proof-of-work challenges for suspicious traffic, login required.
 3. **Waiting room / queue**: customers who tap "Buy" get a position, and the system admits them at a rate checkout can handle (say 2,000/s). This is [queue-based load levelling](#/lesson/m12-message-queues) applied to people.
 4. **Admission gate with pre-allocated tokens**: an in-memory or Redis counter initialised to 10,000. Each admission atomically decrements it (`DECR` in Redis, or a Lua script that also checks a per-customer set). When it reaches zero, every later request gets `SOLD_OUT` instantly. Admitted customers get a ticket valid for 10 minutes to complete checkout.
-5. **Checkout for admitted customers only**, using the normal saga. Inventory for the sale can be **split into buckets** (20 rows of 500 units each), with each request routed to a random bucket, so the database writes are spread across rows instead of one hot row.
+5. **Checkout for admitted customers only**, using the normal saga. Inventory for the sale can be **split into buckets** (20 rows of 500 units each), with each request routed to a random bucket, so the database writes are spread across rows instead of one hot row. When the chosen bucket is empty, try one or two others before answering "sold out", or the last few units sit stranded in buckets nobody happened to pick.
 6. **Return of unused tokens**: when a ticket expires unpaid, or payment fails, the token is returned to the counter for the next person in the queue.
 
 ```csharp file=FlashSale/FlashSaleGate.cs

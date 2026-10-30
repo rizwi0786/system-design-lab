@@ -101,7 +101,7 @@ All numbers are **estimates** for a popular public pastebin.
 - Median paste: about 2 KB. Average: about **10 KB** (a long tail of log dumps pulls the mean up). Maximum: 10 MB.
 - New content per day: 1 M × 10 KB = **10 GB/day** ≈ 3.65 TB/year before expiry and compression.
 - Expiry: assume half of pastes have an expiry of a month or less. The steady-state growth is then roughly half: about **1.8 TB/year**.
-- Text compresses well. Assume 3× with gzip or zstd (an estimate; logs often do better, minified code worse): about **0.6 TB/year** of stored bytes.
+- Text compresses well. Assume 3× with gzip or zstd (an estimate; logs often do better, minified code worse): about **0.6 TB/year** of stored bytes. Compress once at create time and store the blob with `Content-Encoding: gzip`, so the CDN and browsers can take it as is; the code sketch below stores raw bytes to stay short.
 
 ### Metadata size
 
@@ -119,6 +119,8 @@ Keys are random characters from the 62-character alphabet.
 
 - 8 characters: 62⁸ ≈ 2.18 × 10¹⁴ (218 trillion).
 - 12 characters: 62¹² ≈ 3.2 × 10²¹.
+
+**How many live pastes?** If half of the 1 M daily pastes never expire, about 500,000 a day stay: 180 M after a year, about 1 B after five or six years. We size keys for **1 B live pastes**, the conservative end.
 
 **Collisions**: with 1 B live pastes, a fresh 8-character key collides with probability 10⁹ ÷ 2.18 × 10¹⁴ ≈ **4.6 × 10⁻⁶**. That's about one retry per 217,000 creations. Insert-if-absent plus one retry handles it.
 
@@ -292,7 +294,7 @@ Why not rely on Redis-style TTLs alone? Because the content isn't in Redis, and 
 Three ways to get this wrong:
 
 - **Read, then delete** as two separate steps: two concurrent requests both read before either deletes, and the paste is seen twice.
-- **Burn on GET**: Slack, WhatsApp, Teams and email security scanners fetch links to make previews or check for malware. The bot "reads" the paste and the real recipient gets a 404.
+- **Burn on GET**: chat apps, social networks and email security scanners fetch links to make previews or check for malware. The bot "reads" the paste and the real recipient gets a 404.
 - **Cache it**: a CDN or browser cache keeps a copy of a paste that was supposed to self-destruct.
 
 The fix is the flow above: release content only on `POST /reveal`, claim with an atomic `DELETE ... RETURNING` (or `UPDATE ... SET burned = true WHERE burned = false RETURNING`), and send `Cache-Control: no-store`. If you need an audit trail, use the `UPDATE` form and keep a tombstone row.
@@ -647,7 +649,7 @@ Metadata stays uncached at 600 reads/s, because PostgreSQL handles that easily a
 | Failure | Effect | Mitigation |
 |---|---|---|
 | Object storage slow or down | Reads of uncached content fail, creates fail | Serve cached content; return `503` with `Retry-After` for creates; timeouts of a few seconds so threads aren't held |
-| Metadata database primary down | Creates and deletes fail; reads continue from a replica | Automatic failover; reads tolerate slightly stale metadata. Deletion during failover is retried by the client |
+| Metadata database primary down | Creates and deletes fail; reads continue from a replica | Automatic failover; reads tolerate slightly stale metadata. Deletion during failover is retried by the client. Burn-after-read reveals and owner deletes always go to the primary: a replica can't run the atomic `DELETE ... RETURNING`, and a lagging replica may still show a just-deleted paste |
 | Blob uploaded, row insert fails | Orphan blob | Harmless and invisible; lifecycle rule removes it. Optionally an orphan sweeper lists blobs without rows |
 | Row exists, blob missing (bug, manual deletion) | Read finds metadata but no content | Return `404`, log at error level, alert if it's frequent |
 | Sweeper crashes or is disabled | Expired data stays stored, but is never served | Lazy read check protects users; lifecycle rules bound storage; alert on "oldest expired row age" |
@@ -713,6 +715,7 @@ For an internal pastebin used by 300 engineers, put everything in one PostgreSQL
 | Dedupe | None | Content-addressed storage by SHA-256 | Many identical pastes (bots, templates). Adds reference counting and complicates deletion and burn-after-read |
 | Large uploads | JSON body (≤ 10 MB) | Presigned direct upload | Large average sizes or many concurrent big uploads |
 | Rendering | Client-side highlighting | Server-side rendering to HTML | SEO for public pastes, at the cost of CPU and a bigger XSS surface |
+| Confidentiality | Server can read content | Client-side encryption: the browser encrypts with a random key placed in the URL fragment (`#key`), which browsers never send to the server | Sensitive unlisted or burn-after-read pastes. The server stores only ciphertext, so scanning, moderation and server-side search no longer work, and a lost link means lost data |
 
 ## Practical playground
 

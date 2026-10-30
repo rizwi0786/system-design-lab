@@ -100,7 +100,7 @@ Three requirements follow:
 
 1. **Deterministic total order.** Every sort must end with a unique column (the primary key is the usual tie-breaker). Without it, rows with equal `created_at` may straddle a page boundary and be skipped or repeated.
 2. **The sort key must be stable** for the rows being paged. Paging by `updated_at` or by a score that changes breaks, because a row can move from "after the bookmark" to "before" it between requests. Immutable columns (`created_at`, `id`, an invoice number) are safe.
-3. **Matching index.** The index column order must match the `ORDER BY` (and leading equality filters such as `wallet_id` come first). Mixed directions (`created_at DESC, id ASC`) need the index to declare the same directions, or PostgreSQL cannot use it for both the seek and the order.
+3. **Matching index.** The index column order must match the `ORDER BY` (and leading equality filters such as `wallet_id` come first). An all-ascending index `(wallet_id, created_at, id)` also works for an all-descending sort, because PostgreSQL can scan a B-tree backwards. Mixed directions (`created_at DESC, id ASC`) need the index to declare the same mix (or its exact mirror), or PostgreSQL cannot use it for both the seek and the order.
 
 ### What you lose with keyset
 
@@ -226,7 +226,7 @@ Clients should not see or construct `(created_at, id)`. The API encodes them. Ps
 ### Step 5 — the EF Core version
 
 ```csharp
-// Keyset with EF Core. Npgsql translates the tuple comparison to a row-value comparison.
+// Keyset with EF Core, written as the portable OR expansion of the row-value comparison.
 var rows = await db.Payments
     .Where(p => p.WalletId == walletId)
     .Where(p => after == null
@@ -238,7 +238,7 @@ var rows = await db.Payments
     .ToListAsync(ct);
 ```
 
-The expanded `OR` form is what row-value comparison means; PostgreSQL's planner handles both, but the `(a, b) < (x, y)` form is guaranteed to use the composite index in one seek, so when you write raw SQL prefer it. In EF Core 10 you can also write `EF.Functions.LessThan(ValueTuple.Create(p.CreatedAt, p.Id), ValueTuple.Create(after.CreatedAt, after.Id))` with the Npgsql provider to get the row-value form directly.
+The expanded `OR` form is what row-value comparison means and returns the same rows, but PostgreSQL does not turn an `OR` into a single index range: it typically uses the index for `wallet_id` only and filters the rest, or builds a `BitmapOr` and then has to sort. The `(a, b) < (x, y)` form becomes one `Index Cond` and a single seek, so prefer it. With the Npgsql EF Core provider you get it directly from `EF.Functions.LessThan(ValueTuple.Create(p.CreatedAt, p.Id), ValueTuple.Create(after.CreatedAt, after.Id))`; check the generated SQL with `ToQueryString()` once. Keep `AsNoTracking()` on read-only feeds: tracking thousands of entities you will never save costs memory and CPU.
 
 ## Production-style C# implementation
 
@@ -419,7 +419,7 @@ Keyset paging by `updated_at` is a common mistake. A row updated between two req
 
 ## Bad design vs good design
 
-**Bad**: `GET /payments?page=3&pageSize=50` with `ORDER BY created_at DESC LIMIT 50 OFFSET 100`, no tie-breaker, and a `SELECT count(*)` on every request for the "page 3 of 2,418" label. On a wallet with 2 million payments the 40,000th page walks 2 million rows; the count walks 2 million rows on *every* page; and two payments settled in the same second swap places between requests, so the client occasionally shows one twice and misses the other.
+**Bad**: `GET /payments?page=3&pageSize=50` with `ORDER BY created_at DESC LIMIT 50 OFFSET 100`, no tie-breaker, and a `SELECT count(*)` on every request for the "page 3 of 40,000" label. On a wallet with 2 million payments the 40,000th page walks 2 million rows; the count walks 2 million rows on *every* page; and two payments settled in the same second swap places between requests, so the client occasionally shows one twice and misses the other.
 
 **Good**: `GET /wallets/7/payments?size=50&cursor=AQ...` with `(created_at, id) < ($2,$3) ORDER BY created_at DESC, id DESC LIMIT 51`, an index on `(wallet_id, created_at DESC, id DESC)`, `nextCursor` derived from the last row, no count. Constant cost per page, no skips, no repeats.
 
@@ -949,11 +949,11 @@ public async Task Keyset_pages_cover_every_row_once_under_concurrent_inserts()
 {
     // Arrange: 1,000 payments for wallet 7 with deliberate created_at ties.
     // Act: walk pages of 50 while a background task inserts 20 newer payments.
-    // Assert: the set of ids seen equals the 1,000 original ids; no duplicates; the walk made 21 statements.
+    // Assert: the set of ids seen equals the 1,000 original ids; no duplicates; the walk made 20 statements.
 }
 ```
 
-The assertion on statement count (`21` = 1,000 ÷ 50 + 1) also guards against accidentally re-introducing a `COUNT(*)` per page.
+The assertion on statement count (`20` = 1,000 ÷ 50: the 20th call asks for 51 rows, gets 50 and so knows it is the last page, with no extra empty call) also guards against accidentally re-introducing a `COUNT(*)` per page.
 
 **A plan test** worth having on the hot endpoint: run `EXPLAIN (FORMAT JSON)` on the keyset query in CI against a seeded database and assert the top node is an `Index Scan` on `payments_wallet_created_id` with no `Sort` node. This catches a future migration that drops or reorders the index.
 
@@ -964,7 +964,7 @@ Edge cases: a cursor pointing at a row that has since been deleted (keyset handl
 - **Payment and banking apps** show history as an infinite scroll over tens of millions of rows per large customer. Keyset on `(created_at, id)` with an opaque cursor is the standard shape; some add a signed cursor so the position cannot be tampered with.
 - **Public APIs** such as those of large SaaS products expose `next` links or `cursor` fields rather than page numbers for exactly these reasons: deep offsets cost them CPU and give customers inconsistent exports. Several document that page-number parameters are capped at a depth such as 10,000 rows.
 - **Search engines** often cap offset depth (Elasticsearch's `index.max_result_window` defaults to 10,000) and offer `search_after`, a keyset mechanism, for deeper walks.
-- **Infrastructure programme platforms** that sync inspection records or progress entries to a head-office warehouse nightly use a change sequence, not a timestamp, as the sync cursor; a missed row in a progress report is a contractual dispute, not a UI glitch.
+- **Food-delivery and marketplace platforms** that sync orders to a data warehouse or to a restaurant's accounting system use a change sequence, not a timestamp, as the sync cursor; a missed order in a settlement report means a restaurant is not paid, not a UI glitch.
 - **Admin back-offices** keep offset paging deliberately: sortable columns and "go to page" matter more than the cost on a small, filtered result set.
 
 ## Interview questions

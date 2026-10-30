@@ -621,6 +621,8 @@ var app = builder.Build();
 // POST the raw Mermaid text (text/plain). Returns findings that a PR bot can post as review comments.
 app.MapPost("/diagrams/review", async (HttpRequest request, DiagramLinter linter) =>
 {
+    // Reject oversized bodies before reading them; the length check after reading covers chunked uploads.
+    if (request.ContentLength > 200_000) return Results.Problem("Diagram too large.", statusCode: StatusCodes.Status413PayloadTooLarge);
     using var reader = new StreamReader(request.Body);
     var text = await reader.ReadToEndAsync();
     if (text.Length > 200_000) return Results.Problem("Diagram too large.", statusCode: StatusCodes.Status413PayloadTooLarge);
@@ -906,7 +908,7 @@ Write a parser for a single Mermaid flowchart line that contains one link.
   - `api --> db`
   - `api -->|"Reads and writes<br/>[SQL]"| db` (quoted label, returned without quotes)
   - `hub -.->|telemetry| ingest` (unquoted label)
-  - `app["Field app"]:::container ==> db[("Progress DB")]` (shapes and classes on either side)
+  - `app["Mobile app"]:::container ==> db[("Orders DB")]` (shapes and classes on either side)
   - `a --- b;` (optional trailing semicolon)
 - Arrows: `-->`, `-.->`, `==>`, `---`. Ids start with a letter or underscore, then letters, digits or underscores.
 - Shapes: `[...]`, `(...)`, `{...}`, `([...])`, `[(...)]`, `[[...]]`, `{{...}}`, each containing either a quoted label or text without brackets or quotes. An optional `:::class` may follow.
@@ -972,7 +974,7 @@ public class LinkParserTests
     [Fact]
     public void Shapes_and_classes_on_both_sides() =>
         Assert.Equal(new ParsedLink("app", "db", null, "==>"),
-            Parse("app[\"Field app [MAUI]\"]:::container ==> db[(\"Progress DB\")]"));
+            Parse("app[\"Mobile app [MAUI]\"]:::container ==> db[(\"Orders DB\")]"));
 
     [Fact]
     public void Stadium_subroutine_and_hexagon_shapes()
@@ -1379,7 +1381,7 @@ What you can't automate: whether the diagram suits its audience, whether its cla
 ## Real-world application
 
 - **Pull request reviews.** Teams that keep diagrams in the repository review them like code: the PR template asks "does this change a container or an arrow?", and reviewers use the checklist.
-- **Vendor and tender evaluation.** Government and infrastructure clients routinely receive architecture diagrams in bids. Reading them with the five passes quickly separates a vendor who has thought about integrations and failure from one who has drawn boxes.
+- **Vendor evaluation.** Banks, hospital chains and government departments routinely receive architecture diagrams in vendor proposals (answers to a request for proposal). Reading them with the five passes quickly separates a vendor who has thought about integrations and failure from one who has drawn boxes.
 - **Security and privacy reviews.** Reviewers read the container view's boundary-crossing arrows and data stores first. A legend that distinguishes "ours" from "theirs" and a label on every arrow save a meeting.
 - **Incident postmortems.** A dynamic view of the failing flow, with the same names as the container view, makes the timeline understandable to people who weren't on call.
 - **Interviews.** Interviewers notice when a candidate labels arrows, states sync versus async, and keeps one level of detail. It signals clear thinking.

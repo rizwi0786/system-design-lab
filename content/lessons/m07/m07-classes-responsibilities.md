@@ -591,7 +591,7 @@ app.Run();
 Design notes:
 
 - **`Loan`'s constructor is `internal`.** Outside the domain assembly, the only way to get a loan is `member.Borrow(...)`. That is the Creator principle enforced by the compiler, not by a code-review comment.
-- **`TimeProvider` is injected** into the service, and the domain methods take `DateOnly today` as a parameter. The domain never reads the clock, so tests can pass any date.
+- **`TimeProvider` is injected** into the service, and the domain methods take `DateOnly today` as a parameter. The domain never reads the clock, so tests can pass any date. One production caveat: `GetLocalNow()` uses the *server's* time zone, and cloud servers usually run in UTC. A library in Pune should convert to its own zone (`TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")`), or a book returned at 1 a.m. IST is counted as returned the previous day.
 - **The endpoint maps exceptions to status codes.** That is a UI concern. The domain throws a meaningful `LendingException`, and it does not know HTTP exists. A later lesson ([Error handling and domain exceptions](#/lesson/m07-domain-exceptions)) compares this with returning a `Result` type.
 - **`LendingService` is scoped.** In a real app it would share a scoped `DbContext` with the repositories so `Save` calls commit in one transaction.
 
@@ -1130,7 +1130,7 @@ Add `Renew(BookCopy copy, DateOnly today)`: extends the due date by `LoanDays` o
 :::exercise id=m07-classes-responsibilities-ex4 difficulty=intermediate kind=design title="CRC cards for employee leave management"
 Requirement:
 
-> An **employee** at a construction consultancy in Gurgaon applies for **leave** (casual, sick or earned) for a date range. Casual leave allows 12 days a year, sick 10, earned 18. The employee's **reporting manager** approves or rejects. Approved leave reduces the **balance**. Weekends and **public holidays** in the employee's office **location** do not count as leave days. HR can see a **calendar** of who is on leave.
+> An **employee** at a fintech company in Gurgaon applies for **leave** (casual, sick or earned) for a date range. Casual leave allows 12 days a year, sick 10, earned 18. The employee's **reporting manager** approves or rejects. Approved leave reduces the **balance**. Weekends and **public holidays** in the employee's office **location** do not count as leave days. HR can see a **calendar** of who is on leave.
 
 Write CRC cards for the main classes, role-play "Neha applies for 3 days of casual leave from Thursday to Monday", and turn the cards into a class model.
 ::acceptance
@@ -1574,9 +1574,10 @@ Edge cases worth covering: borrowing on the exact due date of another loan (not 
 
 ## Real-world application
 
-- **ASP.NET Core** itself follows the Controller principle at the framework level: an MVC controller or minimal-API handler receives the HTTP request and should delegate to an application-layer class. Microsoft's eShop reference architecture describes exactly this split between a thin API layer, an application layer and a domain model layer.
+- **ASP.NET Core** itself follows the Controller principle at the framework level: an MVC controller or minimal-API handler receives the HTTP request and should delegate to an application-layer class. Microsoft's .NET microservices architecture guide (the eShopOnContainers e-book) describes exactly this split
+ between a thin API layer, an application layer and a domain model layer.
 - **Banking systems** keep "can this account be debited?" on an `Account` object that knows its balance, overdraft limit and freeze status, rather than in each payment channel (UPI, NEFT, card). One rule, many callers.
-- **Infrastructure project platforms** that track contracts and measurement books benefit from the same idea: a `MeasurementEntry` knows how to compute its own amount from quantity and rate, so the monthly progress report, the bill and the dashboard all agree.
+- **Food-delivery apps** benefit from the same idea: an `Order` knows how to compute its own total from its items, delivery fee, packaging charge and coupon, so the checkout page, the GST invoice and the refund flow all agree on the amount.
 - **Interviews.** LLD interviews (parking lot, library, elevator, splitwise) are mostly a test of this lesson. Interviewers listen for: did you find the right nouns, did you reject the wrong ones, and can you justify where each method lives.
 
 ## Interview questions

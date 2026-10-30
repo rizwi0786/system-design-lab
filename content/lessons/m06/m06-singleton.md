@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 70
 prerequisites: [m01-classes-objects, m03-dependency-injection, m03-service-lifetimes, m04-testability]
-related: [m06-intro-patterns, m06-factory-method, m06-dependency-injection-pattern, m06-flyweight, m06-object-pool, m04-di-vs-service-locator]
+related: [m06-intro-patterns, m06-factory-method, m06-dependency-injection-pattern, m04-di-vs-service-locator]
 tags: [creational, gof, thread-safety, lifetimes, payments, pricing]
 patterns: [Singleton]
 summary: Make sure only one instance of a class exists and everyone shares it. Learn the classic C# versions, why they hurt testing, and why a DI singleton lifetime is the modern answer, including the captive-dependency trap.
@@ -1415,7 +1415,7 @@ Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
 - **Shared immutable instances in the BCL**: `Array.Empty<T>()`, `EventArgs.Empty`, `StringComparer.Ordinal`, `Comparer<T>.Default`. These are static and fine, because they're immutable and have no dependencies.
 - **Connection managers**: a Redis connection multiplexer is designed to be created once and shared for the life of the app; data-source objects in database drivers manage a connection pool the same way. Both are typically registered as DI singletons.
 - **Payment and SaaS integrations**: OAuth client-credential tokens are cached per process exactly as in this lesson, with early refresh and single-flight.
-- **Infrastructure project platforms** often load slow-changing master data (states, districts, rate schedules, contract types) into an immutable singleton at startup, and reload it on a timer or when configuration changes via `IOptionsMonitor`.
+- **E-commerce, logistics and government-service platforms** often load slow-changing master data (states, districts, PIN codes, GST rate schedules) into an immutable singleton at startup, and reload it on a timer or when configuration changes via `IOptionsMonitor`.
 
 ## Interview questions
 

@@ -7,10 +7,10 @@ status: reviewed
 template: lld-case
 minutes: 90
 prerequisites: [m06-composite, m07-encapsulation-invariants, m07-domain-exceptions, m14-rbac-pbac]
-related: [m06-iterator, m06-visitor, m11-object-storage, m17-file-storage, m06-facade]
+related: [m11-object-storage, m17-file-storage, m06-facade]
 tags: [lld, composite, paths, permissions, acl, concurrency]
-patterns: [Composite, Facade, Strategy, Iterator]
-summary: Design an in-memory virtual file system for a project document vault — a Composite tree of files and folders, a safe path value object, inherited ACL permissions with deny-wins, check-out locks, and content stored in a blob store without holding locks across I/O.
+patterns: [Composite, Facade, Strategy]
+summary: Design an in-memory virtual file system for a hospital document vault — a Composite tree of files and folders, a safe path value object, inherited ACL permissions with deny-wins, check-out locks, and content stored in a blob store without holding locks across I/O.
 references:
   - title: Refactoring.Guru — Composite
     url: https://refactoring.guru/design-patterns/composite
@@ -22,7 +22,7 @@ references:
     url: https://learn.microsoft.com/windows/win32/secauthz/access-control-lists
 ---
 
-"Design a file system" is a classic interview question because it packs several design ideas into one familiar thing: a tree where folders and files are treated alike, paths that must be parsed safely, permissions that flow down the tree, and operations such as move and delete that touch many nodes at once. In this case study we build a virtual file system for a document portal, the kind that holds drawings, contracts and progress reports for construction projects.
+"Design a file system" is a classic interview question because it packs several design ideas into one familiar thing: a tree where folders and files are treated alike, paths that must be parsed safely, permissions that flow down the tree, and operations such as move and delete that touch many nodes at once. In this case study we build a virtual file system for a hospital document vault, the kind that holds scan images, lab reports and billing records for every department of a clinic chain.
 
 ## Learning objectives
 
@@ -45,7 +45,7 @@ By the end of this case study you will be able to:
 
 ## Explain it like I'm a beginner
 
-Think of a steel almirah in a site office. It has shelves, each shelf has box files, each box file has folders, and folders hold sheets of paper. Some folders hold more folders.
+Think of a steel almirah in a hospital's medical records room. It has shelves, each shelf has box files, each box file has folders, and folders hold sheets of paper. Some folders hold more folders.
 
 Two questions show the key idea:
 
@@ -54,15 +54,15 @@ Two questions show the key idea:
 
 You ask both questions in the same words, and you do not care whether you are holding a sheet or a folder. That is the **Composite** pattern: a *part* and a *whole made of parts* share one interface, so code can treat them alike.
 
-A **path** is directions to a sheet: "almirah → shelf 2 → NH-48 box → drawings → bridge-pier.dwg", written as `/nh-48/drawings/bridge-pier.dwg`. Paths can be tricky: `/nh-48/./drawings/../drawings//bridge-pier.dwg` points to the same sheet, and `/nh-48/../../secret` tries to climb out of the almirah altogether.
+A **path** is directions to a sheet: "almirah → shelf 2 → Cardiology box → scans → echo-0412.dcm", written as `/cardiology/scans/echo-0412.dcm`. Paths can be tricky: `/cardiology/./scans/../scans//echo-0412.dcm` points to the same sheet, and `/cardiology/../../secret` tries to climb out of the almirah altogether.
 
-**Permissions** are the lock and key. If the site engineers' group can read the `NH-48` box, they can normally read everything inside it, because permissions are *inherited* by what is inside. But the "Contracts" folder inside might say "site engineers: no", and that "no" should win.
+**Permissions** are the lock and key. If the nurses' group can read the `Cardiology` box, they can normally read everything inside it, because permissions are *inherited* by what is inside. But the "Billing" folder inside might say "nurses: no", and that "no" should win.
 
 ## Requirements
 
 ### The scenario
 
-Your company runs a project document portal for highway and bridge projects. Each project has a few thousand files (drawings, monthly progress reports, test certificates). Users today keep files on a shared drive and email them around. The new portal needs a virtual file system: the *tree* and its rules live in the application; the file *bytes* live in object storage (Azure Blob Storage or S3). This lesson designs the tree.
+CityCare runs a chain of clinics in Pune and Bengaluru. Each department (cardiology, radiology, pharmacy, HR) has a few thousand files: scan images, lab reports, discharge summaries, duty rosters and policies. Users today keep files on a shared drive and email them around. The new portal needs a virtual file system: the *tree* and its rules live in the application; the file *bytes* live in object storage (Azure Blob Storage or S3). This lesson designs the tree.
 
 ### Functional requirements
 
@@ -73,9 +73,9 @@ Your company runs a project document portal for highway and bridge projects. Eac
 | F3 | Delete a file or an empty folder; delete a non-empty folder only when `recursive` is requested. |
 | F4 | Move or rename a file or folder. A folder cannot be moved into itself or its own descendant. |
 | F5 | Folder size is the total size of everything inside it. |
-| F6 | Permissions per node: Read, Write, Delete, Share (manage permissions), granted to users or groups. Inherited from parent folders unless inheritance is turned off. A Deny entry beats any Allow. The owner of a node, or of any folder above it, always has full access (so the root owner is the vault administrator and a project folder's owner administers that project). |
-| F7 | **Check-out lock**: an engineer can check out a drawing; while checked out, only that engineer can overwrite it, and nobody can delete or move it. |
-| F8 | Find files below a folder by a predicate (for example, every `.dwg` larger than 5 MB). |
+| F6 | Permissions per node: Read, Write, Delete, Share (manage permissions), granted to users or groups. Inherited from parent folders unless inheritance is turned off. A Deny entry beats any Allow. The owner of a node, or of any folder above it, always has full access (so the root owner is the vault administrator and a department folder's owner administers that department). |
+| F7 | **Check-out lock**: a doctor can check out a document (a discharge summary being written, a scan being annotated); while checked out, only that doctor can overwrite it, and nobody can delete or move it. |
+| F8 | Find files below a folder by a predicate (for example, every `.dcm` scan image larger than 5 MB). |
 
 ### Non-functional requirements
 
@@ -84,7 +84,7 @@ Your company runs a project document portal for highway and bridge projects. Eac
 | N1 | Safety | No path can escape the root (`..` above root is rejected), and names with control or reserved characters are rejected. |
 | N2 | Consistency | A recursive delete or a move is all-or-nothing: either every node is affected or none is. |
 | N3 | Concurrency | Many users read and write at once; the tree is never left half-updated. Locks are never held while uploading or downloading bytes. |
-| N4 | Scale (per project) | Up to about 50,000 nodes and 20 levels deep per project tree (an estimate from typical projects). Listing a folder of 2,000 files must feel instant. |
+| N4 | Scale (per department) | Up to about 50,000 nodes and 20 levels deep per department tree (an estimate for a mid-sized hospital). Listing a folder of 2,000 files must feel instant. |
 | N5 | Auditability | Every node records owner, created and modified times, and a version number that increases on each write. |
 | N6 | Testability | Time comes from an injected `TimeProvider`; storage from an `IBlobStore` interface. |
 
@@ -94,7 +94,7 @@ Your company runs a project document portal for highway and bridge projects. Eac
 - **Hard links or shortcuts?** Not in phase 1. Shortcuts create cycles and permission puzzles (Exercise 4).
 - **Versions?** We keep a version counter and the latest content only. Full version history is a likely phase-2 feature, which is why content is stored in a content-addressed blob store (old versions can be kept by keeping old keys).
 - **What does "deny wins" mean across levels?** We choose the simple, safe rule: any applicable Deny, at any level, removes that permission. Windows uses a subtler rule (explicit entries on the child beat inherited ones). Exercise 3 implements that variant.
-- **Can you list a folder whose children you cannot read?** We show only the children the user can read. Showing names of files you cannot open leaks information ("Termination-Notice-Contractor-X.pdf").
+- **Can you list a folder whose children you cannot read?** We show only the children the user can read. Showing names of files you cannot open leaks information ("Disciplinary-Inquiry-Dr-Mehta.pdf").
 - **Is the tree in memory or in the database?** For this lesson, in memory, guarded by a lock, with persistence behind it. The "Alternative designs" section discusses a PostgreSQL-backed tree.
 
 ## Identifying classes and responsibilities
@@ -198,7 +198,7 @@ How to read it: `FsNode` is the Component. `FileNode` (Leaf) and `DirectoryNode`
 
 ```mermaid
 sequenceDiagram
-    participant API as PUT /files/nh-48/drawings/pier.dwg
+    participant API as PUT /files/cardiology/scans/echo-0412.dcm
     participant VFS as VirtualFileSystem
     participant P as AclPermissionEvaluator
     participant B as IBlobStore
@@ -215,7 +215,11 @@ sequenceDiagram
     VFS-->>API: NodeInfo (version 3, 4.2 MB)
 ```
 
-The upload of a 40 MB drawing might take seconds. If we held the tree lock during upload, every other user's listing would freeze. So we check permissions first (fail fast), release the lock, upload, then lock again and **check again**, because in the meantime someone might have deleted the folder, checked out the file, or revoked our permission. This "check, release, do slow work, re-check, commit" shape appears in many systems. The cost: if the second check fails, the uploaded blob is orphaned. A background job deletes blobs no node refers to (garbage collection), which is simple because keys are content hashes.
+The upload of a 40 MB MRI scan might take seconds. If we held the tree lock during upload, every other user's listing would freeze. So we check permissions first (fail fast), release the lock, upload, then lock again and **check again**, because in the meantime someone might have deleted the folder, checked out the file, or revoked our permission. This "check, release, do slow work, re-check, commit" shape appears in many systems. The cost: if the second check fails, the uploaded blob is orphaned. A background job deletes blobs no node refers to (garbage collection), which is simple because keys are content hashes.
+
+The garbage collector has its own check-then-act race. Between step 2 (blob uploaded) and step 3 (node committed), the new blob is referenced by nobody, so a collector that runs at that moment sees an orphan and deletes it, and the commit then points at a missing blob. Content addressing makes it worse: a blob that an old, deleted file used can be "re-used" by a new upload of the same bytes just as the collector removes it. The usual fix is a **grace period**: only collect blobs that have been unreferenced for longer than any upload can take (say 24 hours), judged by the blob's last-written time, which the upload refreshes.
+
+Two writers on the same file is the other race. Both pass the first check, both upload, and the second commit silently overwrites the first ("last writer wins"). Check-out locks prevent it for people who use them. For everyone else, offer optimistic concurrency: the client sends the `Version` it last saw (an HTTP `If-Match` header carrying the version as an ETag), and the commit under the lock refuses with `412 Precondition Failed` if the version has moved on.
 
 ## Patterns and design decisions
 
@@ -251,6 +255,8 @@ All tree reads and writes take one `Lock`. That sounds coarse, but each operatio
 
 Recursive delete first *checks* every descendant (permission and check-out state) and only then *detaches* the subtree. Because both happen under the same lock, nobody sees a half-deleted folder. Move checks everything, then performs one detach and one attach.
 
+A senior reviewer will ask one more question about move: **what happens to permissions?** Inherited ACLs come from the parent chain, so moving `/cardiology/billing` under `/shared` silently drops the cardiology deny entries and adds whatever `/shared` grants. A move can therefore expose files to people who could not see them a minute ago. Our facade demands Write on both parents and Delete on the node; a stricter product also requires Share on the moved node when the effective ACL would change, or copies the inherited entries onto the node as explicit ones ("keep current permissions"), which is what several document systems offer as a choice in the move dialog.
+
 ## State transitions
 
 A file goes through this lifecycle:
@@ -271,7 +277,7 @@ stateDiagram-v2
     end note
 ```
 
-How to read it: a file is born *Available* at version 1. Each write bumps the version but keeps it Available. *CheckedOut* is an exclusive edit lock: only the holder can write, and the file cannot be deleted or moved, so a drawing cannot vanish while someone spends two hours editing it. The holder checks it in; if they go on leave, someone with Share permission can force a check-in. *Deleted* is terminal in this design: the node is detached from the tree. A recycle bin would add a *Trashed* state with "restore" and "purge" transitions, which is an extension task. Notice that a folder containing a checked-out file also cannot be deleted recursively: the check-out state blocks the whole operation.
+How to read it: a file is born *Available* at version 1. Each write bumps the version but keeps it Available. *CheckedOut* is an exclusive edit lock: only the holder can write, and the file cannot be deleted or moved, so a discharge summary cannot vanish while a doctor spends twenty minutes writing it. The holder checks it in; if they go on leave, someone with Share permission can force a check-in. *Deleted* is terminal in this design: the node is detached from the tree. A recycle bin would add a *Trashed* state with "restore" and "purge" transitions, which is an extension task. Notice that a folder containing a checked-out file also cannot be deleted recursively: the check-out state blocks the whole operation.
 
 ## C# implementation
 
@@ -414,7 +420,7 @@ public enum Permission
     All = Read | Write | Delete | Share,
 }
 
-/// <summary>Principal is a user id ("asha"), a group ("group:site-engineers") or "everyone".</summary>
+/// <summary>Principal is a user id ("asha"), a group ("group:nurses") or "everyone".</summary>
 public sealed record AclEntry(string Principal, Permission Allow, Permission Deny = Permission.None);
 
 public sealed record UserContext(string UserId, IReadOnlySet<string> Groups)
@@ -840,21 +846,24 @@ public sealed class VirtualFileSystem
         }
     }
 
-    /// <summary>Snapshot of matching readable files below a folder. Returns a list so no lock escapes.</summary>
+    /// <summary>
+    /// Matching readable files below a folder. The snapshot is taken under the lock; the caller's predicate
+    /// runs after it is released, because we never run unknown code while holding the tree lock.
+    /// </summary>
     public IReadOnlyList<NodeInfo> Find(FsPath folder, Func<NodeInfo, bool> predicate, UserContext user, int limit = 500)
     {
+        List<NodeInfo> readable;
         lock (_gate)
         {
             var dir = ResolveDirectory(folder);
             Demand(dir, Permission.Read, user);
-            return dir.Descendants()
+            readable = dir.Descendants()
                 .OfType<FileNode>()
                 .Where(f => Has(f, Permission.Read, user))
                 .Select(NodeInfo.From)
-                .Where(predicate)
-                .Take(limit)
                 .ToList();
         }
+        return readable.Where(predicate).Take(limit).ToList();
     }
 
     // ---------- Helpers (all called with _gate held) ----------
@@ -929,6 +938,7 @@ Things worth noticing:
 - **Move = rename.** Renaming `/a/x` to `/a/y` is a move within the same folder. One code path, one set of tests.
 - **Delete marks files deleted** before detaching, so a reference that was taken earlier (for example an in-flight `NodeInfo`) can be recognised as stale. The blob itself is left for the garbage collector, which also enables a future recycle bin.
 - **`Find` returns a list, not a lazy `IEnumerable`.** A lazy sequence would be enumerated *after* the lock is released, reading the tree while another thread mutates it. This is a subtle bug that compiles happily.
+- **`Find` runs the caller's predicate outside the lock.** The predicate is code we don't control: a slow regex or a call to a database inside it would freeze every user of the vault. So the lock covers only the snapshot of `NodeInfo` records (immutable, safe to filter anywhere). The cost is a list of every readable file under the folder, a few MB at our 50,000-node ceiling; if that grows, page through the tree in chunks instead.
 
 ### HTTP adapter and composition root
 
@@ -1019,7 +1029,7 @@ app.Run();
 public sealed record MoveRequest(string From, string To);
 ```
 
-Reading the whole request body into memory is fine for a demo and for small files. For 100 MB drawings, stream straight to blob storage (or hand the client a pre-signed upload URL) and only then call the facade with the key and length; see [Object storage](#/lesson/m11-object-storage).
+Reading the whole request body into memory is fine for a demo and for small files. For a 100 MB scan series, stream straight to blob storage (or hand the client a pre-signed upload URL) and only then call the facade with the key and length; see [Object storage](#/lesson/m11-object-storage).
 
 ## Automated testing
 
@@ -1040,8 +1050,8 @@ public sealed class FixedClock : TimeProvider
 public static class Fs
 {
     public static readonly UserContext Admin = UserContext.Of("admin");
-    public static readonly UserContext Asha = UserContext.Of("asha", "group:site-engineers");
-    public static readonly UserContext Ravi = UserContext.Of("ravi", "group:site-engineers");
+    public static readonly UserContext Asha = UserContext.Of("asha", "group:nurses");
+    public static readonly UserContext Ravi = UserContext.Of("ravi", "group:nurses");
 
     public static VirtualFileSystem New(out FixedClock clock)
     {
@@ -1065,14 +1075,14 @@ namespace DocVault.Tests;
 public class FsPathTests
 {
     [Theory]
-    [InlineData("/nh-48/./drawings//pier.dwg", "/nh-48/drawings/pier.dwg")]
-    [InlineData("/nh-48/drawings/../reports/", "/nh-48/reports")]
+    [InlineData("/cardiology/./scans//echo-0412.dcm", "/cardiology/scans/echo-0412.dcm")]
+    [InlineData("/cardiology/scans/../reports/", "/cardiology/reports")]
     [InlineData("/", "/")]
     public void Normalises(string input, string expected) => Assert.Equal(expected, FsPath.Parse(input).ToString());
 
     [Theory]
     [InlineData("relative/path")]
-    [InlineData("/nh-48/../../etc/passwd")]
+    [InlineData("/cardiology/../../etc/passwd")]
     [InlineData("/bad:name")]
     [InlineData("/trailing.")]
     public void Rejects_unsafe_paths(string input) => Assert.Throws<InvalidPathException>(() => FsPath.Parse(input));
@@ -1080,8 +1090,8 @@ public class FsPathTests
     [Fact]
     public void Compares_case_insensitively_but_preserves_case()
     {
-        Assert.Equal(FsPath.Parse("/NH-48/Report.PDF"), FsPath.Parse("/nh-48/report.pdf"));
-        Assert.Equal("/NH-48/Report.PDF", FsPath.Parse("/NH-48/Report.PDF").ToString());
+        Assert.Equal(FsPath.Parse("/Cardiology/Report.PDF"), FsPath.Parse("/cardiology/report.pdf"));
+        Assert.Equal("/Cardiology/Report.PDF", FsPath.Parse("/Cardiology/Report.PDF").ToString());
     }
 
     [Fact]
@@ -1109,12 +1119,12 @@ public class VirtualFileSystemTests
     {
         var fs = New(out _);
         // Writing never creates parent folders implicitly.
-        await Assert.ThrowsAsync<PathNotFoundException>(() => fs.WriteFileAsync(P("/nh-48/drawings/pier.dwg"), Bytes(4000), Admin));
-        fs.CreateDirectory(P("/nh-48/drawings"), Admin, createParents: true);
-        await fs.WriteFileAsync(P("/nh-48/drawings/pier.dwg"), Bytes(4000), Admin);
-        await fs.WriteFileAsync(P("/nh-48/report.pdf"), Bytes(1000), Admin);
-        Assert.Equal(5000, fs.SizeOf(P("/nh-48"), Admin));
-        Assert.Equal(4000, fs.SizeOf(P("/nh-48/drawings"), Admin));
+        await Assert.ThrowsAsync<PathNotFoundException>(() => fs.WriteFileAsync(P("/cardiology/scans/echo-0412.dcm"), Bytes(4000), Admin));
+        fs.CreateDirectory(P("/cardiology/scans"), Admin, createParents: true);
+        await fs.WriteFileAsync(P("/cardiology/scans/echo-0412.dcm"), Bytes(4000), Admin);
+        await fs.WriteFileAsync(P("/cardiology/report.pdf"), Bytes(1000), Admin);
+        Assert.Equal(5000, fs.SizeOf(P("/cardiology"), Admin));
+        Assert.Equal(4000, fs.SizeOf(P("/cardiology/scans"), Admin));
     }
 
     [Fact]
@@ -1133,15 +1143,15 @@ public class VirtualFileSystemTests
     public async Task Group_permission_is_inherited_and_deny_wins()
     {
         var fs = New(out _);
-        fs.CreateDirectory(P("/nh-48/contracts"), Admin, createParents: true);
-        await fs.WriteFileAsync(P("/nh-48/contracts/epc.pdf"), Bytes(10), Admin);
-        fs.Grant(P("/nh-48"), new AclEntry("group:site-engineers", Permission.Read | Permission.Write), Admin);
-        fs.Grant(P("/nh-48/contracts"), new AclEntry("group:site-engineers", Permission.None, Permission.Read), Admin);
+        fs.CreateDirectory(P("/cardiology/billing"), Admin, createParents: true);
+        await fs.WriteFileAsync(P("/cardiology/billing/claims.pdf"), Bytes(10), Admin);
+        fs.Grant(P("/cardiology"), new AclEntry("group:nurses", Permission.Read | Permission.Write), Admin);
+        fs.Grant(P("/cardiology/billing"), new AclEntry("group:nurses", Permission.None, Permission.Read), Admin);
 
-        Assert.Equal(Permission.Read | Permission.Write, fs.EffectivePermissions(P("/nh-48"), Asha));
-        Assert.Equal(Permission.Write, fs.EffectivePermissions(P("/nh-48/contracts/epc.pdf"), Asha));
-        await Assert.ThrowsAsync<AccessDeniedException>(() => fs.ReadFileAsync(P("/nh-48/contracts/epc.pdf"), Asha));
-        Assert.DoesNotContain(fs.List(P("/nh-48"), Asha), n => n.Name == "contracts");   // hidden, not just locked
+        Assert.Equal(Permission.Read | Permission.Write, fs.EffectivePermissions(P("/cardiology"), Asha));
+        Assert.Equal(Permission.Write, fs.EffectivePermissions(P("/cardiology/billing/claims.pdf"), Asha));
+        await Assert.ThrowsAsync<AccessDeniedException>(() => fs.ReadFileAsync(P("/cardiology/billing/claims.pdf"), Asha));
+        Assert.DoesNotContain(fs.List(P("/cardiology"), Asha), n => n.Name == "billing");   // hidden, not just locked
     }
 
     [Fact]
@@ -1160,20 +1170,20 @@ public class VirtualFileSystemTests
     public async Task Checked_out_file_blocks_other_writers_and_recursive_delete()
     {
         var fs = New(out _);
-        fs.CreateDirectory(P("/nh-48"), Admin);
-        fs.Grant(P("/nh-48"), new AclEntry("group:site-engineers", Permission.All), Admin);
-        await fs.WriteFileAsync(P("/nh-48/pier.dwg"), Bytes(10), Asha);
-        fs.CheckOut(P("/nh-48/pier.dwg"), Asha);
+        fs.CreateDirectory(P("/cardiology"), Admin);
+        fs.Grant(P("/cardiology"), new AclEntry("group:nurses", Permission.All), Admin);
+        await fs.WriteFileAsync(P("/cardiology/echo-0412.dcm"), Bytes(10), Asha);
+        fs.CheckOut(P("/cardiology/echo-0412.dcm"), Asha);
 
-        await Assert.ThrowsAsync<FileLockedException>(() => fs.WriteFileAsync(P("/nh-48/pier.dwg"), Bytes(5), Ravi));
-        Assert.Throws<FileLockedException>(() => fs.Delete(P("/nh-48"), Admin, recursive: true));
-        Assert.Equal(10, fs.SizeOf(P("/nh-48"), Admin));             // nothing was deleted: all-or-nothing
+        await Assert.ThrowsAsync<FileLockedException>(() => fs.WriteFileAsync(P("/cardiology/echo-0412.dcm"), Bytes(5), Ravi));
+        Assert.Throws<FileLockedException>(() => fs.Delete(P("/cardiology"), Admin, recursive: true));
+        Assert.Equal(10, fs.SizeOf(P("/cardiology"), Admin));             // nothing was deleted: all-or-nothing
 
-        var v2 = await fs.WriteFileAsync(P("/nh-48/pier.dwg"), Bytes(12), Asha);   // holder may write
+        var v2 = await fs.WriteFileAsync(P("/cardiology/echo-0412.dcm"), Bytes(12), Asha);   // holder may write
         Assert.Equal(2, v2.Version);
-        fs.CheckIn(P("/nh-48/pier.dwg"), Asha);
-        fs.Delete(P("/nh-48"), Admin, recursive: true);
-        Assert.Throws<PathNotFoundException>(() => fs.List(P("/nh-48"), Admin));
+        fs.CheckIn(P("/cardiology/echo-0412.dcm"), Asha);
+        fs.Delete(P("/cardiology"), Admin, recursive: true);
+        Assert.Throws<PathNotFoundException>(() => fs.List(P("/cardiology"), Admin));
     }
 
     [Fact]
@@ -1190,9 +1200,9 @@ public class VirtualFileSystemTests
         var fs = New(out _);
         fs.CreateDirectory(P("/drafts"), Admin);
         fs.CreateDirectory(P("/final"), Admin);
-        await fs.WriteFileAsync(P("/drafts/mpr-mar.pdf"), Bytes(300), Admin);
-        fs.Move(P("/drafts/mpr-mar.pdf"), P("/final/MPR-March-2026.pdf"), Admin);
-        Assert.Equal(300, (await fs.ReadFileAsync(P("/final/mpr-march-2026.pdf"), Admin)).Length);
+        await fs.WriteFileAsync(P("/drafts/roster-mar.pdf"), Bytes(300), Admin);
+        fs.Move(P("/drafts/roster-mar.pdf"), P("/final/Roster-March-2026.pdf"), Admin);
+        Assert.Equal(300, (await fs.ReadFileAsync(P("/final/roster-march-2026.pdf"), Admin)).Length);
         Assert.Empty(fs.List(P("/drafts"), Admin));
     }
 
@@ -1203,6 +1213,24 @@ public class VirtualFileSystemTests
         fs.CreateDirectory(P("/a/b"), Admin, createParents: true);
         Assert.Throws<DirectoryNotEmptyException>(() => fs.Delete(P("/a"), Admin));
     }
+
+    [Fact]
+    public async Task Find_runs_the_predicate_without_holding_the_tree_lock()
+    {
+        var fs = New(out _);
+        fs.CreateDirectory(P("/radiology"), Admin);
+        await fs.WriteFileAsync(P("/radiology/mri-0001.dcm"), Bytes(6_000_000), Admin);
+        await fs.WriteFileAsync(P("/radiology/notes.txt"), Bytes(200), Admin);
+        var otherRequestGotIn = false;
+        var big = fs.Find(P("/radiology"), n =>
+        {
+            // Another user's request, on another thread, while our predicate runs: must not be blocked.
+            otherRequestGotIn |= Task.Run(() => fs.List(P("/radiology"), Admin)).Wait(TimeSpan.FromSeconds(5));
+            return n.Size > 5_000_000;
+        }, Admin);
+        Assert.True(otherRequestGotIn);
+        Assert.Equal("mri-0001.dcm", Assert.Single(big).Name);
+    }
 }
 ```
 
@@ -1210,6 +1238,7 @@ Test design notes:
 
 - **Name the behaviour, not the method.** `Checked_out_file_blocks_other_writers_and_recursive_delete` tells you what broke when it fails.
 - **Assert on the "nothing happened" side** of all-or-nothing operations (size unchanged after a refused delete). Most bugs in multi-node operations are half-done mutations.
+- **Prove the lock is not held where it must not be.** The `Find` test makes the predicate wait for a request on another thread. If the predicate ran under the tree lock, that request would block and the test would fail after five seconds instead of hanging forever.
 - **Test the ancestor check with `/a` vs `/ab`.** A string `StartsWith` implementation passes most tests and fails this one.
 
 ## Bad design vs good design
@@ -1219,7 +1248,7 @@ Test design notes:
 ```csharp
 public class Node
 {
-    public string FullPath;              // "/nh-48/drawings/pier.dwg"
+    public string FullPath;              // "/cardiology/scans/echo-0412.dcm"
     public bool IsFolder;
     public List<Node> Children = new();  // also present on files
     public byte[] Data;                  // also present on folders
@@ -1244,8 +1273,8 @@ Problems:
 2. **Type flag instead of types.** Files have `Children` and folders have `Data`; nothing stops nonsense states. Every operation starts with `if (IsFolder)`.
 3. **Public mutable fields.** Any code can add a child without setting a parent, or create two children with the same name.
 4. **No path normalisation.** `"/a/../b"` and `"/b"` are different keys; `"../../"` might escape the root.
-5. **Permissions as a list of user names on each node.** No groups, no inheritance, no deny. Granting a new engineer access to a 5,000-file project means 5,000 updates.
-6. **Content inside the node.** Gigabytes of drawings end up in the application's memory and in every serialised snapshot.
+5. **Permissions as a list of user names on each node.** No groups, no inheritance, no deny. Granting a new nurse access to a 5,000-file department means 5,000 updates.
+6. **Content inside the node.** Gigabytes of scans end up in the application's memory and in every serialised snapshot.
 
 ### Good: what changed and why it matters
 
@@ -1254,13 +1283,13 @@ Problems:
 | `IsFolder` flag | `FileNode` / `DirectoryNode` types (Composite) | Invalid states cannot be represented |
 | Stored `FullPath` | Path derived from parent links | O(1) move and rename |
 | Raw strings | `FsPath` value object | Normalised, validated, no traversal |
-| Per-node user lists | ACL entries with groups, inheritance and deny | One grant on the project folder covers everything below |
+| Per-node user lists | ACL entries with groups, inheritance and deny | One grant on the department folder covers everything below |
 | Bytes in nodes | Content-addressed blob store | Tree stays small; identical files stored once |
 | Public fields | `internal` mutators behind a facade | Invariants enforced in one place |
 
 ### When is this overkill?
 
-If users only need "a folder per project, one level deep, everyone on the project sees everything", a database table with `project_id` and a blob URL is simpler and enough. Reach for the full tree when you have nesting, mixed permissions within a project, or operations like move that must keep many things consistent.
+If users only need "a folder per department, one level deep, everyone in the department sees everything", a database table with `department_id` and a blob URL is simpler and enough. Reach for the full tree when you have nesting, mixed permissions within a department, or operations like move that must keep many things consistent.
 
 ## Alternative designs
 
@@ -1270,7 +1299,7 @@ Store nodes in PostgreSQL: `nodes(id, parent_id, name, kind, size, blob_key, own
 
 ### Materialised path or `ltree`
 
-Store each node's full path (`nh48.drawings.pier`) and query subtrees with a prefix match. PostgreSQL's `ltree` extension indexes this well. Subtree reads are fast; moves are expensive because every descendant's path changes. Good when reads massively outnumber moves, for example for an archive.
+Store each node's full path (`cardiology.scans.echo_0412`) and query subtrees with a prefix match. PostgreSQL's `ltree` extension indexes this well. Subtree reads are fast; moves are expensive because every descendant's path changes. Good when reads massively outnumber moves, for example for an archive.
 
 ### Closure table
 
@@ -1282,11 +1311,11 @@ Store `Size` on each directory and update all ancestors on each write: O(depth) 
 
 ### Visitor instead of virtual methods
 
-If you keep adding operations over the tree (size, count, export to zip, virus scan), each one adds a method to every node class. The [Visitor](#/lesson/m06-visitor) pattern moves operations into separate classes. It pays off when the node types are stable and operations keep growing; here, with two node types and few operations, `Descendants()` plus LINQ is simpler.
+If you keep adding operations over the tree (size, count, export to zip, virus scan), each one adds a method to every node class. The Visitor pattern moves operations into separate classes. It pays off when the node types are stable and operations keep growing; here, with two node types and few operations, `Descendants()` plus LINQ is simpler.
 
 ### Role-based permissions instead of ACLs
 
-Roles per project ("Viewer", "Editor", "Manager") are easier for users to understand than per-folder ACLs. Many document systems combine them: roles at the project level, ACL overrides only for sensitive folders such as Contracts. Our evaluator interface allows that combination.
+Roles per department ("Viewer", "Editor", "Manager") are easier for users to understand than per-folder ACLs. Many document systems combine them: roles at the department level, ACL overrides only for sensitive folders such as Billing. Our evaluator interface allows that combination.
 
 ## Practical playground
 
@@ -1378,7 +1407,7 @@ public class PathNormalizerTests
     [InlineData("/", "/")]
     [InlineData("///", "/")]
     [InlineData("/a/b/../../c", "/c")]
-    [InlineData("/nh-48/drawings/./pier.dwg", "/nh-48/drawings/pier.dwg")]
+    [InlineData("/cardiology/scans/./echo-0412.dcm", "/cardiology/scans/echo-0412.dcm")]
     public void Normalises(string input, string expected) => Assert.Equal(expected, PathNormalizer.Normalize(input));
 
     [Theory]
@@ -1488,14 +1517,14 @@ using Xunit;
 public class CompositeTests
 {
     private static Folder Sample() =>
-        new Folder("nh-48")
+        new Folder("cardiology")
             .Add(new Document("a.pdf", 100))
             .Add(new Document("b.pdf", 250))
-            .Add(new Folder("drawings").Add(new Document("pier.dwg", 400)).Add(new Folder("empty")));
+            .Add(new Folder("scans").Add(new Document("echo-0412.dcm", 400)).Add(new Folder("empty")));
 
     [Fact] public void Folder_size_is_recursive() => Assert.Equal(750L, Sample().Size);
     [Fact] public void Counts_only_documents() => Assert.Equal(3, Sample().FileCount);
-    [Fact] public void Largest_is_found_at_any_depth() => Assert.Equal("pier.dwg", Sample().Largest()!.Name);
+    [Fact] public void Largest_is_found_at_any_depth() => Assert.Equal("echo-0412.dcm", Sample().Largest()!.Name);
 
     [Fact]
     public void Empty_folder()
@@ -1617,15 +1646,15 @@ using Xunit;
 
 public class NearestWinsEvaluatorTests
 {
-    private static readonly User Asha = new("asha", new HashSet<string> { "engineers" });
+    private static readonly User Asha = new("asha", new HashSet<string> { "nurses" });
 
     [Fact]
     public void Explicit_allow_on_child_beats_inherited_deny()
     {
         var folder = new Node("admin");
-        folder.Entries.Add(new Entry("engineers", Perm.None, Perm.Read));
+        folder.Entries.Add(new Entry("nurses", Perm.None, Perm.Read));
         var file = new Node("admin", folder);
-        file.Entries.Add(new Entry("engineers", Perm.Read));
+        file.Entries.Add(new Entry("nurses", Perm.Read));
         Assert.Equal(Perm.Read, NearestWinsEvaluator.Effective(file, Asha));
     }
 
@@ -1633,7 +1662,7 @@ public class NearestWinsEvaluatorTests
     public void Child_deny_removes_inherited_allow()
     {
         var folder = new Node("admin");
-        folder.Entries.Add(new Entry("engineers", Perm.Read | Perm.Write));
+        folder.Entries.Add(new Entry("nurses", Perm.Read | Perm.Write));
         var file = new Node("admin", folder);
         file.Entries.Add(new Entry("asha", Perm.None, Perm.Write));
         Assert.Equal(Perm.Read, NearestWinsEvaluator.Effective(file, Asha));
@@ -1644,7 +1673,7 @@ public class NearestWinsEvaluatorTests
     {
         var n = new Node("admin");
         n.Entries.Add(new Entry("everyone", Perm.Read));
-        n.Entries.Add(new Entry("engineers", Perm.None, Perm.Read));
+        n.Entries.Add(new Entry("nurses", Perm.None, Perm.Read));
         Assert.Equal(Perm.None, NearestWinsEvaluator.Effective(n, Asha));
     }
 
@@ -1668,7 +1697,7 @@ public class NearestWinsEvaluatorTests
         var root = new Node("admin");
         root.Entries.Add(new Entry("everyone", Perm.Delete));
         var mid = new Node("admin", root);
-        mid.Entries.Add(new Entry("engineers", Perm.Read));
+        mid.Entries.Add(new Entry("nurses", Perm.Read));
         var leaf = new Node("admin", mid);
         Assert.Equal(Perm.Read | Perm.Delete, NearestWinsEvaluator.Effective(leaf, Asha));
     }
@@ -1729,17 +1758,17 @@ public static class NearestWinsEvaluator
 
 The two masks make the rule explicit: once a bit is in `decided`, higher levels cannot change it. That is exactly "nearest wins".
 ::alternatives
-"Deny anywhere wins" (the lesson's evaluator) is simpler to explain and harder to misconfigure, but it cannot express "everyone in the department is denied the Contracts folder, except the contracts manager". Nearest-wins can, at the cost of being harder to audit.
+"Deny anywhere wins" (the lesson's evaluator) is simpler to explain and harder to misconfigure, but it cannot express "everyone in the department is denied the Billing folder, except the billing manager". Nearest-wins can, at the cost of being harder to audit.
 ::mistakes
 - Letting a higher level override an already-decided bit.
 - Applying "deny wins" across levels instead of within a level.
 - Breaking *before* processing the node that has inheritance turned off.
 ::extensions
-Return an explanation alongside the result ("Write denied by entry 'asha' on /nh-48/contracts"), which support teams will love.
+Return an explanation alongside the result ("Write denied by entry 'asha' on /cardiology/billing"), which support teams will love.
 :::
 
 :::exercise id=m18-file-system-ex4 difficulty=intermediate kind=design title="Add shortcuts (symbolic links)"
-Users want shortcuts: `/my-desk/current-drawings` should point to `/nh-48/drawings/rev-c`. Extend the class model.
+Users want shortcuts: `/my-desk/current-scans` should point to `/cardiology/scans/2026-04`. Extend the class model.
 
 Decide and justify: (1) does a shortcut store a path or a node reference? (2) what does `Size` return for a shortcut? (3) how do you prevent infinite loops when resolving or traversing? (4) whose permissions apply, the shortcut's or the target's? (5) what happens to the shortcut when the target is moved or deleted?
 ::acceptance
@@ -2092,28 +2121,28 @@ A: Check under lock, release, upload, re-lock and re-check, then commit; garbage
 
 :::quiz pass=70
 ::q single
-A user moves `/projects/nh-48` (12,000 files) to `/archive/nh-48`. In which design is this an O(1) change to the tree?
+A user moves `/departments/cardiology` (12,000 files) to `/archive/cardiology`. In which design is this an O(1) change to the tree?
 - [ ] Each node stores its full path string.
 - [x] Each node stores a reference to its parent; paths are computed on demand.
-- [ ] Each node stores a materialised path such as `projects.nh48.drawings`.
+- [ ] Each node stores a materialised path such as `departments.cardiology.scans`.
 - [ ] Paths are stored in a closure table.
 > With parent links, only the moved node's parent pointer changes. Stored paths (full strings, materialised paths, closure rows) must be rewritten for every descendant.
 ::q single
 Which request should the path parser reject?
-- [ ] `/nh-48/./drawings`
-- [ ] `/nh-48//drawings/`
-- [x] `/nh-48/../../config/secrets.json`
-- [ ] `/nh-48/drawings/../reports`
+- [ ] `/cardiology/./scans`
+- [ ] `/cardiology//scans/`
+- [x] `/cardiology/../../config/secrets.json`
+- [ ] `/cardiology/scans/../reports`
 > The third path climbs above the root: a path traversal attempt. The others normalise to valid paths inside the root.
 ::q single
-The `/nh-48` folder allows Read and Write to `group:site-engineers`. Its `contracts` subfolder denies Read to the same group. With the "deny anywhere wins" rule, what can Asha (a site engineer) do with `/nh-48/contracts/epc.pdf`?
+The `/cardiology` folder allows Read and Write to `group:nurses`. Its `billing` subfolder denies Read to the same group. With the "deny anywhere wins" rule, what can Asha (a nurse) do with `/cardiology/billing/claims.pdf`?
 - [ ] Read and Write
 - [ ] Read only
 - [x] Write only
 - [ ] Nothing
 > Allows (Read, Write) are unioned with inherited ones, then denied bits (Read) are removed, leaving Write. That is odd ("write but not read"), which is a good reason to deny Write too, or to use roles for simpler semantics.
 ::q multi
-A recursive delete of `/nh-48` must be all-or-nothing. Which of these does that require? (Select all that apply.)
+A recursive delete of `/cardiology` must be all-or-nothing. Which of these does that require? (Select all that apply.)
 - [x] Check Delete permission on every node in the subtree before removing anything.
 - [x] Refuse the whole operation if any file in the subtree is checked out.
 - [x] Perform the checks and the removal under the same lock or transaction.
@@ -2150,4 +2179,4 @@ You have finished this case study when you can:
 - [ ] Complete exercises 1 and 2 with all tests passing.
 - [ ] Complete exercise 5 and explain why checking `/ab` vs `/a` matters.
 - [ ] Draw the Composite class diagram from memory and explain transparent vs safe Composite.
-- [ ] Explain, in two minutes, how inherited permissions are evaluated and which conflict rule you would choose for a document portal.
+- [ ] Explain, in two minutes, how inherited permissions are evaluated and which conflict rule you would choose for a hospital document vault.

@@ -88,6 +88,8 @@ Every component only reacts to state. That is why Kubernetes heals itself after 
 | **HorizontalPodAutoscaler** | The manager who adds cooks | Changes a Deployment's replica count based on metrics. |
 | **PodDisruptionBudget** | "Never take away more than one cook at a time" | Limits voluntary evictions (node upgrades, drains) so a minimum number of pods stays available. |
 
+A note on the front door. The Ingress API still works, but it is frozen: new features go into its successor, the **Gateway API** (`Gateway` and `HTTPRoute` objects), which separates the platform team's listener and certificate settings from each app team's routes. The widely used community **ingress-nginx** controller was retired by the Kubernetes project in 2026 and no longer receives fixes, so for a new cluster pick a maintained Gateway API implementation or your cloud's supported option (on AKS, for example, Application Gateway for Containers or a managed Gateway API add-on) instead of copying an old ingress-nginx tutorial.
+
 ### Reading a Deployment and a Service
 
 YAML is just nested key-value text. Here is the booking API, with each important line explained after.
@@ -139,7 +141,7 @@ spec:
             failureThreshold: 3
           lifecycle:
             preStop:
-              sleep: { seconds: 10 }  # older clusters: exec a sleep command instead
+              sleep: { seconds: 10 }  # built-in sleep action; no shell needed in the image
 ---
 apiVersion: v1
 kind: Service
@@ -178,7 +180,7 @@ Two common recommendations, and why:
 
 The pairing of request and limit sets a pod's **Quality of Service class**: `Guaranteed` (requests equal limits for every resource), `Burstable` (some requests set) or `BestEffort` (nothing set, first to be evicted).
 
-.NET note: the runtime reads the container's CPU and memory limits to size the thread pool and GC heap, so test small pods under load and tune `DOTNET_GCHeapHardLimitPercent` if needed.
+.NET note: the runtime reads the container's memory limit to size the GC heap (by default the heap may use up to 75 % of it) and its CPU limit to decide `Environment.ProcessorCount`, which sizes the thread pool and the number of Server GC heaps. With **no** CPU limit, .NET sees every core of the node, so a pod requesting half a core on a 16-core node may create 16 GC heaps. That is usually fine with .NET 9 and later, where Server GC adapts its heap count to the load by default (DATAS), but test small pods under load, and set `DOTNET_PROCESSOR_COUNT` or `DOTNET_GCHeapHardLimitPercent` if measurements say so.
 
 ### Probes: three different questions
 
@@ -203,9 +205,26 @@ When Kubernetes deletes a pod, two things happen **in parallel**:
 
 If the app exits immediately on `SIGTERM`, the ingress may still send it requests for a few seconds, and those requests fail with connection errors. The fix:
 
-- A `preStop` sleep (5–10 s) so the endpoint removal propagates before the app even hears `SIGTERM`.
+- A `preStop` sleep (5–10 s) so the endpoint removal propagates before the app even hears `SIGTERM`. Use the built-in `sleep` action (on by default since Kubernetes 1.30) rather than `exec: ["sleep", "10"]`: Microsoft's chiseled and distroless .NET images contain no shell and no `sleep` binary, so the exec form fails there.
 - On `SIGTERM`, ASP.NET Core's host stops accepting new connections and waits for in-flight requests up to `HostOptions.ShutdownTimeout` (30 s by default in recent .NET). Make sure `preStop + ShutdownTimeout < terminationGracePeriodSeconds`, for example 10 + 15 < 30.
 - Flip readiness to unhealthy as soon as shutdown begins, so anything still checking stops sending work.
+
+### Planned disruptions: PodDisruptionBudgets
+
+Pods also disappear for planned reasons: a node pool upgrade drains every node in turn, and the cluster autoscaler removes under-used nodes. These are **voluntary disruptions**, and a **PodDisruptionBudget (PDB)** limits how many pods of an app they may take at once. Without one, draining a node that happens to host 3 of your 4 booking-api pods evicts all three together.
+
+```yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: booking-api, namespace: prod }
+spec:
+  maxUnavailable: 1                          # evict at most one booking-api pod at a time
+  selector:
+    matchLabels: { app: booking-api }
+  unhealthyPodEvictionPolicy: AlwaysAllow    # a pod that is already failing readiness never blocks a drain
+```
+
+Three things to know. A PDB does **not** protect against involuntary failures (a node crash or a zone outage); spreading pods across zones does that. Prefer `maxUnavailable` over `minAvailable` for an HPA-managed Deployment, because the replica count keeps changing. And never set `minAvailable` equal to the replica count (or `maxUnavailable: 0`): no pod can ever be evicted, so node drains and cluster upgrades hang until someone deletes the PDB by hand.
 
 ### The Horizontal Pod Autoscaler (HPA)
 
@@ -221,7 +240,7 @@ Worked example: 4 replicas averaging 90 % CPU, target 60 %. Ratio 90 ÷ 60 = 1.5
 
 Details that matter in practice:
 
-- **Tolerance.** If the ratio is within 10 % of 1.0 (0.9 to 1.1 by default), the HPA does nothing, to avoid flapping. 4 replicas at 64 % against a 60 % target is a ratio of 1.067: no change.
+- **Tolerance.** If the ratio is within 10 % of 1.0 (0.9 to 1.1 by default), the HPA does nothing, to avoid flapping. 4 replicas at 64 % against a 60 % target is a ratio of 1.067: no change. The 10 % is a cluster-wide default; newer Kubernetes versions are adding a per-HPA tolerance setting in `behavior`, so check your version before relying on either.
 - **Min and max.** The result is clamped to `minReplicas` and `maxReplicas`. `maxReplicas` is a cost and safety ceiling: it protects the database from being flooded by 200 pods, each with a connection pool.
 - **Scale-down stabilization.** By default the HPA looks at all recommendations in the last **300 seconds** and uses the **highest** one when scaling down. So after a spike ends, replicas stay up for 5 minutes. That prevents a sawtooth when traffic is bursty.
 - **Scale-up policies.** By default the HPA can at most double the replicas or add 4 pods (whichever is more) every 15 seconds, with no stabilization window for scale-up. You can tune both with the `behavior` field.
@@ -279,7 +298,7 @@ If no node has room, the **cluster autoscaler** must add a VM, which commonly ta
 2. **Scheduled scaling**: raise `minReplicas` before a known event (sale, results day, match) with a CronJob or KEDA's cron scaler.
 3. **Faster start**: small images, ReadyToRun or Native AOT where suitable, cached images on nodes, and a warm-up that is short and bounded.
 
-The **Vertical Pod Autoscaler (VPA)** recommends requests from observed usage, useful for right-sizing. Don't let VPA and HPA both act on CPU for one Deployment.
+The **Vertical Pod Autoscaler (VPA)** recommends requests from observed usage, useful for right-sizing. Don't let VPA and HPA both act on CPU for one Deployment. Recent Kubernetes versions can also resize a running pod's CPU and memory **in place** without recreating it, which makes vertical changes less disruptive; check that your cluster version and the VPA version you run support it before relying on it.
 
 ### When Kubernetes is not the answer
 
@@ -1248,7 +1267,7 @@ public async Task Readiness_fails_after_shutdown_begins()
 - **Managed Kubernetes** (AKS, EKS, GKE) runs the control plane for you; you still own node pools, upgrades, add-ons and workload configuration.
 - **Azure Container Apps** runs on Kubernetes with KEDA and Envoy underneath, exposing only apps, revisions and scale rules. Many teams that "need Kubernetes" for a few APIs are well served by it.
 - **KEDA** (a CNCF project) is widely used to scale queue consumers on queue depth, including to zero, which matters for cost in batch-heavy systems.
-- **Government and infrastructure portals** with spiky, predictable peaks (exam results, tender deadlines, toll or tax filing deadlines) benefit most from scheduled pre-scaling on top of the HPA.
+- **Systems with spiky, predictable peaks** (exam-result portals, income-tax filing deadlines, cricket match ticket sales, festival flash sales on shopping apps) benefit most from scheduled pre-scaling on top of the HPA.
 
 ## Interview questions
 

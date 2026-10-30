@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 85
 prerequisites: [m11-capacity-estimation, m09-indexes, m11-caching-layers]
-related: [m09-replicas, m09-partitioning-sharding, m09-relational-vs-document, m09-connection-pooling, m13-sharding, m12-cache-patterns]
+related: [m09-replicas, m09-partitioning-sharding, m09-relational-vs-document, m09-connection-pooling, m13-sharding, m12-cache-patterns, m17-scaling-journey]
 tags: [hld, database, postgresql, replication, partitioning, sharding, nosql]
 patterns: []
 summary: A step-by-step ladder for scaling the database tier, from one well-tuned primary through pooling, replicas, caching and partitioning to sharding, and how to pick SQL or NoSQL stores from access patterns instead of fashion.
@@ -62,17 +62,17 @@ Each step solves a real problem and adds a new one. A good architect climbs only
 
 ### Start with the numbers
 
-Take **SiteLog**, a SaaS platform where contractors record daily progress on infrastructure projects across India: concrete poured, material receipts, labour attendance, site photos (photos go to object storage, only their metadata to the database). Head office staff run dashboards.
+Take **HourLog**, a multi-tenant timesheet and expense SaaS (think a Jira- or Harvest-style tool) used by IT-services firms, design agencies and consultancies across India. Employees log hours against client projects, start and stop timers, update tasks and file expense claims (receipt photos go to object storage, only their metadata to the database). Managers approve timesheets and watch project dashboards.
 
 Today:
 
-- 60,000 site engineers, each making about 40 writes a day: 60,000 × 40 = 2.4 M writes/day. 2,400,000 ÷ 86,400 ≈ 28 writes/s average. Most entries are submitted between 5 and 8 pm, so assume ×5 for peak: about **140 writes/s**.
+- 60,000 employees, each making about 40 writes a day (time entries, timer start and stop, task updates, comments, expense lines): 60,000 × 40 = 2.4 M writes/day. 2,400,000 ÷ 86,400 ≈ 28 writes/s average. Most timesheets are filled in at the end of the working day, between 5 and 8 pm, so assume ×5 for peak: about **140 writes/s**.
 - Reads (dashboards, lists, approvals): 60,000 users × 300 reads/day = 18 M reads/day ≈ 210/s average, ×4 for peak ≈ **850 reads/s**.
 - Storage: 2.4 M rows/day × about 1 KB per row (with overhead) ≈ 2.4 GB/day ≈ 880 GB/year. Indexes typically add a lot on top. Assume ×2: about **1.8 TB/year** (estimate).
 
 A single well-configured PostgreSQL server on modern hardware handles this comfortably, *if* queries are indexed. Many teams would jump to "microservices with sharded NoSQL" here. The numbers say: one primary, one standby for availability, good indexes, and a plan for storage.
 
-Now suppose a national programme brings 10× growth over three years: **1,400 writes/s**, **8,500 reads/s** at peak, and about **18 TB/year**. Now the ladder matters.
+Now suppose a few large enterprise customers plus steady growth bring 10× over three years: **1,400 writes/s**, **8,500 reads/s** at peak, and about **18 TB/year**. Now the ladder matters.
 
 ### What a single primary runs out of, in order
 
@@ -93,16 +93,16 @@ Climb in this order. Each rung is cheaper and safer than the next.
 
 **Rung 1 — Scale up (vertical).** A bigger instance: more cores, more RAM, faster disks. Managed PostgreSQL services offer large instances, and moving up is often a few minutes of planned downtime or a failover. It costs more money but no code. The limit is the largest machine you can buy, and price grows faster than size near the top.
 
-**Rung 2 — Pool connections.** Npgsql pools connections inside each app process. Put an external pooler such as PgBouncer (in transaction mode) between many app instances and the database, so 5,000 client connections share, say, 200 server connections. See [Database connection pooling](#/lesson/m09-connection-pooling).
+**Rung 2 — Pool connections.** Npgsql pools connections inside each app process. Put an external pooler such as PgBouncer (in transaction mode) between many app instances and the database, so 5,000 client connections share, say, 200 server connections. Transaction mode has a price: session state (`SET`, temporary tables, advisory locks, `LISTEN`) does not survive between transactions, and prepared statements need PgBouncer 1.21 or later with `max_prepared_statements` enabled. See [Database connection pooling](#/lesson/m09-connection-pooling).
 
 **Rung 3 — Read replicas.** The primary streams its WAL to one or more replicas, which apply it and serve read-only queries. Writes still go to the primary.
 
 - **Asynchronous replication** (the common default) means the primary doesn't wait for replicas. Writes are fast, but replicas lag behind: normally milliseconds to a second, sometimes much longer during heavy writes or long-running replica queries (estimate).
 - **Synchronous replication** makes a commit wait until a standby confirms. No data loss on failover, but every write pays a network round trip, and a slow standby slows all writes. It is usually used for one HA standby, not for read scaling.
-- **Lag causes visible bugs.** An engineer submits today's entry, the page reloads from a replica that is 800 ms behind, and the entry is "missing". The fix is **read-your-writes**: route a user's reads to the primary for a few seconds after they write, or read from a replica only once it has replayed past the write's position. See [Read replicas and replication lag](#/lesson/m09-replicas).
-- **Capacity maths.** If one node handles about 3,000 simple reads/s at a comfortable 60 % utilisation (estimate, measure your own), 8,500 reads/s needs 8,500 ÷ 3,000 ≈ 3 replicas, plus one spare so losing one doesn't overload the rest: 4.
+- **Lag causes visible bugs.** An employee submits today's time entry, the page reloads from a replica that is 800 ms behind, and the entry is "missing". The fix is **read-your-writes**: route a user's reads to the primary for a few seconds after they write, or read from a replica only once it has replayed past the write's position. See [Read replicas and replication lag](#/lesson/m09-replicas).
+- **Capacity maths.** Suppose one node handles about 3,000 simple reads/s before latency degrades (estimate; measure your own) and you plan at 60 % utilisation, so 1,800 reads/s per node. If 5,100 of the 8,500 reads/s can tolerate lag, they need 5,100 ÷ 1,800 ≈ 2.8 → 3 replicas, plus one spare so losing one doesn't overload the rest: 4.
 
-**Rung 4 — Cache.** Many reads are repeated: the project dashboard summary is viewed hundreds of times between updates. Cache-aside in Redis or in memory (see [Cache patterns](#/lesson/m12-cache-patterns)) can remove a large share of reads. At a 90 % hit ratio on the dashboard endpoints, 5,000 dashboard reads/s become 500 database reads/s. The cost is staleness and invalidation work.
+**Rung 4 — Cache.** Many reads are repeated: the project dashboard summary is viewed hundreds of times between updates. Cache-aside in Redis or in memory (see [Cache patterns](#/lesson/m12-cache-patterns)) can remove a large share of reads. At a 90 % hit ratio on the dashboard endpoints, 3,000 dashboard reads/s become 300 database reads/s. The cost is staleness and invalidation work.
 
 **Rung 5 — Partition tables.** PostgreSQL declarative partitioning splits one logical table into child tables by range (for example by month), list or hash. Benefits:
 
@@ -114,7 +114,7 @@ Partitioning is still **one database on one server**. It doesn't add write capac
 
 **Rung 6 — Split by function.** Move workloads that don't belong in the transactional database:
 
-- Heavy analytics and reports → a columnar warehouse or OLAP store, fed by change data capture or a nightly export. A "sum of concrete by state by month for five years" query should not compete with the 7 pm submission peak.
+- Heavy analytics and reports → a columnar warehouse or OLAP store, fed by change data capture or a nightly export. A "billable hours by client by month for five years" query should not compete with the 7 pm timesheet peak.
 - Full-text search → a search engine.
 - Files → object storage, with only metadata in the database (see [Object storage](#/lesson/m11-object-storage)).
 - Separate bounded contexts (billing, identity) can own separate databases.
@@ -125,8 +125,8 @@ Partitioning is still **one database on one server**. It doesn't add write capac
 
 **Choosing the shard key.** A good key:
 
-- Appears in almost every query, so each request goes to one shard. For a multi-tenant SaaS, `tenant_id` (the contractor company) is the natural choice: every query is "within my company".
-- Spreads data and load evenly. Problem: tenants aren't equal. One national contractor may produce 30 % of all rows. A **hot shard** holding that tenant is the bottleneck.
+- Appears in almost every query, so each request goes to one shard. For a multi-tenant SaaS, `tenant_id` (the customer company) is the natural choice: every query is "within my company".
+- Spreads data and load evenly. Problem: tenants aren't equal. One IT-services customer with 20,000 employees may produce 30 % of all rows. A **hot shard** holding that tenant is the bottleneck.
 - Keeps related data together, so transactions and joins stay inside one shard.
 
 **Routing strategies.**
@@ -142,7 +142,7 @@ A common practical design is **directory with hash fallback**: big tenants are p
 
 **What you give up.**
 
-- **Cross-shard queries** ("total concrete poured across all tenants") must fan out to every shard and merge results, or run in the analytics store instead.
+- **Cross-shard queries** ("total hours logged across all tenants") must fan out to every shard and merge results, or run in the analytics store instead.
 - **Cross-shard transactions** need sagas or two-phase commit. Design so that they're rare.
 - **Global uniqueness**: sequences are per shard, so use UUIDs (UUIDv7 sorts by time and indexes well) or shard-prefixed ids.
 - **Resharding**: moving data between shards while the system is live (copy, catch up, switch, verify) is a project in itself.
@@ -208,7 +208,7 @@ Each rung weakens consistency somewhere. Replicas give stale reads. Caches give 
 
 ### When a simpler design is enough
 
-At SiteLog's current 140 writes/s and 850 reads/s, the right design is: one primary with an HA standby, good indexes, Npgsql pooling, monthly partitions on the biggest table for retention, and daily-tested backups. No replicas for reads yet, no cache yet, no shards. Add each rung when a measured limit approaches, not because a diagram of a much larger company has it.
+At HourLog's current 140 writes/s and 850 reads/s, the right design is: one primary with an HA standby, good indexes, Npgsql pooling, monthly partitions on the biggest table for retention, and daily-tested backups. No replicas for reads yet, no cache yet, no shards. Add each rung when a measured limit approaches, not because a diagram of a much larger company has it.
 
 ## Visual explanation
 
@@ -243,13 +243,13 @@ Reading the arrows:
 
 ```mermaid
 sequenceDiagram
-    participant E as Site engineer
+    participant E as Employee
     participant A as API
     participant T as Write tracker
     participant P as Primary
     participant R as Replica
-    E->>A: POST /entries (today's progress)
-    A->>P: INSERT progress_entry
+    E->>A: POST /entries (today's hours)
+    A->>P: INSERT time_entry
     P-->>A: committed
     A->>T: user 17 wrote at 19:02:10
     A-->>E: 201 Created
@@ -269,11 +269,11 @@ sequenceDiagram
     A-->>E: list
 ```
 
-The engineer's write goes to the primary, and the API records the time of the write. Moments later the engineer's list request would normally go to a replica, but the replica is 800 ms behind and would not show the new entry. Because the tracker says this user wrote within the last 5 seconds, the API reads from the primary instead, and the entry appears. Ten seconds later the window has passed, the replica has caught up, and reads return to the replica. Only the few users who just wrote put load on the primary.
+The employee's write goes to the primary, and the API records the time of the write. Moments later the employee's list request would normally go to a replica, but the replica is 800 ms behind and would not show the new entry. Because the tracker says this user wrote within the last 5 seconds, the API reads from the primary instead, and the entry appears. Ten seconds later the window has passed, the replica has caught up, and reads return to the replica. Only the few users who just wrote put load on the primary.
 
 ## Step-by-step example
 
-SiteLog has grown 10×: 1,400 writes/s and 8,500 reads/s at peak, 18 TB a year. We climb the ladder.
+HourLog has grown 10×: 1,400 writes/s and 8,500 reads/s at peak, 18 TB a year. We climb the ladder.
 
 ### Step 1 — measure and tune
 
@@ -286,31 +286,31 @@ Move the primary to a larger instance with enough RAM to hold the hot data (the 
 ### Step 3 — partition the big table
 
 ```sql
-CREATE TABLE progress_entry (
+CREATE TABLE time_entry (
     tenant_id   bigint      NOT NULL,
     project_id  bigint      NOT NULL,
     entry_id    uuid        NOT NULL,
     entry_date  date        NOT NULL,
     activity    text        NOT NULL,
-    quantity    numeric(12,2) NOT NULL,
+    hours       numeric(5,2) NOT NULL,
     created_by  bigint      NOT NULL,
     PRIMARY KEY (entry_id, entry_date)
 ) PARTITION BY RANGE (entry_date);
 
-CREATE TABLE progress_entry_2026_10 PARTITION OF progress_entry
+CREATE TABLE time_entry_2026_10 PARTITION OF time_entry
     FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');
-CREATE INDEX ON progress_entry (project_id, entry_date);
+CREATE INDEX ON time_entry (project_id, entry_date);
 ```
 
 A partitioned table's primary key must include the partition key, which is why it is `(entry_id, entry_date)`. Partitions are created ahead of time by a scheduled job. Data older than three years is detached and moved to cheaper storage.
 
 ### Step 4 — replicas and read routing
 
-Reads: about 60 % are dashboards and lists that tolerate a second of lag. 8,500 × 0.6 ≈ 5,100 reads/s for replicas. At about 3,000 reads/s per node (estimate), that's 2 replicas, plus 1 spare = 3. The remaining 3,400 reads/s (approvals, read-your-writes, small lookups) stay on the primary, which also handles 1,400 writes/s.
+Reads: about 60 % are dashboards and lists that tolerate a second of lag. 8,500 × 0.6 ≈ 5,100 reads/s for replicas. At about 1,800 reads/s per node (3,000 at 60 % utilisation, estimate), that's 2.8 → 3 replicas, plus 1 spare = 4. The remaining 3,400 reads/s (approvals, read-your-writes, small lookups) stay on the primary, which also handles 1,400 writes/s.
 
 ### Step 5 — cache the dashboards
 
-Project summaries are cached for 60 s and invalidated when an entry is added. At a 90 % hit ratio, the dashboard share of replica reads drops by 90 %. That removes the need for the third replica, but we keep it as the spare.
+Project summaries are cached for 60 s and invalidated when an entry is added. Suppose 3,000 of the 5,100 eventual reads/s are dashboard views. At a 90 % hit ratio they become 300, so replicas carry about 2,100 + 300 = 2,400 reads/s: 2,400 ÷ 1,800 ≈ 1.3 → 2 replicas, plus 1 spare = 3 instead of 4. The cache is worth it only if it costs less than the replica it removes, and the database must still survive a cold cache (see the failure table above).
 
 ### Step 6 — decide about sharding
 
@@ -321,12 +321,12 @@ Writes: 1,400/s on a large primary is within what PostgreSQL can do with good ha
 The code shows the parts the application owns: routing each query to the primary or a replica with read-your-writes and a lag limit, a tenant shard directory, and a cache-aside dashboard service. The database is an in-memory fake behind interfaces, so everything compiles and runs without PostgreSQL.
 
 ```text
-SiteLog.Api/
+HourLog.Api/
   Program.cs
   Data/DbRouting.cs
   Data/TenantShardDirectory.cs
-  Progress/ProgressStore.cs
-  Progress/ProjectSummaryService.cs
+  Timesheets/TimeEntryStore.cs
+  Timesheets/ProjectSummaryService.cs
 ```
 
 With Npgsql in a real app, a multi-host data source can pick primary or standby connections for you. This snippet needs the Npgsql package, so it is not part of the compiled set:
@@ -334,7 +334,7 @@ With Npgsql in a real app, a multi-host data source can pick primary or standby 
 ```csharp
 // Npgsql: one data source over several hosts, then pick by role.
 var multi = new NpgsqlDataSourceBuilder(
-        "Host=pg-primary,pg-replica-1,pg-replica-2;Database=sitelog;Username=app")
+        "Host=pg-primary,pg-replica-1,pg-replica-2;Database=hourlog;Username=app")
     .BuildMultiHost();
 var primary  = multi.WithTargetSession(TargetSessionAttributes.Primary);
 var replicas = multi.WithTargetSession(TargetSessionAttributes.PreferStandby);
@@ -343,7 +343,7 @@ var replicas = multi.WithTargetSession(TargetSessionAttributes.PreferStandby);
 ```csharp file=Data/DbRouting.cs
 using System.Collections.Concurrent;
 
-namespace SiteLog.Data;
+namespace HourLog.Data;
 
 public enum DbRole { Primary, Replica }
 
@@ -394,7 +394,7 @@ public sealed class DbRouter(IReplicaLagMonitor lag, TimeProvider clock, DbRouti
 ```csharp file=Data/TenantShardDirectory.cs
 using System.Text;
 
-namespace SiteLog.Data;
+namespace HourLog.Data;
 
 /// <summary>Directory with hash fallback: big tenants are pinned to a shard; everyone else is placed by a stable hash.</summary>
 public sealed class TenantShardDirectory(int shardCount, IReadOnlyDictionary<long, int> pinned)
@@ -417,59 +417,59 @@ public sealed class TenantShardDirectory(int shardCount, IReadOnlyDictionary<lon
 }
 ```
 
-```csharp file=Progress/ProgressStore.cs
+```csharp file=Timesheets/TimeEntryStore.cs
 using System.Collections.Concurrent;
-using SiteLog.Data;
+using HourLog.Data;
 
-namespace SiteLog.Progress;
+namespace HourLog.Timesheets;
 
-public sealed record ProgressEntry(Guid Id, long TenantId, long ProjectId, DateOnly Date, string Activity, decimal Quantity, string CreatedBy);
+public sealed record TimeEntry(Guid Id, long TenantId, long ProjectId, DateOnly Date, string Activity, decimal Hours, string CreatedBy);
 
-public interface IProgressStore
+public interface ITimeEntryStore
 {
-    Task AddAsync(ProgressEntry entry, CancellationToken ct);
-    Task<IReadOnlyList<ProgressEntry>> ForProjectAsync(long projectId, DbRole role, CancellationToken ct);
-    Task<IReadOnlyList<ProgressEntry>> ForUserAsync(string userId, DbRole role, CancellationToken ct);
+    Task AddAsync(TimeEntry entry, CancellationToken ct);
+    Task<IReadOnlyList<TimeEntry>> ForProjectAsync(long projectId, DbRole role, CancellationToken ct);
+    Task<IReadOnlyList<TimeEntry>> ForUserAsync(string userId, DbRole role, CancellationToken ct);
 }
 
 /// <summary>Stand-in for PostgreSQL. A real implementation opens a connection from the primary or replica data source by role.</summary>
-public sealed class InMemoryProgressStore : IProgressStore
+public sealed class InMemoryTimeEntryStore : ITimeEntryStore
 {
-    private readonly ConcurrentBag<ProgressEntry> _rows = new();
+    private readonly ConcurrentBag<TimeEntry> _rows = new();
     public ConcurrentDictionary<DbRole, int> QueriesByRole { get; } = new();
 
-    public Task AddAsync(ProgressEntry entry, CancellationToken ct)
+    public Task AddAsync(TimeEntry entry, CancellationToken ct)
     {
         _rows.Add(entry);
         QueriesByRole.AddOrUpdate(DbRole.Primary, 1, (_, n) => n + 1);
         return Task.CompletedTask;
     }
 
-    public Task<IReadOnlyList<ProgressEntry>> ForProjectAsync(long projectId, DbRole role, CancellationToken ct)
+    public Task<IReadOnlyList<TimeEntry>> ForProjectAsync(long projectId, DbRole role, CancellationToken ct)
     {
         QueriesByRole.AddOrUpdate(role, 1, (_, n) => n + 1);
-        return Task.FromResult<IReadOnlyList<ProgressEntry>>(_rows.Where(r => r.ProjectId == projectId).ToList());
+        return Task.FromResult<IReadOnlyList<TimeEntry>>(_rows.Where(r => r.ProjectId == projectId).ToList());
     }
 
-    public Task<IReadOnlyList<ProgressEntry>> ForUserAsync(string userId, DbRole role, CancellationToken ct)
+    public Task<IReadOnlyList<TimeEntry>> ForUserAsync(string userId, DbRole role, CancellationToken ct)
     {
         QueriesByRole.AddOrUpdate(role, 1, (_, n) => n + 1);
-        return Task.FromResult<IReadOnlyList<ProgressEntry>>(
+        return Task.FromResult<IReadOnlyList<TimeEntry>>(
             _rows.Where(r => r.CreatedBy == userId).OrderByDescending(r => r.Date).ToList());
     }
 }
 ```
 
-```csharp file=Progress/ProjectSummaryService.cs
+```csharp file=Timesheets/ProjectSummaryService.cs
 using Microsoft.Extensions.Caching.Memory;
-using SiteLog.Data;
+using HourLog.Data;
 
-namespace SiteLog.Progress;
+namespace HourLog.Timesheets;
 
-public sealed record ProjectSummary(long ProjectId, int Entries, decimal TotalQuantity, DateOnly? LastEntry);
+public sealed record ProjectSummary(long ProjectId, int Entries, decimal TotalHours, DateOnly? LastEntry);
 
 /// <summary>Cache-aside over replica reads. Writes go to the primary and evict the cached summary.</summary>
-public sealed class ProjectSummaryService(IProgressStore store, DbRouter router, IMemoryCache cache)
+public sealed class ProjectSummaryService(ITimeEntryStore store, DbRouter router, IMemoryCache cache)
 {
     private static readonly TimeSpan Ttl = TimeSpan.FromSeconds(60);
     private static string Key(long projectId) => $"project-summary:{projectId}";
@@ -480,14 +480,14 @@ public sealed class ProjectSummaryService(IProgressStore store, DbRouter router,
 
         var role = router.ForRead(userId, ReadFreshness.Eventual);
         var rows = await store.ForProjectAsync(projectId, role, ct);
-        var summary = new ProjectSummary(projectId, rows.Count, rows.Sum(r => r.Quantity),
+        var summary = new ProjectSummary(projectId, rows.Count, rows.Sum(r => r.Hours),
             rows.Count == 0 ? null : rows.Max(r => r.Date));
 
         cache.Set(Key(projectId), summary, Ttl);
         return summary;
     }
 
-    public async Task<ProgressEntry> AddEntryAsync(ProgressEntry entry, CancellationToken ct)
+    public async Task<TimeEntry> AddEntryAsync(TimeEntry entry, CancellationToken ct)
     {
         router.ForWrite(entry.CreatedBy);
         await store.AddAsync(entry, ct);
@@ -498,8 +498,8 @@ public sealed class ProjectSummaryService(IProgressStore store, DbRouter router,
 ```
 
 ```csharp file=Program.cs
-using SiteLog.Data;
-using SiteLog.Progress;
+using HourLog.Data;
+using HourLog.Timesheets;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -509,7 +509,7 @@ builder.Services.AddSingleton(new DbRoutingOptions());
 builder.Services.AddSingleton<IReplicaLagMonitor, FixedLagMonitor>();
 builder.Services.AddSingleton<DbRouter>();
 builder.Services.AddSingleton(new TenantShardDirectory(4, new Dictionary<long, int> { [1001] = 3 }));  // big tenant pinned
-builder.Services.AddSingleton<IProgressStore, InMemoryProgressStore>();
+builder.Services.AddSingleton<ITimeEntryStore, InMemoryTimeEntryStore>();
 builder.Services.AddSingleton<ProjectSummaryService>();
 
 var app = builder.Build();
@@ -517,7 +517,7 @@ var app = builder.Build();
 app.MapPost("/projects/{projectId:long}/entries", async (long projectId, NewEntry body, ProjectSummaryService svc, CancellationToken ct) =>
 {
     // In production, user and tenant come from the authenticated principal.
-    var entry = new ProgressEntry(Guid.CreateVersion7(), body.TenantId, projectId, body.Date, body.Activity, body.Quantity, body.UserId);
+    var entry = new TimeEntry(Guid.CreateVersion7(), body.TenantId, projectId, body.Date, body.Activity, body.Hours, body.UserId);
     await svc.AddEntryAsync(entry, ct);
     return Results.Created($"/entries/{entry.Id}", entry);
 });
@@ -525,14 +525,14 @@ app.MapPost("/projects/{projectId:long}/entries", async (long projectId, NewEntr
 app.MapGet("/projects/{projectId:long}/summary", (long projectId, string userId, ProjectSummaryService svc, CancellationToken ct) =>
     svc.GetAsync(projectId, userId, ct));
 
-app.MapGet("/me/entries", async (string userId, DbRouter router, IProgressStore store, CancellationToken ct) =>
+app.MapGet("/me/entries", async (string userId, DbRouter router, ITimeEntryStore store, CancellationToken ct) =>
     await store.ForUserAsync(userId, router.ForRead(userId, ReadFreshness.ReadYourWrites), ct));
 
 app.MapGet("/debug/shard/{tenantId:long}", (long tenantId, TenantShardDirectory dir) => new { tenantId, shard = dir.ShardFor(tenantId) });
 
 app.Run();
 
-public sealed record NewEntry(long TenantId, string UserId, DateOnly Date, string Activity, decimal Quantity);
+public sealed record NewEntry(long TenantId, string UserId, DateOnly Date, string Activity, decimal Hours);
 ```
 
 Design notes:
@@ -545,7 +545,7 @@ Design notes:
 
 ## Bad design vs good design
 
-**Bad**: at 300 writes/s, a team decides "PostgreSQL won't scale" and shards across 8 databases by `hash(user_id) mod 8`. Project data written by different engineers lands on different shards. Every project dashboard fans out to 8 databases. A report needs data from all shards and runs in application code. Adding a 9th shard would move almost all users. Backups, migrations and monitoring are now 8 times the work, and there are still no replicas or standbys, so any one of 8 failures breaks part of the product.
+**Bad**: at 300 writes/s, a team decides "PostgreSQL won't scale" and shards across 8 databases by `hash(user_id) mod 8`. Project data written by different employees lands on different shards. Every project dashboard fans out to 8 databases. A report needs data from all shards and runs in application code. Adding a 9th shard would move almost all users. Backups, migrations and monitoring are now 8 times the work, and there are still no replicas or standbys, so any one of 8 failures breaks part of the product.
 
 **Good**: one primary with an HA standby, tuned queries, pooling, partitioning for retention, replicas and caching as reads grow, analytics moved to a warehouse. Every table carries `tenant_id` so that, if sharding is ever needed, the shard key is the tenant, which keeps each tenant's data and transactions on one shard.
 
@@ -561,42 +561,42 @@ Synchronous replication means a failover loses no committed data, but every comm
 
 ## Practical playground
 
-The SQL playground below creates a small partitioned `progress_entry` table with two monthly partitions. Try these:
+The SQL playground below creates a small partitioned `time_entry` table with two monthly partitions. Try these:
 
-1. `EXPLAIN SELECT * FROM progress_entry WHERE entry_date >= '2026-10-01';` and confirm only the October partition is scanned (partition pruning).
+1. `EXPLAIN SELECT * FROM time_entry WHERE entry_date >= '2026-10-01';` and confirm only the October partition is scanned (partition pruning).
 2. Run the same without the date filter and see both partitions appear.
 3. Find the busiest tenants with `GROUP BY tenant_id`, and decide whether hash sharding by tenant would be balanced.
-4. Try `DROP TABLE progress_entry_2026_09;` and notice how cheap retention becomes.
+4. Try `DROP TABLE time_entry_2026_09;` and notice how cheap retention becomes.
 
 :::playground type=sql title="Partition pruning and tenant skew"
 ```sql
-CREATE TABLE progress_entry (
+CREATE TABLE time_entry (
   tenant_id  int NOT NULL,
   project_id int NOT NULL,
   entry_id   int NOT NULL,
   entry_date date NOT NULL,
   activity   text NOT NULL,
-  quantity   numeric(10,2) NOT NULL,
+  hours      numeric(5,2) NOT NULL,
   PRIMARY KEY (entry_id, entry_date)
 ) PARTITION BY RANGE (entry_date);
-CREATE TABLE progress_entry_2026_09 PARTITION OF progress_entry FOR VALUES FROM ('2026-09-01') TO ('2026-10-01');
-CREATE TABLE progress_entry_2026_10 PARTITION OF progress_entry FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');
-INSERT INTO progress_entry VALUES
-  (1, 10, 1, '2026-09-28', 'Concrete pour (m3)', 42.5),
-  (1, 10, 2, '2026-10-02', 'Concrete pour (m3)', 38.0),
-  (1, 11, 3, '2026-10-03', 'Rebar (t)', 6.2),
-  (1, 11, 4, '2026-10-05', 'Rebar (t)', 4.8),
-  (2, 20, 5, '2026-10-04', 'Earthwork (m3)', 310.0),
-  (3, 30, 6, '2026-09-30', 'Bitumen (t)', 12.0),
-  (3, 30, 7, '2026-10-06', 'Bitumen (t)', 11.5),
-  (1, 12, 8, '2026-10-07', 'Formwork (m2)', 95.0);
+CREATE TABLE time_entry_2026_09 PARTITION OF time_entry FOR VALUES FROM ('2026-09-01') TO ('2026-10-01');
+CREATE TABLE time_entry_2026_10 PARTITION OF time_entry FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');
+INSERT INTO time_entry VALUES
+  (1, 10, 1, '2026-09-28', 'Development', 6.5),
+  (1, 10, 2, '2026-10-02', 'Development', 7.0),
+  (1, 11, 3, '2026-10-03', 'Code review', 2.0),
+  (1, 11, 4, '2026-10-05', 'Testing', 4.5),
+  (2, 20, 5, '2026-10-04', 'Client meeting', 1.5),
+  (3, 30, 6, '2026-09-30', 'Design', 5.0),
+  (3, 30, 7, '2026-10-06', 'Design', 6.0),
+  (1, 12, 8, '2026-10-07', 'Support', 3.5);
 ```
 :::
 
 ## Exercises
 
 :::exercise id=m11-database-architecture-ex1 difficulty=beginner kind=code title="Database capacity calculator"
-Before choosing a rung of the ladder, an engineer needs three numbers. Implement them in `DbCapacity`.
+Before choosing a rung of the ladder, you need three numbers. Implement them in `DbCapacity`.
 ::requirements
 - `ReplicasNeeded(double replicaReadsPerSec, double readsPerNode, double targetUtilisation, int spares)` returns `ceil(replicaReadsPerSec ÷ (readsPerNode × targetUtilisation)) + spares`, or `0` if `replicaReadsPerSec` is 0.
 - `StorageTbPerYear(double rowsPerDay, double bytesPerRow, double indexFactor)` returns `rowsPerDay × bytesPerRow × indexFactor × 365 ÷ 10^12`.
@@ -641,7 +641,7 @@ using Xunit;
 
 public class DbCapacityTests
 {
-    [Fact] public void Replicas_for_sitelog() => Assert.Equal(4, DbCapacity.ReplicasNeeded(5_100, 3_000, 0.6, 1));
+    [Fact] public void Replicas_for_hourlog() => Assert.Equal(4, DbCapacity.ReplicasNeeded(5_100, 3_000, 0.6, 1));
 
     [Fact] public void No_reads_no_replicas() => Assert.Equal(0, DbCapacity.ReplicasNeeded(0, 3_000, 0.6, 1));
 
@@ -700,8 +700,8 @@ public static class DbCapacity
 Add `MonthsUntilFull(double currentTb, double growthTbPerYear, double diskTb, double maxFill)` and use it to decide when partition archiving must start.
 :::
 
-:::exercise id=m11-database-architecture-ex2 difficulty=beginner kind=hld title="Scale SiteLog's read path"
-SiteLog's single PostgreSQL primary is at 85 % CPU during the evening peak. Analysis shows 8,500 reads/s and 1,400 writes/s. About 60 % of reads are dashboards and lists that can be a second stale, and the project dashboard is the most repeated read.
+:::exercise id=m11-database-architecture-ex2 difficulty=beginner kind=hld title="Scale HourLog's read path"
+HourLog's single PostgreSQL primary is at 85 % CPU during the evening peak. Analysis shows 8,500 reads/s and 1,400 writes/s. About 60 % of reads are dashboards and lists that can be a second stale, and the project dashboard is the most repeated read.
 
 Change the starter graph to take read load off the primary without sharding. Add notes on which reads go where and why.
 ::acceptance
@@ -722,9 +722,9 @@ Edges: api → cache, api → db (writes), api → replicas (reads), db → repl
 ```json
 {
   "nodes": [
-    { "id": "users", "type": "client", "label": "Site engineers + head office", "props": { "rps": 9900 } },
+    { "id": "users", "type": "client", "label": "Employees + managers", "props": { "rps": 9900 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
-    { "id": "api", "type": "app-server", "label": "SiteLog API", "props": { "instances": 12 } },
+    { "id": "api", "type": "app-server", "label": "HourLog API", "props": { "instances": 12 } },
     { "id": "db", "type": "database", "label": "PostgreSQL primary (85 % CPU)", "props": { "replicas": 0 } }
   ],
   "edges": [
@@ -738,9 +738,9 @@ Edges: api → cache, api → db (writes), api → replicas (reads), db → repl
 ```json
 {
   "nodes": [
-    { "id": "users", "type": "client", "label": "Site engineers + head office", "props": { "rps": 9900 } },
+    { "id": "users", "type": "client", "label": "Employees + managers", "props": { "rps": 9900 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer", "props": { "multiAz": true } },
-    { "id": "api", "type": "app-server", "label": "SiteLog API", "props": { "instances": 12 } },
+    { "id": "api", "type": "app-server", "label": "HourLog API", "props": { "instances": 12 } },
     { "id": "cache", "type": "cache", "label": "Redis: project summaries", "props": { "ttlSeconds": 60 } },
     { "id": "db", "type": "database", "label": "PostgreSQL primary + sync HA standby", "props": { "multiAz": true } },
     { "id": "r1", "type": "read-replica", "label": "Replica 1 (lists, dashboards)" },
@@ -928,21 +928,21 @@ Add a `MaxPrimaryReadShare` guard: if more than 50 % of reads in the last 10 s w
 :::
 
 :::exercise id=m11-database-architecture-ex4 difficulty=intermediate kind=sql ordered=true title="Find the hot tenants before you shard"
-Before choosing between hash sharding and a directory, you must know whether a few tenants dominate. Write a query that returns the top 3 tenants by number of progress entries, with `tenant_id`, `entries` and `pct` (their share of all entries, as a percentage rounded to 1 decimal place), ordered by `entries` descending and then `tenant_id` ascending.
+Before choosing between hash sharding and a directory, you must know whether a few tenants dominate. Write a query that returns the top 3 tenants by number of time entries, with `tenant_id`, `entries` and `pct` (their share of all entries, as a percentage rounded to 1 decimal place), ordered by `entries` descending and then `tenant_id` ascending.
 ::setup
 ```sql
 CREATE TABLE tenant (
   tenant_id int PRIMARY KEY,
   name      text NOT NULL
 );
-CREATE TABLE progress_entry (
+CREATE TABLE time_entry (
   entry_id   int PRIMARY KEY,
   tenant_id  int NOT NULL REFERENCES tenant (tenant_id),
   project_id int NOT NULL,
   entry_date date NOT NULL
 );
-INSERT INTO tenant VALUES (1,'National Highways Contractor'),(2,'Metro Builders'),(3,'Coastal Ports Ltd'),(4,'Hill Roads'),(5,'Smart City Works');
-INSERT INTO progress_entry
+INSERT INTO tenant VALUES (1,'Infotech Services'),(2,'PixelCraft Agency'),(3,'Ledger Consultants'),(4,'Northwind Analytics'),(5,'Bluepeak Labs');
+INSERT INTO time_entry
 SELECT g, CASE WHEN g <= 600 THEN 1 WHEN g <= 780 THEN 2 WHEN g <= 900 THEN 3 WHEN g <= 960 THEN 4 ELSE 5 END,
        g % 40, DATE '2026-10-01' + (g % 19)
 FROM generate_series(1, 1000) AS g;
@@ -952,7 +952,7 @@ FROM generate_series(1, 1000) AS g;
 SELECT tenant_id,
        count(*) AS entries,
        round(100.0 * count(*) / sum(count(*)) OVER (), 1) AS pct
-FROM progress_entry
+FROM time_entry
 GROUP BY tenant_id
 ORDER BY entries DESC, tenant_id
 LIMIT 3;
@@ -974,7 +974,7 @@ Multiply by `100.0` (not `100`) to avoid integer division, then `round(..., 1)`.
 SELECT tenant_id,
        count(*) AS entries,
        round(100.0 * count(*) / sum(count(*)) OVER (), 1) AS pct
-FROM progress_entry
+FROM time_entry
 GROUP BY tenant_id
 ORDER BY entries DESC, tenant_id
 LIMIT 3;
@@ -1069,10 +1069,10 @@ public class ShardMapTests
     [Fact] public void Pin_overrides_hash()
     {
         var m = new ShardMap(4);
-        var hashed = m.ShardFor("big-contractor");
+        var hashed = m.ShardFor("big-customer");
         var target = (hashed + 1) % 4;
-        m.Pin("big-contractor", target);
-        Assert.Equal(target, m.ShardFor("big-contractor"));
+        m.Pin("big-customer", target);
+        Assert.Equal(target, m.ShardFor("big-customer"));
     }
 
     [Fact] public void Pin_out_of_range_throws() =>
@@ -1159,8 +1159,8 @@ Add `Plan(int newShardCount)` that lists every non-pinned tenant whose shard cha
 [Fact]
 public async Task Dashboard_query_prunes_to_one_partition()
 {
-    var plan = await _db.ExplainAsync("SELECT * FROM progress_entry WHERE entry_date >= DATE '2026-10-01'");
-    Assert.DoesNotContain("progress_entry_2026_09", plan);
+    var plan = await _db.ExplainAsync("SELECT * FROM time_entry WHERE entry_date >= DATE '2026-10-01'");
+    Assert.DoesNotContain("time_entry_2026_09", plan);
 }
 ```
 
@@ -1171,7 +1171,8 @@ public async Task Dashboard_query_prunes_to_one_partition()
 - **Most SaaS products** run for years on one PostgreSQL or MySQL primary with a standby and a few replicas. Sharding usually comes late, by tenant.
 - **Multi-tenant platforms** often isolate their largest customers on dedicated databases (a directory of tenant → database), which also helps with data-residency and noisy-neighbour complaints.
 - **Payments and ledgers** keep balances in a relational database with strong consistency, and push events to other stores for analytics and search.
-- **IoT and telemetry**, such as sensors on bridges or construction equipment, write very high volumes of time-stamped readings. They go to a time-series or wide-column store, while asset and project data stays relational.
+- **IoT and telemetry**, such as smart electricity meters or delivery-fleet GPS trackers, write very high volumes of time-stamped readings. They go to a time-series or wide-column store, while device and customer data stays relational.
+- **Growing products climb the ladder in stages.** [Scaling a real system from 100 to 10 million users](#/lesson/m17-scaling-journey) follows a grocery-delivery app from one PostgreSQL VM to a managed primary with a standby, then replicas and caching, then monthly partitions, and finally per-city partitioning, each step triggered by a measured limit rather than a diagram.
 - **Government dashboards** that aggregate data from many districts typically pair a transactional database with a separate reporting store, so month-end reports never slow down data entry.
 
 ## Interview questions
@@ -1200,7 +1201,7 @@ First measure: `pg_stat_statements` for top queries by total time, and split rea
 ::q advanced
 When would you choose a NoSQL database over PostgreSQL for part of a system? Give an example and the trade-offs.
 ::a
-When one access pattern clearly doesn't fit a single relational primary. Example: equipment telemetry at 200,000 readings per second, always written append-only and read by device and time range. A wide-column or time-series store spreads those writes across many nodes and keeps time-ordered data together by device. Trade-offs: no joins or ad-hoc queries, you model tables per query, consistency is often tunable or eventual, and you run another technology. Keep the business data (assets, projects, contracts, users) in PostgreSQL, where transactions and constraints matter, and connect the two with events (outbox) instead of dual writes. If the volume were 2,000 readings per second, PostgreSQL with partitioning would likely be enough, and simpler.
+When one access pattern clearly doesn't fit a single relational primary. Example: delivery-fleet telemetry at 200,000 readings per second, always written append-only and read by device and time range. A wide-column or time-series store spreads those writes across many nodes and keeps time-ordered data together by device. Trade-offs: no joins or ad-hoc queries, you model tables per query, consistency is often tunable or eventual, and you run another technology. Keep the business data (vehicles, customers, orders, users) in PostgreSQL, where transactions and constraints matter, and connect the two with events (outbox) instead of dual writes. If the volume were 2,000 readings per second, PostgreSQL with partitioning would likely be enough, and simpler.
 :::
 
 ## Summary and revision
@@ -1241,7 +1242,7 @@ A: Tuning: indexes, query fixes and removing N+1 patterns, found with pg_stat_st
 
 :::quiz pass=70
 ::q single
-SiteLog has 140 writes/s and 850 reads/s at peak, with 1.8 TB of growth per year. What's the most appropriate database design today?
+HourLog has 140 writes/s and 850 reads/s at peak, with 1.8 TB of growth per year. What's the most appropriate database design today?
 - [ ] Shard across 8 PostgreSQL servers by user id.
 - [ ] Move everything to a wide-column NoSQL store.
 - [x] One tuned PostgreSQL primary with an HA standby, pooling, partitioning for retention and tested backups.
@@ -1262,7 +1263,7 @@ An approval screen reads a request's status from a replica that's 1 s behind. Wh
 - [ ] The primary will be overloaded.
 > Reads that lead to a decision or a write need current data. Route them to the primary (strong freshness) and use a conditional update to guard the transition.
 ::q multi
-Which statements about partitioning a 2-billion-row `progress_entry` table by month are true? (Select all that apply.)
+Which statements about partitioning a 2-billion-row `time_entry` table by month are true? (Select all that apply.)
 - [x] Queries filtered by date can skip irrelevant partitions.
 - [x] Dropping a year of old data can be done by dropping partitions instead of a huge DELETE.
 - [ ] It doubles write capacity.
@@ -1276,9 +1277,9 @@ Your largest tenant has 60 % of all rows. You plan to shard by `hash(tenant_id) 
 - [ ] The database rebalances automatically.
 > Hashing places a whole tenant on one shard. Pin the big tenant to a dedicated shard with a directory, or shard that tenant internally by another key.
 ::q single
-You need to store sensor readings from 50,000 bridge monitoring devices, 4 readings per second each, queried by device and time range. Asset and contract data needs transactions. What's a sensible split?
+You need to store GPS readings from 50,000 delivery vehicles, 4 readings per second each, queried by vehicle and time range. Vehicle, driver and customer data needs transactions. What's a sensible split?
 - [ ] Everything in one PostgreSQL table without partitioning.
-- [x] Readings in a time-series or wide-column store (or a partitioned time-series extension), asset and contract data in PostgreSQL.
+- [x] Readings in a time-series or wide-column store (or a partitioned time-series extension), vehicle, driver and customer data in PostgreSQL.
 - [ ] Everything in a key-value cache.
 - [ ] Everything in a graph database.
 > 50,000 × 4 = 200,000 writes/s of append-only, time-ordered data suits a store built for that pattern, while transactional business data stays relational.

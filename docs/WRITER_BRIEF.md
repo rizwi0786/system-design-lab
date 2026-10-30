@@ -14,7 +14,7 @@ The repo is at /home/claude/sdlp.
 - Learner may be a beginner. Plain English first, then the correct technical term in brackets,
   e.g. "a waiting line for messages (message queue)". Use analogies and concrete numbers.
 - Concise sentences, no filler, no repetition to pad length. English only.
-- Indian context is welcome in examples (₹, UPI, GST, Indian cities, infrastructure projects) but keep it natural and mixed with global examples.
+- Use everyday, real-life scenarios any learner already understands: online shopping, food delivery, ride-hailing, UPI/bank payments, movie, train and flight tickets, hospital appointments, streaming, social media, school and college systems. Vary the domain from lesson to lesson. Do NOT use construction or civil-engineering scenarios (highways, BOQ, RA bills, site engineers, contractors, tenders). Indian context (₹, UPI, GST, Indian cities) is welcome, mixed naturally with global examples.
 - Be technically accurate and current (.NET 10, C# 14, ASP.NET Core 10, PostgreSQL 17). Never invent benchmark
   numbers; label estimates as estimates. Don't claim to know a company's proprietary architecture —
   say "a system like X" and reason from public engineering principles.

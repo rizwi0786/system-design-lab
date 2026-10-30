@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 80
 prerequisites: [m11-nfrs, m11-capacity-estimation]
-related: [m14-sli-slo-sla, m13-replication, m14-dr, m13-split-brain, m10-timeouts-retries, m03-health-shutdown]
+related: [m14-sli-slo-sla, m13-replication, m14-dr, m13-split-brain, m10-timeouts-retries, m03-health-shutdown, m17-scaling-journey]
 tags: [hld, availability, reliability, redundancy, mtbf, mttr]
 patterns: [Redundancy, Health Endpoint Monitoring]
 summary: Turn "it must always be up" into numbers. Learn the downtime each extra nine buys, how availability multiplies through a chain and improves with redundancy, and why cutting repair time (MTTR) is often the cheapest way to more nines.
@@ -290,7 +290,7 @@ Accept the top-up, write it to the database with status `Pending`, and push the 
 LB 0.9999 × API 0.999975 × DB 0.9995 = 0.99938  →  99.94 %
 ```
 
-Very close to 99.95 %. The gateway's outages now delay settlement instead of rejecting users.
+Very close to 99.95 %. The gateway's outages now delay settlement instead of rejecting users. This is not free: the worker must send an idempotency key with every gateway call (so a retry after a timeout never charges the card twice), and the card holder must see a clear `Pending` state followed by a success or refund notification.
 
 ### Step 5 — Attack MTTR
 
@@ -1055,7 +1055,7 @@ What the numbers teach: a 3-node cluster that needs 2 nodes (99.9702 % with 99 %
 - Treating quorum and replica availability as the same thing. A read that any replica can serve is 1-of-n; a write that needs a majority is k-of-n.
 :::
 
-:::exercise id=m11-availability-ex6 difficulty=advanced kind=written title="Is the fifth nine worth it?"
+:::exercise id=m11-availability-ex6 difficulty=advanced kind=written title="Is the fourth nine worth it?"
 A ride-hailing company in Bengaluru runs dispatch at 99.95 %. Leadership wants 99.99 %. Peak is 6,000 ride requests per minute between 6 and 10 p.m. Average gross booking value is ₹280 and roughly 30 % of users who fail to book switch to a competitor for that ride.
 
 Write a one-page recommendation: what 99.99 % would require, an estimate of the value of the extra availability, and whether you recommend it.
@@ -1133,7 +1133,8 @@ public class DatabaseReadinessCheckTests
 
 - **Cloud SLAs** are published per service and often differ by configuration, for example a single VM versus VMs across availability zones, or a database with or without zone-redundant high availability. Always read the SLA for the exact configuration you deploy, and remember an SLA is a refund promise, not a guarantee of uptime.
 - **Payment systems like UPI apps** keep the critical path ("debit and confirm") short and push notifications, rewards and analytics to asynchronous pipelines, so those systems can fail without blocking payments.
-- **Infrastructure project dashboards** (progress tracking for highways or metro construction) are usually fine at 99.5 %: users are office staff, and a nightly batch can catch up. Spending on four nines there is waste.
+- **Internal back-office tools** (a school's fee-reconciliation dashboard, a gym chain's monthly membership report) are usually fine at 99.5 %: users are office staff, and a nightly batch can catch up. Spending on four nines there is waste.
+- **Growing systems buy nines in stages.** [Scaling a real system from 100 to 10 million users](#/lesson/m17-scaling-journey) follows a grocery-delivery app from one VM (roughly two nines, and nobody minds during a pilot) to multi-zone, cell-based deployments, adding redundancy only when the business cost of downtime justifies it.
 - **Kubernetes and Azure App Service** use liveness and readiness probes exactly as in this lesson. Misconfigured liveness probes that check dependencies are a known cause of restart storms.
 - **Consensus systems** such as etcd recommend odd cluster sizes of 3 or 5 across failure domains, because of the k-of-n arithmetic in exercise 5.
 

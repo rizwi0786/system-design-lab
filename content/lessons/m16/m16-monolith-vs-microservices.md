@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 90
 prerequisites: [m08-ddd-modular-monolith, m08-bounded-contexts, m10-sync-async, m11-availability]
-related: [m16-service-boundaries, m16-strangler-acl, m16-gateway-bff, m12-outbox, m16-architecture-evolution, m15-deployment-strategies]
+related: [m16-service-boundaries, m16-strangler-acl, m17-scaling-journey, m16-gateway-bff, m12-outbox, m16-architecture-evolution, m15-deployment-strategies]
 tags: [architecture, microservices, modular-monolith, conways-law, distributed-monolith, migration]
 patterns: [Modular Monolith, Microservices, Strangler Fig]
 summary: How to choose between one well-structured deployable and many independent services, using four criteria (team topology, deploy independence, data ownership, operational cost), how to spot a distributed monolith, and how to migrate in either direction safely.
@@ -44,13 +44,13 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Think of a large construction company building a highway.
+Think of a company that runs a chain of gyms.
 
-**Option 1: one big site office (a monolith).** Everyone — design, billing, quality inspection, procurement — sits in one building. Need a signature from billing? Walk ten metres. Need to change a process? Call one meeting. The risk: if nobody organises the building, papers from every department pile up on every desk, and nobody can find anything. That messy version is a **big ball of mud**.
+**Option 1: one big head office (a monolith).** Everyone — memberships, billing, trainer scheduling, purchasing — sits in one open hall. Need a signature from billing? Walk ten metres. Need to change a process? Call one meeting. The risk: if nobody organises the building, papers from every department pile up on every desk, and nobody can find anything. That messy version is a **big ball of mud**.
 
-**Option 2: one building with clearly separated departments (a modular monolith).** Same building, same address, but each department has its own room, its own filing cabinet and a counter where other departments must submit requests. Billing never walks into the inspection room and edits a report. Communication is still fast — it is the same building — but it is disciplined.
+**Option 2: one building with clearly separated departments (a modular monolith).** Same building, same address, but each department has its own room, its own filing cabinet and a counter where other departments must submit requests. Billing never walks into the trainers' room and edits a workout plan. Communication is still fast — it is the same building — but it is disciplined.
 
-**Option 3: separate offices in different cities (microservices).** Billing in Gurgaon, inspections in Pune, procurement in Chennai. Each office hires, works and changes its process on its own schedule. That is a real benefit when you have hundreds of people. But every request now needs a courier, couriers get lost or delayed, each office needs its own security guard, reception and electricity bill, and if the courier service stops, work stops.
+**Option 3: separate offices in different cities (microservices).** Billing in Gurgaon, trainer scheduling in Pune, purchasing in Chennai. Each office hires, works and changes its process on its own schedule. That is a real benefit when you have hundreds of people. But every request now needs a courier, couriers get lost or delayed, each office needs its own security guard, reception and electricity bill, and if the courier service stops, work stops.
 
 The question is not "which is modern?" It is: **how many people, working on how many independent things, justify the cost of couriers?**
 
@@ -94,7 +94,7 @@ Fowler calls this the **microservice premium**: a fixed tax you pay before you g
 
 ### Back-of-the-envelope: what a call chain costs
 
-Suppose an "approve a contractor's bill" request passes through five services in series: gateway → billing → projects → contracts → notifications. Each service is up 99.9 % of the time.
+Suppose a "renew my membership" request passes through five services in series: gateway → billing → members → plans → notifications. Each service is up 99.9 % of the time.
 
 **Availability.** In series, availabilities multiply:
 
@@ -131,7 +131,7 @@ A rough guideline from practice, not a law: below about 3 teams, a modular monol
 
 Ask: **would separate deployment actually be independent?** Measure it from your history:
 
-- How often does each area change? Billing rules may change weekly (GST rates, new contract types); the document archive changes twice a year.
+- How often does each area change? Billing rules may change weekly (new plan types, promo codes, GST changes); the waiver-document archive changes twice a year.
 - When area A changes, how often must area B change in the same release? If the answer is "most of the time", they belong in the same deployable — splitting them just turns one deploy into two coordinated deploys.
 
 Independent deployability is the core promise of microservices. If you cannot keep it, you do not get the benefit.
@@ -141,7 +141,7 @@ Independent deployability is the core promise of microservices. If you cannot ke
 A real service owns its data: **no other service reads or writes its tables**. Others ask through an API or keep their own copy updated by events. So ask:
 
 - Can you draw a line where each table has exactly one writer?
-- Which business rules need *one transaction* across areas? "Approve bill and reserve budget atomically" is hard to split. If the rule really needs strong consistency, keep both sides together, or accept a saga with compensations ([see the lesson](#/lesson/m12-sagas)).
+- Which business rules need *one transaction* across areas? "Renew the membership and record the payment atomically" is hard to split. If the rule really needs strong consistency, keep both sides together, or accept a saga with compensations ([see the lesson](#/lesson/m12-sagas)).
 - How many reports join across areas? Every cross-area join becomes either an API composition or a separate read model.
 
 #### 4. Operational cost and maturity (can you run it)
@@ -189,6 +189,8 @@ Each sign points to a fix: redraw boundaries so things that change together live
 - **One hot component**: extract *that component* (for example, a PDF rendering worker reading from a queue) and keep the rest together. This is not "going microservices"; it is moving one workload.
 - **Fault isolation only**: run the same monolith code as two deployments with different roles (web and background workers), so a heavy report job cannot starve web requests.
 
+The [scaling journey](#/lesson/m17-scaling-journey) case study follows one product from a single server to millions of users; service extraction appears late, after replicas, caching, queues and background workers, and only for the parts whose team or load clearly diverged.
+
 ## Visual explanation
 
 ### Architecture: modular monolith versus microservices
@@ -197,61 +199,61 @@ Each sign points to a fix: redraw boundaries so things that change together live
 flowchart LR
     subgraph MM["Modular monolith (one deployable)"]
         direction TB
-        GW1["ASP.NET Core host"] --> P1["Projects module"]
+        GW1["ASP.NET Core host"] --> P1["Members module"]
         GW1 --> B1["Billing module"]
         P1 -- "IBillingApi (in-process)" --> B1
-        P1 -. "MilestoneCompleted event (in-process)" .-> B1
-        P1 --> S1[("projects schema")]
+        P1 -. "PlanActivated event (in-process)" .-> B1
+        P1 --> S1[("members schema")]
         B1 --> S2[("billing schema")]
     end
     subgraph MS["Microservices (many deployables)"]
         direction TB
-        GW2["API gateway"] --> P2["Projects service"]
+        GW2["API gateway"] --> P2["Members service"]
         GW2 --> B2["Billing service"]
         P2 -- "HTTP or gRPC" --> B2
         P2 -. "message broker" .-> B2
-        P2 --> D1[("projects DB")]
+        P2 --> D1[("members DB")]
         B2 --> D2[("billing DB")]
     end
 ```
 
-On the left, one ASP.NET Core host contains both modules. The projects module calls billing only through the `IBillingApi` interface (solid arrow) and tells billing about a finished milestone by publishing an in-process event (dotted arrow). Each module owns a separate schema in one PostgreSQL server. On the right, the same two capabilities run as separate services. The interface call becomes an HTTP or gRPC call, the in-process event becomes a message through a broker, and each service has its own database. **The logical design is identical; only the transport changes.** That is why a well-built modular monolith is the cheapest starting point for a later extraction.
+On the left, one ASP.NET Core host contains both modules. The members module calls billing only through the `IBillingApi` interface (solid arrow) and tells billing about a newly activated plan by publishing an in-process event (dotted arrow). Each module owns a separate schema in one PostgreSQL server. On the right, the same two capabilities run as separate services. The interface call becomes an HTTP or gRPC call, the in-process event becomes a message through a broker, and each service has its own database. **The logical design is identical; only the transport changes.** That is why a well-built modular monolith is the cheapest starting point for a later extraction.
 
 ### Sequence: one request in each shape
 
 ```mermaid
 sequenceDiagram
-    participant U as Site engineer
+    participant U as Front-desk staff
     participant H as Monolith host
-    participant P as Projects module
+    participant P as Members module
     participant B as Billing module
     participant DB as PostgreSQL
-    U->>H: POST complete milestone M3
-    H->>P: CompleteAsync(project, M3)
-    P->>DB: update milestone (projects schema)
-    P->>B: publish MilestoneCompleted (in-process)
+    U->>H: POST activate plan GOLD-12M
+    H->>P: ActivateAsync(member, GOLD-12M)
+    P->>DB: activate plan (members schema)
+    P->>B: publish PlanActivated (in-process)
     B->>DB: insert draft invoice (billing schema)
     B-->>P: handled
     P-->>U: 200 OK
-    Note over P,B: In microservices the publish becomes a broker message.<br/>The engineer gets 200 before billing runs, and billing may lag by seconds.
+    Note over P,B: In microservices the publish becomes a broker message.<br/>The front desk gets 200 before billing runs, and billing may lag by seconds.
 ```
 
-The engineer completes milestone M3. In the monolith, the projects module updates its table, publishes an event, and the billing handler creates a draft invoice before the response returns. Both steps can even share one database transaction if you choose. The note shows what changes after extraction: the event goes through a broker, the user gets a response before the invoice exists, and the billing screen may be a few seconds behind. Your UI and your business must accept that delay before you split.
+The front-desk staff activate a 12-month Gold plan for a member. In the monolith, the members module updates its table, publishes an event, and the billing handler creates a draft invoice before the response returns. Both steps can even share one database transaction if you choose. The note shows what changes after extraction: the event goes through a broker, the user gets a response before the invoice exists, and the billing screen may be a few seconds behind. Your UI and your business must accept that delay before you split.
 
 ## Step-by-step example
 
-Scenario: a platform that manages infrastructure projects for 300 contractors. It has four areas: **Projects** (milestones, schedules), **Billing** (running-account bills, GST invoices), **Documents** (drawings, approvals) and **Inspections** (site quality checks with photos). The company has 14 developers in two teams. Load: about 150 requests per second at peak. The CTO asks: "Should we rebuild as microservices?"
+Scenario: **FitHub**, a platform that runs memberships for 300 gyms and fitness studios. It has four areas: **Members** (sign-ups, plans, class bookings), **Billing** (membership invoices with 18 % GST, refunds), **Documents** (waivers, health declarations) and **Progress** (trainer check-ins with body-measurement photos and PDF progress reports). The company has 14 developers in two teams. Load: about 150 requests per second at peak. The CTO asks: "Should we rebuild as microservices?"
 
 ### Step 1 — score the four criteria
 
 - **Team topology**: two teams. Splitting into four services gives each team two services to run, with no one dedicated to the platform. → monolith.
-- **Deploy independence**: the git history of the last 6 months shows 70 % of billing changes also touched projects code (milestone rules drive billing). → keep Projects and Billing together.
-- **Data ownership**: Billing reads milestone completion; Inspections owns photos; Documents owns files. Inspections and Documents have clean ownership.
+- **Deploy independence**: the git history of the last 6 months shows 70 % of billing changes also touched members code (plan rules drive billing). → keep Members and Billing together.
+- **Data ownership**: Billing reads plan activations; Progress owns photos and reports; Documents owns files. Progress and Documents have clean ownership.
 - **Operational cost**: deployments are manual to IIS; no tracing. → not ready for many services.
 
 ### Step 2 — find the one real outlier
 
-Inspections uploads about 20,000 photos a day and generates thumbnails and PDF reports. Thumbnail generation spikes CPU and slowed down billing screens last month. That is a **scaling and fault-isolation** problem, not a team problem.
+Progress receives about 20,000 photos a day from trainers' phones and generates thumbnails and PDF reports. Thumbnail generation spikes CPU and slowed down billing screens last month. That is a **scaling and fault-isolation** problem, not a team problem.
 
 ### Step 3 — decide
 
@@ -262,19 +264,19 @@ Inspections uploads about 20,000 photos a day and generates thumbnails and PDF r
 
 ### Step 4 — define what would change the answer
 
-Write it down: "We will extract Inspections as a service if (a) a dedicated team owns it, (b) it changes independently in more than 80 % of releases for two quarters, and (c) we have CI/CD per deployable and distributed tracing." Decisions with explicit re-evaluation triggers age far better than "we'll see".
+Write it down: "We will extract Progress as a service if (a) a dedicated team owns it, (b) it changes independently in more than 80 % of releases for two quarters, and (c) we have CI/CD per deployable and distributed tracing." Decisions with explicit re-evaluation triggers age far better than "we'll see".
 
 ## Production-style C# implementation
 
-We build the modular monolith from the example: two modules (Projects and Billing), each with a public **contracts** namespace and a private **internal** namespace, an in-process event bus that can later be replaced by a broker, and an automated boundary check.
+We build the modular monolith from the example: two modules (Members and Billing), each with a public **contracts** namespace and a private **internal** namespace, an in-process event bus that can later be replaced by a broker, and an automated boundary check.
 
 ```text
-ProjectHub.Api/
+FitHub.Api/
   Program.cs
   Modules/IModule.cs
   Modules/Shared/IntegrationEvents.cs
-  Modules/Projects/Contracts/ProjectsContracts.cs
-  Modules/Projects/ProjectsModule.cs
+  Modules/Members/Contracts/MembersContracts.cs
+  Modules/Members/MembersModule.cs
   Modules/Billing/Contracts/BillingContracts.cs
   Modules/Billing/BillingModule.cs
   Architecture/ModuleBoundaryRules.cs
@@ -283,7 +285,7 @@ ProjectHub.Api/
 Rule of the codebase: **code in module A may reference module B only through `B.Contracts`, or the shared kernel.**
 
 ```csharp file=Modules/IModule.cs
-namespace ProjectHub.Modules;
+namespace FitHub.Modules;
 
 /// <summary>A self-contained business module. The host knows modules only through this interface.</summary>
 public interface IModule
@@ -297,7 +299,7 @@ public interface IModule
 ```csharp file=Modules/Shared/IntegrationEvents.cs
 using Microsoft.Extensions.Logging;
 
-namespace ProjectHub.Modules.Shared;
+namespace FitHub.Modules.Shared;
 
 /// <summary>An event other modules may react to. It is part of a module's public contract.</summary>
 public interface IIntegrationEvent
@@ -333,41 +335,41 @@ public sealed class InProcessEventBus(IServiceProvider services, ILogger<InProce
 }
 ```
 
-```csharp file=Modules/Projects/Contracts/ProjectsContracts.cs
-using ProjectHub.Modules.Shared;
+```csharp file=Modules/Members/Contracts/MembersContracts.cs
+using FitHub.Modules.Shared;
 
-namespace ProjectHub.Modules.Projects.Contracts;
+namespace FitHub.Modules.Members.Contracts;
 
-/// <summary>Published when a site engineer marks a contract milestone complete.</summary>
-public sealed record MilestoneCompleted(
+/// <summary>Published when a member's plan is activated (bought or renewed) at the front desk or in the app.</summary>
+public sealed record PlanActivated(
     Guid EventId,
     DateTimeOffset OccurredAt,
-    Guid ProjectId,
-    string MilestoneCode,
-    decimal MilestoneValue) : IIntegrationEvent;
+    Guid MemberId,
+    string PlanCode,
+    decimal PlanPrice) : IIntegrationEvent;
 ```
 
 ```csharp file=Modules/Billing/Contracts/BillingContracts.cs
-namespace ProjectHub.Modules.Billing.Contracts;
+namespace FitHub.Modules.Billing.Contracts;
 
-public sealed record InvoiceSummary(Guid InvoiceId, Guid ProjectId, string MilestoneCode,
+public sealed record InvoiceSummary(Guid InvoiceId, Guid MemberId, string PlanCode,
     decimal NetAmount, decimal Gst, decimal Total);
 
 /// <summary>The only way other modules may ask Billing for data.</summary>
 public interface IBillingApi
 {
-    Task<IReadOnlyList<InvoiceSummary>> GetInvoicesForProjectAsync(Guid projectId, CancellationToken ct);
+    Task<IReadOnlyList<InvoiceSummary>> GetInvoicesForMemberAsync(Guid memberId, CancellationToken ct);
 }
 ```
 
 ```csharp file=Modules/Billing/BillingModule.cs
 using System.Collections.Concurrent;
-using ProjectHub.Modules.Billing.Contracts;
-using ProjectHub.Modules.Billing.Internal;
-using ProjectHub.Modules.Projects.Contracts;
-using ProjectHub.Modules.Shared;
+using FitHub.Modules.Billing.Contracts;
+using FitHub.Modules.Billing.Internal;
+using FitHub.Modules.Members.Contracts;
+using FitHub.Modules.Shared;
 
-namespace ProjectHub.Modules.Billing
+namespace FitHub.Modules.Billing
 {
     public sealed class BillingModule : IModule
     {
@@ -377,102 +379,102 @@ namespace ProjectHub.Modules.Billing
         {
             services.AddSingleton<InvoiceStore>();
             services.AddScoped<IBillingApi, BillingApi>();
-            services.AddScoped<IIntegrationEventHandler<MilestoneCompleted>, DraftInvoiceOnMilestoneCompleted>();
+            services.AddScoped<IIntegrationEventHandler<PlanActivated>, DraftInvoiceOnPlanActivated>();
         }
 
         public void MapEndpoints(IEndpointRouteBuilder endpoints)
         {
             var group = endpoints.MapGroup("/billing");
-            group.MapGet("/projects/{projectId:guid}/invoices",
-                async (Guid projectId, IBillingApi api, CancellationToken ct) =>
-                    Results.Ok(await api.GetInvoicesForProjectAsync(projectId, ct)));
+            group.MapGet("/members/{memberId:guid}/invoices",
+                async (Guid memberId, IBillingApi api, CancellationToken ct) =>
+                    Results.Ok(await api.GetInvoicesForMemberAsync(memberId, ct)));
         }
     }
 }
 
-namespace ProjectHub.Modules.Billing.Internal
+namespace FitHub.Modules.Billing.Internal
 {
     /// <summary>Stands in for the billing schema. Only Billing code can see it (internal).</summary>
     internal sealed class InvoiceStore
     {
         private readonly ConcurrentDictionary<Guid, InvoiceSummary> _byEventId = new();
         public bool TryAdd(Guid eventId, InvoiceSummary invoice) => _byEventId.TryAdd(eventId, invoice);
-        public IReadOnlyList<InvoiceSummary> ForProject(Guid projectId) =>
-            _byEventId.Values.Where(i => i.ProjectId == projectId).OrderBy(i => i.MilestoneCode).ToList();
+        public IReadOnlyList<InvoiceSummary> ForMember(Guid memberId) =>
+            _byEventId.Values.Where(i => i.MemberId == memberId).OrderBy(i => i.PlanCode).ToList();
     }
 
     internal sealed class BillingApi(InvoiceStore store) : IBillingApi
     {
-        public Task<IReadOnlyList<InvoiceSummary>> GetInvoicesForProjectAsync(Guid projectId, CancellationToken ct) =>
-            Task.FromResult(store.ForProject(projectId));
+        public Task<IReadOnlyList<InvoiceSummary>> GetInvoicesForMemberAsync(Guid memberId, CancellationToken ct) =>
+            Task.FromResult(store.ForMember(memberId));
     }
 
     /// <summary>Creates a draft invoice with 18 % GST. Idempotent by event id, so a redelivered event is harmless.</summary>
-    internal sealed class DraftInvoiceOnMilestoneCompleted(InvoiceStore store, ILogger<DraftInvoiceOnMilestoneCompleted> logger)
-        : IIntegrationEventHandler<MilestoneCompleted>
+    internal sealed class DraftInvoiceOnPlanActivated(InvoiceStore store, ILogger<DraftInvoiceOnPlanActivated> logger)
+        : IIntegrationEventHandler<PlanActivated>
     {
         private const decimal GstRate = 0.18m;
 
-        public Task HandleAsync(MilestoneCompleted evt, CancellationToken ct)
+        public Task HandleAsync(PlanActivated evt, CancellationToken ct)
         {
-            var gst = Math.Round(evt.MilestoneValue * GstRate, 2, MidpointRounding.ToEven);
-            var invoice = new InvoiceSummary(Guid.NewGuid(), evt.ProjectId, evt.MilestoneCode,
-                evt.MilestoneValue, gst, evt.MilestoneValue + gst);
+            var gst = Math.Round(evt.PlanPrice * GstRate, 2, MidpointRounding.ToEven);
+            var invoice = new InvoiceSummary(Guid.NewGuid(), evt.MemberId, evt.PlanCode,
+                evt.PlanPrice, gst, evt.PlanPrice + gst);
             if (!store.TryAdd(evt.EventId, invoice))
-                logger.LogInformation("Duplicate MilestoneCompleted {EventId} ignored", evt.EventId);
+                logger.LogInformation("Duplicate PlanActivated {EventId} ignored", evt.EventId);
             return Task.CompletedTask;
         }
     }
 }
 ```
 
-```csharp file=Modules/Projects/ProjectsModule.cs
-using ProjectHub.Modules.Billing.Contracts;
-using ProjectHub.Modules.Projects.Contracts;
-using ProjectHub.Modules.Projects.Internal;
-using ProjectHub.Modules.Shared;
+```csharp file=Modules/Members/MembersModule.cs
+using FitHub.Modules.Billing.Contracts;
+using FitHub.Modules.Members.Contracts;
+using FitHub.Modules.Members.Internal;
+using FitHub.Modules.Shared;
 
-namespace ProjectHub.Modules.Projects
+namespace FitHub.Modules.Members
 {
-    public sealed class ProjectsModule : IModule
+    public sealed class MembersModule : IModule
     {
-        public string Name => "Projects";
+        public string Name => "Members";
 
         public void Register(IServiceCollection services, IConfiguration configuration) =>
-            services.AddScoped<MilestoneService>();
+            services.AddScoped<MembershipService>();
 
         public void MapEndpoints(IEndpointRouteBuilder endpoints)
         {
-            var group = endpoints.MapGroup("/projects");
+            var group = endpoints.MapGroup("/members");
 
-            group.MapPost("/{projectId:guid}/milestones/{code}/complete",
-                async (Guid projectId, string code, decimal value, MilestoneService milestones, CancellationToken ct) =>
+            group.MapPost("/{memberId:guid}/plans/{code}/activate",
+                async (Guid memberId, string code, decimal value, MembershipService memberships, CancellationToken ct) =>
                 {
-                    if (value <= 0) return Results.Problem("Milestone value must be positive.", statusCode: 400);
-                    await milestones.CompleteAsync(projectId, code, value, ct);
+                    if (value <= 0) return Results.Problem("Plan price must be positive.", statusCode: 400);
+                    await memberships.ActivateAsync(memberId, code, value, ct);
                     return Results.Accepted();
                 });
 
-            // Projects needs billing data for its dashboard: it goes through Billing's contract, never its tables.
-            group.MapGet("/{projectId:guid}/billing-summary",
-                async (Guid projectId, IBillingApi billing, CancellationToken ct) =>
+            // Members needs billing data for the member's profile page: it goes through Billing's contract, never its tables.
+            group.MapGet("/{memberId:guid}/billing-summary",
+                async (Guid memberId, IBillingApi billing, CancellationToken ct) =>
                 {
-                    var invoices = await billing.GetInvoicesForProjectAsync(projectId, ct);
-                    return Results.Ok(new { projectId, invoiceCount = invoices.Count, billedTotal = invoices.Sum(i => i.Total) });
+                    var invoices = await billing.GetInvoicesForMemberAsync(memberId, ct);
+                    return Results.Ok(new { memberId, invoiceCount = invoices.Count, billedTotal = invoices.Sum(i => i.Total) });
                 });
         }
     }
 }
 
-namespace ProjectHub.Modules.Projects.Internal
+namespace FitHub.Modules.Members.Internal
 {
-    internal sealed class MilestoneService(IEventBus bus, TimeProvider clock)
+    internal sealed class MembershipService(IEventBus bus, TimeProvider clock)
     {
-        public Task CompleteAsync(Guid projectId, string milestoneCode, decimal value, CancellationToken ct)
+        public Task ActivateAsync(Guid memberId, string planCode, decimal value, CancellationToken ct)
         {
-            // A real implementation would update the projects schema here, in the same transaction
+            // A real implementation would update the members schema here, in the same transaction
             // that writes the event to an outbox table.
-            var evt = new MilestoneCompleted(Guid.NewGuid(), clock.GetUtcNow(), projectId, milestoneCode, value);
+            var evt = new PlanActivated(Guid.NewGuid(), clock.GetUtcNow(), memberId, planCode, value);
             return bus.PublishAsync(evt, ct);
         }
     }
@@ -484,7 +486,7 @@ The boundary rule must be checked by a machine, or it will erode within months. 
 ```csharp file=Architecture/ModuleBoundaryRules.cs
 using System.Reflection;
 
-namespace ProjectHub.Architecture;
+namespace FitHub.Architecture;
 
 public sealed record BoundaryViolation(string FromType, string ToType, string Reason);
 
@@ -494,7 +496,7 @@ public sealed record BoundaryViolation(string FromType, string ToType, string Re
 /// </summary>
 public static class ModuleBoundaryRules
 {
-    private const string Root = "ProjectHub.Modules.";
+    private const string Root = "FitHub.Modules.";
     private const BindingFlags All = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance |
                                      BindingFlags.Static | BindingFlags.DeclaredOnly;
 
@@ -549,15 +551,15 @@ public static class ModuleBoundaryRules
 ```
 
 ```csharp file=Program.cs
-using ProjectHub.Architecture;
-using ProjectHub.Modules;
-using ProjectHub.Modules.Billing;
-using ProjectHub.Modules.Projects;
-using ProjectHub.Modules.Shared;
+using FitHub.Architecture;
+using FitHub.Modules;
+using FitHub.Modules.Billing;
+using FitHub.Modules.Members;
+using FitHub.Modules.Shared;
 
 var builder = WebApplication.CreateBuilder(args);
 
-IModule[] modules = [new ProjectsModule(), new BillingModule()];
+IModule[] modules = [new MembersModule(), new BillingModule()];
 
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IEventBus, InProcessEventBus>();
@@ -587,22 +589,22 @@ app.Run();
 **Bad: microservices that are really one system.**
 
 ```csharp
-// Billing "service" — reads the Projects service's table directly through a shared connection string.
-var milestones = await db.QueryAsync<Milestone>(
-    "SELECT * FROM projects.milestones WHERE project_id = @id AND status = 'Done'", new { id });
-// ... and uses a shared NuGet package, Company.Domain, for the Milestone entity.
+// Billing "service" — reads the Members service's table directly through a shared connection string.
+var plans = await db.QueryAsync<MemberPlan>(
+    "SELECT * FROM members.plans WHERE member_id = @id AND status = 'Active'", new { id });
+// ... and uses a shared NuGet package, Company.Domain, for the MemberPlan entity.
 ```
 
 What is wrong:
 
-- The Projects team cannot rename a column without breaking Billing in production.
+- The Members team cannot rename a column without breaking Billing in production.
 - Both services must upgrade `Company.Domain` together — lockstep deploys.
-- Billing's load on the projects tables is invisible to the Projects team.
+- Billing's load on the members tables is invisible to the Members team.
 - You pay for two pipelines, two deployments and network calls, and still cannot change anything independently.
 
 **Good: one owner per fact, contracts between owners.**
 
-- Billing learns about milestones from the `MilestoneCompleted` event and stores what it needs (value, code) in its own tables.
+- Billing learns about plans from the `PlanActivated` event and stores what it needs (price, code) in its own tables.
 - When Billing needs live data it calls `IBillingApi`-style contracts, versioned like public APIs.
 - Inside one deployable, this is a modular monolith. If Billing is ever extracted, the contract becomes an HTTP API and the event goes through a broker, with no change to the business code.
 
@@ -616,34 +618,34 @@ A modular monolith may keep every module in one PostgreSQL server with one schem
 
 ## Practical playground
 
-The graph below is the 14-developer contractor platform from the step-by-step example, built as four microservices that share one database. Open it in the HLD canvas and reshape it into the design we chose: a modular monolith, plus a separate worker for thumbnails and PDF reports fed by a queue. Watch what happens to the number of network hops for "approve a bill".
+The graph below is the 14-developer FitHub platform from the step-by-step example, built as four microservices that share one database. Open it in the HLD canvas and reshape it into the design we chose: a modular monolith, plus a separate worker for thumbnails and PDF reports fed by a queue. Watch what happens to the number of network hops for "renew a membership".
 
 :::playground type=hld title="From premature microservices to a modular monolith"
 ```json
 {
   "nodes": [
-    { "id": "users", "type": "client", "label": "Contractor and site apps", "props": { "rps": 150 } },
+    { "id": "users", "type": "client", "label": "Member and front-desk apps", "props": { "rps": 150 } },
     { "id": "gw", "type": "api-gateway", "label": "API gateway" },
-    { "id": "proj", "type": "app-server", "label": "Projects service", "props": { "instances": 2 } },
+    { "id": "proj", "type": "app-server", "label": "Members service", "props": { "instances": 2 } },
     { "id": "bill", "type": "app-server", "label": "Billing service", "props": { "instances": 2 } },
     { "id": "docs", "type": "app-server", "label": "Documents service", "props": { "instances": 2 } },
-    { "id": "insp", "type": "app-server", "label": "Inspections service (thumbnails inline)", "props": { "instances": 2 } },
+    { "id": "prog", "type": "app-server", "label": "Progress service (thumbnails inline)", "props": { "instances": 2 } },
     { "id": "db", "type": "database", "label": "Shared PostgreSQL (all tables)", "props": { "replicas": 1 } },
-    { "id": "blob", "type": "object-storage", "label": "Photos and drawings" }
+    { "id": "blob", "type": "object-storage", "label": "Progress photos and waivers" }
   ],
   "edges": [
     { "from": "users", "to": "gw", "kind": "sync" },
     { "from": "gw", "to": "proj", "kind": "sync" },
     { "from": "gw", "to": "bill", "kind": "sync" },
     { "from": "gw", "to": "docs", "kind": "sync" },
-    { "from": "gw", "to": "insp", "kind": "sync" },
-    { "from": "bill", "to": "proj", "kind": "sync", "label": "milestone status, per bill line" },
+    { "from": "gw", "to": "prog", "kind": "sync" },
+    { "from": "bill", "to": "proj", "kind": "sync", "label": "plan status, per invoice line" },
     { "from": "proj", "to": "bill", "kind": "sync", "label": "billed totals" },
     { "from": "proj", "to": "db", "kind": "sync" },
     { "from": "bill", "to": "db", "kind": "sync" },
     { "from": "docs", "to": "db", "kind": "sync" },
-    { "from": "insp", "to": "db", "kind": "sync" },
-    { "from": "insp", "to": "blob", "kind": "sync" },
+    { "from": "prog", "to": "db", "kind": "sync" },
+    { "from": "prog", "to": "blob", "kind": "sync" },
     { "from": "docs", "to": "blob", "kind": "sync" }
   ]
 }
@@ -1053,7 +1055,7 @@ Build the data-driven version of the boundary checker: it receives namespace-to-
 - Return internal-access violations first (sorted by FromModule, ToModule, Detail), then cycles (sorted by Detail).
 ::acceptance
 - A reference to `Root.Billing.Contracts` is legal; `Root.Billing.Internal.Store` is not.
-- Projects → Billing.Contracts plus Billing → Projects.Contracts is reported as one cycle "Billing,Projects".
+- Members → Billing.Contracts plus Billing → Members.Contracts is reported as one cycle "Billing,Members".
 - A three-module cycle is reported once with all three members.
 - Duplicate references produce one violation.
 ::hint
@@ -1104,7 +1106,7 @@ public class ModuleGraphCheckerTests
     [Fact]
     public void Contract_reference_is_legal()
     {
-        var result = ModuleGraphChecker.Check(new[] { Ref("Projects.Internal", "Billing.Contracts") }, R);
+        var result = ModuleGraphChecker.Check(new[] { Ref("Members.Internal", "Billing.Contracts") }, R);
         Assert.Empty(result);
     }
 
@@ -1113,15 +1115,15 @@ public class ModuleGraphCheckerTests
     {
         var refs = new[]
         {
-            Ref("Projects.Internal", "Billing.Internal.Store"),
-            Ref("Projects.Api", "Billing.Internal.Store"),
+            Ref("Members.Internal", "Billing.Internal.Store"),
+            Ref("Members.Api", "Billing.Internal.Store"),
             new TypeRef("System.Collections", $"{R}.Billing.Internal"),
             Ref("Billing.Internal", "Billing.Api"),
             Ref("Billing.Api", "Shared.Events"),
         };
         var v = Assert.Single(ModuleGraphChecker.Check(refs, R));
         Assert.Equal(ModuleGraphChecker.InternalAccess, v.Kind);
-        Assert.Equal("Projects", v.FromModule);
+        Assert.Equal("Members", v.FromModule);
         Assert.Equal("Billing", v.ToModule);
         Assert.Equal($"{R}.Billing.Internal.Store", v.Detail);
     }
@@ -1129,11 +1131,11 @@ public class ModuleGraphCheckerTests
     [Fact]
     public void Two_module_cycle_through_contracts()
     {
-        var refs = new[] { Ref("Projects.Internal", "Billing.Contracts"), Ref("Billing.Internal", "Projects.Contracts") };
+        var refs = new[] { Ref("Members.Internal", "Billing.Contracts"), Ref("Billing.Internal", "Members.Contracts") };
         var v = Assert.Single(ModuleGraphChecker.Check(refs, R));
         Assert.Equal(ModuleGraphChecker.Cycle, v.Kind);
         Assert.Equal("Billing", v.FromModule);
-        Assert.Equal("Billing,Projects", v.Detail);
+        Assert.Equal("Billing,Members", v.Detail);
     }
 
     [Fact]
@@ -1247,7 +1249,7 @@ public static class ModuleGraphChecker
     }
 }
 ```
-Why report cycles even through legal contracts? Because a cycle means neither module can be extracted (or even reasoned about) on its own: Projects needs Billing and Billing needs Projects. Break it by turning one direction into an event: Billing *subscribes* to `MilestoneCompleted` instead of calling Projects.
+Why report cycles even through legal contracts? Because a cycle means neither module can be extracted (or even reasoned about) on its own: Members needs Billing and Billing needs Members. Break it by turning one direction into an event: Billing *subscribes* to `PlanActivated` instead of calling Members.
 ::alternatives
 Off-the-shelf architecture-test libraries (for example NetArchTest or ArchUnitNET) express the same rules declaratively against compiled assemblies. Use one in a real codebase; write your own only when the rules are unusual.
 ::mistakes
@@ -1269,15 +1271,15 @@ public class ArchitectureTests
 {
     [Fact]
     public void Modules_only_use_each_others_contracts() =>
-        Assert.Empty(ModuleBoundaryRules.Check(typeof(ProjectsModule).Assembly));
+        Assert.Empty(ModuleBoundaryRules.Check(typeof(MembersModule).Assembly));
 }
 ```
 
-**2. Module tests through the contract.** Test Billing by publishing a `MilestoneCompleted` event to a real `InProcessEventBus` built from a `ServiceCollection`, then calling `IBillingApi`. Do not reach into `InvoiceStore` from tests in another module; that would teach the tests to break the rule the code follows.
+**2. Module tests through the contract.** Test Billing by publishing a `PlanActivated` event to a real `InProcessEventBus` built from a `ServiceCollection`, then calling `IBillingApi`. Do not reach into `InvoiceStore` from tests in another module; that would teach the tests to break the rule the code follows.
 
 ```csharp
 [Fact]
-public async Task Completed_milestone_creates_one_invoice_even_if_delivered_twice()
+public async Task Activated_plan_creates_one_invoice_even_if_delivered_twice()
 {
     var services = new ServiceCollection().AddLogging();
     services.AddSingleton(TimeProvider.System);
@@ -1286,29 +1288,29 @@ public async Task Completed_milestone_creates_one_invoice_even_if_delivered_twic
     using var sp = services.BuildServiceProvider();
     using var scope = sp.CreateScope();
 
-    var evt = new MilestoneCompleted(Guid.NewGuid(), DateTimeOffset.UtcNow, Guid.NewGuid(), "M3", 1_000_000m);
+    var evt = new PlanActivated(Guid.NewGuid(), DateTimeOffset.UtcNow, Guid.NewGuid(), "GOLD-12M", 18_000m);
     var bus = scope.ServiceProvider.GetRequiredService<IEventBus>();
     await bus.PublishAsync(evt, CancellationToken.None);
     await bus.PublishAsync(evt, CancellationToken.None);   // redelivery
 
     var invoices = await scope.ServiceProvider.GetRequiredService<IBillingApi>()
-        .GetInvoicesForProjectAsync(evt.ProjectId, CancellationToken.None);
+        .GetInvoicesForMemberAsync(evt.MemberId, CancellationToken.None);
     var invoice = Assert.Single(invoices);
     Assert.Equal(1_180_000m, invoice.Total);
 }
 ```
 
-**3. Contract tests once services are split.** When Billing becomes a service, the Projects team keeps a consumer-driven contract test: "the `GET /billing/projects/{id}/invoices` response still contains `total` as a number". Billing runs these tests in its own pipeline, so it learns about a breaking change before deploying, not after.
+**3. Contract tests once services are split.** When Billing becomes a service, the Members team keeps a consumer-driven contract test: "the `GET /billing/members/{id}/invoices` response still contains `total` as a number". Billing runs these tests in its own pipeline, so it learns about a breaking change before deploying, not after.
 
 What to measure in production (the evidence for future decisions): deployment frequency per module, how often two modules change in the same pull request, lead time from merge to production, and the error rate per module.
 
 ## Real-world application
 
 - **Many large companies have published accounts of moving in both directions**: splitting monoliths when team count grew, and consolidating services when the operational cost outgrew the benefit. Read such posts for the *reasons* given, which usually map to the four criteria in this lesson, rather than copying the resulting architecture.
-- **A government grievance or e-procurement portal** with one vendor team is almost always best as a modular monolith with background workers. Extraction is justified for clearly separate concerns with different load, such as document OCR or SMS fan-out.
+- **A government grievance or scholarship portal** with one vendor team is almost always best as a modular monolith with background workers. Extraction is justified for clearly separate concerns with different load, such as document OCR or SMS fan-out.
 - **A ride-hailing or food-delivery platform** with dozens of teams typically runs services per capability (dispatch, pricing, payments, restaurant catalogue) because each team ships many times a day and the load differs by orders of magnitude between them.
 - **.NET tooling** supports both: modular monoliths with one ASP.NET Core host and class-library modules; microservices with .NET Aspire for local orchestration, containers on Azure Container Apps or AKS, and YARP or Azure API Management at the edge.
-- **Infrastructure-project platforms** (progress tracking, RA billing, document control) often start as one application per client. Turning them into one multi-tenant modular monolith usually gives more benefit than splitting each into services.
+- **Gym, clinic and salon management platforms** (bookings, billing, documents) often start as one application per client. Turning them into one multi-tenant modular monolith usually gives more benefit than splitting each into services.
 
 ## Interview questions
 

@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 80
 prerequisites: [m10-http-fundamentals, m11-caching-layers, m11-latency-numbers]
-related: [m11-dns-routing, m11-object-storage, m12-invalidation-ttl, m11-cost-estimation, m12-cache-failures]
+related: [m11-dns-routing, m11-object-storage, m12-invalidation-ttl, m11-cost-estimation, m12-cache-failures, m17-scaling-journey]
 tags: [hld, cdn, caching, edge, http-caching, performance]
 patterns: []
 summary: How a content delivery network puts copies of your content close to users, how edge, shield and origin work together, and how to control what gets cached, for how long, and for whom.
@@ -268,7 +268,7 @@ We'll design the CDN layer for **ExamPrep**, the ed-tech platform from the estim
 | Content | Same for everyone? | Changes how? | Decision |
 |---|---|---|---|
 | `/assets/app.3f9a1c2b.js`, CSS, fonts | Yes | Never (new name per deploy) | Cache 1 year, `immutable` |
-| `/` and `/index.html` (SPA shell) | Yes | Every deploy | `no-cache` for browsers, `s-maxage=120` at CDN |
+| `/` and `/index.html` (SPA shell) | Yes | Every deploy | `max-age=0` for browsers (revalidate each use), `s-maxage=120` at CDN |
 | `/media/thumbnails/*.webp` | Yes | Rarely | 1 day, `stale-while-revalidate` |
 | `/api/public/notices` | Yes | Few times a day | `s-maxage=60`, browsers `max-age=0`, tag purge on edit |
 | `/videos/{id}/*` (HLS segments) | Yes, but paid | Never | Long TTL, **signed** access |
@@ -351,7 +351,8 @@ public sealed partial class CacheRuleCatalog
             return new(CacheClass.PublicApi, "public, max-age=0, s-maxage=60, stale-while-revalidate=30, stale-if-error=600");
 
         // HTML shell and anything unclassified: browsers revalidate, CDN keeps it briefly.
-        return new(CacheClass.HtmlShell, "no-cache, s-maxage=120");
+        // Not "no-cache, s-maxage=120": no-cache applies to shared caches too, so the CDN would revalidate every request.
+        return new(CacheClass.HtmlShell, "public, max-age=0, s-maxage=120");
     }
 }
 ```
@@ -543,6 +544,7 @@ Design notes:
 - **One rule catalog.** Endpoints don't set `Cache-Control` themselves. A single class makes the policy reviewable, and the middleware applies it in `OnStarting`, after the status code is known, so a 500 is never cached.
 - **Safety net on `Set-Cookie`.** If anything sets a cookie, the response becomes `private, no-store`. This one line prevents the most common CDN data leak.
 - **Write, then purge.** If you purge first and the database write is slow, an edge can refetch the *old* data and cache it for another 60 seconds. For extra safety, purge again a few seconds later, or rely on the short `s-maxage`.
+- **`max-age=0, s-maxage=120` for the shell, not `no-cache, s-maxage=120`.** `no-cache` binds shared caches as well, so combining it with `s-maxage` makes the CDN revalidate every request and the 2-minute edge TTL never takes effect.
 - **Signing uses `TimeProvider`** so tests can control time, and `FixedTimeEquals` so the comparison doesn't leak timing information.
 
 ## Bad design vs good design
@@ -1115,8 +1117,9 @@ public async Task Personal_endpoints_are_never_publicly_cacheable()
 
 - **Video streaming** (a service like Netflix, Hotstar or YouTube): video is split into small segments (HLS/DASH), each a cacheable file. Popular titles are pre-positioned in ISP-hosted caches before peak hours. That is push for predictable demand and pull for the long tail. Streaming a cricket final to many millions of viewers at once is mostly a CDN problem.
 - **E-commerce product images**: an image service at the origin resizes on demand (`?w=400&q=80`), and the CDN caches each size. An allow-list of widths stops attackers from generating millions of variants.
-- **Government portals**: results, admit cards and tender documents see sharp, predictable spikes. Pre-generated static files behind a CDN are cheaper and more reliable than scaling a database for one morning.
-- **Construction and infrastructure dashboards**: drone survey orthomosaics are served as map tiles (`/tiles/{z}/{x}/{y}.png`). Tiles for a survey date never change, so they get a versioned path per survey and a one-year TTL. Engineers on remote sites with slow links benefit the most.
+- **Government and exam portals**: results, admit cards and exam timetables see sharp, predictable spikes. Pre-generated static files behind a CDN are cheaper and more reliable than scaling a database for one morning.
+- **Maps in ride-hailing and delivery apps**: map imagery is served as tiles (`/tiles/{z}/{x}/{y}.png`). Tiles for one map release never change, so they get a versioned path per release (`/tiles/2026-10/...`) and a one-year TTL. Riders and drivers on slow mobile networks in smaller towns benefit the most.
+- **A growing product**: in [Scaling a real system from 100 to 10 million users](#/lesson/m17-scaling-journey), a grocery-delivery app adds a CDN at its second growth stage, when product images reach terabytes a day, using versioned image names instead of purges; later the same edge also carries the WAF and bot protection.
 
 ## Interview questions
 
@@ -1132,7 +1135,7 @@ What is the difference between `no-cache` and `no-store`?
 ::q intermediate
 How do you deploy a new JavaScript bundle so that every user gets it, without purging the CDN?
 ::a
-Fingerprint the file name with a hash of its content (`app.3f9a1c2b.js`) and cache it for a year with `immutable`. The HTML that references it has a short CDN TTL and `no-cache` for browsers. After a deploy, the HTML points to a new name, which is a new cache key, so nothing needs purging. Old names stay valid for users who still have the old HTML open. Keep old files in storage for a while so those users don't get 404s.
+Fingerprint the file name with a hash of its content (`app.3f9a1c2b.js`) and cache it for a year with `immutable`. The HTML that references it has a short CDN TTL (`s-maxage`) and `max-age=0` for browsers, so they revalidate it on every use. After a deploy, the HTML points to a new name, which is a new cache key, so nothing needs purging. Old names stay valid for users who still have the old HTML open. Keep old files in storage for a while so those users don't get 404s.
 ::q intermediate
 Your image hit ratio dropped from 96 % to 80 % after a marketing campaign. What happened, and how do you fix it?
 ::a

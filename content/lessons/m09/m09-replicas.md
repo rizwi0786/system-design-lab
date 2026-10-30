@@ -22,7 +22,7 @@ references:
     url: https://www.npgsql.org/doc/failover-and-load-balancing.html
 ---
 
-Most applications read far more than they write: a ticketing app shows seats a hundred times for every booking, a project dashboard is viewed by dozens of people for every progress update. A read replica is a copy of the database that serves those reads, so the primary can concentrate on writes. The price is that a copy is always slightly behind, and "slightly" can become seconds or minutes exactly when the system is busiest. This lesson is about getting the read capacity without showing users stale or contradictory data.
+Most applications read far more than they write: a ticketing app shows seats a hundred times for every booking, a doctor's schedule page is viewed dozens of times for every appointment booked. A read replica is a copy of the database that serves those reads, so the primary can concentrate on writes. The price is that a copy is always slightly behind, and "slightly" can become seconds or minutes exactly when the system is busiest. This lesson is about getting the read capacity without showing users stale or contradictory data.
 
 ## Learning objectives
 
@@ -138,7 +138,7 @@ The router needs fresh replay LSNs. Polling each replica every 100–250 ms is t
 
 ### Back-of-the-envelope
 
-A project-monitoring platform: 400,000 daily active users × 60 page views × ~3 queries per view ≈ 72 million reads/day ÷ 86,400 ≈ 830 reads/s average, × 4 for the morning peak ≈ 3,300 reads/s. Writes: 400,000 × 5 updates ≈ 2 million/day ≈ 23/s average, ~100/s peak. Read:write ≈ 33:1.
+CityCare, a clinic-booking platform: 400,000 daily active users (patients and clinic staff) × 60 page views × ~3 queries per view ≈ 72 million reads/day ÷ 86,400 ≈ 830 reads/s average, × 4 for the morning OPD rush ≈ 3,300 reads/s. Writes: 400,000 × 5 updates ≈ 2 million/day ≈ 23/s average, ~100/s peak. Read:write ≈ 33:1.
 
 If (estimate) one primary handles about 4,000 simple indexed reads per second at 60 % CPU alongside its writes, reads are close to the limit at peak. Two replicas, each taking ~1,500 reads/s, leave the primary with writes, critical reads and headroom. WAL volume at 100 writes/s × ~2 KB WAL per write (with indexes) ≈ 200 KB/s, trivial for replication. Lag would come from occasional bulk imports, not steady traffic.
 
@@ -179,43 +179,43 @@ flowchart LR
     MON -. "feeds lag table" .-> API
 ```
 
-The API instances hold one connection pool for the primary and one per online replica. Writes, and reads that must be current (payment status, stock before reserving), go to the primary. Everything else goes to one of two online replicas in different availability zones. The primary streams WAL to all three replicas; one online replica is synchronous (`ANY 1`) so a primary loss does not lose acknowledged commits, the others are asynchronous. Reporting jobs use a separate replica that is allowed to lag minutes so long queries are not cancelled, and is never used for user-facing reads. The monitor polls each replica's replay LSN and gives the router an up-to-date picture of which replica has reached which position.
+The API instances hold one connection pool for the primary and one per online replica. Writes, and reads that must be current (payment status, slot availability just before booking), go to the primary. Everything else goes to one of two online replicas in different availability zones. The primary streams WAL to all three replicas; one online replica is synchronous (`ANY 1`) so a primary loss does not lose acknowledged commits, the others are asynchronous. Reporting jobs use a separate replica that is allowed to lag minutes so long queries are not cancelled, and is never used for user-facing reads. The monitor polls each replica's replay LSN and gives the router an up-to-date picture of which replica has reached which position.
 
 ### Read-your-writes with an LSN token
 
 ```mermaid
 sequenceDiagram
-    participant App as Site engineer app
-    participant API as Progress API
+    participant App as Patient app
+    participant API as Appointments API
     participant P as Primary
     participant R as Replica pg-mum-2
-    App->>API: POST /sites/88/progress (slab 4 poured)
-    API->>P: INSERT progress row and COMMIT
+    App->>API: POST /patients/88/appointments (Dr Rao, 10:30)
+    API->>P: INSERT appointment row and COMMIT
     API->>P: SELECT pg_current_wal_lsn()
     P-->>API: 2A/7D3F1C80
     API-->>App: 201 Created, token 2A/7D3F1C80
-    App->>API: GET /sites/88/progress with token 2A/7D3F1C80
+    App->>API: GET /patients/88/appointments with token 2A/7D3F1C80
     API->>API: router finds pg-mum-2 replayed only 2A/7D2E0000
     API->>API: pg-mum-1 has 2A/7D3F1C80, choose pg-mum-1
     Note over API: if no replica had reached the token, read from the primary
-    API-->>App: 200 OK with slab 4 included
+    API-->>App: 200 OK with the new appointment included
 ```
 
-The write commits on the primary, and the API immediately asks the primary for its current WAL position. Because the commit has already happened, that position is at or after the commit record, so any server that has replayed up to it can see the new row. The token travels back to the app (a header or cookie; in a browser app, the session works too). On the next read the router compares the token with the replay positions the monitor collected: pg-mum-2 is about 1 MB behind and is skipped, pg-mum-1 has caught up and serves the read. If neither had, the read would go to the primary. The user sees "slab 4 poured" immediately, while almost all reads still land on replicas.
+The write commits on the primary, and the API immediately asks the primary for its current WAL position. Because the commit has already happened, that position is at or after the commit record, so any server that has replayed up to it can see the new row. The token travels back to the app (a header or cookie; in a browser app, the session works too). On the next read the router compares the token with the replay positions the monitor collected: pg-mum-2 is about 1 MB behind and is skipped, pg-mum-1 has caught up and serves the read. If neither had, the read would go to the primary. The patient sees the new 10:30 appointment immediately, while almost all reads still land on replicas.
 
 ## Step-by-step example
 
-A construction progress-tracking platform (the numbers from the back-of-the-envelope section) moves dashboard reads off its primary.
+CityCare (the numbers from the back-of-the-envelope section) moves schedule and dashboard reads off its primary.
 
 ### Step 1 — classify every query
 
 | Query | Freshness need | Route |
 |---|---|---|
-| Save progress entry, approve bill | write | primary |
-| "My entries" right after saving | own writes | token |
-| Site dashboard for a project manager | seconds are fine | replica |
-| Contractor bill status before releasing payment | must be current | primary |
-| Monthly progress report (MPR) export | minutes are fine | reporting replica |
+| Book or cancel an appointment, record a payment | write | primary |
+| "My appointments" right after booking | own writes | token |
+| Doctor's weekly schedule for clinic staff | seconds are fine | replica |
+| Payment status before issuing a refund | must be current | primary |
+| Monthly clinic utilisation report export | minutes are fine | reporting replica |
 
 The default for an unclassified query is **primary**. A forgotten query is then slow, not wrong.
 
@@ -254,7 +254,7 @@ During a bulk import, all replicas lag, every recent writer's reads fall back to
 ```csharp
 // One multi-host data source. Npgsql discovers which host is primary and which are standbys.
 var multi = new NpgsqlDataSourceBuilder(
-        "Host=pg-mum-0,pg-mum-1,pg-mum-2;Database=progress;Username=app;Load Balance Hosts=true")
+        "Host=pg-mum-0,pg-mum-1,pg-mum-2;Database=citycare;Username=app;Load Balance Hosts=true")
     .BuildMultiHost();
 NpgsqlDataSource primary  = multi.WithTargetSession(TargetSessionAttributes.Primary);
 NpgsqlDataSource replicas = multi.WithTargetSession(TargetSessionAttributes.PreferStandby);
@@ -267,7 +267,7 @@ NpgsqlDataSource replicas = multi.WithTargetSession(TargetSessionAttributes.Pref
 The router keeps a registry of replicas (fed by a monitor that polls replay LSNs), parses and compares LSNs, and chooses a target per request. Database calls sit behind interfaces with in-memory fakes so the course checker can build and run it.
 
 ```text
-Progress.Api/
+CityCare.Api/
   Program.cs
   Replication/Lsn.cs
   Replication/ReplicaRegistry.cs
@@ -279,7 +279,7 @@ Progress.Api/
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 
-namespace Progress.Replication;
+namespace CityCare.Replication;
 
 /// <summary>A PostgreSQL WAL position such as "2A/7D3F1C80": high 32 bits / low 32 bits, in hex.</summary>
 public readonly record struct Lsn(ulong Value) : IComparable<Lsn>
@@ -310,7 +310,7 @@ public readonly record struct Lsn(ulong Value) : IComparable<Lsn>
 ```
 
 ```csharp file=Replication/ReplicaRegistry.cs
-namespace Progress.Replication;
+namespace CityCare.Replication;
 
 public enum ReplicaRole { Online, Reporting }
 
@@ -336,13 +336,13 @@ public sealed class ReplicaRegistry
 ```csharp file=Replication/ReadRouter.cs
 using Microsoft.Extensions.Options;
 
-namespace Progress.Replication;
+namespace CityCare.Replication;
 
 public enum ReadConsistency
 {
-    Primary,          // must be current: payments, stock before reserving
+    Primary,          // must be current: payments, slot availability before booking
     ReadYourWrites,   // must include this caller's writes (token), otherwise replica is fine
-    Stale             // dashboards, catalogue, search
+    Stale             // schedules, dashboards, doctor search
 }
 
 public sealed class RouterOptions
@@ -387,7 +387,7 @@ public sealed class ReadRouter(ReplicaRegistry registry, IOptions<RouterOptions>
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace Progress.Replication;
+namespace CityCare.Replication;
 
 /// <summary>
 /// Primary: SELECT pg_current_wal_lsn().
@@ -473,7 +473,7 @@ public sealed class FakeReplicationProbe(Dictionary<string, long> bytesBehind) :
 ```
 
 ```csharp file=Program.cs
-using Progress.Replication;
+using CityCare.Replication;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -496,25 +496,25 @@ builder.Services.AddHostedService<ReplicaMonitor>();
 
 var app = builder.Build();
 
-app.MapPost("/sites/{siteId:int}/progress", async (int siteId, ReplicaRegistry registry, IReplicationProbe probe, HttpResponse res, CancellationToken ct) =>
+app.MapPost("/patients/{patientId:int}/appointments", async (int patientId, ReplicaRegistry registry, IReplicationProbe probe, HttpResponse res, CancellationToken ct) =>
 {
     // ... INSERT and COMMIT on the primary ...
     var lsn = await probe.PrimaryLsnAsync(ct);       // SELECT pg_current_wal_lsn() after the commit
     res.Headers["X-Consistency-Token"] = lsn.ToString();
-    return Results.Created($"/sites/{siteId}/progress", new { siteId, token = lsn.ToString() });
+    return Results.Created($"/patients/{patientId}/appointments", new { patientId, token = lsn.ToString() });
 });
 
-app.MapGet("/sites/{siteId:int}/progress", (int siteId, HttpRequest req, ReadRouter router, IInFlightCounter inFlight) =>
+app.MapGet("/patients/{patientId:int}/appointments", (int patientId, HttpRequest req, ReadRouter router, IInFlightCounter inFlight) =>
 {
     Lsn? token = Lsn.TryParse(req.Headers["X-Consistency-Token"], out var t) ? t : null;
     var decision = router.Choose(token is null ? ReadConsistency.Stale : ReadConsistency.ReadYourWrites, token);
     using var _ = inFlight.Track(decision.Target);
     // ... run the SELECT on the data source named decision.Target ...
-    return Results.Ok(new { siteId, servedBy = decision.Target, decision.Reason });
+    return Results.Ok(new { patientId, servedBy = decision.Target, decision.Reason });
 });
 
-app.MapGet("/bills/{billId:int}/status", (int billId, ReadRouter router) =>
-    Results.Ok(new { billId, servedBy = router.Choose(ReadConsistency.Primary, null).Target }));
+app.MapGet("/payments/{paymentId:int}/status", (int paymentId, ReadRouter router) =>
+    Results.Ok(new { paymentId, servedBy = router.Choose(ReadConsistency.Primary, null).Target }));
 
 app.Run();
 ```
@@ -527,12 +527,12 @@ app.Run();
 - The token is an opaque string to clients. Sign it, or keep it server-side in the session, if you do not want clients to see your WAL positions.
 
 :::callout type=warning title="Never check on a replica and then write on the primary"
-"Is this seat free?" on a replica followed by "book it" on the primary can double-book: the replica may not show a booking made 200 ms ago. Checks that guard a write belong in the same primary transaction as the write, ideally enforced by a constraint.
+"Is the 10:30 slot free?" on a replica followed by "book it" on the primary can double-book: the replica may not show a booking made 200 ms ago. Checks that guard a write belong in the same primary transaction as the write, ideally enforced by a constraint.
 :::
 
 ## Bad design vs good design
 
-**Bad**: the team adds two replicas and a connection string with `Target Session Attributes=prefer-standby` for the whole application. Every query, including "check contractor bill is approved, then release payment", now reads from a random replica. Users report that saved progress entries "disappear" for a second. During a nightly import the replicas fall 90 seconds behind, and the payment job reads bills as unapproved and skips them. When the primary fails, the async replica is promoted and the last 400 ms of approvals are lost; nobody notices until finance reconciles.
+**Bad**: the team adds two replicas and a connection string with `Target Session Attributes=prefer-standby` for the whole application. Every query, including "check the refund is approved, then pay it out", now reads from a random replica. Patients report that a just-booked appointment "disappears" for a second. During a nightly import the replicas fall 90 seconds behind, and the refund job reads refunds as unapproved and skips them. When the primary fails, the async replica is promoted and the last 400 ms of approvals are lost; nobody notices until finance reconciles.
 
 **Good**: queries are classified, with primary as the default. Online reads go to healthy replicas within a lag budget; read-your-writes uses an LSN token; reports use a dedicated replica; one same-region replica is synchronous (`ANY 1`) so failover does not lose acknowledged commits; imports are throttled on replica lag; the primary-fallback rate and replica lag are on the main dashboard.
 
@@ -637,7 +637,7 @@ SELECT r.replica,
 FROM replica_status r CROSS JOIN primary_status p
 ORDER BY lag_bytes, r.replica;
 ```
-`2A/7D3F1C80` means high word `0x2A`, low word `0x7D3F1C80`; the LSN is a byte position in the WAL, so the difference is bytes. pg-mum-2's 1.1 MB at 0.38 s implies roughly 3 MB/s of WAL at that moment; the reporting replica's 1 GB is minutes behind, which is fine for an MPR export and unacceptable for a dashboard. On a real primary you would query `pg_stat_replication` and `pg_current_wal_lsn()` instead of these snapshot tables.
+`2A/7D3F1C80` means high word `0x2A`, low word `0x7D3F1C80`; the LSN is a byte position in the WAL, so the difference is bytes. pg-mum-2's 1.1 MB at 0.38 s implies roughly 3 MB/s of WAL at that moment; the reporting replica's 1 GB is minutes behind, which is fine for a monthly utilisation export and unacceptable for a patient-facing page. On a real primary you would query `pg_stat_replication` and `pg_current_wal_lsn()` instead of these snapshot tables.
 ::mistakes
 - Comparing LSNs as text: `'9/0' > '2A/0'` as strings, but `2A/0` is the larger position.
 - Using `replay_lag` alone: it is NULL for a catching-up replica and can read as small when the primary is idle.
@@ -1104,7 +1104,7 @@ Long aggregates over a month have their own problem on replicas: conflicts with 
 public async Task Own_write_is_visible_while_replica_replay_is_paused()
 {
     // Arrange: pause replay on the test replica (pg_wal_replay_pause()).
-    // Act: POST progress, take X-Consistency-Token, GET with the token.
+    // Act: POST an appointment, take X-Consistency-Token, GET with the token.
     // Assert: response contains the new entry and servedBy == "primary".
     // Then pg_wal_replay_resume(), wait for replay to pass the token, GET again: servedBy is the replica.
 }
@@ -1120,7 +1120,7 @@ public async Task Own_write_is_visible_while_replica_replay_is_paused()
 - **Managed PostgreSQL services** (Azure Database for PostgreSQL, Amazon RDS and Aurora, Google Cloud SQL) offer read replicas and separate reader endpoints; they still leave read-your-writes routing to the application.
 - **E-commerce sales and ticket launches** combine caching of immutable or slow-changing data with replicas for the remainder, and keep stock and payment checks on the primary.
 - **Government portals** with predictable spikes (exam results, scheme enrolment deadlines) pre-warm caches and add temporary replicas before the event, then remove them.
-- **Reporting isolation**: a dedicated, lag-tolerant replica for monthly progress reports and BI tools is one of the most common and least risky uses of replicas.
+- **Reporting isolation**: a dedicated, lag-tolerant replica for monthly reports and BI tools is one of the most common and least risky uses of replicas.
 
 ## Interview questions
 

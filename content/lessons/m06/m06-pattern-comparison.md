@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 90
 prerequisites: [m06-decorator, m06-proxy, m06-adapter, m06-facade, m06-strategy, m06-state]
-related: [m06-template-method, m06-command, m06-factory-method, m06-abstract-factory, m06-builder, m06-prototype, m06-observer, m06-mediator, m06-composite, m06-chain-of-responsibility, m06-pipeline, m06-anti-patterns]
+related: [m06-template-method, m06-command, m06-factory-method, m06-abstract-factory, m06-builder, m06-observer, m06-mediator, m06-composite, m06-chain-of-responsibility, m06-pipeline, m06-anti-patterns]
 tags: [patterns, comparison, decision-making, gof]
 patterns: []
 summary: Many design patterns share the same class diagram and differ only in intent. Learn the questions that tell them apart — what varies, who chooses, does the interface change, how many objects are wrapped — and pick the right one for the problem in front of you.
@@ -29,7 +29,7 @@ You have learned the patterns one at a time. In real work, nobody hands you a pa
 By the end of this lesson you will be able to:
 
 1. Explain why class structure alone can't identify a pattern, and what does (intent, who chooses, what changes).
-2. Distinguish Decorator, Proxy, Adapter and Facade; Strategy, State, Template Method and Command; Factory Method, Abstract Factory, Builder and Prototype; Observer, Mediator and Pub/Sub; Composite and Decorator; Chain of Responsibility and Pipeline.
+2. Distinguish Decorator, Proxy, Adapter and Facade; Strategy, State, Template Method and Command; Factory Method, Abstract Factory and Builder; Observer, Mediator and Pub/Sub; Composite and Decorator; Chain of Responsibility and Pipeline.
 3. Use a decision flowchart to pick a pattern from a problem description.
 4. Recognise misnamed patterns in a codebase (a "Strategy" that is really State, a "Proxy" that is really a Decorator) and why the name matters.
 5. Combine several patterns in one ASP.NET Core feature, each for a clear reason.
@@ -91,24 +91,24 @@ Naming matters in practice. If a class is called `CachingProxy`, a reviewer expe
 | **Who chooses the variant?** | Client or configuration | The object itself, through transitions | The subclass, at compile time | The sender creates it; an invoker runs it later |
 | **Do variants know each other?** | No | Often: a state returns the next state | No | No |
 | **Typical extras** | — | Transitions, guards | Hooks (optional steps) | Undo, queueing, logging, retry |
-| **.NET examples** | `IPasswordHasher<T>`; `IComparer<T>` | `Stream` open/closed behaviour; workflow status classes | `BackgroundService.ExecuteAsync`; `DelegatingHandler.SendAsync` | `ICommand` in WPF; a queued job message |
+| **.NET examples** | `IPasswordHasher<T>`; `IComparer<T>`; `IRetryPolicy`-style options | Workflow status classes (order, appointment, claim) | `BackgroundService.ExecuteAsync`; `AuthenticationHandler<TOptions>.HandleAuthenticateAsync` | A queued job message; a MediatR-style request object |
 
-**Strategy vs State** is the classic confusion, because the class diagrams are identical. Ask: *does the variant change because someone chose it, or because something happened to the object?* "Pay by UPI" is chosen: Strategy. "The bill moves from Submitted to Approved" happens: State. Another test: if the implementations return or set the *next* implementation, it's State.
+**Strategy vs State** is the classic confusion, because the class diagrams are identical. Ask: *does the variant change because someone chose it, or because something happened to the object?* "Pay by UPI" is chosen: Strategy. "The lab report moves from Submitted to Approved" happens: State. Another test: if the implementations return or set the *next* implementation, it's State.
 
 **Strategy vs Template Method:** both vary part of an algorithm. Strategy varies it by *composition* (pass in an object, swap at runtime). Template Method varies it by *inheritance* (override a method, fixed at compile time). Prefer Strategy when you need runtime choice or several independent variations. Template Method is fine when the skeleton is stable and there are a few hook points ([see Composition versus inheritance](#/lesson/m04-composition-inheritance)).
 
 **Strategy vs Command:** both are "an object with one method". A strategy answers *how to do something* for the context, right now, and returns a result. A command packages *something to do*, often with its arguments, so it can be stored, queued, logged, retried or undone. If you need to put it in a queue or a database, it's a Command.
 
-### Group 3 — Factory Method vs Abstract Factory vs Builder vs Prototype (creation)
+### Group 3 — Factory Method vs Abstract Factory vs Builder (creation)
 
-| | Factory Method | Abstract Factory | Builder | Prototype |
-|---|---|---|---|---|
-| **Intent** | Let a subclass or overridable method decide which class to create | Create *families* of related objects that must match | Build a complex object step by step | Create new objects by copying a configured one |
-| **Product** | One product | Several related products | One complex product | A copy |
-| **Typical signal** | `protected virtual Parser CreateParser()` | "If we use provider X, every object must be X's version" | Many optional parameters; validation before creation | Expensive set-up repeated; small variations of a template |
-| **.NET examples** | `DelegatingHandler`-style overrides; `ILoggerProvider.CreateLogger` | `DbProviderFactory` (connection, command, parameter for one database) | `WebApplicationBuilder`, `StringBuilder`, `UriBuilder` | C# `record` `with` expressions; `ICloneable` (discouraged) |
+| | Factory Method | Abstract Factory | Builder |
+|---|---|---|---|
+| **Intent** | Let a subclass or overridable method decide which class to create | Create *families* of related objects that must match | Build a complex object step by step |
+| **Product** | One product | Several related products | One complex product |
+| **Typical signal** | `protected virtual Parser CreateParser()` | "If we use provider X, every object must be X's version" | Many optional parameters; validation before creation |
+| **.NET examples** | `WebApplicationFactory<T>.CreateHost` overrides in tests; `ILoggerProvider.CreateLogger` | `DbProviderFactory` (connection, command, parameter for one database) | `WebApplicationBuilder`, `StringBuilder`, `UriBuilder` |
 
-Ask: *how many things are being created, and must they match?* One thing chosen by a subclass: Factory Method. A matched set (a PostgreSQL connection with a PostgreSQL command, never a SQL Server one): Abstract Factory. One thing with many steps and options: Builder. Many near-identical things based on an example: Prototype. In modern .NET, the DI container plays the factory role most of the time, so explicit factories are mostly for runtime choices the container can't make ([see Dependency Injection as a pattern](#/lesson/m06-dependency-injection-pattern)).
+Ask: *how many things are being created, and must they match?* One thing chosen by a subclass: Factory Method. A matched set (a PostgreSQL connection with a PostgreSQL command, never a SQL Server one): Abstract Factory. One thing with many steps and options: Builder. The GoF's fourth creational look-alike, Prototype ("copy a configured example"), is rarely a class of its own in modern C#: a `record` `with` expression does the job. In modern .NET, the DI container plays the factory role most of the time, so explicit factories are mostly for runtime choices the container can't make ([see Dependency Injection as a pattern](#/lesson/m06-dependency-injection-pattern)).
 
 ### Group 4 — Observer vs Mediator vs Pub/Sub (communication)
 
@@ -121,7 +121,7 @@ Ask: *how many things are being created, and must they match?* One thing chosen 
 | **Delivery** | Synchronous, usually | Synchronous, usually | Asynchronous; durable if the broker is |
 | **.NET examples** | C# `event`; `IObservable<T>`; `IOptionsMonitor.OnChange` | A dialog coordinating its controls; a workflow coordinator | RabbitMQ, Kafka, Azure Service Bus |
 
-**Observer vs Mediator:** in Observer, the subject broadcasts and doesn't care what observers do. In Mediator, the mediator *decides* what happens: "when the contractor field changes, reload the contracts list and clear the bill-number field". If the coordination logic is the point, it's a Mediator. Watch out: the popular "MediatR-style" in-process request dispatcher is closer to a command bus than to the GoF Mediator. It routes one request to one handler and doesn't coordinate colleagues ([see Mediator](#/lesson/m06-mediator)).
+**Observer vs Mediator:** in Observer, the subject broadcasts and doesn't care what observers do. In Mediator, the mediator *decides* what happens: "when the hospital field changes, reload the department list and clear the doctor field". If the coordination logic is the point, it's a Mediator. Watch out: the popular "MediatR-style" in-process request dispatcher is closer to a command bus than to the GoF Mediator. It routes one request to one handler and doesn't coordinate colleagues ([see Mediator](#/lesson/m06-mediator)).
 
 **Observer vs Pub/Sub:** Pub/Sub is Observer with a broker in the middle. That buys you process isolation, buffering and durability, and costs you latency, eventual consistency and an extra piece of infrastructure to run ([see the event-driven architecture lesson](#/lesson/m02-event-driven)).
 
@@ -134,7 +134,7 @@ Both implement the same interface as the things they hold, so clients treat one 
 | **Holds** | Many children | Exactly one wrapped object |
 | **Intent** | Represent part–whole trees | Add behaviour to one object |
 | **Operation** | Usually aggregates children (sum, render all) | Delegates once, before/after adding something |
-| **Example** | A BOQ: a section contains sub-sections and items; `Total()` sums recursively | A `TimingStorage` wrapping `IDocumentStorage` |
+| **Example** | An itemised hospital bill: a section (Pharmacy, Lab tests) contains sub-sections and line items; `Total()` sums recursively | A `TimingStorageDecorator` wrapping `IDocumentStorage` |
 
 Ask: *one child or many?* That settles it nearly every time.
 
@@ -145,7 +145,7 @@ Ask: *one child or many?* That settles it nearly every time.
 | **Intent** | Find the handler that should deal with a request | Pass data through every stage |
 | **Does every handler run?** | No. Each decides: handle, or pass to the next | Yes, in order |
 | **Typical result** | One handler's answer | Transformed data |
-| **Example** | Purchase approval: site engineer, then project manager, then regional head | Invoice import: parse → normalise → validate → enrich |
+| **Example** | Clinic purchase approval: clinic manager, then medical director, then CFO | Supplier-invoice import: parse → normalise → validate → enrich |
 
 **ASP.NET Core middleware is a hybrid.** Each middleware can do work, call `next()`, and do more work afterwards (pipeline-like), or *not* call `next()` and short-circuit (chain-like, as authentication does for a 401). That's why the [Pipeline lesson](#/lesson/m06-pipeline) and the [Chain of Responsibility lesson](#/lesson/m06-chain-of-responsibility) both mention it. When you design your own, decide which you want. "Stops at first match" and "always runs every stage" lead to different tests and different bugs.
 
@@ -178,7 +178,6 @@ flowchart TD
     Q6 -->|"One product, subclass decides"| FM["Factory Method"]
     Q6 -->|"Matching family"| AF["Abstract Factory"]
     Q6 -->|"Many steps or options"| Builder["Builder"]
-    Q6 -->|"Copy a configured example"| Prototype["Prototype"]
     Q6 -->|No| Q7{"Objects reacting to each other?"}
     Q7 -->|"Broadcast in-process"| Observer["Observer"]
     Q7 -->|"Central coordination logic"| Mediator["Mediator"]
@@ -196,8 +195,8 @@ Read it top-down and answer one question at a time. The first split is the GoF c
 classDiagram
     class IDocumentStorage {
         <<interface>>
-        +SaveAsync(string projectId, string fileName, byte[] content, CancellationToken ct) string
-        +ReadAsync(string projectId, string key, CancellationToken ct) byte[]
+        +SaveAsync(string clinicId, string fileName, byte[] content, CancellationToken ct) string
+        +ReadAsync(string clinicId, string key, CancellationToken ct) byte[]
     }
     class TimingStorageDecorator {
         -IDocumentStorage inner
@@ -227,7 +226,7 @@ Three classes implement `IDocumentStorage` and hold one other object. The decora
 
 ```mermaid
 sequenceDiagram
-    participant Doc as ProjectDocument (subject)
+    participant Doc as LabReport (subject)
     participant O1 as AuditObserver
     participant O2 as DashboardObserver
     participant M as SubmissionMediator
@@ -238,25 +237,25 @@ sequenceDiagram
     Doc->>O2: StatusChanged(Approved)
     Note over M,S: Mediator: the hub decides who does what, in what order
     M->>N: Next number?
-    N-->>M: NH48/CIV/0007
+    N-->>M: BLR-01/HAEM/0007
     M->>S: Save(file)
     S-->>M: key
     M->>Doc: Submit()
 ```
 
-In the top half, the document doesn't know what its observers do: auditing and the dashboard each react on their own. In the bottom half, the coordination rule ("number it, then store it, then submit it") lives in one place, and the participants don't talk to each other. If you find observers calling each other or depending on the order in which they're notified, you need a mediator. In this lesson's code, the `DocumentSubmissionFacade` plays that coordinating role for clients, which shows how a facade and a mediator can overlap.
+In the top half, the lab report doesn't know what its observers do: auditing and the dashboard each react on their own. In the bottom half, the coordination rule ("number it, then store it, then submit it") lives in one place, and the participants don't talk to each other. If you find observers calling each other or depending on the order in which they're notified, you need a mediator. In this lesson's code, the `DocumentSubmissionFacade` plays that coordinating role for clients, which shows how a facade and a mediator can overlap.
 
 ## Step-by-step example
 
-Let's walk the decision process for a real feature request: **"Contractors upload drawings and reports for a highway project. Files go into the client's existing document management system (DMS), whose SDK we can't change. Only people assigned to the project may read or write. Each client numbers documents its own way. Documents go Draft → Submitted → Approved or Rejected; rejected ones can be resubmitted. The audit log and the PM dashboard must react to approvals. We need to measure DMS latency. The API should offer one simple 'submit document' call."**
+Let's walk the decision process for a real feature request: **"Our diagnostic-lab branches upload lab reports (blood tests, X-ray and scan reports) for a hospital group. Files go into the hospital's existing document management system (DMS), whose SDK we can't change. Only staff of the branch (clinic) a report belongs to may read or write it. Each hospital in the group numbers reports its own way. Reports go Draft → Submitted → Approved (signed off by a pathologist) or Rejected; rejected ones can be resubmitted. The audit log and the lab manager's dashboard must react to approvals. We need to measure DMS latency. The API should offer one simple 'submit report' call."**
 
 ### Step 1 — split the request into pressures
 
 Each sentence is a separate force on the design:
 
 1. "existing DMS whose SDK we can't change" — incompatible interface.
-2. "only people assigned to the project" — access control.
-3. "each client numbers documents its own way" — interchangeable algorithm, chosen by configuration.
+2. "only staff of the branch a report belongs to" — access control.
+3. "each hospital numbers reports its own way" — interchangeable algorithm, chosen by configuration.
 4. "Draft → Submitted → Approved/Rejected" — behaviour that depends on lifecycle.
 5. "audit and dashboard react to approvals" — dependents to notify.
 6. "measure DMS latency" — extra behaviour around calls.
@@ -276,7 +275,7 @@ Each sentence is a separate force on the design:
 
 ### Step 3 — check for "no pattern needed"
 
-Could numbering be a `switch`? With two clients today and more each quarter, a strategy is justified. Could state be an enum with a `switch` per action? With four states and three actions it could, and some teams would prefer that. We choose State because rejection and resubmission rules are expected to grow (for example, "approval needs two signatures for structural drawings"). This is a judgement call, and it should be written down in an [ADR](#/lesson/m02-adr).
+Could numbering be a `switch`? With two hospitals today and more signing up each quarter, a strategy is justified. Could state be an enum with a `switch` per action? With four states and three actions it could, and some teams would prefer that. We choose State because rejection and resubmission rules are expected to grow (for example, "a critical result needs a second pathologist's sign-off"). This is a judgement call, and it should be written down in an [ADR](#/lesson/m02-adr).
 
 ### Step 4 — decide the composition order
 
@@ -303,16 +302,16 @@ namespace Docs.Documents;
 public interface IDocumentStorage
 {
     /// <summary>Stores the file and returns an opaque storage key.</summary>
-    Task<string> SaveAsync(string projectId, string fileName, byte[] content, CancellationToken ct);
+    Task<string> SaveAsync(string clinicId, string fileName, byte[] content, CancellationToken ct);
 
-    /// <summary>Returns null if the key does not exist or belongs to another project.</summary>
-    Task<byte[]?> ReadAsync(string projectId, string storageKey, CancellationToken ct);
+    /// <summary>Returns null if the key does not exist or belongs to another clinic.</summary>
+    Task<byte[]?> ReadAsync(string clinicId, string storageKey, CancellationToken ct);
 }
 
 public interface ICurrentUser
 {
     string UserId { get; }
-    bool CanAccessProject(string projectId);
+    bool CanAccessClinic(string clinicId);
 }
 ```
 
@@ -345,14 +344,14 @@ public sealed class LegacyDmsStorageAdapter(LegacyDmsClient client) : IDocumentS
 {
     private const string KeyPrefix = "dms:";
 
-    public Task<string> SaveAsync(string projectId, string fileName, byte[] content, CancellationToken ct)
+    public Task<string> SaveAsync(string clinicId, string fileName, byte[] content, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        var id = client.UploadFile(FolderFor(projectId), fileName, content);
+        var id = client.UploadFile(FolderFor(clinicId), fileName, content);
         return Task.FromResult(KeyPrefix + id);
     }
 
-    public Task<byte[]?> ReadAsync(string projectId, string storageKey, CancellationToken ct)
+    public Task<byte[]?> ReadAsync(string clinicId, string storageKey, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         if (!storageKey.StartsWith(KeyPrefix, StringComparison.Ordinal) || !int.TryParse(storageKey.AsSpan(KeyPrefix.Length), out var id))
@@ -360,7 +359,7 @@ public sealed class LegacyDmsStorageAdapter(LegacyDmsClient client) : IDocumentS
         try
         {
             var file = client.DownloadFile(id);
-            return Task.FromResult<byte[]?>(file.FolderPath == FolderFor(projectId) ? file.Data : null);
+            return Task.FromResult<byte[]?>(file.FolderPath == FolderFor(clinicId) ? file.Data : null);
         }
         catch (KeyNotFoundException)
         {
@@ -368,7 +367,7 @@ public sealed class LegacyDmsStorageAdapter(LegacyDmsClient client) : IDocumentS
         }
     }
 
-    private static string FolderFor(string projectId) => $"/projects/{projectId}";
+    private static string FolderFor(string clinicId) => $"/clinics/{clinicId}";
 }
 ```
 
@@ -381,17 +380,17 @@ namespace Docs.Documents;
 /// <summary>DECORATOR: adds timing. Always forwards. Stackable, optional, chosen at composition time.</summary>
 public sealed class TimingStorageDecorator(IDocumentStorage inner, ILogger<TimingStorageDecorator> logger) : IDocumentStorage
 {
-    public async Task<string> SaveAsync(string projectId, string fileName, byte[] content, CancellationToken ct)
+    public async Task<string> SaveAsync(string clinicId, string fileName, byte[] content, CancellationToken ct)
     {
         var start = Stopwatch.GetTimestamp();
-        try { return await inner.SaveAsync(projectId, fileName, content, ct); }
+        try { return await inner.SaveAsync(clinicId, fileName, content, ct); }
         finally { logger.LogInformation("Storage save {Bytes} bytes took {Ms:0.0} ms", content.Length, Stopwatch.GetElapsedTime(start).TotalMilliseconds); }
     }
 
-    public async Task<byte[]?> ReadAsync(string projectId, string storageKey, CancellationToken ct)
+    public async Task<byte[]?> ReadAsync(string clinicId, string storageKey, CancellationToken ct)
     {
         var start = Stopwatch.GetTimestamp();
-        try { return await inner.ReadAsync(projectId, storageKey, ct); }
+        try { return await inner.ReadAsync(clinicId, storageKey, ct); }
         finally { logger.LogInformation("Storage read {Key} took {Ms:0.0} ms", storageKey, Stopwatch.GetElapsedTime(start).TotalMilliseconds); }
     }
 }
@@ -399,22 +398,22 @@ public sealed class TimingStorageDecorator(IDocumentStorage inner, ILogger<Timin
 /// <summary>PROXY: controls access to the real subject. May refuse to forward. Clients don't know it's there.</summary>
 public sealed class AuthorizingStorageProxy(IDocumentStorage realSubject, ICurrentUser user) : IDocumentStorage
 {
-    public Task<string> SaveAsync(string projectId, string fileName, byte[] content, CancellationToken ct)
+    public Task<string> SaveAsync(string clinicId, string fileName, byte[] content, CancellationToken ct)
     {
-        Demand(projectId);
-        return realSubject.SaveAsync(projectId, fileName, content, ct);
+        Demand(clinicId);
+        return realSubject.SaveAsync(clinicId, fileName, content, ct);
     }
 
-    public Task<byte[]?> ReadAsync(string projectId, string storageKey, CancellationToken ct)
+    public Task<byte[]?> ReadAsync(string clinicId, string storageKey, CancellationToken ct)
     {
-        Demand(projectId);
-        return realSubject.ReadAsync(projectId, storageKey, ct);
+        Demand(clinicId);
+        return realSubject.ReadAsync(clinicId, storageKey, ct);
     }
 
-    private void Demand(string projectId)
+    private void Demand(string clinicId)
     {
-        if (!user.CanAccessProject(projectId))
-            throw new UnauthorizedAccessException($"User {user.UserId} is not assigned to project {projectId}.");
+        if (!user.CanAccessClinic(clinicId))
+            throw new UnauthorizedAccessException($"User {user.UserId} does not work at clinic {clinicId}.");
     }
 }
 ```
@@ -424,29 +423,29 @@ using System.Collections.Concurrent;
 
 namespace Docs.Documents;
 
-/// <summary>STRATEGY: how a client wants documents numbered. Chosen by configuration.</summary>
+/// <summary>STRATEGY: how a hospital wants reports numbered. Chosen by configuration.</summary>
 public interface IDocumentNumberingStrategy
 {
-    string Format(string projectId, string discipline, int sequence);
+    string Format(string clinicId, string testCode, int sequence);
 }
 
-public sealed class ProjectDisciplineNumbering : IDocumentNumberingStrategy
+public sealed class ClinicTestNumbering : IDocumentNumberingStrategy
 {
-    public string Format(string projectId, string discipline, int sequence) =>
-        $"{projectId}/{discipline.ToUpperInvariant()}/{sequence:D4}";
+    public string Format(string clinicId, string testCode, int sequence) =>
+        $"{clinicId}/{testCode.ToUpperInvariant()}/{sequence:D4}";
 }
 
-public sealed class ClientPrefixedNumbering(string clientPrefix) : IDocumentNumberingStrategy
+public sealed class HospitalPrefixedNumbering(string hospitalPrefix) : IDocumentNumberingStrategy
 {
-    public string Format(string projectId, string discipline, int sequence) =>
-        $"{clientPrefix}-{DateTime.UtcNow:yy}-{sequence:D5}";
+    public string Format(string clinicId, string testCode, int sequence) =>
+        $"{hospitalPrefix}-{DateTime.UtcNow:yy}-{sequence:D5}";
 }
 
-/// <summary>Per-project counters. Production: a PostgreSQL sequence or a row locked with SELECT ... FOR UPDATE.</summary>
+/// <summary>Per-clinic counters. Production: a PostgreSQL sequence or a row locked with SELECT ... FOR UPDATE.</summary>
 public sealed class DocumentSequence
 {
     private readonly ConcurrentDictionary<string, int> _counters = new();
-    public int Next(string projectId) => _counters.AddOrUpdate(projectId, 1, (_, n) => n + 1);
+    public int Next(string clinicId) => _counters.AddOrUpdate(clinicId, 1, (_, n) => n + 1);
 }
 ```
 
@@ -460,7 +459,7 @@ public abstract class ApprovalState
     public virtual ApprovalState Submit() => throw Illegal("submit");
     public virtual ApprovalState Approve() => throw Illegal("approve");
     public virtual ApprovalState Reject() => throw Illegal("reject");
-    protected InvalidOperationException Illegal(string action) => new($"Cannot {action} a document that is {Name}.");
+    protected InvalidOperationException Illegal(string action) => new($"Cannot {action} a report that is {Name}.");
 }
 
 public sealed class DraftState : ApprovalState
@@ -494,10 +493,10 @@ public sealed class ApprovedState : ApprovalState
 public sealed record StatusChange(string DocumentNumber, string From, string To, string ByUserId, string? Remark);
 
 /// <summary>The context for the State pattern. Its behaviour depends on the current state object.</summary>
-public sealed class ProjectDocument(string number, string projectId, string fileName, string storageKey)
+public sealed class LabReport(string number, string clinicId, string fileName, string storageKey)
 {
     public string Number { get; } = number;
-    public string ProjectId { get; } = projectId;
+    public string ClinicId { get; } = clinicId;
     public string FileName { get; } = fileName;
     public string StorageKey { get; } = storageKey;
     public ApprovalState State { get; private set; } = DraftState.Instance;
@@ -565,27 +564,27 @@ public sealed class DocumentSubmissionFacade(
     ICurrentUser user,
     ILogger<DocumentSubmissionFacade> logger)
 {
-    public async Task<ProjectDocument> SubmitAsync(string projectId, string discipline, string fileName, byte[] content, CancellationToken ct)
+    public async Task<LabReport> SubmitAsync(string clinicId, string testCode, string fileName, byte[] content, CancellationToken ct)
     {
         if (content.Length == 0) throw new ArgumentException("File is empty.", nameof(content));
-        var key = await storage.SaveAsync(projectId, fileName, content, ct);          // proxy checks access first
-        var number = numbering.Format(projectId, discipline, sequence.Next(projectId));
-        var doc = new ProjectDocument(number, projectId, fileName, key);
+        var key = await storage.SaveAsync(clinicId, fileName, content, ct);          // proxy checks access first
+        var number = numbering.Format(clinicId, testCode, sequence.Next(clinicId));
+        var doc = new LabReport(number, clinicId, fileName, key);
         registry.Add(doc);
         await NotifyAsync(doc.Submit(user.UserId), ct);
         return doc;
     }
 
-    public Task<ProjectDocument> ApproveAsync(string number, CancellationToken ct) =>
+    public Task<LabReport> ApproveAsync(string number, CancellationToken ct) =>
         ChangeAsync(number, d => d.Approve(user.UserId), ct);
 
-    public Task<ProjectDocument> RejectAsync(string number, string reason, CancellationToken ct) =>
+    public Task<LabReport> RejectAsync(string number, string reason, CancellationToken ct) =>
         ChangeAsync(number, d => d.Reject(user.UserId, reason), ct);
 
-    private async Task<ProjectDocument> ChangeAsync(string number, Func<ProjectDocument, StatusChange> action, CancellationToken ct)
+    private async Task<LabReport> ChangeAsync(string number, Func<LabReport, StatusChange> action, CancellationToken ct)
     {
         var doc = registry.Find(number) ?? throw new KeyNotFoundException($"Document {number} not found.");
-        if (!user.CanAccessProject(doc.ProjectId)) throw new UnauthorizedAccessException("Not assigned to this project.");
+        if (!user.CanAccessClinic(doc.ClinicId)) throw new UnauthorizedAccessException("Not on the staff of this clinic.");
         await NotifyAsync(action(doc), ct);
         return doc;
     }
@@ -602,9 +601,9 @@ public sealed class DocumentSubmissionFacade(
 
 public sealed class DocumentRegistry
 {
-    private readonly ConcurrentDictionary<string, ProjectDocument> _docs = new(StringComparer.OrdinalIgnoreCase);
-    public void Add(ProjectDocument d) { if (!_docs.TryAdd(d.Number, d)) throw new InvalidOperationException($"Duplicate number {d.Number}."); }
-    public ProjectDocument? Find(string number) => _docs.TryGetValue(number, out var d) ? d : null;
+    private readonly ConcurrentDictionary<string, LabReport> _docs = new(StringComparer.OrdinalIgnoreCase);
+    public void Add(LabReport d) { if (!_docs.TryAdd(d.Number, d)) throw new InvalidOperationException($"Duplicate number {d.Number}."); }
+    public LabReport? Find(string number) => _docs.TryGetValue(number, out var d) ? d : null;
 }
 
 /// <summary>Demo identity from headers. Real apps use claims from authentication.</summary>
@@ -612,10 +611,10 @@ public sealed class HeaderCurrentUser(IHttpContextAccessor accessor) : ICurrentU
 {
     public string UserId => accessor.HttpContext?.Request.Headers["X-User"].ToString() is { Length: > 0 } u ? u : "anonymous";
 
-    public bool CanAccessProject(string projectId) =>
-        (accessor.HttpContext?.Request.Headers["X-Projects"].ToString() ?? "")
+    public bool CanAccessClinic(string clinicId) =>
+        (accessor.HttpContext?.Request.Headers["X-Clinics"].ToString() ?? "")
             .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-            .Contains(projectId, StringComparer.OrdinalIgnoreCase);
+            .Contains(clinicId, StringComparer.OrdinalIgnoreCase);
 }
 ```
 
@@ -639,8 +638,8 @@ builder.Services.AddScoped<IDocumentStorage>(sp =>
 // Strategy chosen by configuration.
 builder.Services.AddSingleton<IDocumentNumberingStrategy>(
     builder.Configuration["Documents:Numbering"] is { Length: > 0 } prefix
-        ? new ClientPrefixedNumbering(prefix)
-        : new ProjectDisciplineNumbering());
+        ? new HospitalPrefixedNumbering(prefix)
+        : new ClinicTestNumbering());
 
 builder.Services.AddSingleton<DocumentSequence>();
 builder.Services.AddSingleton<DocumentRegistry>();
@@ -651,11 +650,11 @@ builder.Services.AddScoped<DocumentSubmissionFacade>();
 
 var app = builder.Build();
 
-app.MapPost("/projects/{projectId}/documents", async (string projectId, SubmitDocumentRequest req, DocumentSubmissionFacade docs, CancellationToken ct) =>
+app.MapPost("/clinics/{clinicId}/reports", async (string clinicId, SubmitDocumentRequest req, DocumentSubmissionFacade docs, CancellationToken ct) =>
 {
     try
     {
-        var doc = await docs.SubmitAsync(projectId, req.Discipline, req.FileName, Convert.FromBase64String(req.ContentBase64), ct);
+        var doc = await docs.SubmitAsync(clinicId, req.TestCode, req.FileName, Convert.FromBase64String(req.ContentBase64), ct);
         return Results.Created($"/documents/{Uri.EscapeDataString(doc.Number)}", new { doc.Number, State = doc.State.Name });
     }
     catch (UnauthorizedAccessException) { return Results.StatusCode(StatusCodes.Status403Forbidden); }
@@ -673,7 +672,7 @@ app.MapGet("/dashboard/approved", (DashboardCounterObserver counter) => counter.
 
 app.Run();
 
-public sealed record SubmitDocumentRequest(string Discipline, string FileName, string ContentBase64);
+public sealed record SubmitDocumentRequest(string TestCode, string FileName, string ContentBase64);
 ```
 
 What to notice:
@@ -681,7 +680,9 @@ What to notice:
 - **Each class's comment names its pattern and its intent.** That's the most useful thing you can do for the next reader.
 - **The proxy and the decorator have the same shape.** The comments, the names and the position in the chain carry the intent.
 - **The facade also acts as a mediator** for the submission workflow. It decides the order: store, number, submit, notify. That overlap is normal. Name it after the role clients see (Facade), and keep the coordination logic thin.
-- **Observer failures are isolated.** One broken observer must not undo an approval. If observers must be reliable across restarts, that's the moment to move to Pub/Sub with an outbox ([see the outbox lesson](#/lesson/m12-outbox)).
+- **Observer failures are isolated.** One broken observer must not undo an approval. But a log line is not a durable audit trail. In healthcare, the audit of who signed off which report is usually a legal requirement, so in production the audit record is written in the same database transaction as the status change, or published through an outbox ([see the outbox lesson](#/lesson/m12-outbox)). In-process Observer is fine for the dashboard counter, which can be rebuilt.
+- **The facade stores the file before it assigns a number.** If numbering or saving the report row fails, the DMS holds an orphan file. Real systems either make the step idempotent (a client-supplied upload id) or run a cleanup job for unreferenced files. Patterns don't remove failure modes; you still have to design for them.
+- **Logs avoid patient data.** The timing decorator logs the storage key and size, never the file name or content, because file names often contain patient names.
 - **Approval states are singletons.** They hold no data, so one instance of each is enough. Data such as the rejection reason lives in the `StatusChange`.
 
 ## Bad design vs good design
@@ -706,7 +707,7 @@ Each name sets wrong expectations. A reviewer who reads "Strategy" assumes the c
 
 ### Forcing a pattern because the shape fits
 
-A team needed "send an alert when a milestone slips". Because they had just learned Mediator, they built a `MilestoneMediator` that every module registered with. A plain Observer (`IMilestoneObserver` injected as `IEnumerable<>`) would have done the job in a third of the code. The mediator's extra power, central coordination rules, was never used.
+A hospital team needed "alert the ward when a lab result is flagged critical". Because they had just learned Mediator, they built a `CriticalResultMediator` that every module registered with. A plain Observer (`ICriticalResultObserver` injected as `IEnumerable<>`) would have done the job in a third of the code. The mediator's extra power, central coordination rules, was never used.
 
 :::callout type=tip title="The two-pattern smell is often a good sign"
 If a problem seems to match two leaves in the flowchart, look again: it often has two pressures. "Retry failed payments later" is Command (queue the request) plus Strategy (the retry policy). Use both, each for its own reason.
@@ -726,53 +727,53 @@ using System;
 using System.Collections.Generic;
 
 // Our interface.
-public interface IPriceFeed { decimal PricePerBag(string material); }
+public interface IPriceFeed { decimal PricePerStrip(string medicine); }
 
-// A vendor service with a different interface: paise, different method name.
-public sealed class VendorRateService
+// A distributor's service with a different interface: paise, SKU codes, different method name.
+public sealed class DistributorRateService
 {
-    private readonly Dictionary<string, long> _paise = new() { ["OPC-53"] = 41_500, ["PPC"] = 38_000 };
+    private readonly Dictionary<string, long> _paise = new() { ["PCM-500"] = 3_050, ["AMOX-250"] = 8_900 };
     public long GetRateInPaise(string sku) => _paise.TryGetValue(sku, out var p) ? p : throw new KeyNotFoundException(sku);
 }
 
 // ADAPTER: translates names and units. No new behaviour.
-public sealed class VendorPriceAdapter(VendorRateService vendor) : IPriceFeed
+public sealed class DistributorPriceAdapter(DistributorRateService distributor) : IPriceFeed
 {
-    public decimal PricePerBag(string material) => vendor.GetRateInPaise(material) / 100m;
+    public decimal PricePerStrip(string medicine) => distributor.GetRateInPaise(medicine) / 100m;
 }
 
 // DECORATOR: adds logging and always forwards.
 public sealed class LoggingPriceFeed(IPriceFeed inner, string label) : IPriceFeed
 {
-    public decimal PricePerBag(string material)
+    public decimal PricePerStrip(string medicine)
     {
-        Console.WriteLine($"[{label}] asking for {material}");
-        var p = inner.PricePerBag(material);
+        Console.WriteLine($"[{label}] asking for {medicine}");
+        var p = inner.PricePerStrip(medicine);
         Console.WriteLine($"[{label}] got {p}");
         return p;
     }
 }
 
 // PROXY: controls access. May refuse.
-public sealed class SiteAccessProxy(IPriceFeed real, Func<bool> userIsProcurement) : IPriceFeed
+public sealed class PharmacyStaffOnlyProxy(IPriceFeed real, Func<bool> userIsPharmacyStaff) : IPriceFeed
 {
-    public decimal PricePerBag(string material) =>
-        userIsProcurement() ? real.PricePerBag(material) : throw new UnauthorizedAccessException("Procurement only");
+    public decimal PricePerStrip(string medicine) =>
+        userIsPharmacyStaff() ? real.PricePerStrip(medicine) : throw new UnauthorizedAccessException("Pharmacy staff only");
 }
 
 public static class Program
 {
     public static void Main()
     {
-        var isProcurement = true;
-        IPriceFeed feed = new SiteAccessProxy(
-            new LoggingPriceFeed(new VendorPriceAdapter(new VendorRateService()), "inner-log"),
-            () => isProcurement);
+        var isPharmacyStaff = true;
+        IPriceFeed feed = new PharmacyStaffOnlyProxy(
+            new LoggingPriceFeed(new DistributorPriceAdapter(new DistributorRateService()), "inner-log"),
+            () => isPharmacyStaff);
 
-        Console.WriteLine($"OPC-53: Rs {feed.PricePerBag("OPC-53")}");
+        Console.WriteLine($"PCM-500 (paracetamol, strip of 10): Rs {feed.PricePerStrip("PCM-500")}");
 
-        isProcurement = false;
-        try { feed.PricePerBag("PPC"); }
+        isPharmacyStaff = false;
+        try { feed.PricePerStrip("AMOX-250"); }
         catch (UnauthorizedAccessException ex) { Console.WriteLine($"Refused: {ex.Message} (note: nothing was logged)"); }
     }
 }
@@ -785,17 +786,17 @@ public static class Program
 For each scenario, name the best-fitting pattern and give the one question from this lesson that decided it.
 
 1. Wrap a vendor's SMS SDK (`SendSms(string mobile, string text, int priority)`) so it implements your `INotificationChannel`.
-2. A tender bid moves Draft → Submitted → Under evaluation → Awarded / Lost, and allowed actions differ in each.
+2. A hospital insurance pre-authorisation moves Draft → Submitted → Under review → Approved / Denied, and allowed actions differ in each.
 3. Add response compression to an existing `Stream` without changing code that reads it.
-4. Let users pick "cheapest", "fastest" or "greenest" route for material deliveries.
-5. Store "recalculate project cost" requests in a table so a worker can run them at night and retry failures.
+4. Let patients pick "cheapest", "fastest" or "greenest" delivery option for a medicine order.
+5. Store "regenerate monthly patient statements" requests in a table so a worker can run them at night and retry failures.
 6. Build an `HttpRequestMessage` with headers, query parameters, body and timeout, validating at the end.
 7. Create a PostgreSQL connection, command and parameter that all belong to the same database provider.
-8. A cost-estimate tree where a section's total is the sum of its sub-sections and items.
+8. An itemised hospital bill where a section's total (Pharmacy, Lab tests) is the sum of its sub-sections and line items.
 9. Expense approval: team lead up to ₹10,000, manager up to ₹1,00,000, finance head above that.
 10. Every uploaded CSV row is trimmed, then converted to typed values, then validated, then saved.
-11. A billing service in another process must learn about approved RA bills, even if it is down for an hour.
-12. Load a 50 MB drawing only when someone first opens it, but let code hold a reference from the start.
+11. An insurer's claims service in another process must learn about approved discharge bills, even if it is down for an hour.
+12. Load a 50 MB MRI scan image only when a doctor first opens it, but let code hold a reference from the start.
 ::acceptance
 - At least 10 of 12 are correct.
 - Each answer cites the deciding question (interface change, who chooses, one vs many, does every step run, and so on).
@@ -829,7 +830,7 @@ For 11, the words "another process" and "down for an hour" point beyond in-proce
 :::
 
 :::exercise id=m06-pattern-comparison-ex2 difficulty=beginner kind=code title="Decorator or Proxy? Build both"
-`IReportSource.Load(reportId)` returns a project report. Creating the real source is expensive (it opens a connection pool and loads templates). Build:
+`IReportSource.Load(reportId)` returns a patient's lab report. Creating the real source is expensive (it opens a connection pool and loads templates). Build:
 
 1. `LoggingReportSource` — a **decorator** that records `"load {id}"` in a log list, then always forwards to the inner source.
 2. `LazyCachingReportProxy` — a **proxy** that doesn't create the real source until the first `Load`, creates it at most once, and caches results per report id.
@@ -968,181 +969,181 @@ public sealed class LazyCachingReportProxy(Func<IReportSource> factory) : IRepor
 :::
 
 :::exercise id=m06-pattern-comparison-ex3 difficulty=intermediate kind=code title="Turn a misnamed Strategy into State"
-A measurement book (MB, the site record of measured work) was written with an `IMbStrategy` field that the code swaps after each action. It's really a state machine. Rewrite it with the State pattern.
+A lab test report was written with an `IReportStrategy` field that the code swaps after each action. It's really a state machine. Rewrite it with the State pattern.
 
-Rules: Draft --Submit--> Submitted. Submitted --Verify--> Verified (terminal). Submitted --Return(reason)--> Draft, recording the reason. `AddEntry(quantity)` is allowed only in Draft. Illegal actions throw `InvalidOperationException` naming the current state.
+Rules: Draft --Submit--> Submitted. Submitted --Verify--> Verified (terminal). Submitted --Return(reason)--> Draft, recording the reason. `AddResult(value)` is allowed only in Draft. Illegal actions throw `InvalidOperationException` naming the current state.
 ::requirements
 - One class per state, each deciding its own legal transitions.
-- `MeasurementBook` exposes `StateName`, `Entries`, `ReturnReasons` and a `History` of state names (starting with "Draft").
+- `TestReport` exposes `StateName`, `Results`, `ReturnReasons` and a `History` of state names (starting with "Draft").
 - `Return` with an empty reason throws `ArgumentException`.
 ::acceptance
-- Happy path: add entries, submit, verify; history is Draft, Submitted, Verified.
-- Return path: submit, return("dimensions missing"), add entry, submit again.
-- `AddEntry` after submit throws; `Verify` from Draft throws; anything on Verified throws.
+- Happy path: add results, submit, verify; history is Draft, Submitted, Verified.
+- Return path: submit, return("reference range missing"), add result, submit again.
+- `AddResult` after submit throws; `Verify` from Draft throws; anything on Verified throws.
 ::hint
 Give the base state class virtual methods that throw by default, and override only the legal ones.
 ::hint
-Each method returns the next state; the `MeasurementBook` stores it and appends to history.
+Each method returns the next state; the `TestReport` stores it and appends to history.
 ::hint
-`AddEntry` doesn't change state, so `DraftState.AddEntry` can return `this`.
+`AddResult` doesn't change state, so `DraftState.AddResult` can return `this`.
 ::hint
 ```csharp
-public abstract class MbState
+public abstract class ReportState
 {
     public abstract string Name { get; }
-    public virtual MbState AddEntry() => throw Illegal("add entries to");
-    public virtual MbState Submit() => throw Illegal("submit");
+    public virtual ReportState AddResult() => throw Illegal("add results to");
+    public virtual ReportState Submit() => throw Illegal("submit");
     ...
-    protected InvalidOperationException Illegal(string what) => new($"Cannot {what} an MB that is {Name}.");
+    protected InvalidOperationException Illegal(string what) => new($"Cannot {what} a report that is {Name}.");
 }
 ```
 ::starter
-```csharp file=MeasurementBook.cs
+```csharp file=TestReport.cs
 using System;
 using System.Collections.Generic;
 
-public abstract class MbState
+public abstract class ReportState
 {
     public abstract string Name { get; }
-    public virtual MbState AddEntry() => throw new NotImplementedException();
-    public virtual MbState Submit() => throw new NotImplementedException();
-    public virtual MbState Verify() => throw new NotImplementedException();
-    public virtual MbState Return() => throw new NotImplementedException();
+    public virtual ReportState AddResult() => throw new NotImplementedException();
+    public virtual ReportState Submit() => throw new NotImplementedException();
+    public virtual ReportState Verify() => throw new NotImplementedException();
+    public virtual ReportState Return() => throw new NotImplementedException();
 }
 
-public sealed class MeasurementBook
+public sealed class TestReport
 {
     public string StateName => throw new NotImplementedException();
-    public IReadOnlyList<decimal> Entries => throw new NotImplementedException();
+    public IReadOnlyList<decimal> Results => throw new NotImplementedException();
     public IReadOnlyList<string> ReturnReasons => throw new NotImplementedException();
     public IReadOnlyList<string> History => throw new NotImplementedException();
 
-    public void AddEntry(decimal quantity) => throw new NotImplementedException();
+    public void AddResult(decimal value) => throw new NotImplementedException();
     public void Submit() => throw new NotImplementedException();
     public void Verify() => throw new NotImplementedException();
     public void Return(string reason) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=MeasurementBookTests.cs
+```csharp file=TestReportTests.cs
 using System;
 using Xunit;
 
-public class MeasurementBookTests
+public class TestReportTests
 {
     [Fact]
     public void Happy_path()
     {
-        var mb = new MeasurementBook();
-        mb.AddEntry(120.5m);
-        mb.AddEntry(80m);
-        mb.Submit();
-        mb.Verify();
-        Assert.Equal("Verified", mb.StateName);
-        Assert.Equal(new[] { "Draft", "Submitted", "Verified" }, mb.History);
-        Assert.Equal(2, mb.Entries.Count);
+        var report = new TestReport();
+        report.AddResult(120.5m);
+        report.AddResult(80m);
+        report.Submit();
+        report.Verify();
+        Assert.Equal("Verified", report.StateName);
+        Assert.Equal(new[] { "Draft", "Submitted", "Verified" }, report.History);
+        Assert.Equal(2, report.Results.Count);
     }
 
     [Fact]
     public void Return_and_resubmit()
     {
-        var mb = new MeasurementBook();
-        mb.AddEntry(10m);
-        mb.Submit();
-        mb.Return("dimensions missing");
-        mb.AddEntry(5m);
-        mb.Submit();
-        Assert.Equal("Submitted", mb.StateName);
-        Assert.Equal("dimensions missing", Assert.Single(mb.ReturnReasons));
-        Assert.Equal(new[] { "Draft", "Submitted", "Draft", "Submitted" }, mb.History);
+        var report = new TestReport();
+        report.AddResult(10m);
+        report.Submit();
+        report.Return("reference range missing");
+        report.AddResult(5m);
+        report.Submit();
+        Assert.Equal("Submitted", report.StateName);
+        Assert.Equal("reference range missing", Assert.Single(report.ReturnReasons));
+        Assert.Equal(new[] { "Draft", "Submitted", "Draft", "Submitted" }, report.History);
     }
 
     [Fact]
     public void Cannot_edit_after_submit()
     {
-        var mb = new MeasurementBook();
-        mb.Submit();
-        var ex = Assert.Throws<InvalidOperationException>(() => mb.AddEntry(1m));
+        var report = new TestReport();
+        report.Submit();
+        var ex = Assert.Throws<InvalidOperationException>(() => report.AddResult(1m));
         Assert.Contains("Submitted", ex.Message);
     }
 
-    [Fact] public void Cannot_verify_draft() => Assert.Throws<InvalidOperationException>(() => new MeasurementBook().Verify());
+    [Fact] public void Cannot_verify_draft() => Assert.Throws<InvalidOperationException>(() => new TestReport().Verify());
 
     [Fact]
     public void Verified_is_terminal()
     {
-        var mb = new MeasurementBook();
-        mb.Submit();
-        mb.Verify();
-        Assert.Throws<InvalidOperationException>(() => mb.Return("late change"));
-        Assert.Throws<InvalidOperationException>(() => mb.Submit());
+        var report = new TestReport();
+        report.Submit();
+        report.Verify();
+        Assert.Throws<InvalidOperationException>(() => report.Return("late change"));
+        Assert.Throws<InvalidOperationException>(() => report.Submit());
     }
 
     [Fact]
     public void Return_needs_reason()
     {
-        var mb = new MeasurementBook();
-        mb.Submit();
-        Assert.Throws<ArgumentException>(() => mb.Return(" "));
+        var report = new TestReport();
+        report.Submit();
+        Assert.Throws<ArgumentException>(() => report.Return(" "));
     }
 }
 ```
 ::solution
-Each state owns its legal moves. The book (the context) delegates to the current state and records history.
+Each state owns its legal moves. The report (the context) delegates to the current state and records history.
 
-```csharp file=MeasurementBook.cs
+```csharp file=TestReport.cs
 using System;
 using System.Collections.Generic;
 
-public abstract class MbState
+public abstract class ReportState
 {
     public abstract string Name { get; }
-    public virtual MbState AddEntry() => throw Illegal("add entries to");
-    public virtual MbState Submit() => throw Illegal("submit");
-    public virtual MbState Verify() => throw Illegal("verify");
-    public virtual MbState Return() => throw Illegal("return");
-    protected InvalidOperationException Illegal(string what) => new($"Cannot {what} an MB that is {Name}.");
+    public virtual ReportState AddResult() => throw Illegal("add results to");
+    public virtual ReportState Submit() => throw Illegal("submit");
+    public virtual ReportState Verify() => throw Illegal("verify");
+    public virtual ReportState Return() => throw Illegal("return");
+    protected InvalidOperationException Illegal(string what) => new($"Cannot {what} a report that is {Name}.");
 }
 
-public sealed class DraftMb : MbState
+public sealed class DraftReport : ReportState
 {
-    public static readonly DraftMb Instance = new();
+    public static readonly DraftReport Instance = new();
     public override string Name => "Draft";
-    public override MbState AddEntry() => this;
-    public override MbState Submit() => SubmittedMb.Instance;
+    public override ReportState AddResult() => this;
+    public override ReportState Submit() => SubmittedReport.Instance;
 }
 
-public sealed class SubmittedMb : MbState
+public sealed class SubmittedReport : ReportState
 {
-    public static readonly SubmittedMb Instance = new();
+    public static readonly SubmittedReport Instance = new();
     public override string Name => "Submitted";
-    public override MbState Verify() => VerifiedMb.Instance;
-    public override MbState Return() => DraftMb.Instance;
+    public override ReportState Verify() => VerifiedReport.Instance;
+    public override ReportState Return() => DraftReport.Instance;
 }
 
-public sealed class VerifiedMb : MbState
+public sealed class VerifiedReport : ReportState
 {
-    public static readonly VerifiedMb Instance = new();
+    public static readonly VerifiedReport Instance = new();
     public override string Name => "Verified";
 }
 
-public sealed class MeasurementBook
+public sealed class TestReport
 {
-    private MbState _state = DraftMb.Instance;
-    private readonly List<decimal> _entries = new();
+    private ReportState _state = DraftReport.Instance;
+    private readonly List<decimal> _results = new();
     private readonly List<string> _reasons = new();
     private readonly List<string> _history = new() { "Draft" };
 
     public string StateName => _state.Name;
-    public IReadOnlyList<decimal> Entries => _entries;
+    public IReadOnlyList<decimal> Results => _results;
     public IReadOnlyList<string> ReturnReasons => _reasons;
     public IReadOnlyList<string> History => _history;
 
-    public void AddEntry(decimal quantity)
+    public void AddResult(decimal value)
     {
-        _state = _state.AddEntry();          // throws unless Draft
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(quantity);
-        _entries.Add(quantity);
+        _state = _state.AddResult();          // throws unless Draft
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(value);
+        _results.Add(value);
     }
 
     public void Submit() => Move(_state.Submit());
@@ -1156,7 +1157,7 @@ public sealed class MeasurementBook
         Move(next);
     }
 
-    private void Move(MbState next)
+    private void Move(ReportState next)
     {
         _state = next;
         _history.Add(next.Name);
@@ -1164,21 +1165,21 @@ public sealed class MeasurementBook
 }
 ```
 
-Why State and not Strategy: the variant changes because *something happened to the MB*, and each state knows its successors. Nobody "chooses" a state from outside.
+Why State and not Strategy: the variant changes because *something happened to the report*, and each state knows its successors. Nobody "chooses" a state from outside.
 ::alternatives
 With 3 states and 4 actions, an `enum` plus a transition table (`Dictionary<(Status, Action), Status>`) is a valid and often shorter alternative, especially if transitions are configured as data. Prefer State classes when states carry real behaviour beyond "is this transition allowed".
 ::mistakes
-- Letting `MeasurementBook` check `if (StateName == "Draft")` itself. The states then exist only for show.
-- Adding to history on `AddEntry`, which isn't a transition.
+- Letting `TestReport` check `if (StateName == "Draft")` itself. The states then exist only for show.
+- Adding to history on `AddResult`, which isn't a transition.
 :::
 
 :::exercise id=m06-pattern-comparison-ex4 difficulty=intermediate kind=design title="Observer, Mediator or Pub/Sub?"
-When a project milestone slips by more than 7 days, four things must happen:
+When the hospital cancels a patient's outpatient (OPD) appointment because the doctor is unavailable, four things must happen:
 
-1. The PM's live dashboard in the same web app updates its "delayed milestones" counter.
-2. The risk register (another module in the same modular monolith) creates a risk entry, but only if no open risk exists for that milestone, and it must then tell the dashboard to show a "risk raised" badge.
-3. The client's separate billing system (another company's service) must withhold the milestone payment. It's sometimes offline for maintenance.
-4. A screen with three linked drop-downs (project, package, milestone) must reset the dependent drop-downs when an earlier one changes.
+1. The front-desk live dashboard in the same web app updates its "cancelled today" counter.
+2. The rebooking module (another module in the same modular monolith) creates a "call patient to rebook" task, but only if no open rebooking task exists for that patient, and it must then tell the dashboard to show a "rebooking pending" badge.
+3. The separate payments system (run by another vendor) must refund the ₹500 booking fee to the patient's UPI account. It's sometimes offline for maintenance.
+4. A booking screen with three linked drop-downs (hospital, department, doctor) must reset the dependent drop-downs when an earlier one changes.
 
 Choose a pattern for each and justify the choice using the comparison table. Sketch the main types.
 ::acceptance
@@ -1190,26 +1191,26 @@ Which of these cross a process boundary? Which need durability?
 ::hint
 Item 4 is the textbook example from the original Mediator description.
 ::hint
-For item 2, decide whether the "only if no open risk" rule belongs to the subject, the observer, or a coordinator.
+For item 2, decide whether the "only if no open rebooking task" rule belongs to the subject, the observer, or a coordinator.
 ::solution
 | # | Choice | Why |
 |---|---|---|
-| 1 | Observer | In-process, broadcast, the dashboard decides what to do. `IMilestoneObserver` injected as `IEnumerable<>`. |
-| 2 | Observer, with the rule inside the risk module | The risk module is just another observer; "only if no open risk" is *its* business rule. It then raises its own `RiskRaised` event, which the dashboard observes. No central coordinator is needed. If the modules must stay strictly decoupled, an in-process event bus between modules is fine. |
-| 3 | Pub/Sub through a broker, with an outbox | Another process, sometimes offline, so it needs durability. Write a `MilestoneSlipped` message to an outbox table in the same transaction as the milestone update. A relay publishes it to the broker, and the billing system consumes it when it's back. |
-| 4 | Mediator | The coordination rule ("project change resets package and milestone") *is* the logic. The drop-downs talk only to a `MilestoneFilterMediator`, never to each other. |
+| 1 | Observer | In-process, broadcast, the dashboard decides what to do. `IAppointmentObserver` injected as `IEnumerable<>`. |
+| 2 | Observer, with the rule inside the rebooking module | The rebooking module is just another observer; "only if no open task" is *its* business rule. It then raises its own `RebookingRequested` event, which the dashboard observes. No central coordinator is needed. If the modules must stay strictly decoupled, an in-process event bus between modules is fine. |
+| 3 | Pub/Sub through a broker, with an outbox | Another process, sometimes offline, so it needs durability. Write an `AppointmentCancelled` message to an outbox table in the same transaction as the cancellation. A relay publishes it to the broker, and the payments system consumes it when it's back. The consumer must be idempotent (dedupe on the appointment id), because the relay delivers at least once and a double refund costs real money. |
+| 4 | Mediator | The coordination rule ("hospital change resets department and doctor") *is* the logic. The drop-downs talk only to a `DoctorFilterMediator`, never to each other. |
 
-Types: `MilestoneSlipped(ProjectId, MilestoneId, DaysLate)` as the event; `IMilestoneObserver.OnSlippedAsync`; `RiskRegisterObserver`, `DashboardObserver`; `OutboxMilestonePublisher`; `MilestoneFilterMediator { ProjectChanged(id); PackageChanged(id); }`.
+Types: `AppointmentCancelled(HospitalId, AppointmentId, PatientId, RefundAmount)` as the event; `IAppointmentObserver.OnCancelledAsync`; `RebookingObserver`, `DashboardObserver`; `OutboxAppointmentPublisher`; `DoctorFilterMediator { HospitalChanged(id); DepartmentChanged(id); }`.
 ::mistakes
-- Using Observer for item 3. If the billing service is down, an in-process call fails and the event is lost.
+- Using Observer for item 3. If the payments service is down, an in-process call fails and the refund is lost.
 - Building one central mediator for items 1–3. It becomes a hub that knows every module, which is the god-object mediator.
 - Using a broker for item 1. It adds latency and infrastructure for a same-process notification.
 :::
 
 :::exercise id=m06-pattern-comparison-ex5 difficulty=advanced kind=code title="Chain of Responsibility vs Pipeline, side by side"
-Implement two sequences of handlers for a construction company's procurement module, and see how their behaviour differs.
+Implement two sequences of handlers for a hospital chain's procurement module, and see how their behaviour differs.
 
-**Purchase approval (Chain of Responsibility).** Approvers in order: Site engineer (up to ₹5,00,000), Project manager (up to ₹50,00,000), Regional head (up to ₹5,00,00,000). Anything larger goes to "Board". An approver can't approve a request they raised; it passes to the next.
+**Purchase approval (Chain of Responsibility).** Approvers in order: Clinic manager (up to ₹50,000), Medical director (up to ₹5,00,000), CFO (up to ₹50,00,000). Anything larger goes to "Board". An approver can't approve a request they raised; it passes to the next.
 
 **Invoice normalisation (Pipeline).** Every step runs, in order: trim all text fields, upper-case the GSTIN, round the amount to 2 decimals. Each step returns a new `Invoice`.
 ::requirements
@@ -1217,8 +1218,8 @@ Implement two sequences of handlers for a construction company's procurement mod
 - `ApprovalChain.Default()` builds the three-level chain.
 - `InvoicePipeline` takes steps in its constructor and runs all of them in order.
 ::acceptance
-- ₹3,00,000 → "SiteEngineer"; ₹30,00,000 → "ProjectManager"; ₹3,00,00,000 → "RegionalHead"; ₹30,00,00,000 → "Board".
-- ₹3,00,000 raised by the site engineer → "ProjectManager".
+- ₹30,000 → "ClinicManager"; ₹3,00,000 → "MedicalDirector"; ₹30,00,000 → "Cfo"; ₹3,00,00,000 → "Board".
+- ₹30,000 raised by the clinic manager → "MedicalDirector".
 - The pipeline turns `"  27abcde1234f1z5 "` into `"27ABCDE1234F1Z5"` and `1234.5678` into `1234.57`, and records that all three steps ran.
 ::hint
 In the chain, each handler decides: handle it, or `return _next?.Handle(r) ?? "Board"`.
@@ -1230,9 +1231,9 @@ The self-approval rule is just another condition in the handler: `r.Amount <= _l
 ```csharp
 public static Approver Default()
 {
-    var head = new Approver("SiteEngineer", 5_00_000m);
-    head.SetNext(new Approver("ProjectManager", 50_00_000m))
-        .SetNext(new Approver("RegionalHead", 5_00_00_000m));
+    var head = new Approver("ClinicManager", 50_000m);
+    head.SetNext(new Approver("MedicalDirector", 5_00_000m))
+        .SetNext(new Approver("Cfo", 50_00_000m));
     return head;
 }
 ```
@@ -1290,28 +1291,28 @@ using Xunit;
 public class ProcurementTests
 {
     [Theory]
-    [InlineData(300000, "SiteEngineer")]
-    [InlineData(3000000, "ProjectManager")]
-    [InlineData(30000000, "RegionalHead")]
-    [InlineData(300000000, "Board")]
+    [InlineData(30000, "ClinicManager")]
+    [InlineData(300000, "MedicalDirector")]
+    [InlineData(3000000, "Cfo")]
+    [InlineData(30000000, "Board")]
     public void Chain_routes_to_first_capable_approver(int amount, string expected) =>
-        Assert.Equal(expected, ApprovalChain.Default().Handle(new PurchaseRequest(amount, "Storekeeper")));
+        Assert.Equal(expected, ApprovalChain.Default().Handle(new PurchaseRequest(amount, "Pharmacist")));
 
     [Fact]
     public void Cannot_approve_own_request() =>
-        Assert.Equal("ProjectManager", ApprovalChain.Default().Handle(new PurchaseRequest(300000m, "SiteEngineer")));
+        Assert.Equal("MedicalDirector", ApprovalChain.Default().Handle(new PurchaseRequest(30000m, "ClinicManager")));
 
     [Fact]
     public void Exact_limit_is_within_authority() =>
-        Assert.Equal("SiteEngineer", ApprovalChain.Default().Handle(new PurchaseRequest(500000m, "Storekeeper")));
+        Assert.Equal("ClinicManager", ApprovalChain.Default().Handle(new PurchaseRequest(50000m, "Pharmacist")));
 
     [Fact]
     public void Pipeline_runs_every_step_in_order()
     {
         var p = new InvoicePipeline(new IInvoiceStep[] { new TrimStep(), new UpperGstinStep(), new RoundAmountStep() });
-        var (result, run) = p.Run(new Invoice("  Shree Cement Traders ", "  27abcde1234f1z5 ", 1234.5678m));
+        var (result, run) = p.Run(new Invoice("  Shree Medico Distributors ", "  27abcde1234f1z5 ", 1234.5678m));
         Assert.Equal("27ABCDE1234F1Z5", result.Gstin);
-        Assert.Equal("Shree Cement Traders", result.VendorName);
+        Assert.Equal("Shree Medico Distributors", result.VendorName);
         Assert.Equal(1234.57m, result.Amount);
         Assert.Equal(new[] { "Trim", "UpperGstin", "RoundAmount" }, run);
     }
@@ -1350,9 +1351,9 @@ public static class ApprovalChain
 {
     public static Approver Default()
     {
-        var first = new Approver("SiteEngineer", 5_00_000m);
-        first.SetNext(new Approver("ProjectManager", 50_00_000m))
-             .SetNext(new Approver("RegionalHead", 5_00_00_000m));
+        var first = new Approver("ClinicManager", 50_000m);
+        first.SetNext(new Approver("MedicalDirector", 5_00_000m))
+             .SetNext(new Approver("Cfo", 50_00_000m));
         return first;
     }
 }
@@ -1431,18 +1432,18 @@ public class AuthorizingStorageProxyTests
         public Task<byte[]?> ReadAsync(string p, string k, CancellationToken ct) { Calls++; return Task.FromResult<byte[]?>(null); }
     }
 
-    private sealed class User(params string[] projects) : ICurrentUser
+    private sealed class User(params string[] clinics) : ICurrentUser
     {
         public string UserId => "u1";
-        public bool CanAccessProject(string id) => projects.Contains(id);
+        public bool CanAccessClinic(string id) => clinics.Contains(id);
     }
 
     [Fact]
     public async Task Refused_call_never_reaches_real_subject()
     {
         var spy = new SpyStorage();
-        var proxy = new AuthorizingStorageProxy(spy, new User("NH48-PKG3"));
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => proxy.SaveAsync("NH44-PKG1", "a.pdf", new byte[] { 1 }, CancellationToken.None));
+        var proxy = new AuthorizingStorageProxy(spy, new User("BLR-01"));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => proxy.SaveAsync("MUM-02", "a.pdf", new byte[] { 1 }, CancellationToken.None));
         Assert.Equal(0, spy.Calls);
     }
 }
@@ -1474,7 +1475,7 @@ Also add a **composition test**: build the real DI container, resolve `IDocument
 - **EF Core** uses proxies for lazy loading and change tracking, and a builder (`DbContextOptionsBuilder`, `ModelBuilder`) for configuration.
 - **ADO.NET's `DbProviderFactory`** is a textbook Abstract Factory: one factory produces a matching connection, command and parameter.
 - **Messaging.** In-process notifications use Observer (`event`, `IObservable<T>`). Cross-service integration uses Pub/Sub on brokers such as RabbitMQ or Kafka. Teams that start with in-process events often move specific events to a broker when another service needs them, which is a deliberate step up in complexity.
-- **Construction and infrastructure software** combines these all the time: adapters around vendor survey and DMS SDKs, State for approval workflows (drawings, RA bills, variations), Strategy for client-specific numbering and rate analysis, Composite for BOQ trees, and Chain of Responsibility for delegation-of-authority approvals.
+- **Hospital and clinic software** combines these all the time: adapters around lab-instrument and DMS SDKs, State for workflows (lab reports, insurance pre-authorisations, discharge), Strategy for hospital-specific numbering and pricing, Composite for itemised bills, and Chain of Responsibility for delegation-of-authority purchase approvals.
 
 ## Interview questions
 
@@ -1513,7 +1514,7 @@ Patterns are solutions to recurring problems, not goals. Each adds indirection, 
 - Five separating questions: what varies, who chooses, does the interface change, how many objects, does every step run.
 - Wrappers: Adapter fits, Decorator adds, Proxy controls, Facade simplifies.
 - Behaviour: Strategy is chosen, State transitions itself, Template Method inherits a skeleton, Command is a storable request.
-- Creation: Factory Method (one product, subclass decides), Abstract Factory (matching family), Builder (steps), Prototype (copy).
+- Creation: Factory Method (one product, subclass decides), Abstract Factory (matching family), Builder (steps). Prototype is just `record` `with` in modern C#.
 - Communication: Observer broadcasts in-process, Mediator coordinates, Pub/Sub crosses processes durably.
 - Composite has many children, Decorator has one. Chain stops at the first handler; Pipeline runs every stage.
 - Name classes by intent, and use no pattern when no real pressure calls for one.
@@ -1552,25 +1553,25 @@ You wrap a vendor's GPS-tracker SDK (`GetFix(int deviceNo)` returning a string) 
 - [ ] Decorator
 > One foreign class, translated to an interface you already own. That's Adapter's intent.
 ::q single
-A `ReportService` is wrapped so the real one (which loads 200 MB of templates) is created only when a report is first requested. Which pattern, and why?
+A `ScanViewerService` is wrapped so the real one (which loads 200 MB of imaging libraries) is created only when a report is first requested. Which pattern, and why?
 - [ ] Decorator, because it wraps the service.
 - [x] Proxy, because it controls when the real subject is created.
-- [ ] Builder, because it delays construction.
+- [ ] Builder, because it delays creating the object.
 - [ ] Facade, because it hides complexity.
 > Controlling the real subject's lifecycle is the virtual-proxy intent.
 ::q single
-A purchase order's allowed actions change as it moves Draft → Approved → Issued → Closed, and each status class returns the next. The code calls them "strategies". What is it really?
+A doctor's appointment's allowed actions change as it moves Booked → Checked in → In consultation → Completed, and each status class returns the next. The code calls them "strategies". What is it really?
 - [ ] Strategy
 - [x] State
 - [ ] Template Method
 - [ ] Command
 > Variants that transition themselves in response to lifecycle events are State.
 ::q single
-Failed "regenerate MPR PDF" requests must be stored and retried by a nightly worker. Which pattern fits the request object?
+Failed "regenerate discharge-summary PDF" requests must be stored and retried by a nightly worker. Which pattern fits the request object?
 - [ ] Strategy
 - [ ] Observer
 - [x] Command
-- [ ] Prototype
+- [ ] Template Method
 > A request packaged as data so it can be queued, persisted and retried is a Command.
 ::q multi
 Which statements about ASP.NET Core middleware are true? (Select all that apply.)
@@ -1580,14 +1581,14 @@ Which statements about ASP.NET Core middleware are true? (Select all that apply.
 - [x] It combines pipeline and chain-of-responsibility behaviour.
 > Short-circuiting means later middleware may not run, so "always runs" is false.
 ::q single
-A BOQ has sections containing sub-sections and items, and `Total()` must work the same on an item or a whole section. Which pattern?
+An itemised hospital bill has sections (Room, Pharmacy, Lab tests) containing sub-sections and line items, and `Total()` must work the same on one line item or a whole section. Which pattern?
 - [ ] Decorator
 - [x] Composite
 - [ ] Chain of Responsibility
 - [ ] Builder
 > Many children, a part–whole tree and an aggregate operation: Composite.
 ::q single
-An approved-bill event must reach a separate accounting service that may be offline for maintenance. Which is the best fit?
+An approved-discharge-bill event must reach the insurer's separate claims service that may be offline for maintenance. Which is the best fit?
 - [ ] Observer with a C# event
 - [ ] Mediator
 - [x] Pub/Sub through a durable broker (ideally with an outbox)
@@ -1597,7 +1598,7 @@ An approved-bill event must reach a separate accounting service that may be offl
 You must create a connection, command and parameter that all match the same database provider. Which pattern?
 - [ ] Factory Method
 - [x] Abstract Factory
-- [ ] Prototype
+- [ ] Composite
 - [ ] Builder
 > A matching family of products is Abstract Factory's intent, as in `DbProviderFactory`.
 :::

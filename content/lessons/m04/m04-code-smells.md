@@ -43,7 +43,7 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Walk into a site office and smell diesel. It doesn't prove anything is wrong — maybe a generator was just refuelled — but a sensible engineer *checks*, because it's often the first sign of a leak.
+Walk into your kitchen and smell gas. It doesn't prove anything is wrong — maybe someone just lit the stove — but anyone sensible *checks*, because it's often the first sign of a leak.
 
 Code smells work the same way. A 400-line method, a `BillManager` class with 60 methods, a method with 11 parameters: none is a bug, but each often means the next change will be slower and riskier.
 
@@ -89,7 +89,7 @@ Fourteen smells from Fowler's catalogue, each with what it looks like, why it hu
 
 #### 3. Long parameter list
 
-**Looks like:** `Process(string, int, string, string, int, int, int, int, string, ...)`. Callers pass `null` or `0` for half. **Hurts because:** easy to swap two `int`s silently; every new input changes every caller. **Refactor:** *Introduce Parameter Object*; *Preserve Whole Object* (pass the `Contract`, not five of its fields); remove flag parameters by splitting the method.
+**Looks like:** `Process(string, int, string, string, int, int, int, int, string, ...)`. Callers pass `null` or `0` for half. **Hurts because:** easy to swap two `int`s silently; every new input changes every caller. **Refactor:** *Introduce Parameter Object*; *Preserve Whole Object* (pass the `Order`, not five of its fields); remove flag parameters by splitting the method.
 
 #### 4. Feature envy
 
@@ -97,11 +97,11 @@ Fourteen smells from Fowler's catalogue, each with what it looks like, why it hu
 
 #### 5. Data clumps
 
-**Looks like:** the same three to five values travelling together: `fromKm, fromM, toKm, toM, side`, or `street, city, state, pincode`. **Hurts because:** validation is repeated wherever the clump appears, and the concept has no name. **Refactor:** *Extract Class* / *Introduce Parameter Object* — here, `ChainageRange`. Test: if you deleted one value, would the others still make sense? If not, it's a clump.
+**Looks like:** the same three to five values travelling together: `pickupLat, pickupLng, dropLat, dropLng, roadMetres`, or `street, city, state, pincode`. **Hurts because:** validation is repeated wherever the clump appears, and the concept has no name. **Refactor:** *Extract Class* / *Introduce Parameter Object* — here, a `DeliveryTrip`. Test: if you deleted one value, would the others still make sense? If not, it's a clump.
 
 #### 6. Primitive obsession
 
-**Looks like:** `string gstin`, `decimal amountInRupees`, `int chainageMetres`, `string status = "APPROVED"`. **Hurts because:** every method re-validates; nothing stops you passing a PAN where a GSTIN is expected. **Refactor:** *Replace Primitive with Object* (value objects such as `Gstin`, `Money`, `Chainage`); *Replace Type Code with Subclasses* or an enum for status strings.
+**Looks like:** `string gstin`, `decimal amountInRupees`, `int distanceMetres`, `string status = "DELIVERED"`. **Hurts because:** every method re-validates; nothing stops you passing an FSSAI licence number where a GSTIN is expected, or kilometres where metres are expected. **Refactor:** *Replace Primitive with Object* (value objects such as `Gstin`, `Money`, `Distance`); *Replace Type Code with Subclasses* or an enum for status strings.
 
 #### 7. Switch statements
 
@@ -113,7 +113,7 @@ Fourteen smells from Fowler's catalogue, each with what it looks like, why it hu
 
 #### 9. Divergent change
 
-**Looks like:** the opposite: one class changes for many unrelated reasons. `RaBillProcessor` changes when tax rules change, when the email template changes and when the database schema changes. **Hurts because:** unrelated changes collide in one file. **Refactor:** *Extract Class* by reason to change ([SRP](#/lesson/m04-srp)).
+**Looks like:** the opposite: one class changes for many unrelated reasons. `OrderBillProcessor` changes when offer rules change, when the email template changes and when the database schema changes. **Hurts because:** unrelated changes collide in one file. **Refactor:** *Extract Class* by reason to change ([SRP](#/lesson/m04-srp)).
 
 #### 10. Speculative generality
 
@@ -121,19 +121,19 @@ Fourteen smells from Fowler's catalogue, each with what it looks like, why it hu
 
 #### 11. Message chains
 
-**Looks like:** `bill.Contract.Project.Client.BillingAddress.State.Code`. **Hurts because:** the caller depends on the whole navigation path; any change in the chain breaks it. **Refactor:** *Hide Delegate* — give the first object a method that answers the real question (`bill.PlaceOfSupplyStateCode()`). This is the Law of Demeter in practice.
+**Looks like:** `order.Restaurant.Outlet.Address.State.Code`. **Hurts because:** the caller depends on the whole navigation path; any change in the chain breaks it. **Refactor:** *Hide Delegate* — give the first object a method that answers the real question (`order.PlaceOfSupplyStateCode()`). This is the Law of Demeter in practice.
 
 #### 12. Middle man
 
-**Looks like:** a class whose methods mostly forward to another class: `ProjectFacade.GetBills() => _billService.GetBills()`. **Hurts because:** an extra hop with no added value. **Refactor:** *Remove Middle Man* — callers use the real class. Note the tension with #11: hiding delegates too eagerly creates middle men. Balance them.
+**Looks like:** a class whose methods mostly forward to another class: `OrderFacade.GetBills() => _billService.GetBills()`. **Hurts because:** an extra hop with no added value. **Refactor:** *Remove Middle Man* — callers use the real class. Note the tension with #11: hiding delegates too eagerly creates middle men. Balance them.
 
 #### 13. Temporary field
 
-**Looks like:** a field that is only set and used in some situations: `OutstandingAdvance` only for one deduction mode. **Hurts because:** readers can't tell when it's valid; it carries state between calls by accident. **Refactor:** *Extract Class* to give the field and the code that uses it their own home (an `AdvanceRecoveryRule` with its own state); *Introduce Special Case* for the "not applicable" situation.
+**Looks like:** a field that is only set and used in some situations: `WalletBalance` only for the offer mode that redeems wallet credit. **Hurts because:** readers can't tell when it's valid; it carries state between calls by accident. **Refactor:** *Extract Class* to give the field and the code that uses it their own home (a `WalletRedemptionRule`), or pass the value in as an explicit input; *Introduce Special Case* for the "not applicable" situation.
 
 #### 14. Refused bequest
 
-**Looks like:** a subclass that inherits methods it doesn't want and overrides them to throw or do nothing: `class ReadOnlyBillRepository : BillRepository { override Save() => throw ... }`. **Hurts because:** the inheritance is lying; it breaks [Liskov substitution](#/lesson/m04-lsp). **Refactor:** *Replace Inheritance with Delegation* ([composition](#/lesson/m04-composition-inheritance)), or *Push Down Method* so only subclasses that need it have it.
+**Looks like:** a subclass that inherits methods it doesn't want and overrides them to throw or do nothing: `class ReadOnlyOrderRepository : OrderRepository { override Save() => throw ... }`. **Hurts because:** the inheritance is lying; it breaks [Liskov substitution](#/lesson/m04-lsp). **Refactor:** *Replace Inheritance with Delegation* ([composition](#/lesson/m04-composition-inheritance)), or *Push Down Method* so only subclasses that need it have it.
 
 :::callout type=tip title="Smells come in families"
 Long method, large class and divergent change usually appear together. So do data clumps, primitive obsession and long parameter lists. Fixing the value-object family first often shrinks the methods and classes for free.
@@ -143,7 +143,7 @@ Long method, large class and divergent change usually appear together. So do dat
 
 Not all debt is equal. Fowler's **technical debt quadrant** sorts it on two axes: was it **deliberate** or **inadvertent**, and was it **prudent** or **reckless**?
 
-- **Prudent, deliberate** — "Ship with one PostgreSQL instance; add a replica before the tender season." A conscious trade with a plan.
+- **Prudent, deliberate** — "Ship with one PostgreSQL instance; add a read replica before the Diwali sale." A conscious trade with a plan.
 - **Reckless, deliberate** — "No time for tests." Usually costs more than it saves, within weeks.
 - **Reckless, inadvertent** — "What's dependency injection?" A skills gap: fix with training and review, not blame.
 - **Prudent, inadvertent** — "Now we know how it should have been designed." The normal result of learning.
@@ -192,30 +192,30 @@ Read it as two questions about each piece of debt. Up–down: did we *choose* th
 
 ```mermaid
 classDiagram
-    class BillingService_Before {
-        +CalculateRetentionRelease(Contract c, DateOnly asOf) decimal
+    class PayoutService_Before {
+        +CalculateHoldbackRelease(RestaurantAccount a, DateOnly asOf) decimal
     }
-    class Contract_Before {
-        +DateOnly CompletionDate
-        +int DefectLiabilityDays
-        +decimal RetentionHeld
-        +decimal RetentionReleased
-        +bool HasOpenDefects
+    class RestaurantAccount_Before {
+        +DateOnly SettlementPeriodEnd
+        +int HoldbackDays
+        +decimal HoldbackHeld
+        +decimal HoldbackReleased
+        +bool HasOpenComplaints
     }
-    BillingService_Before ..> Contract_Before : reads 5 fields
-    class BillingService_After {
-        +ReleaseRetention(Contract c, DateOnly asOf)
+    PayoutService_Before ..> RestaurantAccount_Before : reads 5 fields
+    class PayoutService_After {
+        +ReleaseHoldback(RestaurantAccount a, DateOnly asOf)
     }
-    class Contract_After {
-        -DateOnly completionDate
-        -int defectLiabilityDays
-        -decimal retentionHeld
-        +RetentionReleasable(DateOnly asOf) decimal
+    class RestaurantAccount_After {
+        -DateOnly settlementPeriodEnd
+        -int holdbackDays
+        -decimal holdbackHeld
+        +HoldbackReleasable(DateOnly asOf) decimal
     }
-    BillingService_After --> Contract_After : asks one question
+    PayoutService_After --> RestaurantAccount_After : asks one question
 ```
 
-Before: the service pulls five fields out of `Contract` and does the calculation itself. It "envies" `Contract`'s data. Every rule about retention lives far from the data it's about, and `Contract` must expose all of its internals. After: the calculation moved to `Contract`, which now keeps its fields private and answers one question. The service just asks. This is **Move Method**, the standard fix for feature envy.
+The example comes from restaurant payouts on a food-delivery platform. The platform holds back part of each restaurant's earnings for 30 days to cover refunds, then releases it if there are no open complaints. Before: `PayoutService` pulls five fields out of `RestaurantAccount` and does the calculation itself. It "envies" the account's data. Every rule about the holdback lives far from the data it's about, and `RestaurantAccount` must expose all of its internals. After: the calculation moved to `RestaurantAccount`, which now keeps its fields private and answers one question. The service just asks. This is **Move Method**, the standard fix for feature envy.
 
 ### The refactoring loop
 
@@ -238,38 +238,39 @@ The loop has two safety valves. Missing tests send you to write them first. A re
 
 ## Step-by-step example
 
-The system: contractor billing for highway projects. Every month, a contractor submits a **running-account (RA) bill**: measured quantities × contract rates, minus deductions (retention money, income-tax TDS, recovery of a mobilisation advance). Here's the legacy core, simplified:
+The system: order billing for a food-delivery app. When a customer checks out, the app builds the bill: menu price × quantity for each item, plus a delivery fee that depends on the road distance from the restaurant, minus discounts (a coupon, a membership discount and wallet credit up to a cap). Here's the legacy core, simplified:
 
 ```csharp
-public class RaBillProcessor
+public class OrderBillProcessor
 {
-    public decimal OutstandingAdvance;      // only used by advance recovery
+    public decimal WalletBalance;      // only used when the offer mode redeems wallet credit
     public string LastError = "";
 
-    public decimal Process(string contractNo, int billNo, string contractorPan, string contractorGstin,
-        int fromKm, int fromM, int toKm, int toM, string side, List<(string item, decimal qty)> measurements,
-        Dictionary<string, decimal> rates, string deductionMode, bool isGovt, DateTime billDate)
+    public decimal Process(string orderId, string customerPhone, string restaurantGstin, string fssaiNo,
+        double pickupLat, double pickupLng, double dropLat, double dropLng, int roadMetres,
+        List<(string item, int qty)> cart, Dictionary<string, decimal> menu, string offerMode, DateTime orderTime)
     {
-        decimal gross = 0;
-        foreach (var m in measurements)
+        decimal itemTotal = 0;
+        foreach (var c in cart)
         {
-            if (!rates.ContainsKey(m.item)) { LastError = "Unknown item " + m.item; return -1; }
-            gross += Math.Round(m.qty * rates[m.item], 2);
+            if (!menu.ContainsKey(c.item)) { LastError = "Unknown item " + c.item; return -1; }
+            itemTotal += Math.Round(c.qty * menu[c.item], 2);
         }
-        // ... 40 lines validating PAN/GSTIN with regexes, also copied in VendorController ...
-        decimal deductions = 0;
-        switch (deductionMode)
+        decimal deliveryFee = roadMetres < 3000 ? 25 : roadMetres < 7000 ? 45 : 70;   // also copied in the rider app API
+        // ... 40 lines validating GSTIN and FSSAI numbers with regexes, also copied in RestaurantOnboardingController ...
+        decimal discounts = 0;
+        switch (offerMode)
         {
-            case "RET": deductions += gross * 0.05m; break;
-            case "RET+TDS": deductions += gross * 0.05m + gross * 0.02m; break;
-            case "RET+TDS+ADV":
-                var rec = Math.Min(gross * 0.10m, OutstandingAdvance);
-                OutstandingAdvance -= rec;
-                deductions += gross * 0.05m + gross * 0.02m + rec; break;
+            case "COUPON": discounts += itemTotal * 0.10m; break;
+            case "COUPON+GOLD": discounts += itemTotal * 0.10m + itemTotal * 0.05m; break;
+            case "COUPON+GOLD+WALLET":
+                var credit = Math.Min(itemTotal * 0.10m, WalletBalance);
+                WalletBalance -= credit;
+                discounts += itemTotal * 0.10m + itemTotal * 0.05m + credit; break;
             // 6 more cases...
         }
-        // ... 60 lines building an email, 30 lines writing to the database ...
-        return gross - deductions;
+        // ... 60 lines building the receipt email, 30 lines writing to the database ...
+        return itemTotal + deliveryFee - discounts;
     }
 }
 ```
@@ -280,25 +281,25 @@ Let's walk through it with the smell catalogue above and name each problem.
 
 | What you see | Smell |
 |---|---|
-| `Process` is ~200 lines doing calculation, validation, email and SQL | Long method, divergent change |
-| 15 parameters | Long parameter list |
-| `fromKm, fromM, toKm, toM, side` always travel together | Data clumps |
-| PAN, GSTIN, chainage and money as `string`/`int`/`decimal` | Primitive obsession |
-| `switch (deductionMode)` with combined modes | Switch statements |
-| `OutstandingAdvance` only meaningful for one mode | Temporary field |
-| PAN/GSTIN regexes copied into `VendorController` | Duplicated knowledge → shotgun surgery when the rule changes |
+| `Process` is ~200 lines doing pricing, validation, email and SQL | Long method, divergent change |
+| 13 parameters | Long parameter list |
+| `pickupLat, pickupLng, dropLat, dropLng, roadMetres` always travel together | Data clumps |
+| GSTIN, distance and money as `string`/`int`/`decimal` | Primitive obsession |
+| `switch (offerMode)` with combined modes | Switch statements |
+| `WalletBalance` only meaningful for one mode | Temporary field |
+| GSTIN regex and the delivery-fee slabs copied into other classes | Duplicated knowledge → shotgun surgery when the rule changes |
 | `return -1` plus `LastError` | Not in the classic list, but a hidden error channel |
 
 ### Step 2 — pin behaviour
 
-Before touching anything, write characterisation tests: for three real past bills (taken from production, anonymised), assert the net amount that `Process` returns today. If the legacy result looks wrong, still pin it, and raise a ticket. Refactoring must not change behaviour silently.
+Before touching anything, write characterisation tests: for three real past orders (taken from production, with customer details removed), assert the amount that `Process` returns today. If the legacy result looks wrong, still pin it, and raise a ticket. Refactoring must not change behaviour silently.
 
 ### Step 3 — small steps, in a sensible order
 
-1. **Introduce Parameter Object**: `ChainageRange` replaces the five chainage parameters.
-2. **Replace Primitive with Object**: `Pan`, `Gstin`, `Money`, `Chainage` value objects. The copied regexes now live in one place.
-3. **Extract Method** on the gross calculation, then **Move Method** into `MeasurementSheet`, which owns the data.
-4. **Replace Conditional with Polymorphism**: one `IDeductionRule` per deduction instead of one `switch` case per *combination*. A contract has a list of rules. Nine combination cases become three rule classes.
+1. **Introduce Parameter Object**: `DeliveryTrip` replaces the five location parameters.
+2. **Replace Primitive with Object**: `Gstin`, `Money`, `Distance` and `GeoPoint` value objects. The copied regexes and fee slabs now live in one place each.
+3. **Extract Method** on the item total, then **Move Method** into `Cart`, which owns the data.
+4. **Replace Conditional with Polymorphism**: one `IDiscountRule` per discount instead of one `switch` case per *combination*. An order has a list of active rules. Nine combination cases become three rule classes.
 5. **Extract Class** for the email and persistence parts, which change for different reasons (divergent change).
 6. Replace `-1` + `LastError` with an exception or a result type.
 
@@ -306,13 +307,13 @@ Each step is a commit with green tests. The production code below is the result.
 
 ## Production-style C# implementation
 
-The refactored RA bill core. Value objects remove primitive obsession and data clumps; the sheet owns its calculation (no feature envy); each deduction is a rule (no switch, no temporary field).
+The refactored order-billing core. Value objects remove primitive obsession and data clumps; the cart owns its calculation (no feature envy); each discount is a rule (no switch, no temporary field). To keep the example focused, every discount applies to the item total and GST is left out.
 
 ```csharp file=Billing/ValueObjects.cs
 using System.Globalization;
 using System.Text.RegularExpressions;
 
-namespace Contracts.Billing;
+namespace FoodDelivery.Billing;
 
 public readonly record struct Money(decimal Amount) : IComparable<Money>
 {
@@ -326,38 +327,56 @@ public readonly record struct Money(decimal Amount) : IComparable<Money>
     public override string ToString() => "₹" + Amount.ToString("N2", CultureInfo.InvariantCulture);
 }
 
-/// <summary>Highway chainage, written "km+metres", e.g. "12+350" = 12,350 m from the project start.</summary>
-public readonly record struct Chainage(int Metres) : IComparable<Chainage>
+/// <summary>A road distance stored as whole metres. Parses "3.5 km" or "850 m".</summary>
+public readonly record struct Distance(int Metres) : IComparable<Distance>
 {
-    private static readonly Regex Format = new(@"^(\d{1,4})\+(\d{3})$", RegexOptions.Compiled);
+    private static readonly Regex Format = new(@"^(\d{1,4}(?:\.\d{1,3})?)\s?(km|m)$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    public static Chainage Parse(string text)
+    public static Distance Kilometres(decimal km) => new((int)(km * 1000m));
+
+    public static Distance Parse(string text)
     {
         var m = Format.Match(text.Trim());
-        if (!m.Success) throw new FormatException($"Chainage '{text}' must look like 12+350.");
-        return new Chainage(int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture) * 1000 + int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture));
+        if (!m.Success) throw new FormatException($"Distance '{text}' must look like 3.5 km or 850 m.");
+        var value = decimal.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+        var isKm = m.Groups[2].Value.Equals("km", StringComparison.OrdinalIgnoreCase);
+        if (!isKm && value != decimal.Truncate(value)) throw new FormatException($"Metres must be whole: '{text}'.");
+        return new Distance((int)(isKm ? value * 1000m : value));
     }
 
-    public int CompareTo(Chainage other) => Metres.CompareTo(other.Metres);
-    public override string ToString() => $"{Metres / 1000}+{Metres % 1000:000}";
+    public int CompareTo(Distance other) => Metres.CompareTo(other.Metres);
+    public override string ToString() => Metres < 1000
+        ? $"{Metres} m"
+        : (Metres / 1000m).ToString("0.###", CultureInfo.InvariantCulture) + " km";
 }
 
-public enum CarriagewaySide { Left, Right, Both }
-
-/// <summary>Replaces the data clump (fromKm, fromM, toKm, toM, side).</summary>
-public sealed record ChainageRange
+/// <summary>A latitude/longitude pair that cannot be out of range.</summary>
+public sealed record GeoPoint
 {
-    public Chainage From { get; }
-    public Chainage To { get; }
-    public CarriagewaySide Side { get; }
+    public double Latitude { get; }
+    public double Longitude { get; }
 
-    public ChainageRange(Chainage from, Chainage to, CarriagewaySide side)
+    public GeoPoint(double latitude, double longitude)
     {
-        if (to.CompareTo(from) <= 0) throw new ArgumentException($"End {to} must be after start {from}.");
-        (From, To, Side) = (from, to, side);
+        if (latitude is < -90 or > 90) throw new ArgumentOutOfRangeException(nameof(latitude));
+        if (longitude is < -180 or > 180) throw new ArgumentOutOfRangeException(nameof(longitude));
+        (Latitude, Longitude) = (latitude, longitude);
     }
+}
 
-    public int LengthMetres => To.Metres - From.Metres;
+/// <summary>Replaces the data clump (pickupLat, pickupLng, dropLat, dropLng, roadMetres).</summary>
+public sealed record DeliveryTrip
+{
+    public GeoPoint Pickup { get; }
+    public GeoPoint Drop { get; }
+    /// <summary>Road distance from a routing service, not the straight-line distance between the points.</summary>
+    public Distance RoadDistance { get; }
+
+    public DeliveryTrip(GeoPoint pickup, GeoPoint drop, Distance roadDistance)
+    {
+        if (roadDistance.Metres <= 0) throw new ArgumentException("Road distance must be positive.", nameof(roadDistance));
+        (Pickup, Drop, RoadDistance) = (pickup, drop, roadDistance);
+    }
 }
 
 /// <summary>Replaces "string gstin" and the regex copied into three classes.</summary>
@@ -378,156 +397,197 @@ public sealed record Gstin
 }
 ```
 
-```csharp file=Billing/MeasurementSheet.cs
-namespace Contracts.Billing;
+```csharp file=Billing/Cart.cs
+namespace FoodDelivery.Billing;
 
-public sealed record BoqItem(string Code, string Description, string Unit, Money Rate);
-public sealed record MeasurementEntry(string BoqCode, ChainageRange Stretch, decimal Quantity);
+public sealed record MenuItem(string Code, string Name, Money Price);
+public sealed record CartLine(string ItemCode, int Quantity);
 
-/// <summary>Owns the measured entries and the calculation over them (fixes feature envy).</summary>
-public sealed class MeasurementSheet
+/// <summary>Owns the cart lines and the calculation over them (fixes feature envy).</summary>
+public sealed class Cart
 {
-    private readonly List<MeasurementEntry> _entries = new();
-    public IReadOnlyList<MeasurementEntry> Entries => _entries;
+    private readonly List<CartLine> _lines = new();
+    public IReadOnlyList<CartLine> Lines => _lines;
 
-    public void Add(MeasurementEntry entry)
+    public void Add(CartLine line)
     {
-        if (entry.Quantity <= 0) throw new ArgumentOutOfRangeException(nameof(entry), "Quantity must be positive.");
-        _entries.Add(entry);
+        if (line.Quantity <= 0) throw new ArgumentOutOfRangeException(nameof(line), "Quantity must be positive.");
+        _lines.Add(line);
     }
 
-    public Money GrossValue(IReadOnlyDictionary<string, BoqItem> boq)
+    public Money ItemTotal(IReadOnlyDictionary<string, MenuItem> menu)
     {
         var total = Money.Zero;
-        foreach (var e in _entries)
+        foreach (var line in _lines)
         {
-            if (!boq.TryGetValue(e.BoqCode, out var item))
-                throw new InvalidOperationException($"Measurement refers to unknown BOQ item '{e.BoqCode}'.");
-            total += Money.Rupees(e.Quantity * item.Rate.Amount);
+            if (!menu.TryGetValue(line.ItemCode, out var item))
+                throw new InvalidOperationException($"Cart refers to unknown menu item '{line.ItemCode}'.");
+            total += Money.Rupees(line.Quantity * item.Price.Amount);
         }
         return total;
     }
 }
 ```
 
-```csharp file=Billing/Deductions.cs
-namespace Contracts.Billing;
+```csharp file=Billing/DeliveryFees.cs
+namespace FoodDelivery.Billing;
 
-public sealed record AppliedDeduction(string Code, Money Amount);
-
-public sealed record BillContext(string ContractNo, Money Gross, Money OutstandingAdvance);
-
-/// <summary>One deduction per class. A contract has a list of rules; no switch over combinations.</summary>
-public interface IDeductionRule
+/// <summary>One slab of the delivery-fee table: From (inclusive) to To (exclusive).</summary>
+public sealed record DistanceSlab
 {
-    string Code { get; }
-    AppliedDeduction Apply(BillContext context);
+    public Distance From { get; }
+    public Distance To { get; }
+    public Money Fee { get; }
+
+    public DistanceSlab(Distance from, Distance to, Money fee)
+    {
+        if (to.CompareTo(from) <= 0) throw new ArgumentException($"Slab end {to} must be after start {from}.");
+        (From, To, Fee) = (from, to, fee);
+    }
+
+    public bool Contains(Distance d) => d.Metres >= From.Metres && d.Metres < To.Metres;
 }
 
-public sealed class RetentionRule(decimal percent) : IDeductionRule
+/// <summary>The fee slabs used to be hard-coded in two places; now they are one piece of configuration.</summary>
+public sealed class DeliveryFeeSchedule(IReadOnlyList<DistanceSlab> slabs)
 {
-    public string Code => "RETENTION";
-    public AppliedDeduction Apply(BillContext c) => new(Code, c.Gross.Percent(percent));
-}
-
-public sealed class IncomeTaxTdsRule(decimal percent) : IDeductionRule
-{
-    public string Code => "TDS";
-    public AppliedDeduction Apply(BillContext c) => new(Code, c.Gross.Percent(percent));
-}
-
-/// <summary>The old temporary field (OutstandingAdvance) now arrives in the context; the rule is stateless.</summary>
-public sealed class AdvanceRecoveryRule(decimal percentOfBill) : IDeductionRule
-{
-    public string Code => "ADVANCE";
-    public AppliedDeduction Apply(BillContext c) => new(Code, Money.Min(c.Gross.Percent(percentOfBill), c.OutstandingAdvance));
+    public Money FeeFor(Distance roadDistance) =>
+        slabs.FirstOrDefault(s => s.Contains(roadDistance))?.Fee
+        ?? throw new InvalidOperationException($"{roadDistance} is outside the delivery radius.");
 }
 ```
 
-```csharp file=Billing/RaBillCalculator.cs
-namespace Contracts.Billing;
+```csharp file=Billing/Discounts.cs
+namespace FoodDelivery.Billing;
 
-public sealed record RaBill(string ContractNo, int BillNo, Money Gross, IReadOnlyList<AppliedDeduction> Deductions)
+public sealed record AppliedDiscount(string Code, Money Amount);
+
+public sealed record BillContext(string OrderId, Money ItemTotal, Money WalletBalance);
+
+/// <summary>One discount per class. An order has a list of active rules; no switch over combinations.</summary>
+public interface IDiscountRule
 {
-    public Money TotalDeductions => Deductions.Aggregate(Money.Zero, (sum, d) => sum + d.Amount);
-    public Money NetPayable => Gross - TotalDeductions;
+    string Code { get; }
+    AppliedDiscount Apply(BillContext context);
 }
 
-public sealed record ContractTerms(string ContractNo, IReadOnlyDictionary<string, BoqItem> Boq, IReadOnlyList<IDeductionRule> Deductions);
-
-/// <summary>Small, single-purpose: calculation only. Email and persistence live in their own classes.</summary>
-public static class RaBillCalculator
+public sealed class CouponDiscountRule(decimal percent) : IDiscountRule
 {
-    public static RaBill Calculate(ContractTerms terms, int billNo, MeasurementSheet sheet, Money outstandingAdvance)
+    public string Code => "COUPON";
+    public AppliedDiscount Apply(BillContext c) => new(Code, c.ItemTotal.Percent(percent));
+}
+
+public sealed class MembershipDiscountRule(decimal percent) : IDiscountRule
+{
+    public string Code => "GOLD";
+    public AppliedDiscount Apply(BillContext c) => new(Code, c.ItemTotal.Percent(percent));
+}
+
+/// <summary>The old temporary field (WalletBalance) now arrives in the context; the rule is stateless.</summary>
+public sealed class WalletRedemptionRule(decimal percentOfBill) : IDiscountRule
+{
+    public string Code => "WALLET";
+    public AppliedDiscount Apply(BillContext c) => new(Code, Money.Min(c.ItemTotal.Percent(percentOfBill), c.WalletBalance));
+}
+```
+
+```csharp file=Billing/OrderBillCalculator.cs
+namespace FoodDelivery.Billing;
+
+public sealed record OrderBill(string OrderId, Money ItemTotal, Money DeliveryFee, IReadOnlyList<AppliedDiscount> Discounts)
+{
+    public Money TotalDiscounts => Discounts.Aggregate(Money.Zero, (sum, d) => sum + d.Amount);
+    public Money NetPayable => ItemTotal + DeliveryFee - TotalDiscounts;
+}
+
+public sealed record PricingTerms(IReadOnlyDictionary<string, MenuItem> Menu, DeliveryFeeSchedule DeliveryFees, IReadOnlyList<IDiscountRule> Discounts);
+
+/// <summary>Small, single-purpose: calculation only. Receipt email and persistence live in their own classes.</summary>
+public static class OrderBillCalculator
+{
+    public static OrderBill Calculate(PricingTerms terms, string orderId, Cart cart, DeliveryTrip trip, Money walletBalance)
     {
-        var gross = sheet.GrossValue(terms.Boq);
-        var context = new BillContext(terms.ContractNo, gross, outstandingAdvance);
-        var deductions = terms.Deductions.Select(rule => rule.Apply(context)).ToList();
-        var bill = new RaBill(terms.ContractNo, billNo, gross, deductions);
+        var itemTotal = cart.ItemTotal(terms.Menu);
+        var deliveryFee = terms.DeliveryFees.FeeFor(trip.RoadDistance);
+        var context = new BillContext(orderId, itemTotal, walletBalance);
+        var discounts = terms.Discounts.Select(rule => rule.Apply(context)).ToList();
+        var bill = new OrderBill(orderId, itemTotal, deliveryFee, discounts);
 
         if (bill.NetPayable.Amount < 0)
-            throw new InvalidOperationException($"Deductions {bill.TotalDeductions} exceed gross {gross} on bill {billNo}.");
+            throw new InvalidOperationException($"Discounts {bill.TotalDiscounts} exceed the bill on order {orderId}.");
         return bill;
     }
 }
 ```
 
 ```csharp file=Program.cs
-using Contracts.Billing;
+using FoodDelivery.Billing;
 
 var builder = WebApplication.CreateBuilder(args);
 var app = builder.Build();
 
-// Illustrative contract terms; in a real system these are loaded per contract from the database.
-var terms = new ContractTerms(
-    "NH-48/PKG-3",
-    new Dictionary<string, BoqItem>
+// Illustrative data; a real system loads the menu, fee table, active offers and wallet balance from the database.
+var terms = new PricingTerms(
+    new Dictionary<string, MenuItem>
     {
-        ["EW-01"] = new("EW-01", "Earthwork in embankment", "m3", Money.Rupees(450m)),
-        ["GSB-02"] = new("GSB-02", "Granular sub-base", "m3", Money.Rupees(2_150m)),
+        ["BIR-01"] = new("BIR-01", "Chicken biryani", Money.Rupees(320m)),
+        ["NAAN-02"] = new("NAAN-02", "Butter naan", Money.Rupees(60m)),
     },
-    new IDeductionRule[] { new RetentionRule(5m), new IncomeTaxTdsRule(2m), new AdvanceRecoveryRule(10m) });
+    new DeliveryFeeSchedule(new[]
+    {
+        new DistanceSlab(Distance.Parse("0 m"), Distance.Parse("3 km"), Money.Rupees(25m)),
+        new DistanceSlab(Distance.Parse("3 km"), Distance.Parse("7 km"), Money.Rupees(45m)),
+        new DistanceSlab(Distance.Parse("7 km"), Distance.Parse("12 km"), Money.Rupees(70m)),
+    }),
+    new IDiscountRule[] { new CouponDiscountRule(10m), new MembershipDiscountRule(5m), new WalletRedemptionRule(10m) });
+var walletBalances = new Dictionary<string, decimal> { ["cust-881"] = 50m };
 
-app.MapPost("/contracts/{contractNo}/bills/{billNo:int}/preview",
-    (string contractNo, int billNo, MeasurementInput[] input, decimal outstandingAdvance) =>
+app.MapPost("/customers/{customerId}/orders/{orderId}/bill-preview",
+    (string customerId, string orderId, BillPreviewRequest request) =>
 {
-    var sheet = new MeasurementSheet();
-    foreach (var m in input)
-        sheet.Add(new MeasurementEntry(m.BoqCode,
-            new ChainageRange(Chainage.Parse(m.From), Chainage.Parse(m.To), m.Side), m.Quantity));
+    var cart = new Cart();
+    foreach (var line in request.Lines) cart.Add(new CartLine(line.ItemCode, line.Quantity));
 
-    var bill = RaBillCalculator.Calculate(terms, billNo, sheet, Money.Rupees(outstandingAdvance));
-    return Results.Ok(new { bill.Gross, bill.Deductions, bill.NetPayable });
+    var trip = new DeliveryTrip(new GeoPoint(request.PickupLat, request.PickupLng),
+        new GeoPoint(request.DropLat, request.DropLng), Distance.Parse(request.RoadDistance));
+
+    // Prices and the wallet balance come from the server, never from the request body.
+    var wallet = Money.Rupees(walletBalances.GetValueOrDefault(customerId));
+    var bill = OrderBillCalculator.Calculate(terms, orderId, cart, trip, wallet);
+    return Results.Ok(new { bill.ItemTotal, bill.DeliveryFee, bill.Discounts, bill.NetPayable });
 });
 
 app.Run();
 
-public sealed record MeasurementInput(string BoqCode, string From, string To, CarriagewaySide Side, decimal Quantity);
+public sealed record CartLineInput(string ItemCode, int Quantity);
+public sealed record BillPreviewRequest(CartLineInput[] Lines, double PickupLat, double PickupLng,
+    double DropLat, double DropLng, string RoadDistance);
 ```
 
 What each change bought:
 
-- **`Chainage` and `ChainageRange`** — "12+350" parsing and the "end after start" rule live in one place. A swapped `fromM`/`toKm` is now impossible to write.
-- **`MeasurementSheet.GrossValue`** — the calculation sits with its data; the unknown-item rule throws instead of returning `-1`.
-- **`IDeductionRule`** — nine combination cases became three rules. A new labour-cess deduction is one new class; nothing else changes.
-- **No temporary field** — the outstanding advance is an *input* to the calculation, not hidden mutable state on a service. Updating the advance balance after the bill is approved is a separate, explicit step.
+- **`Distance`, `GeoPoint` and `DeliveryTrip`** — "3.5 km" parsing, range checks and "distance must be positive" live in one place each. Passing kilometres where metres are expected, or swapping a latitude with a longitude parameter, is now hard to write.
+- **`Cart.ItemTotal`** — the calculation sits with its data; the unknown-item rule throws instead of returning `-1`.
+- **`DeliveryFeeSchedule`** — the fee slabs that were hard-coded in two places are one piece of configuration. Changing the 3 km boundary is a data change, not a hunt through the code.
+- **`IDiscountRule`** — nine combination cases became three rules. A new bank-card offer is one new class; nothing else changes.
+- **No temporary field** — the wallet balance is an *input* to the calculation, not hidden mutable state on a service. Debiting the wallet happens later, as a separate, explicit step after payment succeeds, and it must be idempotent (keyed by order id) so that a retried payment callback doesn't debit twice.
 
 ## Bad design vs good design
 
-**Bad:** `RaBillProcessor.Process` from the step-by-step section, with every smell in the table there.
+**Bad:** `OrderBillProcessor.Process` from the step-by-step section, with every smell in the table there.
 
-One deserves emphasis: the temporary field. A "preview bill" button calls `Process`, which reduces `OutstandingAdvance`. Preview twice and the recovery on the real bill is wrong. Smells aren't just style; they hide real defects.
+One deserves emphasis: the temporary field. The checkout screen calls `Process` to show the customer a bill preview, and `Process` reduces `WalletBalance`. Open checkout twice, or let the app retry the call after a timeout, and the wallet credit on the real order is wrong. Smells aren't just style; they hide real defects.
 
 **Good:** the production code above. Each type has one job, inputs are explicit, and invalid values can't be constructed.
 
 ### When smell-fixing goes wrong
 
 :::callout type=mistake title="Refactoring without tests, or without a reason"
-Two common failures: (1) a "big clean-up" PR that touches 80 files with no characterisation tests, which changes behaviour nobody noticed until month-end billing; (2) polishing code that nobody needs to change, while the real hotspot stays ugly. Refactor *in front of* the feature you're about to build, in small steps, with tests.
+Two common failures: (1) a "big clean-up" PR that touches 80 files with no characterisation tests, which changes behaviour nobody noticed until restaurants complained about their weekly payouts; (2) polishing code that nobody needs to change, while the real hotspot stays ugly. Refactor *in front of* the feature you're about to build, in small steps, with tests.
 :::
 
 - **Over-extraction.** Splitting a clear 25-line method into eight 3-line methods scatters the logic. The smell is about *comprehension*, not line count.
-- **Value objects for everything.** A `ProjectName` wrapper around `string` that adds no rules is ceremony. Create value objects where there's validation, formatting or arithmetic to protect.
+- **Value objects for everything.** A `RestaurantName` wrapper around `string` that adds no rules is ceremony. Create value objects where there's validation, formatting or arithmetic to protect.
 - **Hiding every delegate.** Fixing every message chain with forwarding methods creates middle men. Use Hide Delegate when the caller needs a *business answer*, not to avoid every dot.
 - **Treating metrics as targets.** "Every method under 10 lines" or "cyclomatic complexity below 5" become goals people game. Use metrics to find candidates, then use judgement.
 
@@ -544,26 +604,28 @@ using System.Linq;
 
 public static class BillReport
 {
-    public static string PrintBillSummary(string contractNo, List<(string Item, decimal Qty, decimal Rate)> lines, decimal advance)
+    public static string PrintBillSummary(string orderId, List<(string Item, int Qty, decimal Price)> lines,
+        decimal deliveryFee, decimal walletBalance)
     {
-        // --- gross ---
-        decimal gross = 0;
-        foreach (var l in lines) gross += Math.Round(l.Qty * l.Rate, 2, MidpointRounding.AwayFromZero);
+        // --- item total ---
+        decimal itemTotal = 0;
+        foreach (var l in lines) itemTotal += Math.Round(l.Qty * l.Price, 2, MidpointRounding.AwayFromZero);
 
-        // --- deductions ---
-        var retention = Math.Round(gross * 0.05m, 2, MidpointRounding.AwayFromZero);
-        var tds = Math.Round(gross * 0.02m, 2, MidpointRounding.AwayFromZero);
-        var recovery = Math.Min(Math.Round(gross * 0.10m, 2, MidpointRounding.AwayFromZero), advance);
+        // --- discounts ---
+        var coupon = Math.Round(itemTotal * 0.10m, 2, MidpointRounding.AwayFromZero);
+        var gold = Math.Round(itemTotal * 0.05m, 2, MidpointRounding.AwayFromZero);
+        var wallet = Math.Min(Math.Round(itemTotal * 0.10m, 2, MidpointRounding.AwayFromZero), walletBalance);
 
         // --- format ---
         var c = CultureInfo.InvariantCulture;
         return string.Join(Environment.NewLine,
-            $"Contract {contractNo}",
-            $"Gross:     {gross.ToString("N2", c)}",
-            $"Retention: {retention.ToString("N2", c)}",
-            $"TDS:       {tds.ToString("N2", c)}",
-            $"Advance:   {recovery.ToString("N2", c)}",
-            $"Net:       {(gross - retention - tds - recovery).ToString("N2", c)}");
+            $"Order {orderId}",
+            $"Items:     {itemTotal.ToString("N2", c)}",
+            $"Delivery:  {deliveryFee.ToString("N2", c)}",
+            $"Coupon:    -{coupon.ToString("N2", c)}",
+            $"Gold:      -{gold.ToString("N2", c)}",
+            $"Wallet:    -{wallet.ToString("N2", c)}",
+            $"To pay:    {(itemTotal + deliveryFee - coupon - gold - wallet).ToString("N2", c)}");
     }
 }
 
@@ -571,8 +633,9 @@ public static class Program
 {
     public static void Main()
     {
-        var lines = new List<(string, decimal, decimal)> { ("EW-01", 1_200m, 450m), ("GSB-02", 310.5m, 2_150m) };
-        Console.WriteLine(BillReport.PrintBillSummary("NH-48/PKG-3", lines, 50_000m));
+        var lines = new List<(string, int, decimal)> { ("BIR-01", 2, 320m), ("NAAN-02", 4, 60m) };
+        // Expected: items 880.00, delivery 45.00, coupon 88.00, gold 44.00, wallet 50.00, to pay 743.00
+        Console.WriteLine(BillReport.PrintBillSummary("ORD-20931", lines, 45m, 50m));
     }
 }
 ```
@@ -580,136 +643,153 @@ public static class Program
 
 ## Exercises
 
-:::exercise id=m04-code-smells-ex1 difficulty=beginner kind=code title="Cure primitive obsession with a Chainage value object"
-Chainages are passed around as `int km, int m` pairs and strings like `"12+350"`, parsed differently in four places. Implement `Chainage` and `ChainageRange` so the rules live in one place.
+:::exercise id=m04-code-smells-ex1 difficulty=beginner kind=code title="Cure primitive obsession with a Distance value object"
+Delivery distances are passed around as `double km`, `int metres` and strings like `"3.5 km"` or `"850 m"`, parsed differently in four places. One bug already charged a customer the 7–12 km fee for a 1.2 km trip because a caller passed metres where kilometres were expected. Implement `Distance` and `DistanceSlab` so the rules live in one place.
 ::requirements
-- `Chainage.Parse("12+350")` → 12,350 metres. Metres must be exactly three digits.
-- `ToString()` gives `"12+350"`; `Chainage.Parse("0+005").ToString()` gives `"0+005"`.
-- Invalid text (`"12350"`, `"12+35"`, `"a+100"`, `""`) throws `FormatException`.
-- `new ChainageRange(from, to)` throws `ArgumentException` when `to` is not after `from`; `LengthMetres` returns the difference.
+- `Distance.Parse("3.5 km")` → 3,500 metres; `Distance.Parse("850 m")` → 850 metres. The unit is `km` or `m` (any letter case), with at most one space before it. Kilometres may have up to three decimals; metres must be whole.
+- `ToString()` gives `"850 m"` below 1,000 m, otherwise kilometres without trailing zeros: `"3.5 km"`, `"12 km"`. So `Distance.Parse("0.75 km").ToString()` gives `"750 m"`.
+- Invalid text (`"3.5"`, `"km"`, `"-2 km"`, `"3,5 km"`, `"850.5 m"`, `""`) throws `FormatException`.
+- `new DistanceSlab(from, to)` throws `ArgumentException` when `to` is not after `from`. `Contains(d)` is true when `from ≤ d < to`.
 ::acceptance
-- All parse, format and range tests pass.
-- No caller needs to know the "km+metres" format.
+- All parse, format and slab tests pass.
+- No caller needs to know the text format or the unit conversion.
 ::hint
 A `readonly record struct` gives you value equality for free.
 ::hint
-A regex like `^(\d{1,4})\+(\d{3})$` enforces the format.
+Store one number, total metres. Convert only when parsing and formatting.
 ::hint
-Store one number, total metres. Derive km and metres in `ToString` with `/ 1000` and `% 1000`.
+A regex like `^(\d{1,4}(?:\.\d{1,3})?)\s?(km|m)$` with `RegexOptions.IgnoreCase` enforces the format. Parse the number as `decimal` with `CultureInfo.InvariantCulture`, so a comma never sneaks in through the user's locale.
 ::hint
 ```csharp
-return new Chainage(int.Parse(m.Groups[1].Value) * 1000 + int.Parse(m.Groups[2].Value));
+var value = decimal.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+var isKm = m.Groups[2].Value.Equals("km", StringComparison.OrdinalIgnoreCase);
+if (!isKm && value != decimal.Truncate(value)) throw new FormatException(...);
+return new Distance((int)(isKm ? value * 1000m : value));
 ```
 ::starter
-```csharp file=Chainage.cs
+```csharp file=Distance.cs
 using System;
 using System.Text.RegularExpressions;
 
-public readonly record struct Chainage(int Metres)
+public readonly record struct Distance(int Metres)
 {
-    public static Chainage Parse(string text) => throw new NotImplementedException();
+    public static Distance Parse(string text) => throw new NotImplementedException();
     public override string ToString() => throw new NotImplementedException();
 }
 
-public sealed record ChainageRange
+public sealed record DistanceSlab
 {
-    public Chainage From { get; }
-    public Chainage To { get; }
+    public Distance From { get; }
+    public Distance To { get; }
 
-    public ChainageRange(Chainage from, Chainage to) => throw new NotImplementedException();
+    public DistanceSlab(Distance from, Distance to) => throw new NotImplementedException();
 
-    public int LengthMetres => throw new NotImplementedException();
+    public bool Contains(Distance d) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=ChainageTests.cs
+```csharp file=DistanceTests.cs
 using System;
 using Xunit;
 
-public class ChainageTests
+public class DistanceTests
 {
-    [Fact] public void Parses_km_and_metres() => Assert.Equal(12_350, Chainage.Parse("12+350").Metres);
-    [Fact] public void Formats_back() => Assert.Equal("12+350", Chainage.Parse("12+350").ToString());
-    [Fact] public void Pads_metres() => Assert.Equal("0+005", Chainage.Parse("0+005").ToString());
-    [Fact] public void Values_are_equal_by_value() => Assert.Equal(Chainage.Parse("3+000"), new Chainage(3000));
+    [Fact] public void Parses_kilometres() => Assert.Equal(3_500, Distance.Parse("3.5 km").Metres);
+    [Fact] public void Parses_metres() => Assert.Equal(850, Distance.Parse("850 m").Metres);
+    [Fact] public void Formats_kilometres() => Assert.Equal("3.5 km", Distance.Parse("3.5 km").ToString());
+    [Fact] public void Formats_whole_kilometres_and_ignores_case() => Assert.Equal("12 km", Distance.Parse("12 KM").ToString());
+    [Fact] public void Formats_short_distances_in_metres() => Assert.Equal("750 m", Distance.Parse("0.75 km").ToString());
+    [Fact] public void Values_are_equal_by_value() => Assert.Equal(Distance.Parse("3 km"), new Distance(3000));
 
     [Theory]
-    [InlineData("12350")]
-    [InlineData("12+35")]
-    [InlineData("a+100")]
+    [InlineData("3.5")]
+    [InlineData("km")]
+    [InlineData("-2 km")]
+    [InlineData("3,5 km")]
+    [InlineData("850.5 m")]
     [InlineData("")]
-    public void Rejects_bad_format(string text) => Assert.Throws<FormatException>(() => Chainage.Parse(text));
+    public void Rejects_bad_format(string text) => Assert.Throws<FormatException>(() => Distance.Parse(text));
 
     [Fact]
-    public void Range_length() =>
-        Assert.Equal(1_650, new ChainageRange(Chainage.Parse("12+350"), Chainage.Parse("14+000")).LengthMetres);
+    public void Slab_includes_start_and_excludes_end()
+    {
+        var slab = new DistanceSlab(Distance.Parse("3 km"), Distance.Parse("7 km"));
+        Assert.True(slab.Contains(Distance.Parse("3 km")));
+        Assert.True(slab.Contains(Distance.Parse("6.999 km")));
+        Assert.False(slab.Contains(Distance.Parse("7 km")));
+    }
 
     [Fact]
-    public void Range_must_go_forward() =>
-        Assert.Throws<ArgumentException>(() => new ChainageRange(Chainage.Parse("14+000"), Chainage.Parse("12+350")));
+    public void Slab_must_go_forward() =>
+        Assert.Throws<ArgumentException>(() => new DistanceSlab(Distance.Parse("7 km"), Distance.Parse("3 km")));
 }
 ```
 ::solution
-```csharp file=Chainage.cs
+```csharp file=Distance.cs
 using System;
 using System.Globalization;
 using System.Text.RegularExpressions;
 
-public readonly record struct Chainage(int Metres)
+public readonly record struct Distance(int Metres)
 {
-    private static readonly Regex Format = new(@"^(\d{1,4})\+(\d{3})$");
+    private static readonly Regex Format = new(@"^(\d{1,4}(?:\.\d{1,3})?)\s?(km|m)$", RegexOptions.IgnoreCase);
 
-    public static Chainage Parse(string text)
+    public static Distance Parse(string text)
     {
         var m = Format.Match(text?.Trim() ?? "");
-        if (!m.Success) throw new FormatException($"Chainage '{text}' must look like 12+350.");
-        return new Chainage(int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture) * 1000
-                          + int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture));
+        if (!m.Success) throw new FormatException($"Distance '{text}' must look like 3.5 km or 850 m.");
+
+        var value = decimal.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+        var isKm = m.Groups[2].Value.Equals("km", StringComparison.OrdinalIgnoreCase);
+        if (!isKm && value != decimal.Truncate(value)) throw new FormatException($"Metres must be whole: '{text}'.");
+        return new Distance((int)(isKm ? value * 1000m : value));
     }
 
-    public override string ToString() => $"{Metres / 1000}+{Metres % 1000:000}";
+    public override string ToString() => Metres < 1000
+        ? $"{Metres} m"
+        : (Metres / 1000m).ToString("0.###", CultureInfo.InvariantCulture) + " km";
 }
 
-public sealed record ChainageRange
+public sealed record DistanceSlab
 {
-    public Chainage From { get; }
-    public Chainage To { get; }
+    public Distance From { get; }
+    public Distance To { get; }
 
-    public ChainageRange(Chainage from, Chainage to)
+    public DistanceSlab(Distance from, Distance to)
     {
-        if (to.Metres <= from.Metres) throw new ArgumentException($"End {to} must be after start {from}.");
+        if (to.Metres <= from.Metres) throw new ArgumentException($"Slab end {to} must be after start {from}.");
         From = from;
         To = to;
     }
 
-    public int LengthMetres => To.Metres - From.Metres;
+    public bool Contains(Distance d) => d.Metres >= From.Metres && d.Metres < To.Metres;
 }
 ```
 
-Four parsers become one, and a `ChainageRange` that runs backwards can no longer exist anywhere in the system.
+Four parsers become one, the unit conversion happens in exactly one place, and a slab that runs backwards can no longer exist anywhere in the system.
 ::mistakes
-- Storing km and metres separately, which makes comparison and arithmetic awkward.
-- Accepting `"12+35"` as 12,035 m: ambiguous input should be rejected, not guessed.
-- Validating in the callers instead of the constructor.
+- Storing the value as `double` kilometres: `0.1 + 0.2` style rounding errors appear at slab boundaries, and equality becomes unreliable.
+- Accepting `"3,5 km"` by parsing with the current culture: the same text means 3.5 on one server and fails (or means 35) on another. Ambiguous input should be rejected, not guessed.
+- Validating in the callers instead of in `Parse` and the constructor.
 :::
 
 :::exercise id=m04-code-smells-ex2 difficulty=beginner kind=written title="Name the smells"
-Name every smell you can find in this code, and the refactoring you'd apply first for each.
+Name every smell you can find in this code from a food-delivery platform's rider-operations team, and the refactoring you'd apply first for each.
 
 ```csharp
-public class SiteReportService : BaseReportService
+public class RiderReportService : BaseReportService
 {
     public string? CachedWeather;   // set only when includeWeather is true
 
-    public string Build(string projectCode, int y, int m, bool includeWeather, bool includePhotos,
-                        bool pdf, string engineerName, string engineerMobile, string engineerEmail)
+    public string Build(string riderId, int y, int m, bool includeWeather, bool includeMap,
+                        bool pdf, string hubManagerName, string hubManagerMobile, string hubManagerEmail)
     {
-        var state = _projects.Get(projectCode).Contract.Client.Address.State.Name;
+        var state = _riders.Get(riderId).Hub.City.Address.State.Name;
         if (includeWeather) CachedWeather = _weather.Get(state);
         // 150 lines...
     }
 
-    public override void Archive() { /* not used for site reports */ }
+    public override void Archive() { /* not used for rider reports */ }
 }
 ```
 ::acceptance
@@ -722,282 +802,282 @@ Look at the field's lifetime, the long chain of dots, and the empty override.
 ::hint
 Boolean flags that change output format are also worth naming.
 ::solution
-- **Long parameter list** (9) → *Introduce Parameter Object* `SiteReportRequest`.
-- **Data clump** — `engineerName`, `engineerMobile`, `engineerEmail` → *Extract Class* `EngineerContact` (and `y, m` → `YearMonth`).
-- **Flag arguments** — `pdf`, `includePhotos`, `includeWeather` → split into separate methods or a request object with clear options; `pdf` likely belongs to a separate renderer (divergent change).
-- **Temporary field** — `CachedWeather` → make it a local variable or a parameter; it leaks state between calls.
-- **Message chain** — `.Contract.Client.Address.State.Name` → *Hide Delegate*: `_projects.GetClientState(projectCode)`.
+- **Long parameter list** (9) → *Introduce Parameter Object* `RiderReportRequest`.
+- **Data clump** — `hubManagerName`, `hubManagerMobile`, `hubManagerEmail` → *Extract Class* `HubManagerContact` (and `y, m` → a `YearMonth` value).
+- **Flag arguments** — `pdf`, `includeMap`, `includeWeather` → split into separate methods or a request object with clear options; `pdf` likely belongs to a separate renderer (divergent change).
+- **Temporary field** — `CachedWeather` → make it a local variable or a parameter; it leaks state between calls (and between concurrent requests if the service is a singleton).
+- **Message chain** — `.Hub.City.Address.State.Name` → *Hide Delegate*: `_riders.GetHubState(riderId)`.
 - **Long method** (150 lines) → *Extract Method* by section.
 - **Refused bequest** — empty `Archive()` override → *Replace Inheritance with Delegation*; the base class probably isn't a true "is-a".
-- **Primitive obsession** — `projectCode`, `engineerMobile` as strings → value objects where rules exist.
+- **Primitive obsession** — `riderId`, `hubManagerMobile` as strings → value objects where rules exist (a `PhoneNumber` that validates the +91 format, for example).
 ::mistakes
 - Calling the base class a "large class" without evidence. Name what you can see.
 :::
 
 :::exercise id=m04-code-smells-ex3 difficulty=intermediate kind=code title="Move Method to cure feature envy"
-`BillingService.CalculateRetentionRelease` reads five properties of `Contract` and uses nothing of its own. Move the logic into `Contract.RetentionReleasable(DateOnly asOf)` and delete it from `BillingService`.
+A food-delivery platform holds back part of each restaurant's earnings for a while after each settlement period, to cover refunds and chargebacks. `PayoutService.CalculateHoldbackRelease` reads five properties of `RestaurantAccount` and uses nothing of its own. Move the logic into `RestaurantAccount.HoldbackReleasable(DateOnly asOf)` and delete it from `PayoutService`.
 
 Rules:
-- Nothing is releasable before `CompletionDate + DefectLiabilityDays`.
-- Nothing is releasable while `HasOpenDefects` is true.
-- Otherwise, releasable = `RetentionHeld − RetentionReleased` (never negative).
+- Nothing is releasable before `SettlementPeriodEnd + HoldbackDays` (default 30 days).
+- Nothing is releasable while `HasOpenComplaints` is true.
+- Otherwise, releasable = `HoldbackHeld − HoldbackReleased` (never negative).
 ::acceptance
-- `Contract.RetentionReleasable` returns the right amount in all three cases.
-- `BillingService` no longer has `CalculateRetentionRelease`.
-- `BillingService.ReleaseRetention` still works, by asking the contract.
+- `RestaurantAccount.HoldbackReleasable` returns the right amount in all three cases.
+- `PayoutService` no longer has `CalculateHoldbackRelease`.
+- `PayoutService.ReleaseHoldback` still works, by asking the account.
 ::hint
-Copy the method body into `Contract` first, replacing `c.` with nothing. Then make the old method call the new one. Then delete the old one.
+Copy the method body into `RestaurantAccount` first, replacing `a.` with nothing. Then make the old method call the new one. Then delete the old one.
 ::hint
-Once the calculation is inside `Contract`, ask: does anything outside still need the raw fields?
+Once the calculation is inside `RestaurantAccount`, ask: does anything outside still need the raw fields?
 ::hint
-`ReleaseRetention` becomes: `var amount = contract.RetentionReleasable(asOf); contract.RecordRelease(amount); return amount;`
+`ReleaseHoldback` becomes: `var amount = account.HoldbackReleasable(asOf); account.RecordRelease(amount); return amount;`
 ::starter
-```csharp file=Retention.cs
+```csharp file=Holdback.cs
 using System;
 
-public sealed class Contract
+public sealed class RestaurantAccount
 {
-    public required string ContractNo { get; init; }
-    public required DateOnly CompletionDate { get; init; }
-    public int DefectLiabilityDays { get; init; } = 365;
-    public decimal RetentionHeld { get; set; }
-    public decimal RetentionReleased { get; set; }
-    public bool HasOpenDefects { get; set; }
+    public required string RestaurantId { get; init; }
+    public required DateOnly SettlementPeriodEnd { get; init; }
+    public int HoldbackDays { get; init; } = 30;
+    public decimal HoldbackHeld { get; set; }
+    public decimal HoldbackReleased { get; set; }
+    public bool HasOpenComplaints { get; set; }
 
-    public decimal RetentionReleasable(DateOnly asOf) => throw new NotImplementedException();
+    public decimal HoldbackReleasable(DateOnly asOf) => throw new NotImplementedException();
 
     public void RecordRelease(decimal amount)
     {
         if (amount < 0) throw new ArgumentOutOfRangeException(nameof(amount));
-        RetentionReleased += amount;
+        HoldbackReleased += amount;
     }
 }
 
-public sealed class BillingService
+public sealed class PayoutService
 {
-    // Feature envy: uses only Contract's data.
-    public decimal CalculateRetentionRelease(Contract c, DateOnly asOf)
+    // Feature envy: uses only RestaurantAccount's data.
+    public decimal CalculateHoldbackRelease(RestaurantAccount a, DateOnly asOf)
     {
-        if (asOf < c.CompletionDate.AddDays(c.DefectLiabilityDays)) return 0m;
-        if (c.HasOpenDefects) return 0m;
-        return Math.Max(0m, c.RetentionHeld - c.RetentionReleased);
+        if (asOf < a.SettlementPeriodEnd.AddDays(a.HoldbackDays)) return 0m;
+        if (a.HasOpenComplaints) return 0m;
+        return Math.Max(0m, a.HoldbackHeld - a.HoldbackReleased);
     }
 
-    public decimal ReleaseRetention(Contract c, DateOnly asOf)
+    public decimal ReleaseHoldback(RestaurantAccount a, DateOnly asOf)
     {
-        var amount = CalculateRetentionRelease(c, asOf);
-        c.RecordRelease(amount);
+        var amount = CalculateHoldbackRelease(a, asOf);
+        a.RecordRelease(amount);
         return amount;
     }
 }
 ```
 ::tests
-```csharp file=RetentionTests.cs
+```csharp file=HoldbackTests.cs
 using System;
 using Xunit;
 
-public class RetentionTests
+public class HoldbackTests
 {
-    private static Contract NewContract() => new()
+    private static RestaurantAccount NewAccount() => new()
     {
-        ContractNo = "NH-48/PKG-3",
-        CompletionDate = new DateOnly(2025, 3, 31),
-        RetentionHeld = 12_50_000m,
-        RetentionReleased = 2_50_000m,
+        RestaurantId = "BLR-0427",
+        SettlementPeriodEnd = new DateOnly(2026, 3, 31),
+        HoldbackHeld = 1_25_000m,
+        HoldbackReleased = 25_000m,
     };
 
-    [Fact] public void Nothing_before_dlp_ends() => Assert.Equal(0m, NewContract().RetentionReleasable(new DateOnly(2026, 3, 30)));
+    [Fact] public void Nothing_before_holdback_period_ends() => Assert.Equal(0m, NewAccount().HoldbackReleasable(new DateOnly(2026, 4, 29)));
 
-    [Fact] public void Balance_after_dlp() => Assert.Equal(10_00_000m, NewContract().RetentionReleasable(new DateOnly(2026, 3, 31)));
+    [Fact] public void Balance_after_holdback_period() => Assert.Equal(1_00_000m, NewAccount().HoldbackReleasable(new DateOnly(2026, 4, 30)));
 
     [Fact]
-    public void Nothing_with_open_defects()
+    public void Nothing_with_open_complaints()
     {
-        var c = NewContract();
-        c.HasOpenDefects = true;
-        Assert.Equal(0m, c.RetentionReleasable(new DateOnly(2026, 6, 1)));
+        var a = NewAccount();
+        a.HasOpenComplaints = true;
+        Assert.Equal(0m, a.HoldbackReleasable(new DateOnly(2026, 6, 1)));
     }
 
     [Fact]
-    public void Service_releases_by_asking_the_contract()
+    public void Service_releases_by_asking_the_account()
     {
-        var c = NewContract();
-        Assert.Equal(10_00_000m, new BillingService().ReleaseRetention(c, new DateOnly(2026, 4, 1)));
-        Assert.Equal(0m, c.RetentionReleasable(new DateOnly(2026, 4, 2)));
+        var a = NewAccount();
+        Assert.Equal(1_00_000m, new PayoutService().ReleaseHoldback(a, new DateOnly(2026, 5, 1)));
+        Assert.Equal(0m, a.HoldbackReleasable(new DateOnly(2026, 5, 2)));
     }
 
     [Fact]
-    public void Envious_method_is_gone() => Assert.Null(typeof(BillingService).GetMethod("CalculateRetentionRelease"));
+    public void Envious_method_is_gone() => Assert.Null(typeof(PayoutService).GetMethod("CalculateHoldbackRelease"));
 }
 ```
 ::solution
-```csharp file=Retention.cs
+```csharp file=Holdback.cs
 using System;
 
-public sealed class Contract
+public sealed class RestaurantAccount
 {
-    public required string ContractNo { get; init; }
-    public required DateOnly CompletionDate { get; init; }
-    public int DefectLiabilityDays { get; init; } = 365;
-    public decimal RetentionHeld { get; set; }
-    public decimal RetentionReleased { get; set; }
-    public bool HasOpenDefects { get; set; }
+    public required string RestaurantId { get; init; }
+    public required DateOnly SettlementPeriodEnd { get; init; }
+    public int HoldbackDays { get; init; } = 30;
+    public decimal HoldbackHeld { get; set; }
+    public decimal HoldbackReleased { get; set; }
+    public bool HasOpenComplaints { get; set; }
 
-    public decimal RetentionReleasable(DateOnly asOf)
+    public decimal HoldbackReleasable(DateOnly asOf)
     {
-        if (asOf < CompletionDate.AddDays(DefectLiabilityDays)) return 0m;
-        if (HasOpenDefects) return 0m;
-        return Math.Max(0m, RetentionHeld - RetentionReleased);
+        if (asOf < SettlementPeriodEnd.AddDays(HoldbackDays)) return 0m;
+        if (HasOpenComplaints) return 0m;
+        return Math.Max(0m, HoldbackHeld - HoldbackReleased);
     }
 
     public void RecordRelease(decimal amount)
     {
         if (amount < 0) throw new ArgumentOutOfRangeException(nameof(amount));
-        RetentionReleased += amount;
+        HoldbackReleased += amount;
     }
 }
 
-public sealed class BillingService
+public sealed class PayoutService
 {
-    public decimal ReleaseRetention(Contract c, DateOnly asOf)
+    public decimal ReleaseHoldback(RestaurantAccount a, DateOnly asOf)
     {
-        var amount = c.RetentionReleasable(asOf);
-        c.RecordRelease(amount);
+        var amount = a.HoldbackReleasable(asOf);
+        a.RecordRelease(amount);
         return amount;
     }
 }
 ```
 
-The next step (not required here) is to make `RetentionHeld`, `RetentionReleased` and `HasOpenDefects` private-set, since nothing outside needs to write them any more. That's how Move Method leads to better encapsulation.
+The next step (not required here) is to make `HoldbackHeld`, `HoldbackReleased` and `HasOpenComplaints` private-set, since nothing outside needs to write them any more. That's how Move Method leads to better encapsulation.
 ::mistakes
-- Moving the method but leaving a forwarding copy in `BillingService` "for compatibility" inside the same codebase — a middle man.
-- Changing behaviour while moving (for example, adding a partial release). Move first, change later, in separate commits.
+- Moving the method but leaving a forwarding copy in `PayoutService` "for compatibility" inside the same codebase — a middle man.
+- Changing behaviour while moving (for example, adding a partial release when complaints are small). Move first, change later, in separate commits.
 :::
 
-:::exercise id=m04-code-smells-ex4 difficulty=intermediate kind=code title="Replace the deduction switch with rules"
-`DeductionCalculator` has a `switch` with a case for every **combination** of deductions. Replace it with one class per deduction and a `RaBillDeductions` aggregator, then delete `DeductionCalculator`.
+:::exercise id=m04-code-smells-ex4 difficulty=intermediate kind=code title="Replace the discount switch with rules"
+`DiscountCalculator` has a `switch` with a case for every **combination** of discounts a food order can get. Replace it with one class per discount and an `OrderDiscounts` aggregator, then delete `DiscountCalculator`.
 ::requirements
-- `RetentionRule(percent)`, `IncomeTaxTdsRule(percent)` and `AdvanceRecoveryRule(percentOfBill)` implement `IDeductionRule`.
-- Advance recovery is `percentOfBill` of gross, but never more than the outstanding advance.
+- `CouponDiscountRule(percent)`, `MembershipDiscountRule(percent)` and `WalletRedemptionRule(percentOfBill)` implement `IDiscountRule`.
+- Wallet redemption is `percentOfBill` of the item total, but never more than the wallet balance.
 - Every amount is rounded to 2 decimals, half away from zero.
-- `RaBillDeductions.Total(gross, outstandingAdvance)` sums all configured rules.
+- `OrderDiscounts.Total(itemTotal, walletBalance)` sums all configured rules.
 ::acceptance
-- Gross ₹10,00,000 with 5 % retention, 2 % TDS, 10 % advance recovery and ₹60,000 outstanding → total ₹1,30,000.
-- A new rule defined only in the test file works without changing `RaBillDeductions`.
-- `DeductionCalculator` no longer exists.
+- Item total ₹2,000 with a 10 % coupon, 5 % membership discount, and wallet credit of up to 10 % with ₹150 in the wallet → total ₹450 (200 + 100 + 150).
+- A new rule defined only in the test file works without changing `OrderDiscounts`.
+- `DiscountCalculator` no longer exists.
 ::hint
 Each `case` in the old switch adds the same pieces in different combinations. What are the pieces?
 ::hint
-The pieces are the rules. A contract's configuration becomes a *list* of rules instead of a mode string.
+The pieces are the rules. An order's offers become a *list* of rules instead of a mode string.
 ::hint
-`RaBillDeductions` takes `IEnumerable<IDeductionRule>` and sums `rule.Amount(gross, outstanding)`.
+`OrderDiscounts` takes `IEnumerable<IDiscountRule>` and sums `rule.Amount(itemTotal, walletBalance)`.
 ::hint
 ```csharp
-public decimal Amount(decimal gross, decimal outstanding) => Math.Min(Round(gross * percent / 100m), outstanding);
+public decimal Amount(decimal itemTotal, decimal walletBalance) => Math.Min(Round(itemTotal * percentOfBill / 100m), walletBalance);
 ```
 ::starter
-```csharp file=Deductions.cs
+```csharp file=Discounts.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public static class DeductionCalculator
+public static class DiscountCalculator
 {
-    public static decimal Calculate(string mode, decimal gross, decimal outstandingAdvance)
+    public static decimal Calculate(string mode, decimal itemTotal, decimal walletBalance)
     {
         decimal R(decimal v) => Math.Round(v, 2, MidpointRounding.AwayFromZero);
         switch (mode)
         {
-            case "RET": return R(gross * 0.05m);
-            case "RET+TDS": return R(gross * 0.05m) + R(gross * 0.02m);
-            case "RET+ADV": return R(gross * 0.05m) + Math.Min(R(gross * 0.10m), outstandingAdvance);
-            case "RET+TDS+ADV": return R(gross * 0.05m) + R(gross * 0.02m) + Math.Min(R(gross * 0.10m), outstandingAdvance);
+            case "COUPON": return R(itemTotal * 0.10m);
+            case "COUPON+GOLD": return R(itemTotal * 0.10m) + R(itemTotal * 0.05m);
+            case "COUPON+WALLET": return R(itemTotal * 0.10m) + Math.Min(R(itemTotal * 0.10m), walletBalance);
+            case "COUPON+GOLD+WALLET": return R(itemTotal * 0.10m) + R(itemTotal * 0.05m) + Math.Min(R(itemTotal * 0.10m), walletBalance);
             default: throw new ArgumentException($"Unknown mode {mode}");
         }
     }
 }
 
-public interface IDeductionRule
+public interface IDiscountRule
 {
     string Code { get; }
-    decimal Amount(decimal gross, decimal outstandingAdvance);
+    decimal Amount(decimal itemTotal, decimal walletBalance);
 }
 
-public sealed class RetentionRule(decimal percent) : IDeductionRule
+public sealed class CouponDiscountRule(decimal percent) : IDiscountRule
 {
-    public string Code => "RETENTION";
-    public decimal Amount(decimal gross, decimal outstandingAdvance) => throw new NotImplementedException();
+    public string Code => "COUPON";
+    public decimal Amount(decimal itemTotal, decimal walletBalance) => throw new NotImplementedException();
 }
 
-public sealed class IncomeTaxTdsRule(decimal percent) : IDeductionRule
+public sealed class MembershipDiscountRule(decimal percent) : IDiscountRule
 {
-    public string Code => "TDS";
-    public decimal Amount(decimal gross, decimal outstandingAdvance) => throw new NotImplementedException();
+    public string Code => "GOLD";
+    public decimal Amount(decimal itemTotal, decimal walletBalance) => throw new NotImplementedException();
 }
 
-public sealed class AdvanceRecoveryRule(decimal percentOfBill) : IDeductionRule
+public sealed class WalletRedemptionRule(decimal percentOfBill) : IDiscountRule
 {
-    public string Code => "ADVANCE";
-    public decimal Amount(decimal gross, decimal outstandingAdvance) => throw new NotImplementedException();
+    public string Code => "WALLET";
+    public decimal Amount(decimal itemTotal, decimal walletBalance) => throw new NotImplementedException();
 }
 
-public sealed class RaBillDeductions(IEnumerable<IDeductionRule> rules)
+public sealed class OrderDiscounts(IEnumerable<IDiscountRule> rules)
 {
-    public decimal Total(decimal gross, decimal outstandingAdvance) => throw new NotImplementedException();
+    public decimal Total(decimal itemTotal, decimal walletBalance) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=DeductionTests.cs
+```csharp file=DiscountTests.cs
 using System;
 using Xunit;
 
-public class DeductionTests
+public class DiscountTests
 {
-    private sealed class LabourCessRule : IDeductionRule
+    private sealed class BankCardOfferRule : IDiscountRule
     {
-        public string Code => "CESS";
-        public decimal Amount(decimal gross, decimal outstandingAdvance) => Math.Round(gross * 0.01m, 2);
+        public string Code => "BANK";
+        public decimal Amount(decimal itemTotal, decimal walletBalance) => Math.Round(itemTotal * 0.01m, 2);
     }
 
     [Fact]
     public void Full_set_of_rules()
     {
-        IDeductionRule[] rules = { new RetentionRule(5m), new IncomeTaxTdsRule(2m), new AdvanceRecoveryRule(10m) };
-        Assert.Equal(1_30_000m, new RaBillDeductions(rules).Total(10_00_000m, 60_000m));
+        IDiscountRule[] rules = { new CouponDiscountRule(10m), new MembershipDiscountRule(5m), new WalletRedemptionRule(10m) };
+        Assert.Equal(450m, new OrderDiscounts(rules).Total(2_000m, 150m));
     }
 
     [Fact]
-    public void Advance_recovery_never_exceeds_outstanding() =>
-        Assert.Equal(60_000m, new AdvanceRecoveryRule(10m).Amount(10_00_000m, 60_000m));
+    public void Wallet_credit_never_exceeds_balance() =>
+        Assert.Equal(150m, new WalletRedemptionRule(10m).Amount(2_000m, 150m));
 
     [Fact]
-    public void Advance_recovery_is_percent_when_enough_outstanding() =>
-        Assert.Equal(1_00_000m, new AdvanceRecoveryRule(10m).Amount(10_00_000m, 5_00_000m));
+    public void Wallet_credit_is_percent_when_balance_is_enough() =>
+        Assert.Equal(200m, new WalletRedemptionRule(10m).Amount(2_000m, 500m));
 
     [Fact]
-    public void Rounds_half_away_from_zero() => Assert.Equal(0.05m, new RetentionRule(5m).Amount(0.9m, 0m));
+    public void Rounds_half_away_from_zero() => Assert.Equal(0.05m, new MembershipDiscountRule(5m).Amount(0.9m, 0m));
 
     [Fact]
     public void New_rule_needs_no_change_to_aggregator()
     {
-        IDeductionRule[] rules = { new RetentionRule(5m), new LabourCessRule() };
-        Assert.Equal(60_000m, new RaBillDeductions(rules).Total(10_00_000m, 0m));
+        IDiscountRule[] rules = { new MembershipDiscountRule(5m), new BankCardOfferRule() };
+        Assert.Equal(120m, new OrderDiscounts(rules).Total(2_000m, 0m));
     }
 
     [Fact]
-    public void Switch_class_is_gone() => Assert.Null(Type.GetType("DeductionCalculator"));
+    public void Switch_class_is_gone() => Assert.Null(Type.GetType("DiscountCalculator"));
 }
 ```
 ::solution
-```csharp file=Deductions.cs
+```csharp file=Discounts.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public interface IDeductionRule
+public interface IDiscountRule
 {
     string Code { get; }
-    decimal Amount(decimal gross, decimal outstandingAdvance);
+    decimal Amount(decimal itemTotal, decimal walletBalance);
 }
 
 internal static class Rupees
@@ -1005,50 +1085,50 @@ internal static class Rupees
     public static decimal Round(decimal value) => Math.Round(value, 2, MidpointRounding.AwayFromZero);
 }
 
-public sealed class RetentionRule(decimal percent) : IDeductionRule
+public sealed class CouponDiscountRule(decimal percent) : IDiscountRule
 {
-    public string Code => "RETENTION";
-    public decimal Amount(decimal gross, decimal outstandingAdvance) => Rupees.Round(gross * percent / 100m);
+    public string Code => "COUPON";
+    public decimal Amount(decimal itemTotal, decimal walletBalance) => Rupees.Round(itemTotal * percent / 100m);
 }
 
-public sealed class IncomeTaxTdsRule(decimal percent) : IDeductionRule
+public sealed class MembershipDiscountRule(decimal percent) : IDiscountRule
 {
-    public string Code => "TDS";
-    public decimal Amount(decimal gross, decimal outstandingAdvance) => Rupees.Round(gross * percent / 100m);
+    public string Code => "GOLD";
+    public decimal Amount(decimal itemTotal, decimal walletBalance) => Rupees.Round(itemTotal * percent / 100m);
 }
 
-public sealed class AdvanceRecoveryRule(decimal percentOfBill) : IDeductionRule
+public sealed class WalletRedemptionRule(decimal percentOfBill) : IDiscountRule
 {
-    public string Code => "ADVANCE";
-    public decimal Amount(decimal gross, decimal outstandingAdvance) =>
-        Math.Min(Rupees.Round(gross * percentOfBill / 100m), outstandingAdvance);
+    public string Code => "WALLET";
+    public decimal Amount(decimal itemTotal, decimal walletBalance) =>
+        Math.Min(Rupees.Round(itemTotal * percentOfBill / 100m), walletBalance);
 }
 
-public sealed class RaBillDeductions(IEnumerable<IDeductionRule> rules)
+public sealed class OrderDiscounts(IEnumerable<IDiscountRule> rules)
 {
-    private readonly IReadOnlyList<IDeductionRule> _rules = rules.ToList();
-    public decimal Total(decimal gross, decimal outstandingAdvance) => _rules.Sum(r => r.Amount(gross, outstandingAdvance));
+    private readonly IReadOnlyList<IDiscountRule> _rules = rules.ToList();
+    public decimal Total(decimal itemTotal, decimal walletBalance) => _rules.Sum(r => r.Amount(itemTotal, walletBalance));
 }
 ```
 
-Four combination cases (nine in the real system) became three rules. A new deduction is one class plus one line of configuration. The `Rupees.Round` helper is shared because the rounding rule is one piece of knowledge.
+Four combination cases (nine in the real system) became three rules. A new offer is one class plus one line of configuration. The `Rupees.Round` helper is shared because the rounding rule is one piece of knowledge.
 ::alternatives
-If deductions are purely "percent of gross" with no special logic, a single `PercentDeduction(code, percent)` class configured from the database is simpler than one class per deduction. Keep separate classes only for rules with real differences, like the advance cap.
+If discounts are purely "percent of item total" with no special logic, a single `PercentDiscount(code, percent)` class configured from the database is simpler than one class per discount. Keep separate classes only for rules with real differences, like the wallet cap. Real offer engines also need ordering (does the wallet apply before or after the coupon?) and stacking rules ("coupon and bank offer can't combine"); those belong in the aggregator or a small policy object, not back in a switch.
 ::mistakes
 - Keeping the mode string and mapping it to rules in a new switch — the combinations are still enumerated.
-- Making `AdvanceRecoveryRule` mutate an outstanding balance field: that recreates the temporary-field bug.
+- Making `WalletRedemptionRule` mutate a wallet-balance field: that recreates the temporary-field bug.
 :::
 
 :::exercise id=m04-code-smells-ex5 difficulty=advanced kind=written title="Build and prioritise a technical-debt register"
-You lead a team of six maintaining a project-monitoring platform. The backlog has these debt items. Using the quadrant and hotspot thinking, classify each, estimate whether it's paying interest, and propose an order of work for the next quarter, assuming about 20 % of capacity for debt (a common team convention, not a rule).
+You lead a team of six maintaining the restaurant-partner side of a food-delivery platform (menus, orders, weekly payouts). The backlog has these debt items. Using the quadrant and hotspot thinking, classify each, estimate whether it's paying interest, and propose an order of work for the next quarter, assuming about 20 % of capacity for debt (a common team convention, not a rule).
 
 | # | Item | Commits in last 6 months | Incidents | Notes |
 |---|---|---|---|---|
-| A | `ProgressReportBuilder` — 2,400 lines, no tests | 61 | 3 billing errors | Changed for every client |
-| B | Old PDF export library, unsupported | 2 | 0 | Works; security scan flags it |
+| A | `PayoutStatementBuilder` — 2,400 lines, no tests | 61 | 3 wrong payouts | Changed for every new commission plan |
+| B | Old PDF library for invoices, unsupported | 2 | 0 | Works; security scan flags a known vulnerability |
 | C | Copy-pasted GSTIN validation in 7 places | 9 | 1 | Format change expected |
 | D | Admin screens with inline SQL | 1 | 0 | Rarely used |
-| E | Shortcut: single region, no replica, "until go-live" (chosen 2 years ago) | — | 1 outage, 40 min | Customer SLA now 99.9 % |
+| E | Shortcut: one database server, no replica, "until launch" (chosen 2 years ago) | — | 1 outage, 40 min, during dinner peak | Restaurant SLA now 99.9 % |
 | F | Inconsistent naming in DTOs | 14 | 0 | Annoys developers |
 ::acceptance
 - Each item placed in a quadrant with a reason.
@@ -1070,12 +1150,12 @@ Think in increments: what can be done in two weeks that reduces interest straigh
 - **B** — prudent/inadvertent (was fine when chosen). Low change, but **security risk** is interest. Medium priority; time-box a replacement.
 - **C** — reckless/inadvertent duplication; a known upcoming change turns it into shotgun surgery. **High priority, cheap**: one `Gstin` value object.
 - **D** — any quadrant; almost no interest. **Leave it**, but add a note; fix if a change is ever needed.
-- **E** — prudent/deliberate *when taken*, but the plan was never executed, and the SLA changed. Now its interest is real (outage risk vs 99.9 %, which allows about 43 minutes of downtime a month). **High priority.**
+- **E** — prudent/deliberate *when taken*, but the plan was never executed, and the SLA changed. Now its interest is real: 99.9 % allows about 43 minutes of downtime a month, and one outage already used 40 of them during the busiest hour of the day. **High priority.**
 - **F** — low interest; fix opportunistically (boy-scout rule) when touching those DTOs.
 
 **Order:** C (a week, prevents a known incident) → A → E (replica plus tested failover) → B (replace behind an `IPdfRenderer` port) → F opportunistically → D only if touched.
 
-**First steps:** for **A**, golden-file tests for five real monthly reports, then *Extract Method* on the financial-progress section that caused the billing errors. For **C**, create `Gstin.Parse` and replace one call site per commit.
+**First steps:** for **A**, golden-file tests for five real weekly payout statements, then *Extract Method* on the commission section that caused the wrong payouts. For **C**, create `Gstin.Parse` and replace one call site per commit.
 ::mistakes
 - Ordering by ugliness ("D's SQL is the worst code") instead of by interest.
 - Proposing a rewrite of A from scratch instead of incremental refactoring behind tests.
@@ -1089,39 +1169,50 @@ Tests make refactoring safe, and value objects make tests sharper.
 **1. Characterisation (golden) tests before refactoring.** Pin today's output for real inputs:
 
 ```csharp
-public class RaBillCharacterisationTests
+public class OrderBillCharacterisationTests
 {
     [Fact]
-    public void Bill_7_matches_legacy_result()
+    public void Order_20931_matches_legacy_result()
     {
-        var terms = new ContractTerms("NH-48/PKG-3",
-            new Dictionary<string, BoqItem> { ["EW-01"] = new("EW-01", "Earthwork", "m3", Money.Rupees(450m)) },
-            new IDeductionRule[] { new RetentionRule(5m), new IncomeTaxTdsRule(2m), new AdvanceRecoveryRule(10m) });
-        var sheet = new MeasurementSheet();
-        sheet.Add(new MeasurementEntry("EW-01",
-            new ChainageRange(Chainage.Parse("12+000"), Chainage.Parse("12+500"), CarriagewaySide.Left), 1_200m));
+        var terms = new PricingTerms(
+            new Dictionary<string, MenuItem>
+            {
+                ["BIR-01"] = new("BIR-01", "Chicken biryani", Money.Rupees(320m)),
+                ["NAAN-02"] = new("NAAN-02", "Butter naan", Money.Rupees(60m)),
+            },
+            new DeliveryFeeSchedule(new[]
+            {
+                new DistanceSlab(Distance.Parse("0 m"), Distance.Parse("3 km"), Money.Rupees(25m)),
+                new DistanceSlab(Distance.Parse("3 km"), Distance.Parse("7 km"), Money.Rupees(45m)),
+            }),
+            new IDiscountRule[] { new CouponDiscountRule(10m), new MembershipDiscountRule(5m), new WalletRedemptionRule(10m) });
+        var cart = new Cart();
+        cart.Add(new CartLine("BIR-01", 2));
+        cart.Add(new CartLine("NAAN-02", 4));
+        var trip = new DeliveryTrip(new GeoPoint(12.9716, 77.5946), new GeoPoint(12.9352, 77.6245), Distance.Parse("4.2 km"));
 
-        var bill = RaBillCalculator.Calculate(terms, 7, sheet, Money.Rupees(30_000m));
+        var bill = OrderBillCalculator.Calculate(terms, "ORD-20931", cart, trip, Money.Rupees(50m));
 
-        // 1,200 x 450 = 5,40,000; retention 27,000; TDS 10,800; advance min(54,000, 30,000) = 30,000
-        Assert.Equal(5_40_000m, bill.Gross.Amount);
-        Assert.Equal(4_72_200m, bill.NetPayable.Amount);
+        // items 2 x 320 + 4 x 60 = 880; delivery 45 (3-7 km slab);
+        // coupon 88; Gold 44; wallet min(88, 50) = 50; to pay 880 + 45 - 182 = 743
+        Assert.Equal(880m, bill.ItemTotal.Amount);
+        Assert.Equal(743m, bill.NetPayable.Amount);
     }
 }
 ```
 
-Run the same inputs through the old `RaBillProcessor` and the new code during the transition, and assert they agree. Once the old code is deleted, these become ordinary regression tests.
+Run the same inputs through the old `OrderBillProcessor` and the new code during the transition, and assert they agree. Once the old code is deleted, these become ordinary regression tests.
 
-**2. Value-object tests.** `Chainage`, `Gstin` and `Money` each get a small `[Theory]` table of valid and invalid inputs. Every class that uses them inherits that safety.
+**2. Value-object tests.** `Distance`, `Gstin` and `Money` each get a small `[Theory]` table of valid and invalid inputs. Every class that uses them inherits that safety.
 
-**3. Rule tests in isolation.** Each `IDeductionRule` is tested alone with two or three rows, including the boundary (advance recovery exactly equal to outstanding).
+**3. Rule tests in isolation.** Each `IDiscountRule` is tested alone with two or three rows, including the boundaries (wallet credit exactly equal to the balance; a distance of exactly 3 km falls in the second fee slab).
 
-**4. Guard against regression.** Roslyn analyzers such as CA1502 (excessive cyclomatic complexity) can warn in CI. Keep them as warnings, not hard gates, to avoid metric-gaming.
+**4. Guard against regression.** The .NET code-metrics analyzers, such as CA1502 (avoid excessive complexity, off by default and enabled in `.editorconfig`), can warn in CI. Keep them as warnings, not hard gates, to avoid metric-gaming.
 
 ## Real-world application
 
-- **Billing and finance systems** accumulate switch-on-combination and temporary-field smells, because rules are added contract by contract. Rule objects and explicit inputs fix both.
-- **Government-integration code** (GST, e-way bills, PFMS) is prone to primitive obsession: GSTINs, PANs, IFSC codes and state codes as strings. Value objects pay off fast when formats change.
+- **Billing, pricing and offer engines** accumulate switch-on-combination and temporary-field smells, because rules are added offer by offer and customer segment by customer segment. Rule objects and explicit inputs fix both.
+- **Payments and government-integration code** (GST e-invoicing, UPI, bank transfers) is prone to primitive obsession: GSTINs, PANs, UPI IDs, IFSC codes and state codes as strings. Value objects pay off fast when formats change.
 - **Hotspot analysis** from version control is used by many teams to direct refactoring effort, often with tools that combine `git log` churn with complexity metrics.
 - **Debt registers** are commonly kept as labelled backlog items with an "interest" note, so product owners can weigh them against features.
 - **Strangler migrations**: when a module is too smelly to refactor safely, teams wrap it and replace it piece by piece ([Strangler fig](#/lesson/m16-strangler-acl)).
@@ -1140,11 +1231,11 @@ Changing the internal structure of code without changing its observable behaviou
 ::q intermediate
 Explain feature envy and how to fix it.
 ::a
-A method that uses another object's data more than its own — for example, a `BillingService` method that reads five properties of `Contract` to compute retention. The rule is far from its data, and `Contract` must expose internals. Fix with *Move Method*: put the calculation on `Contract` and let the service ask. Then tighten `Contract`'s setters, since outsiders no longer need them. The exception is code whose job is to combine many objects, such as a report query.
+A method that uses another object's data more than its own — for example, a `PayoutService` method that reads five properties of `RestaurantAccount` to decide how much held-back money can be released. The rule is far from its data, and the account must expose internals. Fix with *Move Method*: put the calculation on `RestaurantAccount` and let the service ask. Then tighten the account's setters, since outsiders no longer need them. The exception is code whose job is to combine many objects, such as a report query.
 ::q intermediate
 What's the difference between shotgun surgery and divergent change?
 ::a
-They're mirror images. **Shotgun surgery**: one change requires edits in many classes (GSTIN validation copied into seven places). Fix by consolidating the logic into one place. **Divergent change**: one class changes for many unrelated reasons (a processor that changes for tax rules, email templates and database schema). Fix by splitting the class by reason to change. Together they describe misplaced responsibility in both directions.
+They're mirror images. **Shotgun surgery**: one change requires edits in many classes (GSTIN validation copied into seven places). Fix by consolidating the logic into one place. **Divergent change**: one class changes for many unrelated reasons (a processor that changes for offer rules, receipt templates and database schema). Fix by splitting the class by reason to change. Together they describe misplaced responsibility in both directions.
 ::q advanced
 Explain Fowler's technical debt quadrant and how you'd use it with a product owner.
 ::a
@@ -1174,9 +1265,9 @@ A: A surface indication that usually corresponds to a deeper design problem. A h
 Q: Feature envy — fix?
 A: Move Method: put the logic on the class whose data it uses.
 Q: Data clumps — fix?
-A: Extract Class / Introduce Parameter Object (e.g. ChainageRange for fromKm, fromM, toKm, toM, side).
+A: Extract Class / Introduce Parameter Object (e.g. DeliveryTrip for pickupLat, pickupLng, dropLat, dropLng, roadMetres).
 Q: Primitive obsession — fix?
-A: Replace Primitive with Object: value objects like Gstin, Money, Chainage that validate themselves.
+A: Replace Primitive with Object: value objects like Gstin, Money, Distance that validate themselves.
 Q: Shotgun surgery vs divergent change?
 A: Shotgun: one change, many classes (consolidate). Divergent: one class, many reasons to change (split).
 Q: Message chain vs middle man?
@@ -1209,12 +1300,12 @@ GSTIN validation is copied into seven classes, and the format is about to change
 - [ ] Refused bequest; Replace Inheritance with Delegation.
 > One change would need seven edits. Consolidating the knowledge into one type removes the scatter.
 ::q single
-A "preview bill" button reduces the contractor's outstanding advance each time it's clicked. Which smell most likely caused this?
+Every time a customer opens the checkout screen, their wallet balance drops a little, even though they haven't paid. Which smell most likely caused this?
 - [ ] Long parameter list
 - [x] Temporary field — mutable state on the service that's only meaningful for one calculation
 - [ ] Middle man
 - [ ] Speculative generality
-> The advance balance was a field mutated as a side effect. Passing it as an explicit input makes the calculation repeatable.
+> The wallet balance was a field mutated as a side effect of calculating the bill. Passing it as an explicit input makes the calculation repeatable; debiting happens once, after payment.
 ::q multi
 Which are signs that you should *not* refactor a smelly module right now? (Select all that apply.)
 - [x] It hasn't changed in three years and has no incidents.
@@ -1237,7 +1328,7 @@ How should you prioritise technical-debt items?
 - [ ] Always fix the oldest debt first.
 > Interest is paid where code changes or risk materialises. That's where repayment buys the most.
 ::q single
-A teammate's refactoring PR also changes how retention is rounded. What's the best review comment?
+A teammate's refactoring PR also changes how the membership discount is rounded. What's the best review comment?
 - [ ] Approve; it's all improvement.
 - [x] Split it: one PR for the behaviour-preserving refactoring, another for the rounding change with its own tests.
 - [ ] Reject all refactoring PRs.

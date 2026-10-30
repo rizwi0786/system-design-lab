@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 65
 prerequisites: [m01-interfaces-abstract, m03-dependency-injection, m04-dip]
-related: [m06-facade, m06-decorator, m06-proxy, m06-bridge, m02-hexagonal, m06-pattern-comparison]
+related: [m06-facade, m06-decorator, m06-proxy, m02-hexagonal, m06-pattern-comparison]
 tags: [structural, gof, integration, third-party, legacy, soap]
 patterns: [Adapter]
 summary: Wrap a third-party SDK or legacy service behind an interface your application owns, so the rest of your code never sees the vendor's formats, error codes or quirks, and switching vendors means writing one new class.
@@ -22,7 +22,7 @@ references:
     url: https://learn.microsoft.com/dotnet/standard/asynchronous-programming-patterns/interop-with-other-asynchronous-patterns-and-types
 ---
 
-Every real application talks to code it doesn't control: an SMS provider's SDK, a payment gateway, a government SOAP service written in 2009, a weighbridge driver that speaks over a serial port. Each one has its own names, units, date formats and error codes. The Adapter pattern keeps all of that at the edge of your system, so the code in the middle stays clean and stays yours.
+Every real application talks to code it doesn't control: an SMS provider's SDK, a payment gateway, a courier partner's SOAP service written in 2009, a parcel scale at the warehouse packing desk that speaks over a serial port. Each one has its own names, units, date formats and error codes. The Adapter pattern keeps all of that at the edge of your system, so the code in the middle stays clean and stays yours.
 
 ## Learning objectives
 
@@ -71,7 +71,7 @@ The *Design Patterns* book states Adapter's intent as: "Convert the interface of
 In modern business systems, the problem shows up as **integration**:
 
 1. **Third-party SDKs** (SMS, email, payments, maps, KYC) use their own types, units and errors. If your code calls them directly in 20 places, the vendor's model leaks into your domain. Switching vendors becomes a project instead of a task.
-2. **Legacy systems** (SOAP services, old DLLs, mainframe gateways) use dated conventions: dates as `"31/03/2027"` strings, yes/no as `"Y"`/`"N"`, amounts in lakhs, error codes in a `RetCode` field instead of exceptions.
+2. **Legacy systems** (SOAP services, old DLLs, mainframe gateways) use dated conventions: dates as `"31/03/2027"` strings, yes/no as `"Y"`/`"N"`, weights in grams sent as text, error codes in a `RetCode` field instead of exceptions.
 3. **Mismatched styles**: callback- or event-based APIs where your code wants `async`/`await`, synchronous APIs where you need asynchronous ones, or the reverse.
 
 Without an adapter, translation code spreads everywhere: `amount * 100` to get paise in one place, `amount * 100m` in another, and a forgotten one that charges customers 1 % of the price.
@@ -84,7 +84,7 @@ An adapter is a translator. For each call, it may translate:
 |---|---|
 | **Names and shape** | `SendAsync(SmsMessage)` → `SubmitAsync(KiteMessage)` |
 | **Data formats** | `+919876543210` → `919876543210`; `DateOnly` ↔ `"31/03/2027"` |
-| **Units** | ₹1,499.50 → 149950 paise; ₹ lakhs → ₹ |
+| **Units** | ₹1,499.50 → 149950 paise; `"1250"` grams → 1.25 kg |
 | **Errors** | vendor code `"101"` → permanent failure; `"503"` → retryable exception; SOAP fault → domain exception |
 | **Style** | events and callbacks → `Task`; sync → async |
 | **Missing features** | the vendor has no idempotency key, so the adapter maps your order id to its merchant reference |
@@ -142,10 +142,10 @@ Its only real advantages are slightly less code and the ability to override the 
 
 | Participant | Role | In our example |
 |---|---|---|
-| **Target** | The interface the client expects. You own it and design it for your domain | `ISmsSender`, `ISanctionLookup` |
+| **Target** | The interface the client expects. You own it and design it for your domain | `ISmsSender`, `IShipmentLookup` |
 | **Client** | Code that uses the target | `OtpService`, an endpoint |
 | **Adaptee** | Existing class with a useful but incompatible interface. You can't (or shouldn't) change it | `KiteClient` SDK, the generated SOAP proxy |
-| **Adapter** | Implements the target, delegates to the adaptee, translates both ways | `KiteSmsAdapter`, `LegacyPmsSanctionLookup` |
+| **Adapter** | Implements the target, delegates to the adaptee, translates both ways | `KiteSmsAdapter`, `LegacyCourierShipmentLookup` |
 
 A key design rule: **the target interface is shaped by your needs, not the vendor's.** If `ISmsSender` has a `KiteMessage` parameter, you haven't adapted anything. You've just renamed the SDK.
 
@@ -162,6 +162,7 @@ A key design rule: **the target interface is shaped by your needs, not the vendo
 - **The vendor's interface already fits.** If an official SDK already exposes an interface close to what you need (many Azure SDK clients are mockable and well designed), a wrapper that just forwards every call adds a layer with nothing in it. Wrap when there is translation to do or a real chance of switching.
 - **One call site, one vendor, no tests needed.** A small internal tool that calls one API once can call it directly. Add the adapter when the second call site or the second vendor appears.
 - **You're building a huge "universal" interface.** If the target interface tries to expose every feature of every possible vendor, it becomes a leaky lowest common denominator. Keep the target small and specific to your use cases.
+- **The platform already gives you the seam.** Many teams still write `IClock` / `IDateTimeProvider` adapters over `DateTime.UtcNow`. Since .NET 8 the BCL ships `TimeProvider`, an abstract class you can inject and replace in tests with `FakeTimeProvider` (package `Microsoft.Extensions.TimeProvider.Testing`). ASP.NET Core itself made this move: its own clock interface, `ISystemClock` in the authentication stack, was marked obsolete in .NET 8 in favour of `TimeProvider`. Likewise, `ILogger<T>`, `IConfiguration`, `IHttpClientFactory` and `IDistributedCache` are already abstractions you own the use of; wrapping them in your own `IMyLogger` adds a layer and no translation.
 
 ### Trade-offs
 
@@ -238,14 +239,14 @@ public async Task<IResult> RequestOtp(string mobile, KiteClient kite)
     var code = Random.Shared.Next(100000, 999999).ToString();
     var resp = await kite.SubmitAsync(new KiteMessage
     {
-        To = "91" + mobile, Body = $"Your OTP is {code}", SenderId = "INFRAO", DltTemplateId = "1107169..."
+        To = "91" + mobile, Body = $"Your OTP is {code}", SenderId = "SHOPIN", DltTemplateId = "1107169..."
     });
     if (resp.Status != "0") return Results.Problem(resp.Error);
     return Results.Ok();
 }
 ```
 
-Now imagine the same `KiteMessage` construction copied into the password-reset flow, the site-alert flow and the invoice-reminder flow. Each copy formats the number slightly differently, one forgets the DLT id, and every endpoint knows Kite's error codes.
+Now imagine the same `KiteMessage`-building code copied into the password-reset flow, the delivery-update flow and the invoice-reminder flow. Each copy formats the number slightly differently, one forgets the DLT id, and every endpoint knows Kite's error codes.
 
 ### Step 2 — define the target in your language
 
@@ -262,20 +263,20 @@ Move every Kite-specific detail into `KiteSmsAdapter`: number formatting, sender
 ## Production-style C# implementation
 
 ```text
-Infra.Api/
+Shop.Api/
   Program.cs
   Notifications/Sms.cs                     # target interface + domain types
   Notifications/Vendors/KiteSdk.cs         # simulated third-party SDK (you can't edit this)
   Notifications/KiteSmsAdapter.cs          # adapter
   Notifications/OtpService.cs              # client
-  Legacy/PmsServiceReference.cs            # simulated svcutil-generated SOAP proxy
-  Legacy/SanctionLookup.cs                 # target + adapter for the legacy SOAP service
+  Legacy/CourierServiceReference.cs        # simulated svcutil-generated SOAP proxy
+  Legacy/ShipmentLookup.cs                 # target + adapter for the courier's legacy SOAP service
 ```
 
 ```csharp file=Notifications/Sms.cs
 using System.Text.RegularExpressions;
 
-namespace Infra.Notifications;
+namespace Shop.Notifications;
 
 /// <summary>Value object: an Indian mobile number in E.164 form (+91 followed by 10 digits starting 6–9).</summary>
 public sealed partial record PhoneNumber
@@ -332,7 +333,7 @@ public sealed class KiteMessage
 {
     public string To { get; set; } = "";          // "919876543210": country code, no plus sign
     public string Body { get; set; } = "";
-    public string SenderId { get; set; } = "";     // 6-character header, e.g. "INFRAO"
+    public string SenderId { get; set; } = "";     // 6-character header, e.g. "SHOPIN"
     public string DltTemplateId { get; set; } = "";
 }
 
@@ -358,12 +359,12 @@ public class KiteClient(string apiKey)
 using KiteSms.Sdk;
 using Microsoft.Extensions.Options;
 
-namespace Infra.Notifications;
+namespace Shop.Notifications;
 
 public sealed class KiteOptions
 {
     public string ApiKey { get; set; } = "";
-    public string SenderId { get; set; } = "INFRAO";
+    public string SenderId { get; set; } = "SHOPIN";
 }
 
 /// <summary>Object adapter: implements our ISmsSender and delegates to the Kite SDK, translating
@@ -415,7 +416,7 @@ public sealed class KiteSmsAdapter(KiteClient kite, IOptions<KiteOptions> option
 ```csharp file=Notifications/OtpService.cs
 using System.Security.Cryptography;
 
-namespace Infra.Notifications;
+namespace Shop.Notifications;
 
 /// <summary>Client. Knows about OTPs and templates; knows nothing about Kite.</summary>
 public sealed class OtpService(ISmsSender sms, ILogger<OtpService> logger)
@@ -434,113 +435,114 @@ public sealed class OtpService(ISmsSender sms, ILogger<OtpService> logger)
 }
 ```
 
-```csharp file=Legacy/PmsServiceReference.cs
-// Simulates the proxy that `dotnet-svcutil` generates from a legacy SOAP WSDL.
+```csharp file=Legacy/CourierServiceReference.cs
+// Simulates the proxy that `dotnet-svcutil` generates from a courier partner's legacy SOAP WSDL.
 // Generated code is regenerated, not edited, so it is an adaptee too.
-namespace LegacyPms.ServiceReference;
+namespace LegacyCourier.ServiceReference;
 
-public partial class GetSanctionStatusRequest
+public partial class TrackConsignmentRequest
 {
-    public string ProjCode { get; set; } = "";
+    public string AwbNo { get; set; } = "";              // air waybill number printed on the shipping label
     public string UserId { get; set; } = "";
     public string Pwd { get; set; } = "";
 }
 
-public partial class GetSanctionStatusResponse
+public partial class TrackConsignmentResponse
 {
-    public string RetCode { get; set; } = "";            // "000" ok, "404" unknown project, others: errors
+    public string RetCode { get; set; } = "";            // "000" ok, "404" unknown AWB, others: errors
     public string RetMsg { get; set; } = "";
-    public string SanctionAmtLakhs { get; set; } = "";   // e.g. "1245.50" (lakhs of rupees)
-    public string SanctionDt { get; set; } = "";         // "dd/MM/yyyy"
-    public string StatusFlg { get; set; } = "";          // "S" sanctioned, "P" pending, "R" rejected
+    public string WeightGms { get; set; } = "";          // e.g. "1250" (grams, as text)
+    public string BookedDt { get; set; } = "";           // "dd/MM/yyyy"
+    public string StatusFlg { get; set; } = "";          // "B" booked, "T" in transit, "D" delivered, "R" returned to seller
 }
 
-public interface IPmsServiceChannel
+public interface ICourierServiceChannel
 {
-    Task<GetSanctionStatusResponse> GetSanctionStatusAsync(GetSanctionStatusRequest request);
+    Task<TrackConsignmentResponse> TrackConsignmentAsync(TrackConsignmentRequest request);
 }
 
 /// <summary>In-memory stand-in for the real SOAP endpoint, so the sample runs anywhere.</summary>
-public sealed class FakePmsChannel : IPmsServiceChannel
+public sealed class FakeCourierChannel : ICourierServiceChannel
 {
-    public Task<GetSanctionStatusResponse> GetSanctionStatusAsync(GetSanctionStatusRequest request) =>
-        Task.FromResult(request.ProjCode == "PMGSY-UP-0042"
-            ? new GetSanctionStatusResponse { RetCode = "000", SanctionAmtLakhs = "1245.50", SanctionDt = "14/08/2025", StatusFlg = "S" }
-            : new GetSanctionStatusResponse { RetCode = "404", RetMsg = "PROJECT NOT FOUND" });
+    public Task<TrackConsignmentResponse> TrackConsignmentAsync(TrackConsignmentRequest request) =>
+        Task.FromResult(request.AwbNo == "EK123456789IN"
+            ? new TrackConsignmentResponse { RetCode = "000", WeightGms = "1250", BookedDt = "14/08/2026", StatusFlg = "T" }
+            : new TrackConsignmentResponse { RetCode = "404", RetMsg = "AWB NOT FOUND" });
 }
 ```
 
-```csharp file=Legacy/SanctionLookup.cs
+```csharp file=Legacy/ShipmentLookup.cs
 using System.Globalization;
-using LegacyPms.ServiceReference;
+using LegacyCourier.ServiceReference;
 using Microsoft.Extensions.Options;
 
-namespace Infra.Legacy;
+namespace Shop.Legacy;
 
-public enum SanctionStatus { Pending, Sanctioned, Rejected }
+public enum ShipmentStatus { Booked, InTransit, Delivered, ReturnedToSeller }
 
-/// <summary>Domain model: rupees as decimal, real dates, a real enum.</summary>
-public sealed record Sanction(string ProjectCode, decimal AmountRupees, DateOnly SanctionedOn, SanctionStatus Status);
+/// <summary>Domain model: kilograms as decimal, real dates, a real enum.</summary>
+public sealed record Shipment(string AwbNumber, decimal WeightKg, DateOnly BookedOn, ShipmentStatus Status);
 
 public sealed class LegacySystemException(string message) : Exception(message);
 
 /// <summary>Target interface.</summary>
-public interface ISanctionLookup
+public interface IShipmentLookup
 {
-    Task<Sanction?> FindAsync(string projectCode, CancellationToken ct);
+    Task<Shipment?> FindAsync(string awbNumber, CancellationToken ct);
 }
 
-public sealed class PmsOptions
+public sealed class CourierOptions
 {
     public string UserId { get; set; } = "";
     public string Password { get; set; } = "";
 }
 
-/// <summary>Adapter over the generated SOAP proxy. Converts lakhs to rupees, string dates to DateOnly,
+/// <summary>Adapter over the generated SOAP proxy. Converts grams to kilograms, string dates to DateOnly,
 /// status flags to an enum, and return codes to null or exceptions. Credentials stay here too.</summary>
-public sealed class LegacyPmsSanctionLookup(IPmsServiceChannel channel, IOptions<PmsOptions> options) : ISanctionLookup
+public sealed class LegacyCourierShipmentLookup(ICourierServiceChannel channel, IOptions<CourierOptions> options) : IShipmentLookup
 {
-    private const decimal RupeesPerLakh = 100_000m;
+    private const decimal GramsPerKg = 1000m;
 
-    public async Task<Sanction?> FindAsync(string projectCode, CancellationToken ct)
+    public async Task<Shipment?> FindAsync(string awbNumber, CancellationToken ct)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(projectCode);
-        var request = new GetSanctionStatusRequest
+        ArgumentException.ThrowIfNullOrWhiteSpace(awbNumber);
+        var request = new TrackConsignmentRequest
         {
-            ProjCode = projectCode.Trim().ToUpperInvariant(),
+            AwbNo = awbNumber.Trim().ToUpperInvariant(),
             UserId = options.Value.UserId,
             Pwd = options.Value.Password,
         };
 
-        var response = await channel.GetSanctionStatusAsync(request).WaitAsync(ct);
+        var response = await channel.TrackConsignmentAsync(request).WaitAsync(ct);
 
         return response.RetCode switch
         {
-            "000" => Map(request.ProjCode, response),
+            "000" => Map(request.AwbNo, response),
             "404" => null,
-            _ => throw new LegacySystemException($"PMS returned {response.RetCode}: {response.RetMsg}"),
+            _ => throw new LegacySystemException($"Courier service returned {response.RetCode}: {response.RetMsg}"),
         };
     }
 
-    private static Sanction Map(string code, GetSanctionStatusResponse r) => new(
-        code,
-        decimal.Parse(r.SanctionAmtLakhs, NumberStyles.Number, CultureInfo.InvariantCulture) * RupeesPerLakh,
-        DateOnly.ParseExact(r.SanctionDt, "dd/MM/yyyy", CultureInfo.InvariantCulture),
+    private static Shipment Map(string awb, TrackConsignmentResponse r) => new(
+        awb,
+        decimal.Parse(r.WeightGms, NumberStyles.Integer, CultureInfo.InvariantCulture) / GramsPerKg,
+        DateOnly.ParseExact(r.BookedDt, "dd/MM/yyyy", CultureInfo.InvariantCulture),
         r.StatusFlg switch
         {
-            "S" => SanctionStatus.Sanctioned,
-            "P" => SanctionStatus.Pending,
-            "R" => SanctionStatus.Rejected,
-            var other => throw new LegacySystemException($"Unknown PMS status flag '{other}'."),
+            "B" => ShipmentStatus.Booked,
+            "T" => ShipmentStatus.InTransit,
+            "D" => ShipmentStatus.Delivered,
+            "R" => ShipmentStatus.ReturnedToSeller,
+            var other => throw new LegacySystemException($"Unknown courier status flag '{other}'."),
         });
 }
 ```
 
 ```csharp file=Program.cs
-using Infra.Legacy;
-using Infra.Notifications;
+using Shop.Legacy;
+using Shop.Notifications;
 using KiteSms.Sdk;
-using LegacyPms.ServiceReference;
+using LegacyCourier.ServiceReference;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -557,9 +559,9 @@ else
 builder.Services.AddScoped<OtpService>();
 
 // Legacy SOAP: the channel is the adaptee; the lookup is the adapter.
-builder.Services.Configure<PmsOptions>(builder.Configuration.GetSection("Pms"));
-builder.Services.AddSingleton<IPmsServiceChannel, FakePmsChannel>();
-builder.Services.AddScoped<ISanctionLookup, LegacyPmsSanctionLookup>();
+builder.Services.Configure<CourierOptions>(builder.Configuration.GetSection("Courier"));
+builder.Services.AddSingleton<ICourierServiceChannel, FakeCourierChannel>();
+builder.Services.AddScoped<IShipmentLookup, LegacyCourierShipmentLookup>();
 
 var app = builder.Build();
 
@@ -573,17 +575,19 @@ app.MapPost("/otp", async (string mobile, OtpService otp, CancellationToken ct) 
     catch (SmsTransientException) { return Results.Problem("SMS provider unavailable, try again shortly.", statusCode: 503); }
 });
 
-app.MapGet("/projects/{code}/sanction", async (string code, ISanctionLookup lookup, CancellationToken ct) =>
-    await lookup.FindAsync(code, ct) is { } s ? Results.Ok(s) : Results.NotFound());
+app.MapGet("/shipments/{awb}", async (string awb, IShipmentLookup lookup, CancellationToken ct) =>
+    await lookup.FindAsync(awb, ct) is { } s ? Results.Ok(s) : Results.NotFound());
 
 app.Run();
 ```
 
 ### Design notes
 
-- **Credentials belong in the adapter**, not the client. `OtpService` doesn't know an API key exists, and the SOAP user id and password never leave `LegacyPmsSanctionLookup`.
+- **Credentials belong in the adapter**, not the client. `OtpService` doesn't know an API key exists, and the SOAP user id and password never leave `LegacyCourierShipmentLookup`.
 - **Unknown codes are errors, not silent successes.** Both adapters end their `switch` with an exception for unexpected values. Vendors add codes over time, and treating `"104"` as success is how money goes missing.
-- **`WaitAsync(ct)`** lets the adapter honour cancellation even when the adaptee has no token parameter. It stops *waiting*. It doesn't stop the vendor's work, which is the best you can do with such an API.
+- **`WaitAsync(ct)`** lets the adapter honour cancellation even when the adaptee has no token parameter. It stops *waiting*. It doesn't stop the vendor's work, which is the best you can do with such an API. It is not a timeout either: set the real one on the transport (the WCF binding's `SendTimeout`, or `HttpClient.Timeout` / a resilience handler for HTTP SDKs), otherwise a hung legacy call holds a connection open far longer than your users will wait.
+- **Real SOAP in .NET 10.** The generated proxy comes from `dotnet-svcutil` and runs on the `System.ServiceModel.Http` client packages, which are supported on modern .NET. Treat the generated code exactly like a vendor SDK: never edit it, regenerate it when the WSDL changes, and keep it inside the integration project behind the adapter.
+- **Log at the boundary.** The adapter is the one place that sees both the vendor's raw status and your domain result, so it is the right place for a debug log line and a metric tagged with the vendor name. When a vendor quietly changes behaviour, that metric is how you find out.
 - **Adapters and resilience compose.** Because the adapter turns vendor errors into `SmsTransientException`, a retry or circuit-breaker [decorator](#/lesson/m06-decorator) around `ISmsSender` can work without knowing about Kite.
 
 ## Bad design vs good design
@@ -668,8 +672,8 @@ public static class Program
     {
         ISmsSender a = new GatewayObjectAdapter(new OldSmsGateway());
         ISmsSender b = new GatewayClassAdapter();
-        await a.SendAsync("+919876543210", "Site inspection at 10:00");
-        await b.SendAsync("+919876543210", "Site inspection at 10:00");
+        await a.SendAsync("+919876543210", "Your parcel is out for delivery");
+        await b.SendAsync("+919876543210", "Your parcel is out for delivery");
 
         var leaky = new GatewayClassAdapter();
         leaky.Send("98765", "bypasses the adapter entirely");   // compiles: vendor API leaks through
@@ -683,33 +687,34 @@ Both adapters produce the same result through `ISmsSender`. The difference shows
 
 ## Exercises
 
-:::exercise id=m06-adapter-ex1 difficulty=beginner kind=code title="Adapt a legacy weighbridge driver"
-Trucks carrying aggregate into a batching plant are weighed on a weighbridge. The vendor's driver class returns raw text frames from a serial port, such as `ST,GS,+0024570kg`. Your billing code wants `IWeighbridge.Read()` returning tonnes. Write `WeighbridgeAdapter`.
+:::exercise id=m06-adapter-ex1 difficulty=beginner kind=code title="Adapt a legacy parcel-scale driver"
+In an e-commerce warehouse, every packed parcel is put on a weighing scale before the shipping label is printed, because the courier charges by weight slab. The scale vendor's driver class returns raw text frames from a serial port, such as `ST,GS,+0002450g`. Your shipping-charge code wants `IParcelScale.Read()` returning kilograms. Write `ParcelScaleAdapter`.
 ::requirements
-- Frame format: `<stability>,<mode>,<sign><7 digits>kg`. Stability `ST` means stable, `US` means unstable. Mode is `GS` (gross) or `NT` (net); report it as given.
-- Convert kilograms to tonnes (`24570 kg` → `24.570 t`).
+- Frame format: `<stability>,<mode>,<sign><7 digits>g`. Stability `ST` means stable, `US` means unstable. Mode is `GS` (gross, box included) or `NT` (net, box weight tared off); report it as given.
+- Convert grams to kilograms (`2450 g` → `2.450 kg`).
 - The frame `OL` means overload: throw `ScaleOverloadException`.
 - Any other malformed frame throws `FormatException`.
 - Don't change `LegacyScaleDriver`.
 ::acceptance
-- `ST,GS,+0024570kg` → `24.57` t, stable, gross.
-- `US,NT,+0001250kg` → `1.25` t, not stable, net.
+- `ST,GS,+0002450g` → `2.45` kg, stable, gross.
+- `US,NT,+0000125g` → `0.125` kg, not stable, net.
+- A frame in the wrong unit (`+0002450kg`, `+0002450lb`) → `FormatException`.
 - `OL` → `ScaleOverloadException`.
 - `garbage` → `FormatException`.
 ::hint
-The adapter implements `IWeighbridge` and holds a `LegacyScaleDriver`. Every `Read()` calls `ReadFrame()` once and translates.
+The adapter implements `IParcelScale` and holds a `LegacyScaleDriver`. Every `Read()` calls `ReadFrame()` once and translates.
 ::hint
 Handle `OL` first, then `Split(',')`. You expect exactly 3 parts.
 ::hint
-For the weight part, check it ends with `kg`, strip it, and parse with `int.Parse(..., NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture)`. Then divide by `1000m`.
+For the weight part, check it ends with `g`, strip that one character, and parse with `int.Parse(..., NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture)`. Then divide by `1000m`.
 ::hint
 ```text
 if frame == "OL" -> throw ScaleOverloadException
-parts = frame.Split(',') ; require 3 parts, parts[0] in {ST, US}, parts[1] in {GS, NT}, parts[2] ends with "kg"
-kg = int.Parse(parts[2][..^2]) ; return new WeighingResult(kg / 1000m, parts[0] == "ST", parts[1] == "NT")
+parts = frame.Split(',') ; require 3 parts, parts[0] in {ST, US}, parts[1] in {GS, NT}, parts[2] ends with "g"
+grams = int.Parse(parts[2][..^1]) ; return new WeighingResult(grams / 1000m, parts[0] == "ST", parts[1] == "NT")
 ```
 ::starter
-```csharp file=Weighbridge.cs
+```csharp file=ParcelScale.cs
 using System;
 using System.Globalization;
 
@@ -721,40 +726,40 @@ public sealed class LegacyScaleDriver
     public string ReadFrame() => _serialPort();
 }
 
-// ----- Target: what our billing code wants -----
-public sealed record WeighingResult(decimal Tonnes, bool IsStable, bool IsNet);
+// ----- Target: what our shipping-charge code wants -----
+public sealed record WeighingResult(decimal Kilograms, bool IsStable, bool IsNet);
 
-public interface IWeighbridge
+public interface IParcelScale
 {
     WeighingResult Read();
 }
 
 public sealed class ScaleOverloadException : Exception
 {
-    public ScaleOverloadException() : base("Weighbridge overload.") { }
+    public ScaleOverloadException() : base("Scale overload.") { }
 }
 
 // ----- Adapter -----
-public sealed class WeighbridgeAdapter : IWeighbridge
+public sealed class ParcelScaleAdapter : IParcelScale
 {
-    public WeighbridgeAdapter(LegacyScaleDriver driver) => throw new NotImplementedException();
+    public ParcelScaleAdapter(LegacyScaleDriver driver) => throw new NotImplementedException();
     public WeighingResult Read() => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=WeighbridgeTests.cs
+```csharp file=ParcelScaleTests.cs
 using System;
 using Xunit;
 
-public class WeighbridgeTests
+public class ParcelScaleTests
 {
-    private static IWeighbridge With(string frame) => new WeighbridgeAdapter(new LegacyScaleDriver(() => frame));
+    private static IParcelScale With(string frame) => new ParcelScaleAdapter(new LegacyScaleDriver(() => frame));
 
     [Fact]
     public void Stable_gross_reading()
     {
-        var r = With("ST,GS,+0024570kg").Read();
-        Assert.Equal(24.57m, r.Tonnes);
+        var r = With("ST,GS,+0002450g").Read();
+        Assert.Equal(2.45m, r.Kilograms);
         Assert.True(r.IsStable);
         Assert.False(r.IsNet);
     }
@@ -762,8 +767,8 @@ public class WeighbridgeTests
     [Fact]
     public void Unstable_net_reading()
     {
-        var r = With("US,NT,+0001250kg").Read();
-        Assert.Equal(1.25m, r.Tonnes);
+        var r = With("US,NT,+0000125g").Read();
+        Assert.Equal(0.125m, r.Kilograms);
         Assert.False(r.IsStable);
         Assert.True(r.IsNet);
     }
@@ -774,25 +779,26 @@ public class WeighbridgeTests
 
     [Theory]
     [InlineData("garbage")]
-    [InlineData("ST,GS,+0024570lb")]
-    [InlineData("XX,GS,+0024570kg")]
+    [InlineData("ST,GS,+0002450lb")]
+    [InlineData("XX,GS,+0002450g")]
     [InlineData("ST,GS")]
+    [InlineData("ST,GS,+0002450kg")]
     public void Malformed_frames_throw_format_exception(string frame) =>
         Assert.Throws<FormatException>(() => With(frame).Read());
 
     [Fact]
     public void Each_read_asks_the_driver_again()
     {
-        var frames = new[] { "ST,GS,+0010000kg", "ST,GS,+0020000kg" };
+        var frames = new[] { "ST,GS,+0010000g", "ST,GS,+0020000g" };
         var i = 0;
-        var adapter = new WeighbridgeAdapter(new LegacyScaleDriver(() => frames[i++]));
-        Assert.Equal(10m, adapter.Read().Tonnes);
-        Assert.Equal(20m, adapter.Read().Tonnes);
+        var adapter = new ParcelScaleAdapter(new LegacyScaleDriver(() => frames[i++]));
+        Assert.Equal(10m, adapter.Read().Kilograms);
+        Assert.Equal(20m, adapter.Read().Kilograms);
     }
 }
 ```
 ::solution
-```csharp file=Weighbridge.cs
+```csharp file=ParcelScale.cs
 using System;
 using System.Globalization;
 
@@ -803,23 +809,23 @@ public sealed class LegacyScaleDriver
     public string ReadFrame() => _serialPort();
 }
 
-public sealed record WeighingResult(decimal Tonnes, bool IsStable, bool IsNet);
+public sealed record WeighingResult(decimal Kilograms, bool IsStable, bool IsNet);
 
-public interface IWeighbridge
+public interface IParcelScale
 {
     WeighingResult Read();
 }
 
 public sealed class ScaleOverloadException : Exception
 {
-    public ScaleOverloadException() : base("Weighbridge overload.") { }
+    public ScaleOverloadException() : base("Scale overload.") { }
 }
 
-public sealed class WeighbridgeAdapter : IWeighbridge
+public sealed class ParcelScaleAdapter : IParcelScale
 {
     private readonly LegacyScaleDriver _driver;
 
-    public WeighbridgeAdapter(LegacyScaleDriver driver) => _driver = driver ?? throw new ArgumentNullException(nameof(driver));
+    public ParcelScaleAdapter(LegacyScaleDriver driver) => _driver = driver ?? throw new ArgumentNullException(nameof(driver));
 
     public WeighingResult Read()
     {
@@ -831,21 +837,23 @@ public sealed class WeighbridgeAdapter : IWeighbridge
 
         var stable = parts[0] switch { "ST" => true, "US" => false, _ => throw new FormatException($"Bad stability '{parts[0]}'.") };
         var net = parts[1] switch { "NT" => true, "GS" => false, _ => throw new FormatException($"Bad mode '{parts[1]}'.") };
-        if (!parts[2].EndsWith("kg", StringComparison.Ordinal)) throw new FormatException($"Bad unit in '{parts[2]}'.");
+        if (!parts[2].EndsWith('g')) throw new FormatException($"Bad unit in '{parts[2]}'.");
 
-        var kg = int.Parse(parts[2][..^2], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
-        return new WeighingResult(kg / 1000m, stable, net);
+        // A "kg" or "lb" suffix leaves a letter before the "g" (or no "g" at all), so parsing fails: wrong units are rejected, not guessed.
+        var grams = int.Parse(parts[2][..^1], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+        return new WeighingResult(grams / 1000m, stable, net);
     }
 }
 ```
 
-All knowledge of the frame format is now in one class. If the plant replaces the weighbridge with a model that speaks JSON over TCP, you write a second adapter, and the billing code doesn't change.
+All knowledge of the frame format is now in one class. If the warehouse buys a new scale model that speaks JSON over USB, you write a second adapter, and the shipping-charge code doesn't change.
 ::mistakes
-- Using `double` for the weight. Billing by weight needs `decimal`.
+- Using `double` for the weight. Charging by weight slab needs exact `decimal` values: 0.5 kg must not become 0.49999.
 - Parsing with the current culture. On a machine set to a locale with different number formats, parsing can behave differently. Use `CultureInfo.InvariantCulture`.
-- Returning `0 t` for malformed frames. A silent zero bills a truck for nothing.
+- Returning `0 kg` for malformed frames. A silent zero ships the parcel at the cheapest slab, and the courier bills you the difference later.
+- Assuming the unit. A scale switched to kilogram mode by a packer sends `+0000002kg`; reading that as 2 g is an incident waiting to happen.
 ::extensions
-Add `ReadStableAsync(TimeSpan timeout)` that polls until a stable frame arrives. This is a small feature the vendor lacks, added in the adapter because it's about the *device*, not billing.
+Add `ReadStableAsync(TimeSpan timeout)` that polls until a stable frame arrives. This is a small feature the vendor lacks, added in the adapter because it's about the *device*, not shipping charges.
 :::
 
 :::exercise id=m06-adapter-ex2 difficulty=beginner kind=code title="Adapt a payment gateway SDK (rupees, paise and declines)"
@@ -1122,53 +1130,53 @@ A paise bug is a classic integration incident: sending rupees where paise are ex
 Add a second adapter for another gateway, and a `FailoverPaymentGateway : IPaymentGateway` that tries the second only on `GatewayUnavailableException`, never on `Declined`. Explain why retrying a decline at a different gateway is a bad idea.
 :::
 
-:::exercise id=m06-adapter-ex3 difficulty=intermediate kind=code title="Wrap a legacy SOAP contractor registry"
-A state government contractor registry is only available as a SOAP service. `dotnet-svcutil` generated a proxy with string-typed fields. Write `SoapContractorDirectory : IContractorDirectory`, so the rest of your tender module sees a clean `Contractor` record.
+:::exercise id=m06-adapter-ex3 difficulty=intermediate kind=code title="Wrap a legacy SOAP seller master"
+Your marketplace's seller records (shop name, agreement validity, suspension flag, GSTIN) live in the parent company's old seller-master system, which is only available as a SOAP service. `dotnet-svcutil` generated a proxy with string-typed fields. Write `SoapSellerDirectory : ISellerDirectory`, so the rest of your onboarding and payout code sees a clean `Seller` record.
 ::requirements
-- Normalise the input registration number (trim, upper-case) before calling the service.
-- `ResultCode "00"` → map the record. `"04"` → return `null`. Any other code → `RegistryUnavailableException`.
-- A `SoapFaultException` → `RegistryUnavailableException`, with the fault as `InnerException`.
-- Map `ValidUpto` from `dd/MM/yyyy`, `BlacklistedFlag` from `"Y"`/`"N"`, trim `FirmName`, and turn an empty or blank `GstinNo` into `null`.
+- Normalise the input seller code (trim, upper-case) before calling the service.
+- `ResultCode "00"` → map the record. `"04"` → return `null`. Any other code → `SellerMasterUnavailableException`.
+- A `SoapFaultException` → `SellerMasterUnavailableException`, with the fault as `InnerException`.
+- Map `AgreementValidUpto` from `dd/MM/yyyy`, `SuspendedFlag` from `"Y"`/`"N"`, trim `ShopName`, and turn an empty or blank `GstinNo` into `null`.
 - If the token is already cancelled, throw an `OperationCanceledException` without calling the service.
 ::acceptance
-- `" rc-1029 "` is sent to the service as `"RC-1029"`.
+- `" sl-1029 "` is sent to the service as `"SL-1029"`.
 - `31/03/2027` becomes `new DateOnly(2027, 3, 31)`, and `"Y"` becomes `true`.
-- A blank GSTIN becomes `null`, and the firm name has no surrounding spaces.
-- Code `"04"` gives `null`. Code `"99"` and SOAP faults give `RegistryUnavailableException`.
+- A blank GSTIN becomes `null`, and the shop name has no surrounding spaces.
+- Code `"04"` gives `null`. Code `"99"` and SOAP faults give `SellerMasterUnavailableException`.
 ::hint
 Split the work: normalise input → call → check result code → map record. Each step is a few lines.
 ::hint
 Use `DateOnly.ParseExact(value, "dd/MM/yyyy", CultureInfo.InvariantCulture)`. Never use the server's current culture for wire formats.
 ::hint
-Use `ct.ThrowIfCancellationRequested()` first, then `await _soap.GetContractorAsync(regNo).WaitAsync(ct)`, since the legacy proxy has no token parameter.
+Use `ct.ThrowIfCancellationRequested()` first, then `await _soap.GetSellerAsync(code).WaitAsync(ct)`, since the legacy proxy has no token parameter.
 ::hint
 Wrap only the *call* in `try/catch (SoapFaultException ex)`, so mapping bugs aren't disguised as outages.
 ::starter
-```csharp file=ContractorDirectory.cs
+```csharp file=SellerDirectory.cs
 using System;
 using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 
 // ----- "Generated" SOAP proxy types (adaptee; regenerated, never edited) -----
-public sealed class ContractorRecord
+public sealed class SellerRecord
 {
-    public string RegNo { get; set; } = "";
-    public string FirmName { get; set; } = "";
-    public string ValidUpto { get; set; } = "";        // dd/MM/yyyy
-    public string BlacklistedFlag { get; set; } = "N"; // "Y" | "N"
+    public string SellerCode { get; set; } = "";
+    public string ShopName { get; set; } = "";
+    public string AgreementValidUpto { get; set; } = "";        // dd/MM/yyyy
+    public string SuspendedFlag { get; set; } = "N"; // "Y" | "N"
     public string GstinNo { get; set; } = "";          // may be empty
 }
 
-public sealed class GetContractorResponse
+public sealed class GetSellerResponse
 {
     public string ResultCode { get; set; } = "";       // "00" ok, "04" not found, others: error
-    public ContractorRecord? Record { get; set; }
+    public SellerRecord? Record { get; set; }
 }
 
-public interface IContractorRegistrySoap
+public interface ISellerMasterSoap
 {
-    Task<GetContractorResponse> GetContractorAsync(string regNo);
+    Task<GetSellerResponse> GetSellerAsync(string code);
 }
 
 public sealed class SoapFaultException : Exception
@@ -1178,68 +1186,68 @@ public sealed class SoapFaultException : Exception
 }
 
 // ----- Our domain (target) -----
-public sealed record Contractor(string RegistrationNumber, string FirmName, DateOnly ValidUntil, bool IsBlacklisted, string? Gstin);
+public sealed record Seller(string SellerCode, string ShopName, DateOnly AgreementValidUntil, bool IsSuspended, string? Gstin);
 
-public sealed class RegistryUnavailableException : Exception
+public sealed class SellerMasterUnavailableException : Exception
 {
-    public RegistryUnavailableException(string message, Exception? inner = null) : base(message, inner) { }
+    public SellerMasterUnavailableException(string message, Exception? inner = null) : base(message, inner) { }
 }
 
-public interface IContractorDirectory
+public interface ISellerDirectory
 {
-    Task<Contractor?> FindAsync(string registrationNumber, CancellationToken ct = default);
+    Task<Seller?> FindAsync(string sellerCode, CancellationToken ct = default);
 }
 
 // ----- Adapter -----
-public sealed class SoapContractorDirectory : IContractorDirectory
+public sealed class SoapSellerDirectory : ISellerDirectory
 {
-    public SoapContractorDirectory(IContractorRegistrySoap soap) => throw new NotImplementedException();
+    public SoapSellerDirectory(ISellerMasterSoap soap) => throw new NotImplementedException();
 
-    public Task<Contractor?> FindAsync(string registrationNumber, CancellationToken ct = default) =>
+    public Task<Seller?> FindAsync(string sellerCode, CancellationToken ct = default) =>
         throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=ContractorDirectoryTests.cs
+```csharp file=SellerDirectoryTests.cs
 using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-public sealed class FakeRegistry : IContractorRegistrySoap
+public sealed class FakeSellerMaster : ISellerMasterSoap
 {
-    public string? LastRegNo { get; private set; }
+    public string? LastSellerCode { get; private set; }
     public int Calls { get; private set; }
-    public Func<string, GetContractorResponse> Handler { get; set; } = _ => new GetContractorResponse { ResultCode = "04" };
+    public Func<string, GetSellerResponse> Handler { get; set; } = _ => new GetSellerResponse { ResultCode = "04" };
 
-    public Task<GetContractorResponse> GetContractorAsync(string regNo)
+    public Task<GetSellerResponse> GetSellerAsync(string code)
     {
         Calls++;
-        LastRegNo = regNo;
-        return Task.FromResult(Handler(regNo));
+        LastSellerCode = code;
+        return Task.FromResult(Handler(code));
     }
 }
 
-public class ContractorDirectoryTests
+public class SellerDirectoryTests
 {
-    private static GetContractorResponse Ok() => new()
+    private static GetSellerResponse Ok() => new()
     {
         ResultCode = "00",
-        Record = new ContractorRecord { RegNo = "RC-1029", FirmName = "  Sharma Infra Pvt Ltd ", ValidUpto = "31/03/2027", BlacklistedFlag = "Y", GstinNo = "  " },
+        Record = new SellerRecord { SellerCode = "SL-1029", ShopName = "  Sharma Home Decor Pvt Ltd ", AgreementValidUpto = "31/03/2027", SuspendedFlag = "Y", GstinNo = "  " },
     };
 
     [Fact]
     public async Task Maps_a_found_record()
     {
-        var fake = new FakeRegistry { Handler = _ => Ok() };
-        var c = await new SoapContractorDirectory(fake).FindAsync(" rc-1029 ");
-        Assert.Equal("RC-1029", fake.LastRegNo);
+        var fake = new FakeSellerMaster { Handler = _ => Ok() };
+        var c = await new SoapSellerDirectory(fake).FindAsync(" sl-1029 ");
+        Assert.Equal("SL-1029", fake.LastSellerCode);
         Assert.NotNull(c);
-        Assert.Equal("Sharma Infra Pvt Ltd", c!.FirmName);
-        Assert.Equal(new DateOnly(2027, 3, 31), c.ValidUntil);
-        Assert.True(c.IsBlacklisted);
+        Assert.Equal("Sharma Home Decor Pvt Ltd", c!.ShopName);
+        Assert.Equal(new DateOnly(2027, 3, 31), c.AgreementValidUntil);
+        Assert.True(c.IsSuspended);
         Assert.Null(c.Gstin);
-        Assert.Equal("RC-1029", c.RegistrationNumber);
+        Assert.Equal("SL-1029", c.SellerCode);
     }
 
     [Fact]
@@ -1247,67 +1255,67 @@ public class ContractorDirectoryTests
     {
         var ok = Ok();
         ok.Record!.GstinNo = "09ABCDE1234F1Z5";
-        ok.Record.BlacklistedFlag = "N";
-        var c = await new SoapContractorDirectory(new FakeRegistry { Handler = _ => ok }).FindAsync("RC-1029");
+        ok.Record.SuspendedFlag = "N";
+        var c = await new SoapSellerDirectory(new FakeSellerMaster { Handler = _ => ok }).FindAsync("SL-1029");
         Assert.Equal("09ABCDE1234F1Z5", c!.Gstin);
-        Assert.False(c.IsBlacklisted);
+        Assert.False(c.IsSuspended);
     }
 
     [Fact]
     public async Task Not_found_returns_null() =>
-        Assert.Null(await new SoapContractorDirectory(new FakeRegistry()).FindAsync("RC-0000"));
+        Assert.Null(await new SoapSellerDirectory(new FakeSellerMaster()).FindAsync("SL-0000"));
 
     [Fact]
     public async Task Unknown_result_code_is_unavailable()
     {
-        var fake = new FakeRegistry { Handler = _ => new GetContractorResponse { ResultCode = "99" } };
-        await Assert.ThrowsAsync<RegistryUnavailableException>(() => new SoapContractorDirectory(fake).FindAsync("RC-1"));
+        var fake = new FakeSellerMaster { Handler = _ => new GetSellerResponse { ResultCode = "99" } };
+        await Assert.ThrowsAsync<SellerMasterUnavailableException>(() => new SoapSellerDirectory(fake).FindAsync("SL-1"));
     }
 
     [Fact]
     public async Task Soap_fault_is_wrapped()
     {
-        var fake = new FakeRegistry { Handler = _ => throw new SoapFaultException("Server.Busy") };
-        var ex = await Assert.ThrowsAsync<RegistryUnavailableException>(() => new SoapContractorDirectory(fake).FindAsync("RC-1"));
+        var fake = new FakeSellerMaster { Handler = _ => throw new SoapFaultException("Server.Busy") };
+        var ex = await Assert.ThrowsAsync<SellerMasterUnavailableException>(() => new SoapSellerDirectory(fake).FindAsync("SL-1"));
         Assert.IsType<SoapFaultException>(ex.InnerException);
     }
 
     [Fact]
     public async Task Cancelled_token_does_not_call_service()
     {
-        var fake = new FakeRegistry();
+        var fake = new FakeSellerMaster();
         using var cts = new CancellationTokenSource();
         cts.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new SoapContractorDirectory(fake).FindAsync("RC-1", cts.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new SoapSellerDirectory(fake).FindAsync("SL-1", cts.Token));
         Assert.Equal(0, fake.Calls);
     }
 }
 ```
 ::solution
-```csharp file=ContractorDirectory.cs
+```csharp file=SellerDirectory.cs
 using System;
 using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 
-public sealed class ContractorRecord
+public sealed class SellerRecord
 {
-    public string RegNo { get; set; } = "";
-    public string FirmName { get; set; } = "";
-    public string ValidUpto { get; set; } = "";
-    public string BlacklistedFlag { get; set; } = "N";
+    public string SellerCode { get; set; } = "";
+    public string ShopName { get; set; } = "";
+    public string AgreementValidUpto { get; set; } = "";
+    public string SuspendedFlag { get; set; } = "N";
     public string GstinNo { get; set; } = "";
 }
 
-public sealed class GetContractorResponse
+public sealed class GetSellerResponse
 {
     public string ResultCode { get; set; } = "";
-    public ContractorRecord? Record { get; set; }
+    public SellerRecord? Record { get; set; }
 }
 
-public interface IContractorRegistrySoap
+public interface ISellerMasterSoap
 {
-    Task<GetContractorResponse> GetContractorAsync(string regNo);
+    Task<GetSellerResponse> GetSellerAsync(string code);
 }
 
 public sealed class SoapFaultException : Exception
@@ -1316,70 +1324,70 @@ public sealed class SoapFaultException : Exception
     public string FaultCode { get; }
 }
 
-public sealed record Contractor(string RegistrationNumber, string FirmName, DateOnly ValidUntil, bool IsBlacklisted, string? Gstin);
+public sealed record Seller(string SellerCode, string ShopName, DateOnly AgreementValidUntil, bool IsSuspended, string? Gstin);
 
-public sealed class RegistryUnavailableException : Exception
+public sealed class SellerMasterUnavailableException : Exception
 {
-    public RegistryUnavailableException(string message, Exception? inner = null) : base(message, inner) { }
+    public SellerMasterUnavailableException(string message, Exception? inner = null) : base(message, inner) { }
 }
 
-public interface IContractorDirectory
+public interface ISellerDirectory
 {
-    Task<Contractor?> FindAsync(string registrationNumber, CancellationToken ct = default);
+    Task<Seller?> FindAsync(string sellerCode, CancellationToken ct = default);
 }
 
-public sealed class SoapContractorDirectory : IContractorDirectory
+public sealed class SoapSellerDirectory : ISellerDirectory
 {
-    private readonly IContractorRegistrySoap _soap;
+    private readonly ISellerMasterSoap _soap;
 
-    public SoapContractorDirectory(IContractorRegistrySoap soap) => _soap = soap ?? throw new ArgumentNullException(nameof(soap));
+    public SoapSellerDirectory(ISellerMasterSoap soap) => _soap = soap ?? throw new ArgumentNullException(nameof(soap));
 
-    public async Task<Contractor?> FindAsync(string registrationNumber, CancellationToken ct = default)
+    public async Task<Seller?> FindAsync(string sellerCode, CancellationToken ct = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(registrationNumber);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sellerCode);
         ct.ThrowIfCancellationRequested();
-        var regNo = registrationNumber.Trim().ToUpperInvariant();
+        var code = sellerCode.Trim().ToUpperInvariant();
 
-        GetContractorResponse response;
+        GetSellerResponse response;
         try
         {
-            response = await _soap.GetContractorAsync(regNo).WaitAsync(ct);
+            response = await _soap.GetSellerAsync(code).WaitAsync(ct);
         }
         catch (SoapFaultException ex)
         {
-            throw new RegistryUnavailableException($"Contractor registry fault {ex.FaultCode}.", ex);
+            throw new SellerMasterUnavailableException($"Seller master fault {ex.FaultCode}.", ex);
         }
 
         return response.ResultCode switch
         {
-            "00" when response.Record is not null => Map(regNo, response.Record),
+            "00" when response.Record is not null => Map(code, response.Record),
             "04" => null,
-            _ => throw new RegistryUnavailableException($"Contractor registry returned code '{response.ResultCode}'."),
+            _ => throw new SellerMasterUnavailableException($"Seller master returned code '{response.ResultCode}'."),
         };
     }
 
-    private static Contractor Map(string regNo, ContractorRecord r) => new(
-        RegistrationNumber: string.IsNullOrWhiteSpace(r.RegNo) ? regNo : r.RegNo.Trim(),
-        FirmName: r.FirmName.Trim(),
-        ValidUntil: DateOnly.ParseExact(r.ValidUpto.Trim(), "dd/MM/yyyy", CultureInfo.InvariantCulture),
-        IsBlacklisted: r.BlacklistedFlag.Trim().Equals("Y", StringComparison.OrdinalIgnoreCase),
+    private static Seller Map(string code, SellerRecord r) => new(
+        SellerCode: string.IsNullOrWhiteSpace(r.SellerCode) ? code : r.SellerCode.Trim(),
+        ShopName: r.ShopName.Trim(),
+        AgreementValidUntil: DateOnly.ParseExact(r.AgreementValidUpto.Trim(), "dd/MM/yyyy", CultureInfo.InvariantCulture),
+        IsSuspended: r.SuspendedFlag.Trim().Equals("Y", StringComparison.OrdinalIgnoreCase),
         Gstin: string.IsNullOrWhiteSpace(r.GstinNo) ? null : r.GstinNo.Trim());
 }
 ```
 
 Note the `"00" when response.Record is not null` guard. A legacy service that says "OK" but sends no record is treated as an error, not as "not found". Legacy systems do this more often than you'd hope.
 ::alternatives
-If several legacy operations share the same result-code conventions, extract a small `RegistryResponseTranslator` used by multiple adapters. Keep it internal to the integration project.
+If several legacy operations share the same result-code conventions, extract a small `SellerMasterResponseTranslator` used by multiple adapters. Keep it internal to the integration project.
 ::mistakes
-- `DateOnly.Parse(r.ValidUpto)`: on a server whose culture expects month first, `03/04/2027` becomes 4 March instead of 3 April.
-- Treating `"BlacklistedFlag" != "N"` as "blacklisted". An empty flag would blacklist everyone, and a lowercase `"y"` might slip through. Decide on the rule explicitly and test it.
-- Catching every exception as `RegistryUnavailableException`, which hides parsing bugs.
+- `DateOnly.Parse(r.AgreementValidUpto)`: on a server whose culture expects month first, `03/04/2027` becomes 4 March instead of 3 April.
+- Treating `"SuspendedFlag" != "N"` as "suspended". An empty flag would suspend every seller, and a lowercase `"y"` might slip through. Decide on the rule explicitly and test it.
+- Catching every exception as `SellerMasterUnavailableException`, which hides parsing bugs.
 ::extensions
-The registry is slow (a 2-second p95, an estimate from monitoring). Add a caching [decorator](#/lesson/m06-decorator) around `IContractorDirectory` with a 6-hour TTL, without touching the adapter.
+The seller master is slow (a 2-second p95, an estimate from monitoring). Add a caching [decorator](#/lesson/m06-decorator) around `ISellerDirectory`, without touching the adapter. Choose the TTL carefully: shop names can be cached for hours, but a suspension must stop payouts quickly, so either keep the TTL to a few minutes or bypass the cache on the payout path.
 :::
 
 :::exercise id=m06-adapter-ex4 difficulty=intermediate kind=design title="Refactor: untangle a vendor SDK used in 14 places"
-A field-operations app calls the "GeoTrack" vehicle-tracking SDK directly from 14 places: controllers, a background job that computes idle time, a report generator and two Razor pages. Code looks like `var pos = await geoTrack.GetLastFixAsync(imei); var lat = pos.LatE6 / 1e6;`. The company has signed with a second tracking vendor for new vehicles, so both must work side by side, chosen per vehicle. Redesign this.
+A parcel-delivery company's app tracks its delivery vans through the "GeoTrack" vehicle-tracking SDK, called directly from 14 places: controllers, a background job that computes idle time, the customer's "where is my parcel" endpoint, a report generator and two Razor pages. Code looks like `var pos = await geoTrack.GetLastFixAsync(imei); var lat = pos.LatE6 / 1e6;`. The company has signed with a second tracking vendor for new vehicles, so both must work side by side, chosen per vehicle. Redesign this.
 ::acceptance
 - A target interface in the app's own terms, with no vendor types.
 - One adapter per vendor, with the coordinate and unit conversion inside it.
@@ -1418,7 +1426,7 @@ classDiagram
 
 - **Target**: `IVehicleTracker` with `VehiclePosition` in decimal degrees, UTC time and km/h. Units are the app's, not the vendor's.
 - **Adapters**: `GeoTrackAdapter` divides `LatE6` by 1,000,000 and maps the IMEI. `OrbitAdapter` converts knots to km/h and its epoch-millisecond timestamps to `DateTimeOffset`. Each maps vendor errors to `TrackerUnavailableException`, and a vehicle unknown to the vendor to `null`.
-- **Routing**: `VendorRoutingTracker` also implements `IVehicleTracker`. It looks up the vehicle's vendor in `IVehicleRegistry` (cached) and calls the keyed adapter (`AddKeyedSingleton<IVehicleTracker, GeoTrackAdapter>("geotrack")`). Call sites receive the router as their `IVehicleTracker` and never see a vendor choice. Structurally, the router is a Composite/Proxy-style wrapper; the adapters are the Adapter pattern.
+- **Routing**: `VendorRoutingTracker` also implements `IVehicleTracker`. It looks up the vehicle's vendor in `IVehicleRegistry` (cached) and calls the keyed adapter (`AddKeyedSingleton<IVehicleTracker, GeoTrackAdapter>("geotrack")`). Call sites receive the router as their `IVehicleTracker` and never see a vendor choice. Structurally, the router is a routing Proxy (same interface, picks the real implementation per call); the adapters are the Adapter pattern.
 - **Migration**: (1) add the interface and `GeoTrackAdapter`, with tests comparing its output with the old inline math on recorded responses; (2) move call sites in small PRs, background job first since it's best covered by tests; (3) add the router with GeoTrack as the only vendor; (4) add `OrbitAdapter` and flip vehicles in the registry; (5) remove the GeoTrack package reference from every project except the integration project.
 ::mistakes
 - Making the target interface return `GeoTrackPosition`, which recreates the coupling with a new name.
@@ -1427,7 +1435,8 @@ classDiagram
 :::
 
 :::exercise id=m06-adapter-ex5 difficulty=advanced kind=code title="Adapt an event-based legacy scanner to async/await"
-A document-scanning library from 2012 uses events: you call `BeginScan(requestId, documentId)`, and later it raises `ScanCompleted` or `ScanFailed` with the same `requestId`, possibly on another thread. Many requests can be in flight at once. Write `AsyncScannerAdapter : IDocumentScanner` with `Task<string> ScanAsync(documentId, ct)`.
+The warehouse scans signed proof-of-delivery slips and supplier invoices with a document-scanning library from 2012 that uses events:
+ you call `BeginScan(requestId, documentId)`, and later it raises `ScanCompleted` or `ScanFailed` with the same `requestId`, possibly on another thread. Many requests can be in flight at once. Write `AsyncScannerAdapter : IDocumentScanner` with `Task<string> ScanAsync(documentId, ct)`.
 ::requirements
 - Generate a unique request id per call, and complete only on events that carry *that* id.
 - `ScanCompleted` → return the text. `ScanFailed` → throw `ScanFailedException` with the reason.
@@ -1544,8 +1553,8 @@ public class ScannerAdapterTests
         var fake = new FakeScanner();
         var task = new AsyncScannerAdapter(fake).ScanAsync("DOC-1");
         await WaitBegun(fake, 1);
-        fake.Complete("DOC-1", "Measurement book page 14");
-        Assert.Equal("Measurement book page 14", await task.WaitAsync(TimeSpan.FromSeconds(2)));
+        fake.Complete("DOC-1", "Proof of delivery, AWB EK123456789IN");
+        Assert.Equal("Proof of delivery, AWB EK123456789IN", await task.WaitAsync(TimeSpan.FromSeconds(2)));
         Assert.Equal(0, fake.SubscriberCount);
     }
 
@@ -1692,14 +1701,14 @@ Add a per-call timeout (`TimeSpan`) that ends the task with `TimeoutException` a
 
 Adapters are integration code, so test them in three layers.
 
-**1. Unit tests with a fake adaptee.** When the SDK exposes an interface (`ISwiftPayApi`, `IContractorRegistrySoap`), write a small fake that records requests and returns scripted responses, as in exercises 2 and 3. When it exposes only a concrete class, subclass it if it has virtual methods (`KiteClient.SubmitAsync` is `virtual` for this reason), or put a thin interface in front of it. Test both directions of translation:
+**1. Unit tests with a fake adaptee.** When the SDK exposes an interface (`ISwiftPayApi`, `ISellerMasterSoap`), write a small fake that records requests and returns scripted responses, as in exercises 2 and 3. When it exposes only a concrete class, subclass it if it has virtual methods (`KiteClient.SubmitAsync` is `virtual` for this reason), or put a thin interface in front of it. Test both directions of translation:
 
 ```csharp
 [Fact]
 public async Task Kite_503_becomes_transient_exception()
 {
     var kite = new ScriptedKite(new KiteResponse { Status = "503" });
-    var adapter = new KiteSmsAdapter(kite, Options.Create(new KiteOptions { SenderId = "INFRAO" }), NullLogger<KiteSmsAdapter>.Instance);
+    var adapter = new KiteSmsAdapter(kite, Options.Create(new KiteOptions { SenderId = "SHOPIN" }), NullLogger<KiteSmsAdapter>.Instance);
     var msg = new SmsMessage(PhoneNumber.Parse("9876543210"), "Hi", "1107160000000000001");
     await Assert.ThrowsAsync<SmsTransientException>(() => adapter.SendAsync(msg));
     Assert.Equal("919876543210", kite.Last!.To);   // request translation checked too
@@ -1724,9 +1733,15 @@ Client code (`OtpService`, checkout) is tested with fakes of the *target* interf
 
 ## Real-world application
 
-- **.NET itself.** `StreamReader` adapts a byte `Stream` to a text-reading interface. `Task.Factory.FromAsync` and `TaskCompletionSource` adapt older async patterns to tasks. ADO.NET providers such as Npgsql adapt each database's wire protocol to the common `DbConnection`/`DbCommand` interfaces. `ILoggerProvider` implementations for Serilog, NLog or OpenTelemetry adapt those libraries to `Microsoft.Extensions.Logging`.
+- **.NET itself.** Adapters are everywhere in the framework once you look for them:
+  - `StreamReader` and `StreamWriter` adapt a byte `Stream` to a text-reading/-writing interface, translating bytes to characters through an `Encoding`. In System.IO.Pipelines, `PipeReader.Create(stream)` and `pipeReader.AsStream()` adapt in both directions between the stream and pipe models.
+  - `ILoggerProvider` implementations for Serilog, NLog or OpenTelemetry adapt those libraries to `Microsoft.Extensions.Logging`, so application code only ever sees `ILogger<T>`.
+  - `IConfigurationProvider` implementations adapt JSON files, environment variables, command-line arguments, Azure Key Vault or AWS Parameter Store to the one key/value shape of `IConfiguration`. Writing your own provider (for example over a PostgreSQL settings table) is a textbook object adapter.
+  - ADO.NET providers such as Npgsql adapt each database's wire protocol to the common `DbConnection`/`DbCommand` interfaces.
+  - `Task.Factory.FromAsync` and `TaskCompletionSource` adapt older async patterns (APM, EAP) to tasks, as in exercise 5. `IAsyncEnumerable<T>` over a `Channel<T>` adapts push-style callbacks to pull-style `await foreach`.
 - **Hexagonal architecture.** "Ports and adapters" is this pattern at architecture scale: the domain defines ports (target interfaces), and infrastructure provides adapters for databases, queues and HTTP APIs. See [Hexagonal architecture](#/lesson/m02-hexagonal).
 - **Payments and messaging.** Platforms that support several payment gateways or SMS vendors (common in India because of pricing, regional delivery rates and regulatory changes such as DLT) put each vendor behind an adapter and route by cost or health.
+- **Shipping and logistics.** E-commerce sellers usually ship through several courier partners. Each partner has its own booking API, label format, status codes and pincode-serviceability rules; an `ICourierPartner` target with one adapter per courier lets the checkout pick the cheapest serviceable partner without knowing any of them.
 - **Government and enterprise integration.** Many public-sector systems still expose SOAP or fixed-width file interfaces. Teams wrap them in adapters and often add caching and retries around them with decorators.
 - **Front-end and mobile.** Map SDK wrappers let one app switch between map providers. Analytics wrappers send the same event to several analytics tools.
 
@@ -1738,7 +1753,7 @@ Client code (`OtpService`, checkout) is tested with fakes of the *target* interf
 | [Facade](#/lesson/m06-facade) | Defines a *new, simpler* interface over *many* classes | Hide a complex subsystem behind one easy entry point |
 | [Decorator](#/lesson/m06-decorator) | Keeps the *same* interface | Add behaviour (logging, caching, retry) around an object |
 | [Proxy](#/lesson/m06-proxy) | Keeps the *same* interface | Control access: lazy loading, remote calls, permissions, caching |
-| [Bridge](#/lesson/m06-bridge) | Designed up front to separate abstraction from implementation | Let two hierarchies vary independently; Adapter is retrofitted after the fact |
+| Bridge | Designed up front to separate abstraction from implementation | Let two hierarchies vary independently; Adapter is retrofitted after the fact |
 
 A quick test: if the wrapper's interface equals the wrapped object's interface, it's a Decorator or Proxy. If it differs and wraps one thing, it's an Adapter. If it wraps many things to simplify them, it's a Facade. See [Choosing between similar patterns](#/lesson/m06-pattern-comparison).
 
@@ -1801,6 +1816,8 @@ Q: Which .NET type bridges event/callback APIs to async/await?
 A: TaskCompletionSource<T> (with RunContinuationsAsynchronously, correlation ids and unsubscription in finally).
 Q: Quick test for a real adapter boundary?
 A: Could you delete the vendor package from everything except the adapter project and still compile?
+Q: Name three adapters inside .NET itself.
+A: StreamReader/StreamWriter (bytes to text), ILoggerProvider implementations (Serilog/NLog to ILogger), IConfigurationProvider implementations (JSON, env vars, Key Vault to IConfiguration). Also ADO.NET providers and TaskCompletionSource.
 :::
 
 ## Knowledge check
@@ -1855,7 +1872,15 @@ When is adding an adapter around a third-party SDK most likely *not* worth it?
 - [x] A small internal script calls one well-designed SDK method once, with no plans to switch.
 - [ ] You need to unit-test checkout logic without the vendor.
 > Adapters pay off with translation, multiple call sites, vendor changes or testability needs. A one-off call to a clean API doesn't need a layer.
+::q single
+A teammate proposes an `IClock` interface with a `SystemClock` adapter over `DateTime.UtcNow` so delivery-SLA code can be tested. The app targets .NET 10. What is the best advice?
+- [ ] Good idea; every external dependency needs your own adapter.
+- [x] Inject the built-in `TimeProvider` instead and use `FakeTimeProvider` in tests; the platform already provides the seam.
+- [ ] Use ASP.NET Core's `ISystemClock`.
+- [ ] Call `DateTime.Now` and run tests at fixed times.
+> `TimeProvider` (since .NET 8) is the BCL's own abstraction for time and timers. ASP.NET Core's `ISystemClock` is obsolete. An extra adapter adds a layer with no translation in it.
 :::
+
 
 ## Completion criteria
 

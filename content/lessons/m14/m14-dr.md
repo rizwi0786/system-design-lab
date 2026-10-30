@@ -22,7 +22,7 @@ references:
     url: https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/disaster-recovery-options-in-the-cloud.html
 ---
 
-At 11:20 a.m. a support engineer at a construction-management company runs a clean-up script against what he believes is the staging database. It is production. `DELETE FROM site_progress WHERE project_id = 4417` was supposed to have `AND is_test = true`. Eleven months of daily progress entries for a 140 km highway project are gone. The database has two replicas in two availability zones, and both deleted the rows within milliseconds, exactly as designed. High availability did its job perfectly and saved nothing. This lesson is about the other half of reliability: getting data back.
+At 11:20 a.m. a support engineer at a company that sells school-management software runs a clean-up script against what he believes is the staging database. It is production. `DELETE FROM attendance WHERE school_id = 4417` was supposed to have `AND is_test = true`. Eleven months of daily attendance for a school with 2,300 students are gone, the records its teachers need for report cards, exam eligibility and scholarship claims. The database has two replicas in two availability zones, and both deleted the rows within milliseconds, exactly as designed. High availability did its job perfectly and saved nothing. This lesson is about the other half of reliability: getting data back.
 
 ## Learning objectives
 
@@ -120,6 +120,8 @@ To restore to 11:19:00:
 3. Create an empty `recovery.signal` file and start PostgreSQL.
 4. PostgreSQL replays WAL from the base backup's start up to 11:19:00, then stops and opens for writes.
 
+A timestamp is the easiest target to explain, but not the most precise: several transactions can commit in the same second. If you can find the offending transaction with `pg_waldump`, use `recovery_target_lsn` (or `recovery_target_xid`) with `recovery_target_inclusive = false` to stop exactly before it.
+
 You restore to a **new** server, not over production, then copy the deleted rows back (or switch traffic to the restored server if the damage is wide). Restoring alongside keeps the evidence and lets you compare.
 
 **What sets your RPO with PITR?** The archive only receives *completed* segments. On a busy database a segment fills in seconds; on a quiet one it might take an hour. `archive_timeout = 60` forces a segment switch at least every minute, bounding data loss to about a minute plus archive delay. For near-zero RPO, stream WAL continuously (`pg_receivewal`, or the backup tool's streaming mode) or keep a synchronous standby.
@@ -135,7 +137,7 @@ This arithmetic is why restore drills matter: real throughput is often very diff
 
 ### Logical backups still matter
 
-Physical backups restore a whole cluster. `pg_dump -Fc` gives you a portable, per-database archive from which you can restore one table (`pg_restore -t site_progress`), move data to a newer major version, or hand a copy to an auditor. Many teams keep both: physical with PITR for disasters, a nightly logical dump of the critical database for surgical restores and long-term retention.
+Physical backups restore a whole cluster. `pg_dump -Fc` gives you a portable, per-database archive from which you can restore one table (`pg_restore -t attendance`), move data to a newer major version, or hand a copy to an auditor. Many teams keep both: physical with PITR for disasters, a nightly logical dump of the critical database for surgical restores and long-term retention.
 
 ### Restore drills
 
@@ -186,7 +188,7 @@ Managed PostgreSQL (Azure Database for PostgreSQL flexible server, Amazon RDS, G
 
 A database restore alone rarely brings a service back. A DR plan must also cover:
 
-- **Object storage** (documents, drone imagery, invoices): versioning, cross-region replication, immutability policies.
+- **Object storage** (uploaded documents, homework files, invoices): versioning, cross-region replication, immutability policies.
 - **Secrets and keys**: if the key vault is gone, encrypted backups are useless.
 - **Infrastructure as code** to rebuild networks, app servers and DNS.
 - **Message queues and caches**: usually rebuilt, but in-flight messages may be lost; design consumers to be idempotent and replayable.
@@ -231,28 +233,28 @@ sequenceDiagram
     participant Arch as WAL archive
     participant IC as Incident commander
     participant New as Restore server
-    Eng->>PG: DELETE site_progress rows for project 4417 at 11:20:05
+    Eng->>PG: DELETE attendance rows for school 4417 at 11:20:05
     PG->>Arch: archive WAL segment containing the DELETE
     Eng->>IC: report data deleted at about 11:20
-    IC->>IC: declare SEV2 and freeze writes to site_progress
+    IC->>IC: declare SEV2 and freeze writes to attendance
     IC->>New: provision server from latest base backup (Sunday 02:00)
     New->>Arch: restore_command fetches WAL from Sunday to Friday
     New->>New: replay until recovery_target_time 11:19:59
-    New->>New: pause, check rows for project 4417 exist
-    New-->>IC: 61,320 rows recovered as of 11:19:59
+    New->>New: pause, check rows for school 4417 exist
+    New-->>IC: 552,000 rows recovered as of 11:19:59
     IC->>PG: copy rows back with INSERT from restored server
     IC->>IC: verify counts, unfreeze, schedule postmortem
 ```
 
-The `DELETE` is itself recorded in WAL and archived, which is what makes the precise restore possible: replay stops just before the transaction that deleted the rows. Writes to the table are frozen so new progress entries don't conflict with the repair. The restore goes to a **new** server so production keeps serving every other project. Recovery pauses at the target (`recovery_target_action = 'pause'` during investigation) so you can check you picked the right moment before promoting; if 11:19:59 was too late, you can restart with an earlier target. Finally, only the lost rows are copied back, so other projects' work since 11:20 is kept. A full rollback of the whole database to 11:19:59 would have lost everyone else's changes.
+The `DELETE` is itself recorded in WAL and archived, which is what makes the precise restore possible: replay stops just before the transaction that deleted the rows. Writes to the table are frozen so new attendance entries don't conflict with the repair. The restore goes to a **new** server so production keeps serving every other school. Recovery pauses at the target (`recovery_target_action = 'pause'` during investigation) so you can check you picked the right moment before promoting; if 11:19:59 was too late, you can restart with an earlier target. Finally, only the lost rows are copied back, so other schools' work since 11:20 is kept. The row count is a sanity check you can do in your head: 2,300 students × about 240 school days ≈ 552,000 attendance rows. A full rollback of the whole database to 11:19:59 would have lost everyone else's changes.
 
 ## Step-by-step example
 
-We'll set up PITR for the construction-management database, then rehearse the restore.
+We'll set up PITR for the school-management database, then rehearse the restore.
 
 ### Step 1 — agree RPO and RTO
 
-With the business: progress data is entered daily by site engineers and used for monthly bills to the client. Losing more than 15 minutes of entries means re-entry from paper; a day's outage delays billing. Agreed: **RPO 5 minutes, RTO 4 hours** for the database, recorded in the service's reliability document.
+With the business: attendance and marks are entered by teachers during every class and used for report cards, exam eligibility and fee reminders. Losing more than 15 minutes of entries means teachers re-entering a period's attendance from memory or paper; a day's outage during exam week delays results. Agreed: **RPO 5 minutes, RTO 4 hours** for the database, recorded in the service's reliability document.
 
 ### Step 2 — enable WAL archiving
 
@@ -260,7 +262,7 @@ With the business: progress data is entered daily by site engineers and used for
 # postgresql.conf
 wal_level = replica
 archive_mode = on
-archive_command = 'pgbackrest --stanza=nirman archive-push %p'
+archive_command = 'pgbackrest --stanza=vidya archive-push %p'
 archive_timeout = 60          # force a segment switch at least every minute
 summarize_wal = on            # PostgreSQL 17: enables native incremental base backups
 ```
@@ -269,7 +271,7 @@ summarize_wal = on            # PostgreSQL 17: enables native incremental base b
 
 ### Step 3 — schedule base backups
 
-Full backup weekly (Sunday 02:00), incremental daily. With 40 GB of WAL per day, the worst-case replay is one day of WAL instead of six. Keep 35 days of backups and WAL, plus monthly logical dumps for a year (contract requirement).
+Full backup weekly (Sunday 02:00), incremental daily. With 40 GB of WAL per day, the worst-case replay is one day of WAL instead of six. Keep 35 days of backups and WAL, plus monthly logical dumps for a year (required by the customer agreements with schools).
 
 ### Step 4 — make the archive survive a bad day
 
@@ -279,11 +281,11 @@ Store the repository in object storage in another region, with versioning and a 
 
 ```text
 # On a fresh scratch server
-pgbackrest --stanza=nirman --type=time "--target=2026-10-20 11:19:59+05:30" \
+pgbackrest --stanza=vidya --type=time "--target=2026-10-20 11:19:59+05:30" \
            --target-action=pause restore
 # postgresql.auto.conf now contains restore_command and recovery_target_time
 pg_ctl -D /var/lib/postgresql/17/main start
-psql -c "SELECT count(*) FROM site_progress WHERE project_id = 4417;"
+psql -c "SELECT count(*) FROM attendance WHERE school_id = 4417;"
 psql -c "SELECT pg_wal_replay_resume();"   # promote once satisfied
 ```
 
@@ -359,7 +361,7 @@ namespace Ops.Dr;
 
 public sealed class DrTargets
 {
-    public string Database { get; set; } = "nirman";
+    public string Database { get; set; } = "vidya";
     /// <summary>Recovery point objective. WAL archiving older than this breaches it.</summary>
     public TimeSpan Rpo { get; set; } = TimeSpan.FromMinutes(5);
     /// <summary>Recovery time objective, compared with drill results.</summary>
@@ -510,7 +512,7 @@ Problems: the accidental `DELETE` replicates to both replicas instantly. The dum
 
 ## Practical playground
 
-The canvas shows the construction-management platform in one region: app servers, a PostgreSQL primary with an HA standby, object storage for drone imagery and documents, and a nightly dump to the same storage account. Improve it to meet **RPO 5 minutes, RTO 4 hours** for the database and **no document loss** even if the production account is compromised.
+The canvas shows the school-management platform in one region: app servers, a PostgreSQL primary with an HA standby, object storage for uploaded documents and homework, and a nightly dump to the same storage account. Improve it to meet **RPO 5 minutes, RTO 4 hours** for the database and **no document loss** even if the production account is compromised.
 
 1. Add a WAL archive and base backups in another region. Where does `archive_timeout` show up in your RPO?
 2. Make one copy immutable. What attack does this stop that cross-region replication does not?
@@ -522,11 +524,11 @@ The canvas shows the construction-management platform in one region: app servers
 ```json
 {
   "nodes": [
-    { "id": "users", "type": "client", "label": "Site engineers and project managers", "props": { "rps": 150 } },
+    { "id": "users", "type": "client", "label": "Teachers, school admins and parents", "props": { "rps": 150 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer", "props": { "region": "central-india" } },
-    { "id": "app", "type": "app-server", "label": "Construction API", "props": { "instances": 3, "region": "central-india" } },
+    { "id": "app", "type": "app-server", "label": "School API", "props": { "instances": 3, "region": "central-india" } },
     { "id": "pg", "type": "database", "label": "PostgreSQL primary + HA standby", "props": { "replicas": 1, "multiAz": true, "region": "central-india" } },
-    { "id": "blob", "type": "object-storage", "label": "Documents and drone imagery (also holds nightly pg_dump)", "props": { "region": "central-india" } }
+    { "id": "blob", "type": "object-storage", "label": "Documents and homework uploads (also holds nightly pg_dump)", "props": { "region": "central-india" } }
   ],
   "edges": [
     { "from": "users", "to": "lb", "kind": "sync" },
@@ -647,7 +649,7 @@ For each system, propose an RPO, an RTO and a DR tier (backup and restore, pilot
 
 1. A UPI-linked wallet's transaction ledger, 4,000 transactions per second at peak.
 2. An internal BI dashboard rebuilt every night from the operational databases.
-3. A drone-imagery archive for infrastructure projects: 60 TB, written once, read rarely, contractually required for 7 years.
+3. A hospital's medical-imaging archive (X-rays, CT and MRI scans): 60 TB, written once, read rarely, kept for 7 years under the hospital's records policy.
 4. A state grievance portal: citizens file complaints, officers respond within 30 days.
 ::acceptance
 - Each answer ties the numbers to business impact, not technology.
@@ -854,14 +856,14 @@ CREATE TABLE wal_archive (
   PRIMARY KEY (database, segment_no)
 );
 INSERT INTO wal_archive (database, segment_no, archived_at)
-SELECT 'nirman', s, timestamptz '2026-10-18 00:00+05:30' + (s - 1000) * interval '2 minutes'
+SELECT 'vidya', s, timestamptz '2026-10-18 00:00+05:30' + (s - 1000) * interval '2 minutes'
 FROM generate_series(1000, 4000) AS s
 WHERE s NOT BETWEEN 2310 AND 2345 AND s <> 3999;
 INSERT INTO wal_archive (database, segment_no, archived_at)
 SELECT 'grievance', s, timestamptz '2026-10-18 00:00+05:30' + (s - 500) * interval '5 minutes'
 FROM generate_series(500, 1700) AS s;
 INSERT INTO wal_archive (database, segment_no, archived_at)
-SELECT 'tender', s, timestamptz '2026-10-18 00:00+05:30' + (s - 80) * interval '9 minutes'
+SELECT 'library', s, timestamptz '2026-10-18 00:00+05:30' + (s - 80) * interval '9 minutes'
 FROM generate_series(80, 700) AS s
 WHERE s NOT IN (412, 413, 414, 415);
 ```
@@ -898,7 +900,7 @@ WHERE next_no > segment_no + 1
 ORDER BY database, last_before_gap;
 ```
 
-Three gaps: `nirman` is missing 36 segments after 2309 and one after 3998; `tender` is missing 4 after 411. For `nirman`, any PITR target after the `gap_starts_at` of segment 2309 is unreachable from backups taken before it, which is what the planner in exercise 3 reports. The single missing segment near the end may just be "not archived yet" or a real loss; check `pg_stat_archiver` on the primary.
+Three gaps: `library` is missing 4 segments after 411; `vidya` is missing 36 after 2309 and one after 3998. For `vidya`, any PITR target after the `gap_starts_at` of segment 2309 is unreachable from backups taken before it, which is what the planner in exercise 3 reports. The single missing segment near the end may just be "not archived yet" or a real loss; check `pg_stat_archiver` on the primary.
 
 Run this as a scheduled check and alert on any row. Real segment names are hexadecimal and include the timeline (for example `000000010000000A000000F3`); a tool converts them to a number or compares LSN ranges.
 ::mistakes
@@ -907,18 +909,18 @@ Run this as a scheduled check and alert on any row. Real segment names are hexad
 - Generating every missing number with `generate_series` and returning one row per missing segment.
 :::
 
-:::exercise id=m14-dr-ex5 difficulty=advanced kind=hld title="DR for a state e-procurement portal"
-A state e-procurement (tender) portal runs in one cloud region: 4 app instances, PostgreSQL 1.2 TB (25 GB of WAL per day), 40 TB of bid documents in object storage, Redis for sessions, and a queue for notification emails. Requirements from the department:
+:::exercise id=m14-dr-ex5 difficulty=advanced kind=hld title="DR for a state scholarship portal"
+A state scholarship portal runs in one cloud region: 4 app instances, PostgreSQL 1.2 TB (25 GB of WAL per day), 40 TB of uploaded documents (mark sheets, income and caste certificates, bank passbooks) in object storage, Redis for sessions, and a queue for notification e-mails and SMS. Requirements from the department:
 
-- Bid submission deadlines are legally binding. During the last 2 hours before a deadline, RTO is **30 minutes** and RPO **zero** for submitted bids.
+- Application deadlines are fixed by government order, and lakhs of students apply in the last days. During the last 2 hours before a deadline, RTO is **30 minutes** and RPO **zero** for submitted applications.
 - At other times RTO **4 hours**, RPO **5 minutes**.
-- Bid documents must never be lost or altered, and must be kept 10 years.
+- Submitted applications and their documents must never be lost or altered, and must be kept 10 years for audit.
 - The department will pay for DR, but asks you to justify every rupee.
 
 Design the backup and DR architecture.
 ::acceptance
 - Separates HA (zone failure), PITR (logical errors), and regional DR, and says which requirement each meets.
-- Explains how RPO zero for bids is achieved, and its latency cost.
+- Explains how RPO zero for submitted applications is achieved, and its latency cost.
 - Shows restore-time arithmetic for the 1.2 TB database and how the 30-minute RTO is met.
 - Protects documents against deletion and tampering, not only region loss.
 - Includes drills, monitoring and the decision process for failing over.
@@ -935,17 +937,17 @@ Who decides to fail over at 4:45 p.m. on a deadline day, and how long does that 
 ```json
 {
   "nodes": [
-    { "id": "bidders", "type": "client", "label": "Bidders and officers", "props": { "rps": 300 } },
+    { "id": "students", "type": "client", "label": "Students and scholarship officers", "props": { "rps": 300 } },
     { "id": "dns", "type": "dns", "label": "DNS" },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer", "props": { "region": "primary" } },
-    { "id": "app", "type": "app-server", "label": "Tender API", "props": { "instances": 4, "region": "primary" } },
+    { "id": "app", "type": "app-server", "label": "Scholarship API", "props": { "instances": 4, "region": "primary" } },
     { "id": "pg", "type": "database", "label": "PostgreSQL 1.2 TB", "props": { "replicas": 0, "region": "primary" } },
     { "id": "redis", "type": "cache", "label": "Redis sessions", "props": { "region": "primary" } },
     { "id": "q", "type": "queue", "label": "Email queue", "props": { "region": "primary" } },
-    { "id": "docs", "type": "object-storage", "label": "Bid documents 40 TB", "props": { "region": "primary" } }
+    { "id": "docs", "type": "object-storage", "label": "Application documents 40 TB", "props": { "region": "primary" } }
   ],
   "edges": [
-    { "from": "bidders", "to": "dns", "kind": "sync" },
+    { "from": "students", "to": "dns", "kind": "sync" },
     { "from": "dns", "to": "lb", "kind": "sync" },
     { "from": "lb", "to": "app", "kind": "sync" },
     { "from": "app", "to": "pg", "kind": "sync" },
@@ -959,24 +961,24 @@ Who decides to fail over at 4:45 p.m. on a deadline day, and how long does that 
 ```json
 {
   "nodes": [
-    { "id": "bidders", "type": "client", "label": "Bidders and officers", "props": { "rps": 300 } },
+    { "id": "students", "type": "client", "label": "Students and scholarship officers", "props": { "rps": 300 } },
     { "id": "dns", "type": "dns", "label": "DNS with health-checked failover (TTL 60 s)" },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer", "props": { "region": "primary" } },
-    { "id": "app", "type": "app-server", "label": "Tender API", "props": { "instances": 4, "region": "primary", "multiAz": true } },
+    { "id": "app", "type": "app-server", "label": "Scholarship API", "props": { "instances": 4, "region": "primary", "multiAz": true } },
     { "id": "pg", "type": "database", "label": "PostgreSQL primary + sync standby in second zone", "props": { "replicas": 1, "multiAz": true, "region": "primary" } },
     { "id": "redis", "type": "cache", "label": "Redis sessions (rebuildable)", "props": { "region": "primary" } },
     { "id": "q", "type": "queue", "label": "Email queue (outbox in DB, replayable)", "props": { "region": "primary" } },
-    { "id": "docs", "type": "object-storage", "label": "Bid documents: versioned, SHA-256 in DB, 10-year retention lock", "props": { "region": "primary" } },
+    { "id": "docs", "type": "object-storage", "label": "Application documents: versioned, SHA-256 in DB, 10-year retention lock", "props": { "region": "primary" } },
     { "id": "lb2", "type": "load-balancer", "label": "DR load balancer", "props": { "region": "dr" } },
-    { "id": "app2", "type": "app-server", "label": "Tender API warm standby (scales 1 to 4)", "props": { "instances": 1, "region": "dr" } },
+    { "id": "app2", "type": "app-server", "label": "Scholarship API warm standby (scales 1 to 4)", "props": { "instances": 1, "region": "dr" } },
     { "id": "pg2", "type": "database", "label": "Cross-region replica (async, promotable)", "props": { "replicas": 0, "region": "dr" } },
     { "id": "arch", "type": "object-storage", "label": "Base backups + WAL archive, immutable 35 days, monthly dumps 10 years", "props": { "region": "dr" } },
-    { "id": "docs2", "type": "object-storage", "label": "Bid documents replica (retention lock)", "props": { "region": "dr" } },
+    { "id": "docs2", "type": "object-storage", "label": "Application documents replica (retention lock)", "props": { "region": "dr" } },
     { "id": "drill", "type": "scheduler", "label": "Weekly restore drill + quarterly regional failover game day" },
     { "id": "mon", "type": "monitoring", "label": "Replica lag, WAL archive age, drill results, backup freshness" }
   ],
   "edges": [
-    { "from": "bidders", "to": "dns", "kind": "sync" },
+    { "from": "students", "to": "dns", "kind": "sync" },
     { "from": "dns", "to": "lb", "kind": "sync" },
     { "from": "dns", "to": "lb2", "kind": "sync", "label": "on failover" },
     { "from": "lb", "to": "app", "kind": "sync" },
@@ -997,11 +999,11 @@ Who decides to fail over at 4:45 p.m. on a deadline day, and how long does that 
 ```
 
 **Three layers, three jobs.**
-- *HA*: synchronous standby in a second zone with automatic failover. Handles the common failures (host, disk, zone) in under a minute with RPO zero, because every commit waits for the standby (`synchronous_commit = on`, `synchronous_standby_names`). Cost: one zone-to-zone round trip per commit, typically about a millisecond or two within a region (an estimate; measure it). This is what makes "RPO zero for submitted bids" true for anything short of a regional disaster.
+- *HA*: synchronous standby in a second zone with automatic failover. Handles the common failures (host, disk, zone) in under a minute with RPO zero, because every commit waits for the standby (`synchronous_commit = on`, `synchronous_standby_names`). Cost: one zone-to-zone round trip per commit, typically about a millisecond or two within a region (an estimate; measure it). This is what makes "RPO zero for submitted applications" true for anything short of a regional disaster.
 - *PITR*: base backups and WAL archive in the DR region on immutable storage. Handles logical errors (bad migration, accidental delete, ransomware) with RPO about 1 minute.
 - *Regional DR*: warm standby. An asynchronous replica in the DR region (lag usually seconds) plus one app instance and a DR load balancer, ready to scale out.
 
-**RPO zero across regions?** Synchronous replication to another region would add the inter-region round trip (often tens of milliseconds) to every commit and makes the primary stall if the DR link is slow. Instead: keep cross-region async, and make bid submission itself durable across regions. Store each bid document in object storage (replicated) and write a signed submission receipt, then confirm to the bidder. During the deadline window, the API can additionally wait for the DR replica to confirm the submission's LSN (`pg_current_wal_lsn()` compared with the replica's replay LSN) before returning success, for that one transaction type only. This "wait for remote LSN" step costs latency only on bid submissions during the critical window.
+**RPO zero across regions?** Synchronous replication to another region would add the inter-region round trip (often tens of milliseconds) to every commit and makes the primary stall if the DR link is slow. Instead: keep cross-region async, and make application submission itself durable across regions. Store each document in object storage (replicated) and write a signed acknowledgement with an application number, then confirm to the student. During the deadline window, the API can additionally wait for the DR replica to confirm the submission's LSN (`pg_current_wal_lsn()` compared with the replica's replay LSN) before returning success, for that one transaction type only. This "wait for remote LSN" step costs latency only on final submissions during the critical window, and needs a timeout: if the DR replica is unreachable, the API must decide (in advance, with the department) whether to accept with zone-level durability or ask the student to retry.
 
 **Restore arithmetic.** 1.2 TB from object storage at an assumed 250 MB/s = 1,200,000 ÷ 250 = 4,800 s = 80 minutes, before WAL replay. That fails the 30-minute RTO, which is why a running replica is required. Failover time with the warm standby: detection 5 min + decision 5 min + promote replica 1–2 min + scale app instances 5–10 min + DNS TTL 1 min ≈ 20–25 minutes. Pre-scale the DR app to 4 instances during deadline windows (a scheduled scale-up) to remove the 5–10 minutes.
 
@@ -1011,7 +1013,7 @@ Who decides to fail over at 4:45 p.m. on a deadline day, and how long does that 
 
 **Decision and drills.** Failover is declared by the incident commander using a written checklist ("primary region unreachable for 10 minutes, or provider confirms regional incident"); a scripted runbook does the steps. During deadline windows the department agrees in advance to extend deadlines if failover happens, which is the cheapest mitigation of all. Weekly automated restore drills from the archive; a quarterly game day that actually fails over to the DR region outside deadline windows ([Chaos engineering](#/lesson/m14-chaos)).
 
-**Cost (relative, illustrative).** Backup and restore only: +5–10 % on top of production for storage; fails the 30-minute RTO. Pilot light (replica only): +15–20 %; RTO about 45–60 minutes because app capacity must be created. Warm standby as designed: +30–45 %. Active-active: +100 % or more plus conflict handling for bids; not justified because writes can tolerate a 20-minute failover with deadline extensions.
+**Cost (relative, illustrative).** Backup and restore only: +5–10 % on top of production for storage; fails the 30-minute RTO. Pilot light (replica only): +15–20 %; RTO about 45–60 minutes because app capacity must be created. Warm standby as designed: +30–45 %. Active-active: +100 % or more plus conflict handling for applications; not justified because writes can tolerate a 20-minute failover with deadline extensions.
 ::mistakes
 - Proposing synchronous cross-region replication for all writes without discussing the latency and availability cost.
 - Relying on cross-region object replication alone for documents: a malicious delete replicates.
@@ -1030,8 +1032,8 @@ public async Task Stale_archive_is_unhealthy()
     var now = new DateTimeOffset(2026, 10, 20, 11, 0, 0, TimeSpan.Zero);
     var time = new FixedTime(now);
     var catalog = new InMemoryBackupCatalog();
-    catalog.Add(new BackupRecord("nirman", BackupKind.Full, now.AddHours(-10), 800_000_000_000, Verified: true));
-    catalog.ReportArchive(new WalArchiveStatus("nirman", now.AddMinutes(-12), FailedCount: 3));
+    catalog.Add(new BackupRecord("vidya", BackupKind.Full, now.AddHours(-10), 800_000_000_000, Verified: true));
+    catalog.ReportArchive(new WalArchiveStatus("vidya", now.AddMinutes(-12), FailedCount: 3));
 
     var check = new BackupFreshnessHealthCheck(catalog, Options.Create(new DrTargets()), time);
     var result = await check.CheckHealthAsync(new HealthCheckContext());
@@ -1060,7 +1062,7 @@ sealed class FixedTime(DateTimeOffset now) : TimeProvider { public override Date
 - **Managed PostgreSQL on Azure, AWS and Google Cloud** provides automatic backups with PITR and cross-region replicas; teams add retention choices, cross-account copies and restore drills on top.
 - **Banks and payment companies** are typically required by regulators to maintain DR sites and test them periodically, which is why DR drills are routine in financial services.
 - **Public postmortems** from well-known software companies describe incidents where backups failed silently and restores were attempted for the first time during a disaster. They are some of the most instructive reading on this topic.
-- **Construction and infrastructure platforms** hold project records needed for billing, audits and disputes for years after a project ends. Long-term immutable archives and logical exports matter more there than a fast failover.
+- **School and university platforms** hold attendance, marks and fee records needed for transcripts, audits and disputes for years after a student leaves. Long-term immutable archives and logical exports matter more there than a fast failover.
 - **Ransomware response**: organisations with immutable or offline copies restore; those whose backups were reachable with the same admin credentials often cannot.
 
 ## Interview questions
@@ -1159,9 +1161,9 @@ Which make backups survive ransomware with stolen admin credentials? (Select all
 - [ ] More read replicas.
 > The attacker can delete anything their credentials can reach. Immutability and separation are what remain.
 ::q single
-After deleting rows for one project at 11:20, why restore to a new server instead of rolling the production database back to 11:19?
+After deleting rows for one school at 11:20, why restore to a new server instead of rolling the production database back to 11:19?
 - [ ] New servers are faster.
-- [x] Rolling back production would also discard every other project's changes made after 11:19. Restoring alongside lets you copy back only the lost rows.
+- [x] Rolling back production would also discard every other school's changes made after 11:19. Restoring alongside lets you copy back only the lost rows.
 - [ ] PITR cannot restore to the original server.
 - [ ] It avoids WAL replay.
 > Surgical repair keeps unrelated work. A full rollback is a last resort for widespread damage.
@@ -1188,5 +1190,5 @@ You have finished this lesson when you can:
 - [ ] Score at least 70 % on the knowledge check.
 - [ ] Complete exercises 1 and 3 with all tests passing.
 - [ ] Find the WAL gaps in exercise 4 and explain what each means for PITR.
-- [ ] Design the e-procurement DR in exercise 5 and defend your tier choice with restore arithmetic.
+- [ ] Design the scholarship-portal DR in exercise 5 and defend your tier choice with restore arithmetic.
 - [ ] Explain, without notes, why replicas are not backups and how PITR works.

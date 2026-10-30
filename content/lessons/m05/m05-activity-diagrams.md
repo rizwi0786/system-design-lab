@@ -22,7 +22,7 @@ references:
     url: https://martinfowler.com/books/uml.html
 ---
 
-A class diagram shows what your code *is*. An activity diagram shows what your business *does*: the steps of a process, the choices along the way, the work that can happen at the same time, and who is responsible for each step. It is the diagram you draw when someone says "walk me through how a bill gets paid" or "what happens after the customer clicks Return?". This lesson teaches the notation, how to write it in Mermaid, and how each symbol becomes C#.
+A class diagram shows what your code *is*. An activity diagram shows what your business *does*: the steps of a process, the choices along the way, the work that can happen at the same time, and who is responsible for each step. It is the diagram you draw when someone says "walk me through how an insurance claim gets paid" or "what happens after the customer clicks Return?". This lesson teaches the notation, how to write it in Mermaid, and how each symbol becomes C#.
 
 ## Learning objectives
 
@@ -56,17 +56,17 @@ An activity diagram is that recipe drawn as boxes and arrows, so anyone can foll
 
 ### A relay race with lanes
 
-Now imagine a relay race. Each runner has their own lane, and the baton passes from one lane to the next. In a business process, the "runners" are people, teams or systems: the customer, the warehouse, the payment gateway. Drawing each in its own **lane** (a **swimlane**, formally a *partition*) makes hand-offs visible. Hand-offs are where processes usually break: the baton gets dropped between the site engineer and the accounts team, not inside either.
+Now imagine a relay race. Each runner has their own lane, and the baton passes from one lane to the next. In a business process, the "runners" are people, teams or systems: the customer, the warehouse, the payment gateway. Drawing each in its own **lane** (a **swimlane**, formally a *partition*) makes hand-offs visible. Hand-offs are where processes usually break: the baton gets dropped between the medical reviewer and the accounts team, not inside either.
 
-### Our example: paying a contractor's running bill
+### Our example: paying a health insurance claim
 
-On a highway project, the contractor is paid every month for work done so far, through a **running account bill** (RA bill). A simplified version of the process:
+Priya was in hospital for three days and paid the bill herself. Now she claims the money back from her health insurer. This is a **reimbursement claim**, and a simplified version of the insurer's process is:
 
-1. The **contractor** submits the bill with quantities claimed (for example 1,200 m³ of embankment).
-2. The **site engineer** checks the measurements against the measurement book. *At the same time*, the **quality lab** confirms that test reports exist for that work (compaction tests, for example).
-3. If either check fails, the bill goes back to the contractor for revision.
-4. If both pass, the **authority's engineer** approves it. Bills above ₹50 lakh need a second sign-off from the project director.
-5. **Accounts** deducts retention (say 5 %) and schedules payment.
+1. The **policyholder** submits the claim online with the hospital bills and discharge summary (for example ₹1,20,000).
+2. A **medical reviewer** checks the treatment against the discharge summary and the policy, and works out the admissible amount. *At the same time*, the **documents team** confirms that every original bill, pharmacy receipt and test report is present.
+3. If either check fails, the claim goes back to the policyholder with a query, and she corrects or completes it.
+4. If both pass, the **claims manager** approves it. Claims of ₹5 lakh or more need a second sign-off from the chief medical officer.
+5. **Accounts** deducts the policy's co-payment (say 10 %) and schedules the bank transfer.
 
 Every symbol in this lesson will be shown on this process.
 
@@ -81,7 +81,7 @@ An activity diagram models a **flow of control**: which step runs after which, u
 | Element | Looks like | Meaning | Token rule |
 |---|---|---|---|
 | **Initial node** | small filled circle | where the flow starts | one token placed here |
-| **Action** | rounded rectangle | one step of work ("Verify measurements") | runs when a token arrives, then passes it on |
+| **Action** | rounded rectangle | one step of work ("Review treatment") | runs when a token arrives, then passes it on |
 | **Control flow** | arrow | "then" | carries the token |
 | **Decision** | diamond, one arrow in, several out | a choice | token goes down exactly **one** branch whose guard is true |
 | **Merge** | diamond, several in, one out | branches rejoin | passes on **each** token that arrives, without waiting |
@@ -92,29 +92,31 @@ An activity diagram models a **flow of control**: which step runs after which, u
 
 Two pairs confuse beginners, so slow down here:
 
-- **Decision vs fork.** Both split one arrow into many. A decision picks **one** path ("approved *or* rejected"). A fork takes **all** paths ("verify measurements *and* check test reports").
+- **Decision vs fork.** Both split one arrow into many. A decision picks **one** path ("approved *or* rejected"). A fork takes **all** paths ("review the treatment *and* check the documents").
 - **Merge vs join.** Both combine arrows. A merge passes through whatever arrives ("whichever path we came from, now send the email"). A join **waits** for all branches ("only approve once both checks are done").
 
 ### Guards
 
-A **guard** is a condition in square brackets on an arrow leaving a decision: `[amount > ₹50 lakh]`, `[else]`. Two rules make guards correct:
+A **guard** is a condition in square brackets on an arrow leaving a decision: `[amount >= ₹5 lakh]`, `[else]`. Two rules make guards correct:
 
 1. **Complete**: for every possible input, at least one guard is true. Otherwise the token gets stuck. `[else]` is the usual safety net.
-2. **Exclusive**: at most one guard is true. `[amount > 50 lakh]` and `[amount < 50 lakh]` fail rule 1 for exactly ₹50 lakh. `[amount >= 50 lakh]` with `[else]` passes both rules.
+2. **Exclusive**: at most one guard is true. `[amount > 5 lakh]` and `[amount < 5 lakh]` fail rule 1 for exactly ₹5 lakh. `[amount >= 5 lakh]` with `[else]` passes both rules.
 
 This is the same discipline as writing a `switch` with a `default`, and the diagram is where you catch the gap before the code is written.
 
 ### Swimlanes (partitions)
 
-A **partition** groups actions by who performs them. It can be a role (site engineer), a department (accounts), or a system (payment gateway, ERP). Lanes add no new behaviour. They answer "who?" and make every **hand-off** (an arrow that crosses a lane boundary) obvious. Each hand-off is a place where you need a notification, a queue, a task in someone's inbox, or an API call, and a place where things get lost.
+A **partition** groups actions by who performs them. It can be a role (medical reviewer), a department (accounts), or a system (payment gateway, hospital billing system). Lanes add no new behaviour. They answer "who?" and make every **hand-off** (an arrow that crosses a lane boundary) obvious. Each hand-off is a place where you need a notification, a queue, a task in someone's inbox, or an API call, and a place where things get lost.
 
 ### Objects on the flow (optional)
 
-UML also lets you draw **object nodes**: rectangles for the *things* that flow between actions, such as `RA bill [submitted]` or `Payment advice`. The text in brackets is the object's state. Use them when the main question is "what document moves where?". Most teams leave them out to keep the diagram light, and model the object's life separately in a [state machine diagram](#/lesson/m05-state-diagrams).
+UML also lets you draw **object nodes**: rectangles for the *things* that flow between actions, such as `Claim [submitted]` or `Payment advice`. The text in brackets is the object's state. Use them when the main question is "what document moves where?". Most teams leave them out to keep the diagram light, and model the object's life separately in a [state machine diagram](#/lesson/m05-state-diagrams).
 
 ### Loops
 
-There is no special loop symbol. A loop is an arrow that goes back to an earlier action, usually through a decision: "Revise bill → Submit → Verify → [failed] → Revise bill". Always make sure a loop can exit. If a bill can be returned forever, ask whether the business wants a limit (say three revisions, then escalate).
+There is no special loop symbol. A loop is an arrow that goes back to an earlier action, usually through a decision: "Revise claim → Submit → Review → [failed] → Revise claim". Always make sure a loop can exit. If a claim can be returned forever, ask whether the business wants a limit (say three queries, then a phone call from a claims officer).
+
+Strictly, UML 2 gives an action with several incoming arrows an *implicit join*: the action waits for a token on every one of them. A loop that points straight back at "Submit claim" would then wait for both the start token and the loop token, which never happens. So route the loop (and any other rejoining paths) through a **merge** diamond in front of the action. Many informal diagrams skip it; anything that executes or validates diagrams will not.
 
 ### Activity, sequence or state diagram?
 
@@ -124,7 +126,7 @@ There is no special loop symbol. A loop is an arrow that goes back to an earlier
 | Which objects or services send which messages, in what order, for one scenario? | [Sequence](#/lesson/m05-sequence-diagrams) |
 | What states can one object be in, and what moves it between them? | [State machine](#/lesson/m05-state-diagrams) |
 
-An activity diagram is about **the process**. A sequence diagram is about **the conversation** between participants for one path. A state diagram is about **one thing's life**. The RA bill process could be drawn all three ways, and each would answer a different question.
+An activity diagram is about **the process**. A sequence diagram is about **the conversation** between participants for one path. A state diagram is about **one thing's life**. The claim process could be drawn all three ways, and each would answer a different question.
 
 ### Writing activity diagrams in Mermaid
 
@@ -141,8 +143,8 @@ flowchart TD
 **Actions.** Give each node a short id, then its label. Rounded rectangles match the UML action shape:
 
 ```text
-submit("Submit RA bill")
-verify("Verify measurements")
+submit("Submit claim")
+review("Review treatment")
 ```
 
 `id["text"]` is a sharp rectangle, `id("text")` rounded, `id(["text"])` a pill (stadium). Always **quote labels** that contain brackets, commas, `₹`, `%`, colons or other special characters. Quoting everything is the simplest habit.
@@ -186,13 +188,13 @@ The quotes are needed because `[` and `]` are otherwise Mermaid syntax. Other ar
 **Swimlanes as subgraphs.** Each lane is a `subgraph` with an id and a quoted title. Nodes declared inside belong to the lane. Arrows between lanes can be written anywhere, usually after all lanes:
 
 ```text
-subgraph contractor["Contractor"]
-    submit("Submit RA bill")
+subgraph holder["Policyholder"]
+    submit("Submit claim")
 end
-subgraph site["Site engineer"]
-    verify("Verify measurements")
+subgraph medical["Medical reviewer"]
+    review("Review treatment")
 end
-submit --> verify
+submit --> review
 ```
 
 A node belongs to the **first** subgraph that declares it. Declaring the same id in two lanes doesn't create two nodes; it silently keeps the first, so keep ids unique. Use `direction TB` inside a subgraph to control its layout.
@@ -212,7 +214,7 @@ Common Mermaid errors with activity diagrams: an unquoted label containing `(` o
 | Fork | start several tasks without awaiting each one: `var a = CheckAAsync(); var b = CheckBAsync();` |
 | Join | `await Task.WhenAll(a, b);` |
 | Loop back | `while`/`do` loop, with an exit condition and preferably a maximum count |
-| Swimlane | one interface per lane (`ISiteEngineerDesk`, `IQualityLab`), so each actor's work is behind its own boundary |
+| Swimlane | one interface per lane (`IMedicalReviewDesk`, `IDocumentsDesk`), so each actor's work is behind its own boundary |
 | Hand-off between people | not a method call at all, but a persisted task, a message on a queue, or a status change that someone else picks up later |
 | Activity final | `return` from the workflow method |
 | Flow final | a branch task that completes without affecting the others |
@@ -259,62 +261,64 @@ flowchart TD
 
 Read it top to bottom. The small filled circle starts the flow. After the first action, the diamond is a **decision**: exactly one of the two guarded arrows is followed, and `[else]` makes the guards complete. The second diamond is a **merge**: both branches arrive at it and the flow continues once. The first thick bar is a **fork**, so "Parallel 1" and "Parallel 2" both run. The second bar is a **join**, which waits for both. The dotted arrow from "Parallel 2" to the crossed circle shows a **flow final**: that side branch ends quietly without stopping anything else. The bullseye at the bottom is the **activity final**: when the token reaches it, the whole activity is over.
 
-### The RA bill process with swimlanes
+### The claim process with swimlanes
 
 ```mermaid
 flowchart TD
-    subgraph contractor["Contractor"]
+    subgraph holder["Policyholder"]
         direction TB
         start@{ shape: sm-circ }
-        submit("Submit RA bill with claimed quantities")
-        revise("Revise bill")
+        mSubmit{" "}
+        submit("Submit claim with bills and discharge summary")
+        revise("Answer query and revise claim")
     end
-    subgraph site["Site engineer"]
+    subgraph medical["Medical reviewer"]
         direction TB
         forkChecks@{ shape: fork }
-        verify("Verify measurements against measurement book")
+        review("Review treatment against discharge summary")
     end
-    subgraph lab["Quality lab"]
+    subgraph docs["Documents team"]
         direction TB
-        tests("Confirm test reports for the work")
+        papers("Confirm original bills and reports")
     end
-    subgraph ae["Authority's engineer"]
+    subgraph manager["Claims manager"]
         direction TB
         joinChecks@{ shape: fork }
         ok{"Both checks passed?"}
-        big{"Net amount at least ₹50 lakh?"}
-        pd("Project director sign-off")
-        approve("Approve bill")
+        big{"Admissible amount at least ₹5 lakh?"}
+        cmo("Chief medical officer sign-off")
+        mApprove{" "}
+        approve("Approve claim")
     end
     subgraph accounts["Accounts"]
         direction TB
-        retention("Deduct 5% retention")
-        schedule("Schedule payment")
+        copay("Deduct 10% co-payment")
+        schedule("Schedule bank transfer")
         done@{ shape: framed-circle }
     end
-    start --> submit --> forkChecks
-    forkChecks --> verify
-    forkChecks --> tests
-    verify --> joinChecks
-    tests --> joinChecks
+    start --> mSubmit --> submit --> forkChecks
+    forkChecks --> review
+    forkChecks --> papers
+    review --> joinChecks
+    papers --> joinChecks
     joinChecks --> ok
     ok -->|"[no]"| revise
-    revise --> submit
+    revise --> mSubmit
     ok -->|"[yes]"| big
-    big -->|"[yes]"| pd
-    pd --> approve
-    big -->|"[else]"| approve
-    approve --> retention --> schedule --> done
+    big -->|"[yes]"| cmo
+    cmo --> mApprove
+    big -->|"[else]"| mApprove
+    mApprove --> approve --> copay --> schedule --> done
 ```
 
-Follow one bill through it:
+Follow one claim through it:
 
-- The flow starts in the **Contractor** lane and the bill is submitted. The arrow into the **Site engineer** lane is a hand-off: in a real system this is a notification and a task in the engineer's queue.
-- The **fork** sends work to two lanes at once: the site engineer verifies measurements, and the quality lab confirms test reports. Neither waits for the other.
-- The **join** sits in the authority's engineer lane, because that's who waits for both results. If the lab takes three days and the engineer one, the join simply waits three days.
-- The first **decision** loops back to the contractor on failure. The arrow from "Revise bill" back to "Submit" is the loop, and its exit is "both checks pass". A real process would also cap the number of revisions.
-- The second decision uses `[yes]` and `[else]`, which is complete and exclusive. Note the threshold wording, "at least ₹50 lakh", so a bill of exactly ₹50,00,000 has one clear path.
-- "Approve bill" is reached from two arrows (direct, or after the project director). UML allows several arrows into an action, but they behave like a merge. Many teams draw an explicit merge diamond to make that obvious.
+- The flow starts in the **Policyholder** lane and the claim is submitted. The arrow into the **Medical reviewer** lane is a hand-off: in a real system this is a notification and a task in the reviewer's work queue.
+- The **fork** sends work to two lanes at once: the medical reviewer checks the treatment, and the documents team checks the paperwork. Neither waits for the other.
+- The **join** sits in the claims manager's lane, because that's who waits for both results. If the documents team takes three days and the reviewer one, the join simply waits three days.
+- The first **decision** loops back to the policyholder on failure. The arrow from "Answer query and revise claim" back to the merge in front of "Submit" is the loop, and its exit is "both checks pass". A real insurer would also cap the number of queries before a claims officer phones the customer.
+- The second decision uses `[yes]` and `[else]`, which is complete and exclusive. Note the threshold wording, "at least ₹5 lakh", so a claim of exactly ₹5,00,000 has one clear path.
+- "Approve claim" is reached from two paths (direct, or after the chief medical officer). They meet at an explicit **merge** diamond first. Without it, UML's implicit-join rule would make "Approve claim" wait for *both* arrows, and small claims would never be approved.
 - The **activity final** is in the Accounts lane, where the process ends.
 
 Count the lane crossings: there are six. Each needs a mechanism (an email, a dashboard task, an API call) and an owner if it is forgotten. That count is a cheap, useful measure of process risk.
@@ -325,19 +329,19 @@ How do you get from a conversation with the business to that diagram? Six steps.
 
 ### Step 1 — write the happy path as verbs
 
-Ask "what happens, step by step, when everything goes right?" and write one verb phrase per line: *submit bill, verify measurements, check tests, approve, deduct retention, schedule payment*. Each becomes an action. Use verb-object names ("Verify measurements"), never nouns ("Measurements").
+Ask "what happens, step by step, when everything goes right?" and write one verb phrase per line: *submit claim, review treatment, check documents, approve, deduct co-payment, schedule transfer*. Each becomes an action. Use verb-object names ("Review treatment"), never nouns ("Treatment").
 
 ### Step 2 — ask "who does this?" for every step
 
-Write the actor next to each verb. Group them into lanes. If two actors share a step ("site engineer and contractor jointly measure"), either pick the one accountable for it, or split it into two actions.
+Write the actor next to each verb. Group them into lanes. If two actors share a step ("the reviewer and the hospital's billing desk reconcile the bill together"), either pick the one accountable for it, or split it into two actions.
 
 ### Step 3 — ask "can these happen at the same time?"
 
-For each pair of neighbouring steps, ask whether the second needs the first's result. Verifying measurements and checking test reports don't depend on each other, so they go between a fork and a join. Parallel work is often the biggest time saving in a real process: here, total waiting time becomes the slower of the two checks instead of their sum.
+For each pair of neighbouring steps, ask whether the second needs the first's result. Reviewing the treatment and checking the documents don't depend on each other, so they go between a fork and a join. Parallel work is often the biggest time saving in a real process: here, total waiting time becomes the slower of the two checks instead of their sum.
 
 ### Step 4 — ask "what can go wrong, and what then?"
 
-For each action, ask about failure: measurement mismatch, missing test report, approver on leave. Add decisions with complete guards. Decide where each failure goes: back to an earlier step (a loop), to an escalation, or to an end.
+For each action, ask about failure: a treatment the policy doesn't cover, a missing pharmacy receipt, an approver on leave. Add decisions with complete guards. Decide where each failure goes: back to an earlier step (a loop), to an escalation, or to an end.
 
 ### Step 5 — check the token flow
 
@@ -345,257 +349,254 @@ Walk a coin through every path:
 
 - Does every decision have an `[else]` or otherwise complete guards?
 - Does every fork's branch reach its join on **every** path? (A decision inside a forked branch that exits to "Reject" without reaching the join leaves the join waiting forever.)
+- Do paths that rejoin meet at a merge, not at an action or a join?
 - Can every loop exit?
 - Is there exactly one initial node, and does every path reach a final node?
 
 ### Step 6 — write it in Mermaid and review it with the people in the lanes
 
-Commit the Mermaid next to the code that implements the workflow. Then show it to the site engineer and the accountant, not just developers. People recognise their own lane instantly and will tell you "actually, we also check the GST invoice here", which is exactly the kind of gap you want to find before coding.
+Commit the Mermaid next to the code that implements the workflow. Then show it to the medical reviewer and the accountant, not just developers. People recognise their own lane instantly and will tell you "actually, we also check the policy's waiting period here", which is exactly the kind of gap you want to find before coding.
 
 ## Production-style C# implementation
 
-Here is the RA bill process implemented as an ASP.NET Core service. Each lane is an interface, the fork and join are `Task.WhenAll`, and the workflow records a trace of the actions it performed so tests can compare it with the diagram. In production the lanes' implementations would call other systems or create inbox tasks. Here they are in-memory fakes, so the code compiles and runs offline.
+Here is the claim process implemented as an ASP.NET Core service. Each lane is an interface, the fork and join are `Task.WhenAll`, and the workflow records a trace of the actions it performed so tests can compare it with the diagram. In production the lanes' implementations would call other systems or create inbox tasks. Here they are in-memory fakes, so the code compiles and runs offline.
 
 ```text
-RaBills.Api/
+Claims.Api/
   Program.cs
-  Domain/RaBill.cs                 // the bill, the outcome, money rules
-  Lanes/Lanes.cs                   // one interface per swimlane
-  Lanes/InMemoryLanes.cs           // fakes for demos and tests
-  Workflow/BillApprovalWorkflow.cs // the activity diagram as code
+  Domain/Claim.cs                   // the claim, the outcome, money rules
+  Lanes/Lanes.cs                    // one interface per swimlane
+  Lanes/InMemoryLanes.cs            // fakes for demos and tests
+  Workflow/ClaimApprovalWorkflow.cs // the activity diagram as code
 ```
 
-```csharp file=Domain/RaBill.cs
-namespace RaBills.Api.Domain;
+```csharp file=Domain/Claim.cs
+namespace Claims.Api.Domain;
 
-/// <summary>An RA (running account) bill: the object that flows through the activity.</summary>
-public sealed record RaBill(Guid Id, string ContractorCode, string WorkItem, decimal ClaimedQuantity, decimal RatePerUnit)
-{
-    public decimal ClaimedAmount => decimal.Round(ClaimedQuantity * RatePerUnit, 2);
-}
+/// <summary>A reimbursement claim: the object that flows through the activity.</summary>
+public sealed record ReimbursementClaim(Guid Id, string PolicyNumber, string AdmissionRef, decimal ClaimedAmount);
 
-public enum BillOutcome { ReturnedForRevision, Scheduled }
+public enum ClaimOutcome { ReturnedWithQuery, Scheduled }
 
 /// <summary>Result of one run of the workflow. Trace lists the actions in the order they ran.</summary>
-public sealed record BillDecision(
-    BillOutcome Outcome,
-    decimal NetAmount,
-    decimal Retention,
+public sealed record ClaimDecision(
+    ClaimOutcome Outcome,
+    decimal ApprovedAmount,
+    decimal CoPayment,
     IReadOnlyList<string> Reasons,
     IReadOnlyList<string> Trace);
 
-public static class BillRules
+public static class ClaimRules
 {
-    /// <summary>Guard on the "needs project director" decision: at least ₹50 lakh.</summary>
-    public const decimal DirectorSignOffThreshold = 50_00_000m;
-    public const decimal RetentionRate = 0.05m;
+    /// <summary>Guard on the "needs chief medical officer" decision: at least ₹5 lakh.</summary>
+    public const decimal CmoSignOffThreshold = 5_00_000m;
+    public const decimal CoPaymentRate = 0.10m;
 
-    public static decimal RetentionOn(decimal amount) => decimal.Round(amount * RetentionRate, 2, MidpointRounding.AwayFromZero);
+    public static decimal CoPaymentOn(decimal amount) => decimal.Round(amount * CoPaymentRate, 2, MidpointRounding.AwayFromZero);
 }
 ```
 
 ```csharp file=Lanes/Lanes.cs
-using RaBills.Api.Domain;
+using Claims.Api.Domain;
 
-namespace RaBills.Api.Lanes;
+namespace Claims.Api.Lanes;
 
-/// <summary>Site engineer lane: "Verify measurements against measurement book".</summary>
-public interface ISiteEngineerDesk
+/// <summary>Medical reviewer lane: "Review treatment against discharge summary".</summary>
+public interface IMedicalReviewDesk
 {
-    /// <returns>The quantity the engineer accepts. Less than claimed means a mismatch.</returns>
-    Task<decimal> VerifyMeasurementsAsync(RaBill bill, CancellationToken ct);
+    /// <returns>The amount the reviewer accepts. Less than claimed means a query.</returns>
+    Task<decimal> AssessAdmissibleAmountAsync(ReimbursementClaim claim, CancellationToken ct);
 }
 
-/// <summary>Quality lab lane: "Confirm test reports for the work".</summary>
-public interface IQualityLab
+/// <summary>Documents team lane: "Confirm original bills and reports".</summary>
+public interface IDocumentsDesk
 {
-    Task<bool> HasPassingTestReportsAsync(string workItem, CancellationToken ct);
+    Task<bool> HasCompleteDocumentsAsync(string admissionRef, CancellationToken ct);
 }
 
-/// <summary>Authority's engineer lane, including the project director's sign-off.</summary>
+/// <summary>Claims manager lane, including the chief medical officer's sign-off.</summary>
 public interface IApprovalDesk
 {
-    Task<bool> DirectorSignOffAsync(RaBill bill, decimal netAmount, CancellationToken ct);
+    Task<bool> CmoSignOffAsync(ReimbursementClaim claim, decimal amount, CancellationToken ct);
 }
 
-/// <summary>Accounts lane: "Schedule payment".</summary>
+/// <summary>Accounts lane: "Schedule bank transfer".</summary>
 public interface IAccountsDesk
 {
-    Task<DateOnly> SchedulePaymentAsync(RaBill bill, decimal payable, CancellationToken ct);
+    Task<DateOnly> ScheduleTransferAsync(ReimbursementClaim claim, decimal payable, CancellationToken ct);
 }
 ```
 
 ```csharp file=Lanes/InMemoryLanes.cs
 using System.Collections.Concurrent;
-using RaBills.Api.Domain;
+using Claims.Api.Domain;
 
-namespace RaBills.Api.Lanes;
+namespace Claims.Api.Lanes;
 
-/// <summary>Measurement book held in memory: accepted quantity per work item.</summary>
-public sealed class InMemorySiteEngineerDesk : ISiteEngineerDesk
+/// <summary>Reviewer's assessments held in memory: admissible amount per hospital admission.</summary>
+public sealed class InMemoryMedicalReviewDesk : IMedicalReviewDesk
 {
-    private readonly ConcurrentDictionary<string, decimal> _measured = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, decimal> _admissible = new(StringComparer.OrdinalIgnoreCase);
 
-    public void Record(string workItem, decimal quantity) => _measured[workItem] = quantity;
+    public void Record(string admissionRef, decimal admissibleAmount) => _admissible[admissionRef] = admissibleAmount;
 
-    public async Task<decimal> VerifyMeasurementsAsync(RaBill bill, CancellationToken ct)
+    public async Task<decimal> AssessAdmissibleAmountAsync(ReimbursementClaim claim, CancellationToken ct)
     {
-        await Task.Delay(20, ct);   // stands in for a database or field-app call
-        return Math.Min(bill.ClaimedQuantity, _measured.GetValueOrDefault(bill.WorkItem));
+        await Task.Delay(20, ct);   // stands in for a database or reviewer-app call
+        return Math.Min(claim.ClaimedAmount, _admissible.GetValueOrDefault(claim.AdmissionRef));
     }
 }
 
-public sealed class InMemoryQualityLab : IQualityLab
+public sealed class InMemoryDocumentsDesk : IDocumentsDesk
 {
-    private readonly ConcurrentDictionary<string, bool> _reports = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, bool> _complete = new(StringComparer.OrdinalIgnoreCase);
 
-    public void Record(string workItem, bool passed) => _reports[workItem] = passed;
+    public void Record(string admissionRef, bool complete) => _complete[admissionRef] = complete;
 
-    public async Task<bool> HasPassingTestReportsAsync(string workItem, CancellationToken ct)
+    public async Task<bool> HasCompleteDocumentsAsync(string admissionRef, CancellationToken ct)
     {
         await Task.Delay(20, ct);
-        return _reports.GetValueOrDefault(workItem);
+        return _complete.GetValueOrDefault(admissionRef);
     }
 }
 
 /// <summary>Auto-approves up to a configurable ceiling. A real desk would create an inbox task and wait.</summary>
-public sealed class AutoApprovalDesk(decimal directorCeiling) : IApprovalDesk
+public sealed class AutoApprovalDesk(decimal cmoCeiling) : IApprovalDesk
 {
-    public Task<bool> DirectorSignOffAsync(RaBill bill, decimal netAmount, CancellationToken ct) =>
-        Task.FromResult(netAmount <= directorCeiling);
+    public Task<bool> CmoSignOffAsync(ReimbursementClaim claim, decimal amount, CancellationToken ct) =>
+        Task.FromResult(amount <= cmoCeiling);
 }
 
 public sealed class InMemoryAccountsDesk(TimeProvider clock) : IAccountsDesk
 {
-    public ConcurrentQueue<(Guid BillId, decimal Payable, DateOnly On)> Scheduled { get; } = new();
+    public ConcurrentQueue<(Guid ClaimId, decimal Payable, DateOnly On)> Scheduled { get; } = new();
 
-    public Task<DateOnly> SchedulePaymentAsync(RaBill bill, decimal payable, CancellationToken ct)
+    public Task<DateOnly> ScheduleTransferAsync(ReimbursementClaim claim, decimal payable, CancellationToken ct)
     {
-        // Rule of thumb for the demo: pay on the 7th of next month.
-        var today = DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
-        var next = new DateOnly(today.Year, today.Month, 1).AddMonths(1).AddDays(6);
-        Scheduled.Enqueue((bill.Id, payable, next));
-        return Task.FromResult(next);
+        // Rule of thumb for the demo: transfer three days after approval.
+        var on = DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime).AddDays(3);
+        Scheduled.Enqueue((claim.Id, payable, on));
+        return Task.FromResult(on);
     }
 }
 ```
 
-```csharp file=Workflow/BillApprovalWorkflow.cs
-using RaBills.Api.Domain;
-using RaBills.Api.Lanes;
+```csharp file=Workflow/ClaimApprovalWorkflow.cs
+using Claims.Api.Domain;
+using Claims.Api.Lanes;
 
-namespace RaBills.Api.Workflow;
+namespace Claims.Api.Workflow;
 
 /// <summary>
-/// The RA bill activity diagram as code. Each comment names the diagram element.
+/// The claim activity diagram as code. Each comment names the diagram element.
 /// This version runs inside one request. If approvals take days, the same diagram is
 /// implemented as persisted status changes instead (see "Real-world application").
 /// </summary>
-public sealed class BillApprovalWorkflow(
-    ISiteEngineerDesk site, IQualityLab lab, IApprovalDesk approvals, IAccountsDesk accounts)
+public sealed class ClaimApprovalWorkflow(
+    IMedicalReviewDesk medical, IDocumentsDesk documents, IApprovalDesk approvals, IAccountsDesk accounts)
 {
-    public async Task<BillDecision> RunAsync(RaBill bill, CancellationToken ct)
+    public async Task<ClaimDecision> RunAsync(ReimbursementClaim claim, CancellationToken ct)
     {
-        ArgumentNullException.ThrowIfNull(bill);
-        var trace = new List<string> { "Submit RA bill" };
+        ArgumentNullException.ThrowIfNull(claim);
+        var trace = new List<string> { "Submit claim" };
 
         // FORK: start both checks without awaiting either one.
-        var measurementTask = site.VerifyMeasurementsAsync(bill, ct);
-        var testsTask = lab.HasPassingTestReportsAsync(bill.WorkItem, ct);
+        var reviewTask = medical.AssessAdmissibleAmountAsync(claim, ct);
+        var documentsTask = documents.HasCompleteDocumentsAsync(claim.AdmissionRef, ct);
 
         // JOIN: wait until both branches have finished.
-        await Task.WhenAll(measurementTask, testsTask);
-        var acceptedQty = await measurementTask;
-        var testsOk = await testsTask;
-        trace.Add("Verify measurements");
-        trace.Add("Confirm test reports");
+        await Task.WhenAll(reviewTask, documentsTask);
+        var admissible = await reviewTask;
+        var documentsOk = await documentsTask;
+        trace.Add("Review treatment");
+        trace.Add("Check documents");
 
         // DECISION "Both checks passed?" — guards [no] / [yes].
         var reasons = new List<string>();
-        if (acceptedQty < bill.ClaimedQuantity)
-            reasons.Add($"Measured {acceptedQty} against {bill.ClaimedQuantity} claimed.");
-        if (!testsOk)
-            reasons.Add($"No passing test report for {bill.WorkItem}.");
+        if (admissible < claim.ClaimedAmount)
+            reasons.Add($"Admissible {admissible:N0} against {claim.ClaimedAmount:N0} claimed.");
+        if (!documentsOk)
+            reasons.Add($"Documents incomplete for admission {claim.AdmissionRef}.");
         if (reasons.Count > 0)
         {
-            trace.Add("Revise bill");                       // [no] -> loop back to the contractor
-            return new BillDecision(BillOutcome.ReturnedForRevision, 0m, 0m, reasons, trace);
+            trace.Add("Revise claim");                      // [no] -> loop back to the policyholder
+            return new ClaimDecision(ClaimOutcome.ReturnedWithQuery, 0m, 0m, reasons, trace);
         }
 
-        var net = bill.ClaimedAmount;
+        var amount = admissible;
 
-        // DECISION "Net amount at least ₹50 lakh?" — guards [yes] / [else].
-        if (net >= BillRules.DirectorSignOffThreshold)
+        // DECISION "Admissible amount at least ₹5 lakh?" — guards [yes] / [else].
+        if (amount >= ClaimRules.CmoSignOffThreshold)
         {
-            trace.Add("Project director sign-off");
-            if (!await approvals.DirectorSignOffAsync(bill, net, ct))
+            trace.Add("Chief medical officer sign-off");
+            if (!await approvals.CmoSignOffAsync(claim, amount, ct))
             {
-                trace.Add("Revise bill");
-                return new BillDecision(BillOutcome.ReturnedForRevision, 0m, 0m,
-                    new[] { "Project director did not sign off." }, trace);
+                trace.Add("Revise claim");
+                return new ClaimDecision(ClaimOutcome.ReturnedWithQuery, 0m, 0m,
+                    new[] { "Chief medical officer did not sign off." }, trace);
             }
         }
         // MERGE: both paths continue here.
-        trace.Add("Approve bill");
+        trace.Add("Approve claim");
 
-        var retention = BillRules.RetentionOn(net);
-        trace.Add("Deduct 5% retention");
+        var coPayment = ClaimRules.CoPaymentOn(amount);
+        trace.Add("Deduct 10% co-payment");
 
-        await accounts.SchedulePaymentAsync(bill, net - retention, ct);
-        trace.Add("Schedule payment");
+        await accounts.ScheduleTransferAsync(claim, amount - coPayment, ct);
+        trace.Add("Schedule bank transfer");
 
         // ACTIVITY FINAL.
-        return new BillDecision(BillOutcome.Scheduled, net, retention, Array.Empty<string>(), trace);
+        return new ClaimDecision(ClaimOutcome.Scheduled, amount, coPayment, Array.Empty<string>(), trace);
     }
 }
 ```
 
 ```csharp file=Program.cs
-using RaBills.Api.Domain;
-using RaBills.Api.Lanes;
-using RaBills.Api.Workflow;
+using Claims.Api.Domain;
+using Claims.Api.Lanes;
+using Claims.Api.Workflow;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var site = new InMemorySiteEngineerDesk();
-site.Record("EMB-CH12", 1_200m);          // embankment, chainage 12 km: 1,200 m³ measured
-var lab = new InMemoryQualityLab();
-lab.Record("EMB-CH12", passed: true);
+var medical = new InMemoryMedicalReviewDesk();
+medical.Record("ADM-1001", 1_20_000m);    // three-day stay: ₹1,20,000 admissible
+var documents = new InMemoryDocumentsDesk();
+documents.Record("ADM-1001", complete: true);
 
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<ISiteEngineerDesk>(site);
-builder.Services.AddSingleton<IQualityLab>(lab);
-builder.Services.AddSingleton<IApprovalDesk>(new AutoApprovalDesk(directorCeiling: 2_00_00_000m));
+builder.Services.AddSingleton<IMedicalReviewDesk>(medical);
+builder.Services.AddSingleton<IDocumentsDesk>(documents);
+builder.Services.AddSingleton<IApprovalDesk>(new AutoApprovalDesk(cmoCeiling: 25_00_000m));
 builder.Services.AddSingleton<IAccountsDesk, InMemoryAccountsDesk>();
-builder.Services.AddSingleton<BillApprovalWorkflow>();
+builder.Services.AddSingleton<ClaimApprovalWorkflow>();
 
 var app = builder.Build();
 
-app.MapPost("/ra-bills", async (SubmitBill req, BillApprovalWorkflow workflow, CancellationToken ct) =>
+app.MapPost("/claims", async (SubmitClaim req, ClaimApprovalWorkflow workflow, CancellationToken ct) =>
 {
-    if (req.Quantity <= 0 || req.Rate <= 0) return Results.Problem("Quantity and rate must be positive.", statusCode: 400);
-    var bill = new RaBill(Guid.NewGuid(), req.ContractorCode, req.WorkItem, req.Quantity, req.Rate);
-    var decision = await workflow.RunAsync(bill, ct);
-    return decision.Outcome == BillOutcome.Scheduled
+    if (req.Amount <= 0) return Results.Problem("Claimed amount must be positive.", statusCode: 400);
+    var claim = new ReimbursementClaim(Guid.NewGuid(), req.PolicyNumber, req.AdmissionRef, req.Amount);
+    var decision = await workflow.RunAsync(claim, ct);
+    return decision.Outcome == ClaimOutcome.Scheduled
         ? Results.Ok(decision)
         : Results.UnprocessableEntity(decision);
 });
 
 app.Run();
 
-public sealed record SubmitBill(string ContractorCode, string WorkItem, decimal Quantity, decimal Rate);
+public sealed record SubmitClaim(string PolicyNumber, string AdmissionRef, decimal Amount);
 ```
 
 Check the mapping against the diagram:
 
-- **Fork and join are two lines.** Calling both methods *before* awaiting either starts them together; `Task.WhenAll` is the join. If you wrote `var qty = await site...; var ok = await lab...;` the code would be correct but sequential, and the diagram's fork would be a lie. With the two 20 ms fakes, the parallel version waits about 20 ms and the sequential one about 40 ms. With real people, the difference is days.
-- **Each guard is an `if`.** The threshold is a named constant with `>=`, matching "at least ₹50 lakh" exactly. A bill of 1,200 m³ × ₹420 = ₹5,04,000 skips the director; 1,200 m³ × ₹4,500 = ₹54,00,000 needs her.
+- **Fork and join are two lines.** Calling both methods *before* awaiting either starts them together; `Task.WhenAll` is the join. If you wrote `var amount = await medical...; var ok = await documents...;` the code would be correct but sequential, and the diagram's fork would be a lie. With the two 20 ms fakes, the parallel version waits about 20 ms and the sequential one about 40 ms. With real people, the difference is days.
+- **Each guard is an `if`.** The threshold is a named constant with `>=`, matching "at least ₹5 lakh" exactly. A claim of ₹1,20,000 skips the chief medical officer; a claim of ₹6,40,000 (a week in intensive care, say) needs her.
 - **The merge is just "the code after the `if`".** That's why merges are invisible in code and easy to forget on diagrams.
-- **Lanes are interfaces.** You can swap the in-memory lab for one that calls the lab's LIMS (laboratory information system) without touching the workflow.
+- **Lanes are interfaces.** You can swap the in-memory documents desk for one that calls a document-scanning (OCR) service without touching the workflow.
 - **The trace makes the diagram testable.** Each string is exactly an action label, so a test can assert "this input followed this path".
 
 :::callout type=tradeoff title="One method or a persisted workflow?"
-This code runs the whole activity inside one HTTP request, which is right when every lane is a system that answers in milliseconds. When lanes are people who answer in days, a running method can't wait: the server restarts, the request times out. Then you store the bill with a status (`Submitted`, `UnderVerification`, `Approved`...) and each lane's action is its own endpoint or background job. A fork becomes "create two tasks"; a join becomes "when the second task completes, check whether the other is done too". The diagram doesn't change, which is why you draw it first. The [state machine diagrams lesson](#/lesson/m05-state-diagrams) shows how to model that status.
+This code runs the whole activity inside one HTTP request, which is right when every lane is a system that answers in milliseconds. When lanes are people who answer in days, a running method can't wait: the server restarts, the request times out. Then you store the claim with a status (`Submitted`, `UnderReview`, `QueryRaised`, `Approved`...) and each lane's action is its own endpoint or background job. A fork becomes "create two tasks"; a join becomes "when the second task completes, check whether the other is done too", done inside one transaction (or with a row lock) so two tasks finishing at the same moment can't both miss each other, or both trigger the next step. Make each step idempotent too: a reviewer double-clicking "Done" must not schedule two transfers. The diagram doesn't change, which is why you draw it first. The [state machine diagrams lesson](#/lesson/m05-state-diagrams) shows how to model that status.
 :::
 
 ## Bad design vs good design
@@ -604,39 +605,39 @@ This code runs the whole activity inside one HTTP request, which is right when e
 
 ```mermaid
 flowchart TD
-    A["Bill"] --> B["Check"]
+    A["Claim"] --> B["Check"]
     B --> C{"OK?"}
-    C -->|"yes"| D["Approve and pay and email and update ERP"]
+    C -->|"yes"| D["Approve and pay and email and update ledger"]
     C --> E["Reject"]
     D --> F["End"]
 ```
 
 What's wrong:
 
-- **Nouns, not actions.** "Bill" and "Check" don't say what happens. Check *what*? By *whom*?
+- **Nouns, not actions.** "Claim" and "Check" don't say what happens. Check *what*? By *whom*?
 - **No start node and a box called "End".** Readers can't tell where the flow begins, and "End" is an action box, not a final node.
 - **One unguarded branch.** `C --> E` has no label, so it's unclear whether it's `[no]` or "always". In UML, an unguarded arrow from a decision is always taken, which would make both branches run.
-- **Four actions in one box.** "Approve and pay and email and update ERP" hides the parallel work, the ordering and the failure points. What if the ERP update fails after payment?
-- **"Reject" is a dead end.** It has no outgoing arrow and no final node. Does the contractor know? Can they resubmit?
+- **Four actions in one box.** "Approve and pay and email and update ledger" hides the parallel work, the ordering and the failure points. What if the ledger update fails after payment?
+- **"Reject" is a dead end.** It has no outgoing arrow and no final node. Does the policyholder know? Can she resubmit?
 - **No lanes.** Nobody knows who checks or who pays.
 
 ### The same process, drawn well
 
-The swimlane diagram in the visual section fixes each problem: verb-object names, a start and a final node, complete guards, one action per box, parallel checks made explicit, a loop for revisions, and lanes for responsibility. It is longer, but every box answers a question someone will ask.
+The swimlane diagram in the visual section fixes each problem: verb-object names, a start and a final node, complete guards, one action per box, parallel checks made explicit, a loop for queries, and lanes for responsibility. It is longer, but every box answers a question someone will ask.
 
 ### Is more detail always better?
 
-No. The good diagram leaves out the GST invoice check, the measurement book's page numbers and the email template. Put detail in where decisions or hand-offs happen. Leave out detail that doesn't change the flow. For a slide to senior management, five boxes with three lanes may be the right diagram.
+No. The good diagram leaves out the waiting-period check, the room-rent cap and the email template. Put detail in where decisions or hand-offs happen. Leave out detail that doesn't change the flow. For a slide to senior management, five boxes with three lanes may be the right diagram.
 
 :::callout type=mistake title="The join that waits forever"
-A fork starts two branches. Inside one branch, a decision says "[test failed] → Reject → final". If that branch ends at a **flow final** (or any node other than the join), the join never receives its second token. In UML terms the activity is stuck. In code, this is a `Task.WhenAll` that never completes, or a "both tasks done?" check that is never true. Every path inside a forked branch must reach the join, or reach an **activity final**, which ends everything. Exercise 6 asks you to find and fix one.
+A fork starts two branches. Inside one branch, a decision says "[documents missing] → Reject → final". If that branch ends at a **flow final** (or any node other than the join), the join never receives its second token. In UML terms the activity is stuck. In code, this is a `Task.WhenAll` that never completes, or a "both tasks done?" check that is never true. Every path inside a forked branch must reach the join, or reach an **activity final**, which ends everything. Exercise 6 asks you to find and fix one.
 :::
 
 ## Practical playground
 
-Run the workflow with four bills and watch the trace. Then change the inputs: make the lab report fail, set the quantity to exactly the measured value, or set the rate so the net amount is exactly ₹50,00,000 and confirm the director path is taken. Finally, make the fork sequential (await each check in turn) and compare the printed elapsed time.
+Run the workflow with four claims and watch the trace. Then change the inputs: mark the documents as incomplete, set a claim to exactly its admissible amount, or set a claim of exactly ₹5,00,000 and confirm the chief medical officer path is taken. Finally, make the fork sequential (await each check in turn) and compare the printed elapsed time.
 
-:::playground type=csharp title="Trace the RA bill activity"
+:::playground type=csharp title="Trace the claim activity"
 ```csharp file=Program.cs
 using System;
 using System.Collections.Generic;
@@ -645,52 +646,57 @@ using System.Threading.Tasks;
 
 public static class Program
 {
-    private static readonly Dictionary<string, decimal> Measured = new() { ["EMB-CH12"] = 1200m, ["GSB-CH14"] = 800m };
-    private static readonly Dictionary<string, bool> LabPassed = new() { ["EMB-CH12"] = true, ["GSB-CH14"] = false };
-
-    private static async Task<decimal> VerifyMeasurementsAsync(string item, decimal claimed)
+    private static readonly Dictionary<string, decimal> Admissible = new()
     {
-        await Task.Delay(200);                       // the site engineer takes "200 ms"
-        return Math.Min(claimed, Measured.GetValueOrDefault(item));
+        ["ADM-1001"] = 120000m, ["ADM-1002"] = 640000m, ["ADM-1003"] = 70000m, ["ADM-1004"] = 45000m,
+    };
+    private static readonly Dictionary<string, bool> DocumentsComplete = new()
+    {
+        ["ADM-1001"] = true, ["ADM-1002"] = true, ["ADM-1003"] = true, ["ADM-1004"] = false,
+    };
+
+    private static async Task<decimal> ReviewTreatmentAsync(string admission, decimal claimed)
+    {
+        await Task.Delay(200);                       // the medical reviewer takes "200 ms"
+        return Math.Min(claimed, Admissible.GetValueOrDefault(admission));
     }
 
-    private static async Task<bool> ConfirmTestsAsync(string item)
+    private static async Task<bool> CheckDocumentsAsync(string admission)
     {
-        await Task.Delay(300);                       // the lab takes "300 ms"
-        return LabPassed.GetValueOrDefault(item);
+        await Task.Delay(300);                       // the documents team takes "300 ms"
+        return DocumentsComplete.GetValueOrDefault(admission);
     }
 
-    private static async Task<List<string>> RunAsync(string item, decimal qty, decimal rate)
+    private static async Task<List<string>> RunAsync(string admission, decimal claimed)
     {
-        var trace = new List<string> { "Submit RA bill" };
-        var m = VerifyMeasurementsAsync(item, qty);  // fork
-        var t = ConfirmTestsAsync(item);
-        await Task.WhenAll(m, t);                    // join
-        trace.Add("Verify measurements");
-        trace.Add("Confirm test reports");
-        if (await m < qty || !await t) { trace.Add("Revise bill"); return trace; }
-        var net = qty * rate;
-        if (net >= 50_00_000m) trace.Add("Project director sign-off");
-        trace.Add("Approve bill");
-        trace.Add($"Deduct 5% retention (Rs {net * 0.05m:N0})");
-        trace.Add($"Schedule payment (Rs {net * 0.95m:N0})");
+        var trace = new List<string> { "Submit claim" };
+        var r = ReviewTreatmentAsync(admission, claimed);   // fork
+        var d = CheckDocumentsAsync(admission);
+        await Task.WhenAll(r, d);                            // join
+        trace.Add("Review treatment");
+        trace.Add("Check documents");
+        if (await r < claimed || !await d) { trace.Add("Revise claim"); return trace; }
+        if (claimed >= 500000m) trace.Add("Chief medical officer sign-off");
+        trace.Add("Approve claim");
+        trace.Add($"Deduct 10% co-payment (Rs {claimed * 0.10m:N0})");
+        trace.Add($"Schedule bank transfer (Rs {claimed * 0.90m:N0})");
         return trace;
     }
 
     public static async Task Main()
     {
-        var bills = new (string Item, decimal Qty, decimal Rate)[]
+        var claims = new (string Admission, decimal Amount)[]
         {
-            ("EMB-CH12", 1200m, 420m),     // small bill, all good
-            ("EMB-CH12", 1200m, 4500m),    // Rs 54 lakh: needs the director
-            ("EMB-CH12", 1300m, 420m),     // claims more than measured
-            ("GSB-CH14", 800m, 900m),      // lab report failed
+            ("ADM-1001", 120000m),   // three-day stay, all good
+            ("ADM-1002", 640000m),   // Rs 6.4 lakh: needs the chief medical officer
+            ("ADM-1003", 85000m),    // claims more than the reviewer admits
+            ("ADM-1004", 45000m),    // pharmacy receipts missing
         };
-        foreach (var b in bills)
+        foreach (var c in claims)
         {
             var sw = Stopwatch.StartNew();
-            var trace = await RunAsync(b.Item, b.Qty, b.Rate);
-            Console.WriteLine($"{b.Item} {b.Qty} x {b.Rate} ({sw.ElapsedMilliseconds} ms)");
+            var trace = await RunAsync(c.Admission, c.Amount);
+            Console.WriteLine($"{c.Admission} Rs {c.Amount:N0} ({sw.ElapsedMilliseconds} ms)");
             foreach (var step in trace) Console.WriteLine($"   -> {step}");
         }
     }
@@ -698,7 +704,7 @@ public static class Program
 ```
 :::
 
-You should see each run take roughly 300 ms (the slower branch), not 500 ms (the sum). That gap is the fork in action.
+You should see each run take roughly 300 ms (the slower branch), not 500 ms (the sum). That gap is the fork in action. The first claim pays ₹1,08,000 after a ₹12,000 co-payment; the second pays ₹5,76,000 after ₹64,000.
 
 ## Exercises
 
@@ -1019,7 +1025,7 @@ using Xunit;
 
 public class VendorOnboardingTests
 {
-    private static readonly Vendor Acme = new("Acme Infra", "ABCDE1234F", "27ABCDE1234F1Z5", "HDFC0001234", "50100012345678");
+    private static readonly Vendor Acme = new("Acme Traders", "ABCDE1234F", "27ABCDE1234F1Z5", "HDFC0001234", "50100012345678");
 
     private sealed class GatedCheck(string name, bool result) : IVendorCheck
     {
@@ -1154,23 +1160,23 @@ If a single failure should stop the other checks early (to save paid API calls),
 Give each branch its own timeout (for example 5 seconds) using `CancellationTokenSource.CreateLinkedTokenSource(ct)` plus `CancelAfter`, and report `"<Name>: timeout"` separately from errors.
 :::
 
-:::exercise id=m05-activity-diagrams-ex4 difficulty=intermediate kind=written title="Draw a swimlane diagram for building-plan approval"
-A municipal corporation describes its online building-plan approval:
+:::exercise id=m05-activity-diagrams-ex4 difficulty=intermediate kind=written title="Draw a swimlane diagram for a passport application"
+A passport office describes its online application process:
 
-> "The architect uploads drawings and pays the scrutiny fee. The system runs an automatic rule check (setbacks, height, floor area ratio). If the rule check fails, the architect gets the report and can re-upload. If it passes, two things happen at the same time: the fire department reviews the plan (only for buildings above 15 m) and the town-planning engineer does a site inspection. When both are done, the assistant commissioner approves or rejects. On approval the system issues the permit with a QR code and emails the owner."
+> "The applicant fills in the form online, uploads proof of address and date of birth, and pays the fee. The system runs an automatic document check (photo size, file type, name matching across documents). If the check fails, the applicant gets the report and can re-upload. If it passes, two things happen at the same time: the local police verify the applicant's address (only for first-time applicants; renewals with no change of address skip it), and an officer at the passport centre verifies the original documents during the applicant's appointment. When both are done, the granting officer approves or rejects. On approval the system queues the passport for printing and sends an SMS with the courier tracking number."
 
 Write a Mermaid activity diagram with swimlanes. Then list every hand-off between lanes and say how the system should implement each one.
 ::acceptance
-- Lanes for at least: architect, system, fire department, town planning, assistant commissioner.
-- A loop for the failed rule check back to re-upload.
-- A fork and a join around the fire review and site inspection.
-- The "above 15 m" condition is handled so the join never waits for a fire review that doesn't happen.
+- Lanes for at least: applicant, system, police, passport centre, granting officer.
+- A loop for the failed document check back to re-upload, entering through a merge.
+- A fork and a join around the police verification and the centre's document verification.
+- The "first-time applicant" condition is handled so the join never waits for a police verification that doesn't happen.
 - Guards are complete and quoted correctly in Mermaid.
 - Every lane crossing is listed with an implementation mechanism.
 ::hint
 List the verbs first, then put an actor next to each.
 ::hint
-The fire review is conditional, but the join must always receive a token from that branch. Put a decision *inside* the branch with two paths that both lead to the join.
+The police verification is conditional, but the join must always receive a token from that branch. Put a decision *inside* the branch with two paths, and merge them before the join.
 ::hint
 In Mermaid, put each lane in `subgraph id["Title"] ... end` and write cross-lane arrows after the lanes.
 ::hint
@@ -1178,44 +1184,47 @@ Hand-offs to people are usually "create a task in their queue and notify them". 
 ::solution
 ```mermaid
 flowchart TD
-    subgraph arch["Architect"]
+    subgraph app["Applicant"]
         direction TB
         start@{ shape: sm-circ }
-        upload("Upload drawings and pay fee")
-        fix("Read report and fix drawings")
+        mUpload{" "}
+        upload("Fill form, upload documents and pay fee")
+        fix("Read report and re-upload documents")
     end
-    subgraph sys["Approval system"]
+    subgraph sys["Passport system"]
         direction TB
-        rules("Run automatic rule check")
-        passed{"Rule check passed?"}
+        rules("Run automatic document check")
+        passed{"Document check passed?"}
         f1@{ shape: fork }
-        tall{"Height above 15 m?"}
-        skip("Record fire review not required")
+        fresh{"First-time applicant?"}
+        skip("Record police verification not required")
+        mPolice{" "}
         j1@{ shape: fork }
-        issue("Issue permit with QR code")
-        email("Email owner")
+        print("Queue passport for printing")
+        sms("Send SMS with tracking number")
         done@{ shape: framed-circle }
         notify("Notify rejection with reasons")
         stopR@{ shape: framed-circle }
     end
-    subgraph fire["Fire department"]
-        fireReview("Review fire safety")
+    subgraph police["Police"]
+        policeCheck("Verify address")
     end
-    subgraph tp["Town planning"]
-        inspect("Inspect site")
+    subgraph centre["Passport centre"]
+        verifyDocs("Verify original documents")
     end
-    subgraph ac["Assistant commissioner"]
+    subgraph go["Granting officer"]
         decide{"Approve?"}
     end
-    start --> upload --> rules --> passed
-    passed -->|"[no]"| fix --> upload
+    start --> mUpload --> upload --> rules --> passed
+    passed -->|"[no]"| fix --> mUpload
     passed -->|"[yes]"| f1
-    f1 --> tall
-    tall -->|"[yes]"| fireReview --> j1
-    tall -->|"[no]"| skip --> j1
-    f1 --> inspect --> j1
+    f1 --> fresh
+    fresh -->|"[yes]"| policeCheck --> mPolice
+    fresh -->|"[no]"| skip --> mPolice
+    mPolice --> j1
+    f1 --> verifyDocs --> j1
     j1 --> decide
-    decide -->|"[yes]"| issue --> email --> done
+    decide -->|"[yes]"| print --> sms --> done
     decide -->|"[no]"| notify --> stopR
 ```
 
@@ -1223,21 +1232,22 @@ Hand-offs and mechanisms:
 
 | From → to | Mechanism |
 |---|---|
-| Architect → system (upload) | Web upload API; payment via a payment gateway callback |
-| System → architect (failed report) | Email/SMS with a link to the report; status "Returned" on the portal |
-| System → fire department | Task created in the fire department's queue, with an SLA timer |
-| System → town planning | Inspection task assigned to the ward engineer, visible in their mobile app |
-| Fire / town planning → system (join) | Each completes their task via the API; the system checks whether the other branch is done |
-| System → assistant commissioner | Task in the approver's inbox once the join completes |
-| Commissioner → system | Decision submitted via the portal; the system issues the permit or notifies |
+| Applicant → system (upload) | Web upload API; fee via a payment gateway callback, checked for idempotency so a retried callback doesn't create two applications |
+| System → applicant (failed report) | Email/SMS with a link to the report; status "Returned" on the portal |
+| System → police | Verification task created in the police station's queue for the applicant's address, with an SLA timer |
+| System → passport centre | Appointment slot booked; the officer's worklist for that day shows the application |
+| Police / centre → system (join) | Each completes their task via the API; the system checks, in one transaction, whether the other branch is done |
+| System → granting officer | Task in the officer's inbox once the join completes |
+| Granting officer → system | Decision submitted via the portal; the system queues printing or notifies rejection |
 
-The key design point is the decision **inside** the fire branch: for low buildings the branch still produces a token ("Record fire review not required"), so the join is never left waiting.
+The key design point is the decision **inside** the police branch: for renewals the branch still produces a token ("Record police verification not required"), and the two paths meet at a **merge** before the join. If both arrows went straight into the join, the join would wait for a token on each of them, and every application would hang.
 ::mistakes
-- Putting the "above 15 m" decision *before* the fork, with the `[no]` path skipping straight to the join. The join then waits for a fire-branch token that never comes.
+- Putting the "first-time applicant" decision *before* the fork, with the `[no]` path skipping straight to the join. The join then waits for a police-branch token that never comes.
+- Drawing both outcomes of the inner decision directly into the join, without a merge. The join then has three incoming arrows and waits for all three.
 - Unquoted guards like `-->|[yes]|`, which Mermaid can't parse.
-- Drawing the assistant commissioner's decision without a rejection path.
+- Drawing the granting officer's decision without a rejection path.
 ::extensions
-Add an SLA: if the site inspection isn't done in 7 days, escalate to the executive engineer. How do you show a timer in an activity diagram? (UML has an "accept time event" action, an hourglass shape; in Mermaid use an action labelled "Wait 7 days" on a parallel branch, or a note.)
+Add an SLA: if the police verification isn't done in 15 days, escalate to the district superintendent's office. How do you show a timer in an activity diagram? (UML has an "accept time event" action, an hourglass shape; in Mermaid use an action labelled "Wait 15 days" on a parallel branch, or a note.)
 :::
 
 :::exercise id=m05-activity-diagrams-ex5 difficulty=advanced kind=code title="Validate an activity graph and export it to Mermaid"
@@ -1264,7 +1274,7 @@ Build a small tool that checks an activity diagram for structural errors, then w
 
 Tests compare trimmed lines, so indentation is up to you.
 ::acceptance
-- A valid RA-bill-style graph produces no errors.
+- A valid claim-approval-style graph produces no errors.
 - Each rule above is triggered by a dedicated test.
 - `ToMermaid()` produces the exact lines described, including guard brackets and `#quot;` escaping.
 ::hint
@@ -1320,14 +1330,14 @@ public class ActivityGraphTests
     private static List<ActivityNode> ValidNodes() => new()
     {
         new("start", NodeKind.Initial),
-        new("submit", NodeKind.Action, "Submit bill"),
+        new("submit", NodeKind.Action, "Submit claim"),
         new("f1", NodeKind.Fork),
-        new("verify", NodeKind.Action, "Verify measurements"),
-        new("tests", NodeKind.Action, "Confirm test reports"),
+        new("verify", NodeKind.Action, "Review treatment"),
+        new("tests", NodeKind.Action, "Check documents"),
         new("j1", NodeKind.Join),
         new("ok", NodeKind.Decision, "Checks passed?"),
-        new("approve", NodeKind.Action, "Approve bill"),
-        new("revise", NodeKind.Action, "Revise bill"),
+        new("approve", NodeKind.Action, "Approve claim"),
+        new("revise", NodeKind.Action, "Revise claim"),
         new("done", NodeKind.Final),
     };
 
@@ -1409,7 +1419,7 @@ public class ActivityGraphTests
     public void Writes_mermaid()
     {
         var n = ValidNodes(); n.Add(new("m1", NodeKind.Merge));
-        n[1] = new("submit", NodeKind.Action, "Submit \"RA\" bill");
+        n[1] = new("submit", NodeKind.Action, "Submit \"cashless\" claim");
         var lines = new ActivityGraph(n, ValidEdges()).ToMermaid()
             .Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToArray();
         Assert.Equal("flowchart TD", lines[0]);
@@ -1417,7 +1427,7 @@ public class ActivityGraphTests
         Assert.Contains("done@{ shape: framed-circle }", lines);
         Assert.Contains("f1@{ shape: fork }", lines);
         Assert.Contains("j1@{ shape: fork }", lines);
-        Assert.Contains("submit(\"Submit #quot;RA#quot; bill\")", lines);
+        Assert.Contains("submit(\"Submit #quot;cashless#quot; claim\")", lines);
         Assert.Contains("ok{\"Checks passed?\"}", lines);
         Assert.Contains("m1{\" \"}", lines);
         Assert.Contains("start --> submit", lines);
@@ -1547,27 +1557,27 @@ Add `Lane` to `ActivityNode` and emit one `subgraph` per lane, then count lane c
 :::
 
 :::exercise id=m05-activity-diagrams-ex6 difficulty=advanced kind=written title="Find the stuck join"
-A team drew this process for releasing a retention amount at the end of a contract's defect liability period:
+A rental-flat platform drew this process for refunding a tenant's security deposit when they move out:
 
 ```mermaid
 flowchart TD
     start@{ shape: sm-circ }
-    req("Contractor requests retention release")
+    req("Tenant requests deposit refund")
     f1@{ shape: fork }
-    defects("Inspect for defects")
-    dues{"Any dues pending?"}
-    recover("Recover dues")
+    inspect("Inspect flat for damage")
+    dues{"Any unpaid rent or bills?"}
+    recover("Recover dues from deposit")
     ff@{ shape: cross-circ }
-    clearance("Collect no-dues certificate")
+    clearance("Confirm all bills settled")
     j1@{ shape: fork }
-    release("Release retention")
+    refund("Refund deposit")
     done@{ shape: framed-circle }
     start --> req --> f1
-    f1 --> defects --> j1
+    f1 --> inspect --> j1
     f1 --> dues
     dues -->|"[yes]"| recover --> ff
     dues -->|"[no]"| clearance --> j1
-    j1 --> release --> done
+    j1 --> refund --> done
 ```
 
 1. Walk tokens through the diagram. In which case does the process get stuck, and why?
@@ -1576,66 +1586,67 @@ flowchart TD
 ::acceptance
 - Identifies the `[yes]` path ending at a flow final, so the join never receives the second token.
 - Describes the code equivalent (a `Task.WhenAll` or "both done" check that never completes).
-- Gives two valid fixes, for example looping back after recovery, or routing recovery to the join, and argues for one.
+- Gives two valid fixes, for example continuing to the clearance step after recovery, or merging recovery into the join's branch, and argues for one.
 ::hint
 Place a coin on the start and follow it. At the fork, it becomes two coins.
 ::hint
 What does the crossed circle do to a coin? What does the join need?
 ::hint
-Ask the business: after dues are recovered, should the retention still be released?
+Ask the business: after dues are recovered, should the rest of the deposit still be refunded?
 ::solution
-1. At the fork, one token goes to "Inspect for defects" and reaches the join. The other goes to "Any dues pending?". If dues **are** pending, it goes to "Recover dues" and then to a **flow final**, which destroys that token. The join is still waiting for a token on its second incoming arrow, and none will ever come. The retention is never released, and nothing says so. (If dues are not pending, the flow works.)
-2. In code it looks like this: the second branch `return`s early without completing the task the join is waiting on, for example a `TaskCompletionSource` that is never set, or a database flag `NoDuesCollected` that is never set to `true`, so a "release when both flags are true" job never fires. In workflow tools it shows up as an instance stuck "in progress" forever.
+1. At the fork, one token goes to "Inspect flat for damage" and reaches the join. The other goes to "Any unpaid rent or bills?". If dues **are** pending, it goes to "Recover dues from deposit" and then to a **flow final**, which destroys that token. The join is still waiting for a token on its second incoming arrow, and none will ever come. The tenant's deposit is never refunded, and nothing says so. (If no dues are pending, the flow works.)
+2. In code it looks like this: the second branch `return`s early without completing the task the join is waiting on, for example a `TaskCompletionSource` that is never set, or a database flag `DuesCleared` that is never set to `true`, so a "refund when both flags are true" job never fires. In workflow tools it shows up as an instance stuck "in progress" forever, and in real life as an angry tenant on social media.
 3. Fixes:
-   - **Recovery then continue**: `recover --> clearance`. After recovering dues, collect the no-dues certificate, and the token reaches the join. This is almost certainly what the business wants: recovering dues is a step, not a reason to keep the retention forever.
-   - **Recovery reduces the amount**: route `recover` into the join directly, and have "Release retention" pay the balance after recovery.
-   - If the business really wanted "pending dues stops the release", the branch should end at an **activity final** with an explicit "Reject release and notify contractor" action, so the whole activity ends visibly instead of hanging.
+   - **Recovery then continue**: `recover --> clearance`. After recovering the dues, confirm everything is settled, and the token reaches the join. This is almost certainly what the business wants: recovering ₹4,500 of unpaid electricity from a ₹60,000 deposit is a step, not a reason to keep the other ₹55,500.
+   - **Merge the two paths**: add a merge diamond after `recover` and `clearance`, route it into the join, and have "Refund deposit" pay the balance after recovery.
+   - If the business really wanted "pending dues stops the refund", the branch should end at an **activity final** with an explicit "Reject refund and notify tenant" action, so the whole activity ends visibly instead of hanging.
 
 The general rule: inside a forked region, every path must reach the join, or end the whole activity explicitly.
 ::mistakes
 - Saying "the diagram is fine because the `[no]` path works". Diagrams must be correct for every path.
 - Replacing the flow final with an activity final without adding a visible action, so the process ends silently.
+- Fixing it by drawing `recover --> j1` *and* keeping `clearance --> j1`. The join now has three incoming arrows and waits for all of them; use a merge.
 :::
 
 ## Automated testing
 
 An activity diagram is a promise about **paths**. Tests should check those paths.
 
-**1. One test per path through the diagram.** Count the paths: the RA bill diagram has four (checks fail; small bill approved; big bill approved by director; big bill refused by director). Write one test for each, asserting the trace:
+**1. One test per path through the diagram.** Count the paths: the claim diagram has four (checks fail; small claim approved; big claim approved by the chief medical officer; big claim refused by her). Write one test for each, asserting the trace:
 
 ```csharp
-public class BillApprovalWorkflowTests
+public class ClaimApprovalWorkflowTests
 {
-    private static (BillApprovalWorkflow Wf, InMemoryAccountsDesk Accounts) Build(decimal measured, bool labOk, decimal directorCeiling = decimal.MaxValue)
+    private static (ClaimApprovalWorkflow Wf, InMemoryAccountsDesk Accounts) Build(decimal admissible, bool documentsOk, decimal cmoCeiling = decimal.MaxValue)
     {
-        var site = new InMemorySiteEngineerDesk(); site.Record("EMB", measured);
-        var lab = new InMemoryQualityLab(); lab.Record("EMB", labOk);
+        var medical = new InMemoryMedicalReviewDesk(); medical.Record("ADM-7", admissible);
+        var documents = new InMemoryDocumentsDesk(); documents.Record("ADM-7", documentsOk);
         var accounts = new InMemoryAccountsDesk(TimeProvider.System);
-        return (new BillApprovalWorkflow(site, lab, new AutoApprovalDesk(directorCeiling), accounts), accounts);
+        return (new ClaimApprovalWorkflow(medical, documents, new AutoApprovalDesk(cmoCeiling), accounts), accounts);
     }
 
     [Fact]
-    public async Task Exactly_fifty_lakh_needs_director()
+    public async Task Exactly_five_lakh_needs_cmo()
     {
-        var (wf, _) = Build(measured: 1000m, labOk: true);
-        var result = await wf.RunAsync(new RaBill(Guid.NewGuid(), "C-17", "EMB", 1000m, 5000m), CancellationToken.None);
-        Assert.Contains("Project director sign-off", result.Trace);
-        Assert.Equal(2_50_000m, result.Retention);
+        var (wf, _) = Build(admissible: 5_00_000m, documentsOk: true);
+        var result = await wf.RunAsync(new ReimbursementClaim(Guid.NewGuid(), "HP-2291", "ADM-7", 5_00_000m), CancellationToken.None);
+        Assert.Contains("Chief medical officer sign-off", result.Trace);
+        Assert.Equal(50_000m, result.CoPayment);
     }
 
     [Fact]
-    public async Task Failed_lab_check_returns_bill_and_pays_nothing()
+    public async Task Missing_documents_return_claim_and_pay_nothing()
     {
-        var (wf, accounts) = Build(measured: 1000m, labOk: false);
-        var result = await wf.RunAsync(new RaBill(Guid.NewGuid(), "C-17", "EMB", 1000m, 400m), CancellationToken.None);
-        Assert.Equal(BillOutcome.ReturnedForRevision, result.Outcome);
-        Assert.Equal("Revise bill", result.Trace[^1]);
+        var (wf, accounts) = Build(admissible: 40_000m, documentsOk: false);
+        var result = await wf.RunAsync(new ReimbursementClaim(Guid.NewGuid(), "HP-2291", "ADM-7", 40_000m), CancellationToken.None);
+        Assert.Equal(ClaimOutcome.ReturnedWithQuery, result.Outcome);
+        Assert.Equal("Revise claim", result.Trace[^1]);
         Assert.Empty(accounts.Scheduled);
     }
 }
 ```
 
-**2. Test the guard boundaries.** Every guard with a number has two important inputs: exactly on the boundary and one unit either side (₹49,99,999.99, ₹50,00,000, ₹50,00,000.01). Boundaries are where code and diagram most often disagree.
+**2. Test the guard boundaries.** Every guard with a number has two important inputs: exactly on the boundary and one unit either side (₹4,99,999.99, ₹5,00,000, ₹5,00,000.01). Boundaries are where code and diagram most often disagree.
 
 **3. Test that the fork is really parallel.** Use fakes built on `TaskCompletionSource` that record "started" and wait for a release signal, as in exercise 3. A sequential implementation fails because the second branch never starts while the first is held open. Avoid tests based on elapsed time; they are flaky on busy CI machines.
 
@@ -1643,9 +1654,9 @@ public class BillApprovalWorkflowTests
 
 ## Real-world application
 
-- **Approval workflows in government and infrastructure.** Bills, permits, change orders and land acquisition files move through many desks. Activity diagrams with swimlanes are the shared language between the department and the developers, and the lane crossings become the system's task queues and notifications.
+- **Approval workflows in insurance, banking and government.** Insurance claims, loan applications, passport and licence applications move through many desks. Activity diagrams with swimlanes are the shared language between the department and the developers, and the lane crossings become the system's task queues and notifications.
 - **Order fulfilment and payments.** A system like a food-delivery or e-commerce platform has forks (cook while assigning a rider) and many decisions (payment pending, item out of stock). The activity diagram is drawn first; the implementation is often a saga or an orchestrated workflow.
-- **Workflow engines.** Tools such as BPMN engines, Azure Logic Apps, AWS Step Functions and Temporal implement the same ideas as running infrastructure: tasks, choices, parallel branches and joins that wait. Learning activity diagrams makes their models easy to read. (BPMN is a separate standard with a richer notation, but its gateways and lanes map directly to decisions, forks and partitions.)
+- **Workflow engines.** Tools such as BPMN engines, Azure Logic Apps, Azure Durable Functions, AWS Step Functions and Temporal (which has a .NET SDK) implement the same ideas as running infrastructure: tasks, choices, parallel branches and joins that wait. Learning activity diagrams makes their models easy to read. (BPMN is a separate standard with a richer notation, but its gateways and lanes map directly to decisions, forks and partitions.)
 - **ASP.NET Core background processing.** Long-running flows are split into steps run by `BackgroundService` workers reading from a queue, with status stored in PostgreSQL. The activity diagram tells you which steps and which status values you need. See [Background services and hosted workers](#/lesson/m03-background-services).
 - **Requirements workshops.** Drawing the "as-is" process with the people who do it, then the "to-be" process, is one of the fastest ways to find waste: sequential steps that could be parallel, and hand-offs that could be removed.
 
@@ -1663,19 +1674,19 @@ Swimlanes (partitions) group actions by who performs them: a person, a team or a
 ::q intermediate
 How do you make sure guards on a decision are correct?
 ::a
-Check that they are **complete** (at least one is true for every possible input, so the flow can't get stuck) and **exclusive** (at most one is true, so the path is unambiguous). Use `[else]` to guarantee completeness. Be precise at boundaries: "at least ₹50 lakh" (`>=`) with `[else]`, instead of `> 50 lakh` and `< 50 lakh`, which both miss the exact value. Then test the boundary values in code.
+Check that they are **complete** (at least one is true for every possible input, so the flow can't get stuck) and **exclusive** (at most one is true, so the path is unambiguous). Use `[else]` to guarantee completeness. Be precise at boundaries: "at least ₹5 lakh" (`>=`) with `[else]`, instead of `> 5 lakh` and `< 5 lakh`, which both miss the exact value. Then test the boundary values in code.
 ::q intermediate
 You have an activity diagram for a process that takes days and involves several people. How would you implement it in ASP.NET Core?
 ::a
-Not as one long-running method, because the process must survive restarts and wait for humans. Store the process instance in PostgreSQL with a status and the data each step needs. Each lane's action becomes an endpoint or a background job that loads the instance, checks the current status, performs the step and moves it to the next status in a transaction. A fork creates several pending tasks; the join is a check, run whenever a task completes, that all sibling tasks are done. Hand-offs become notifications and inbox queries. For complex flows, consider a workflow engine. The activity diagram stays the same; it defines the statuses, tasks and transitions.
+Not as one long-running method, because the process must survive restarts and wait for humans. Store the process instance in PostgreSQL with a status and the data each step needs. Each lane's action becomes an endpoint or a background job that loads the instance, checks the current status, performs the step and moves it to the next status in a transaction. A fork creates several pending tasks; the join is a check, run whenever a task completes and inside the same transaction (with a row lock or an optimistic concurrency check), that all sibling tasks are done, so two tasks finishing together neither miss nor double-fire the next step. Steps must be idempotent because people double-click and jobs retry. Hand-offs become notifications and inbox queries. For complex flows, consider a workflow engine. The activity diagram stays the same; it defines the statuses, tasks and transitions.
 ::q advanced
 What is the "stuck join" problem and how do you prevent it?
 ::a
-A join waits for a token from every incoming branch. If a path inside one forked branch ends somewhere else, for example at a flow final after a rejection, the join waits forever and the process hangs silently. Prevent it by design rules: every path inside a forked region must reach its join, or end the whole activity with an activity final and a visible action. Put conditional work as a decision *inside* the branch, with both outcomes reaching the join. In code, make sure every branch completes its task, including error paths, and add timeouts and monitoring for instances that stay "in progress" too long. Validators can check this structurally, or by simulating token flows.
+A join waits for a token from every incoming branch. If a path inside one forked branch ends somewhere else, for example at a flow final after a rejection, the join waits forever and the process hangs silently. Prevent it by design rules: every path inside a forked region must reach its join, or end the whole activity with an activity final and a visible action. Put conditional work as a decision *inside* the branch, with both outcomes meeting at a merge before the join (not as two arrows into the join, which would make it wait for both). In code, make sure every branch completes its task, including error paths, and add timeouts and monitoring for instances that stay "in progress" too long. Validators can check this structurally, or by simulating token flows.
 ::q advanced
 When would you choose an activity diagram over a state machine diagram, and when might you need both?
 ::a
-Use an activity diagram when the question is about a **process**: steps, order, parallel work, and who does what. Use a state machine when the question is about **one object's lifecycle**: which states it can be in and which events move it between them. Long business processes often need both: the activity diagram for the workshop with the business and for designing tasks and hand-offs, and a state machine for the main document (the bill: Submitted, UnderVerification, Returned, Approved, Paid) that the code enforces. They must agree: every status change in the activity should be a legal transition in the state machine.
+Use an activity diagram when the question is about a **process**: steps, order, parallel work, and who does what. Use a state machine when the question is about **one object's lifecycle**: which states it can be in and which events move it between them. Long business processes often need both: the activity diagram for the workshop with the business and for designing tasks and hand-offs, and a state machine for the main document (the claim: Submitted, UnderReview, QueryRaised, Approved, Paid) that the code enforces. They must agree: every status change in the activity should be a legal transition in the state machine.
 :::
 
 ## Summary and revision
@@ -1752,14 +1763,14 @@ Which C# code correctly implements a fork and join of two checks?
 - [ ] `await CheckAAsync().ContinueWith(_ => CheckBAsync());`
 > Start both before awaiting, then join with `Task.WhenAll`. The first option is sequential; the third has no join at all.
 ::q multi
-You are drawing an activity diagram for a permit approval with five departments. Which are good practice? (Select all that apply.)
-- [x] One swimlane per department or role
-- [x] Verb-object action names such as "Inspect site"
+You are drawing an activity diagram for a passport application handled by five teams. Which are good practice? (Select all that apply.)
+- [x] One swimlane per team or role
+- [x] Verb-object action names such as "Verify address"
 - [ ] Combining several steps into one box to keep it small, such as "Approve, pay and email"
 - [x] An `[else]` guard on decisions
 > Lanes show responsibility, verb-object names say what happens, and `[else]` keeps guards complete. Combining steps hides failure points and parallelism.
 ::q single
-The business wants to know what states a work order can be in (Draft, Issued, InProgress, Closed) and which events change it. Which diagram should you draw first?
+The business wants to know what states a support ticket can be in (Open, InProgress, Resolved, Closed) and which events change it. Which diagram should you draw first?
 - [ ] Activity diagram
 - [x] State machine diagram
 - [ ] Deployment diagram

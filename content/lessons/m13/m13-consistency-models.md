@@ -108,7 +108,7 @@ So a read may return a value that is "old" in wall-clock terms, as long as every
 
 It is the strongest model that can stay available during partitions for clients that stick to one replica, which makes it attractive for geo-replicated apps. Implementations track dependencies: each write carries the versions it depends on (vector clocks or explicit dependency lists, see [the previous lesson](#/lesson/m13-time-ordering)), and a replica only makes a write visible after its dependencies are visible.
 
-**Anomaly prevented.** A project manager posts in a site-coordination thread: "Pour at pier P7 is cancelled." A site engineer replies: "OK, releasing the transit mixers." A third user must never see the reply without the message it answers — out of context, "releasing the mixers" could be read as "go ahead".
+**Anomaly prevented.** In a team chat (Slack-style), the tech lead posts: "Tonight's 9 pm release is cancelled — the payment bug is back." An engineer replies: "OK, releasing the deploy slot." A third user must never see the reply without the message it answers — out of context, "releasing the deploy" could be read as "go ahead and ship".
 
 **Failure case: partitioned by the wrong key.** The comment service shards comments by `comment_id` across replicas with independent replication. The reply lands on a shard whose replica is caught up; the original lands on one that lags by 3 seconds. Readers see the reply alone. Each shard is "eventually consistent" and the design passed review. The fix: shard by `thread_id` so a thread's comments replicate in order, or carry `depends_on` and hold the reply back until its parent is visible (exercise 4 builds this).
 
@@ -116,7 +116,7 @@ It is the strongest model that can stay available during partitions for clients 
 
 **Definition.** After a client writes, its own later reads return that write or something newer. It says nothing about *other* clients.
 
-**Anomaly prevented — the classic.** A contractor updates their GST number on a supplier portal, clicks Save, and is redirected to the profile page, which reads from a replica that is 300 ms behind. The old GST number appears. The contractor saves again (creating a duplicate audit entry) or calls support.
+**Anomaly prevented — the classic.** A candidate updates their phone number on a job portal, clicks Save, and is redirected to the profile page, which reads from a replica that is 300 ms behind. The old number appears. The candidate saves again (creating a duplicate audit entry) or calls support.
 
 **How often does this happen?** Suppose replica lag is roughly exponential with a mean of 200 ms, and the redirect reads 100 ms after the write. The chance a replica hasn't applied the write yet is about e^(−100/200) = e^(−0.5) ≈ **61 %**. At 50,000 profile saves a day, that's about 30,000 confusing page loads. (The exponential lag model is a simplification; measure your own lag distribution.)
 
@@ -125,13 +125,13 @@ It is the strongest model that can stay available during partitions for clients 
 1. **Read from the leader for a while after writing** (for example 1 s, or until replication lag is known to be smaller). Simple, but adds load on the leader.
 2. **Session token.** The write returns the version (for PostgreSQL, the WAL position, an LSN) it was committed at. The client sends it with later reads; the server reads from any replica that has applied at least that version, waits briefly, or falls back to the leader. This is how Azure Cosmos DB's documented session consistency works conceptually.
 
-**Failure case: read-your-writes per device, not per user.** The token lives in a browser cookie. The contractor saves on their phone, then opens the laptop. The laptop has no token, reads a lagging replica, and shows the old number. If the guarantee must hold across devices, store the token server-side per user (for example in a cache keyed by user id) or pin that user's reads to the leader for a short time.
+**Failure case: read-your-writes per device, not per user.** The token lives in a browser cookie. The candidate saves on their mobile, then opens the laptop. The laptop has no token, reads a lagging replica, and shows the old number. If the guarantee must hold across devices, store the token server-side per user (for example in a cache keyed by user id) or pin that user's reads to the leader for a short time.
 
 ### Monotonic reads
 
 **Definition.** If a client has seen a value at version v, later reads never return an older version. Time never goes backwards for that client.
 
-**Anomaly prevented.** A user refreshes a project dashboard: progress shows 64 %. They refresh again and the load balancer sends them to a more-lagged replica: 61 %. A third refresh: 64 %. The numbers jump around and users stop trusting the dashboard.
+**Anomaly prevented.** A recruiter refreshes the dashboard for a job posting: 64 applications. They refresh again and the load balancer sends them to a more-lagged replica: 61 applications. A third refresh: 64. The numbers jump around and users stop trusting the dashboard.
 
 **Implementations.**
 
@@ -189,11 +189,11 @@ How to read it: the write goes to the primary, which commits at version 1051 and
 
 ```mermaid
 sequenceDiagram
-    participant C as Contractor browser
+    participant C as Candidate browser
     participant API as Profile API
     participant P as Primary
     participant R as Lagging replica
-    C->>API: PUT gstin = 29ABCDE1234F1Z5
+    C->>API: PUT phone = +91 98450 12345
     API->>P: UPDATE profile
     P-->>API: committed at version 1051
     API-->>C: 200 OK with token 1051
@@ -201,13 +201,13 @@ sequenceDiagram
     alt no session token
         C->>API: GET profile
         API->>R: SELECT profile
-        R-->>API: old GSTIN (version 1032)
+        R-->>API: old phone number (version 1032)
         API-->>C: old value - looks like save failed
     else with session token
         C->>API: GET profile with token 1051
         API->>API: replica applied 1032 is below 1051
         API->>P: SELECT profile
-        P-->>API: new GSTIN
+        P-->>API: new phone number
         API-->>C: new value and token 1051
     end
 ```
@@ -216,7 +216,7 @@ The top branch is the bug users report as "my changes didn't save". The bottom b
 
 ## Step-by-step example
 
-A supplier portal: contractors edit their profile (name, city, GSTIN). One primary and two read replicas. Most traffic is reads.
+A job portal: candidates edit their profile (name, city, phone number). One primary and two read replicas. Most traffic is reads.
 
 ### Step 1 — the naive version
 
@@ -254,7 +254,7 @@ Portal.Api/
 ```csharp file=Consistency/InMemoryCluster.cs
 namespace Portal.Consistency;
 
-public sealed record Profile(string UserId, string DisplayName, string City, string Gstin);
+public sealed record Profile(string UserId, string DisplayName, string City, string Phone);
 
 /// <summary>A primary with an append-only log and replicas that have applied a prefix of it.
 /// Stands in for PostgreSQL (WAL LSN) or any leader-follower store.</summary>
@@ -408,7 +408,7 @@ app.Use(async (ctx, next) =>
 
 app.MapPut("/profiles/{id}", (string id, ProfileUpdate body, InMemoryCluster cluster, SessionContext session) =>
 {
-    var version = cluster.Write(new Profile(id, body.DisplayName, body.City, body.Gstin));
+    var version = cluster.Write(new Profile(id, body.DisplayName, body.City, body.Phone));
     session.Token = session.Token.Max(version);
     return Results.Ok(new { version });
 });
@@ -426,7 +426,7 @@ app.MapPost("/admin/replicate", (InMemoryCluster cluster) => { cluster.CatchUpAl
 
 app.Run();
 
-public sealed record ProfileUpdate(string DisplayName, string City, string Gstin);
+public sealed record ProfileUpdate(string DisplayName, string City, string Phone);
 ```
 
 Design notes:
@@ -488,7 +488,7 @@ CREATE TABLE reads (
 INSERT INTO writes VALUES
  (101, 'priya', 1, 'city=Patna'),
  (102, 'arjun', 1, 'city=Pune'),
- (103, 'priya', 3, 'gstin=10ABCDE1234F1Z5'),
+ (103, 'priya', 3, 'phone=+91 98450 12345'),
  (104, 'meera', 2, 'city=Kochi');
 
 INSERT INTO reads VALUES
@@ -723,7 +723,7 @@ Result: `(s1, 3)`, `(s3, 2)`, `(s3, 3)`. A `LAG`-based query would miss `(s3, 3)
 :::
 
 :::exercise id=m13-consistency-models-ex4 difficulty=intermediate kind=code title="Deliver messages in causal order"
-A site-coordination chat replicates messages across regions. Messages can arrive in any order, but each one lists the ids it depends on (the message it replies to). Implement `CausalInbox`, which holds a message back until all its dependencies have been delivered, then delivers it — and any held messages that became deliverable as a result.
+A team chat app replicates messages across regions. Messages can arrive in any order, but each one lists the ids it depends on (the message it replies to). Implement `CausalInbox`, which holds a message back until all its dependencies have been delivered, then delivers it — and any held messages that became deliverable as a result.
 ::requirements
 - `Receive(Message m)` returns the messages delivered *because of* this call, in delivery order (possibly empty).
 - A message whose dependencies are all delivered is delivered immediately.
@@ -1084,9 +1084,9 @@ public async Task Read_after_write_never_sees_older_version()
     var reader = new SessionAwareReader(cluster, TimeProvider.System,
         Options.Create(new SessionReadOptions { MaxReplicaWait = TimeSpan.Zero }));
 
-    cluster.Write(new Profile("42", "Asha", "Patna", "10AAAAA0000A1Z5"));
+    cluster.Write(new Profile("42", "Asha", "Patna", "+91 98450 12345"));
     cluster.CatchUpAll();
-    var v2 = cluster.Write(new Profile("42", "Asha R", "Patna", "10AAAAA0000A1Z5"));   // replicas lag
+    var v2 = cluster.Write(new Profile("42", "Asha R", "Patna", "+91 98450 12345"));   // replicas lag
 
     var read = await reader.ReadAsync("42", new SessionToken(v2), CancellationToken.None);
     Assert.Equal("Asha R", read.Profile!.DisplayName);
@@ -1105,7 +1105,7 @@ public async Task Read_after_write_never_sees_older_version()
 ## Real-world application
 
 - **Azure Cosmos DB** documents five consistency levels — strong, bounded staleness, session, consistent prefix and eventual — and session is the default for new accounts. Its session tokens are the same idea as the lesson's.
-- **PostgreSQL with replicas**: applications implement read-your-writes by capturing `pg_current_wal_lsn()` after a write and comparing with `pg_last_wal_replay_lsn()` on replicas, or simply routing a user to the primary for a short window after a write.
+- **PostgreSQL with replicas**: applications implement read-your-writes by capturing `pg_current_wal_lsn()` after a write and comparing with `pg_last_wal_replay_lsn()` on replicas, or simply routing a user to the primary for a short window after a write. (`pg_current_wal_lsn()` read after the commit may be slightly *ahead* of your commit record, which only makes the check conservative.) A heavier alternative is `synchronous_commit = remote_apply` for the transactions that need it: the commit does not return until a synchronous standby has *applied* it, so reads on that standby see it — at the cost of standby latency on every such commit.
 - **Amazon DynamoDB** offers eventually consistent reads by default and strongly consistent reads on request (for single-region tables).
 - **Chat and social apps** typically partition conversations by conversation id so messages in one thread replicate in order, which gives causal order within a thread cheaply.
 - **etcd and ZooKeeper-based coordination** provide linearizable writes; etcd offers linearizable reads by default and a cheaper "serializable" read option that may be stale — two models on one API.
@@ -1191,7 +1191,7 @@ Write x = 1 completes at 12:00:00.000. A read by another client starts at 12:00:
 - [ ] Linearizable but not sequential
 > The read can be placed before the write in a single agreed order, so it's sequential; real time says the write finished first, so it isn't linearizable.
 ::q single
-A dashboard shows progress 64 %, then 61 %, then 64 % on three refreshes with no new data. What's the cheapest robust fix?
+A recruiter dashboard shows 64 applications, then 61, then 64 on three refreshes with no new data. What's the cheapest robust fix?
 - [ ] Make every read go to the primary.
 - [x] Track the max version the client has seen and only read from replicas at or beyond it.
 - [ ] Increase the cache TTL.

@@ -46,21 +46,21 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-### The drawing register
+### The project report's version log
 
-On an infrastructure project, every drawing goes through revisions. The bridge general arrangement drawing is issued as Revision A, then B after the client's comments, then C "Issued for Construction". The **drawing register** records each revision: what changed, who changed it, who checked it, and when. Nobody overwrites Revision B with C and throws B away; if C turns out to be wrong, the team can go back and see exactly what B said.
+A group of final-year students writes a project report. Version 1 goes to their guide, comes back full of comments and becomes Version 2; Version 3 is the one marked "Submitted to the university". The group keeps a **version log**: what changed in each version, who changed it, who checked it, and when. Nobody overwrites Version 2 with Version 3 and throws 2 away; if the examiner questions something in Version 3, the group can open Version 2 and see exactly what it said.
 
-Git is a drawing register for code:
+Git is that version log for code:
 
-| Drawing office | Git | Technical term |
+| Project report | Git | Technical term |
 |---|---|---|
-| The drawing on your desk that you are editing | the files in your project folder | working directory |
-| The sheets you have marked "ready to issue" | changes you have selected for the next save | staging area (index) |
-| An issued revision with its description, date and author | a saved snapshot with a message | commit |
-| A designer working on "Option 2 with a longer span" without touching the issued set | a separate line of work | branch |
-| Combining Option 2 into the main set after approval | joining branches | merge |
-| The checker who reviews before issue | a colleague reviewing your change | code review |
-| "Please check and approve Revision C" | a request to merge your branch | pull request |
+| The chapter open on your laptop that you are editing | the files in your project folder | working directory |
+| The chapters you have marked "ready for the next version" | changes you have selected for the next save | staging area (index) |
+| A saved version with its note, date and author | a saved snapshot with a message | commit |
+| One student rewriting Chapter 4 in a copy, without touching the agreed report | a separate line of work | branch |
+| Copying the new Chapter 4 into the main report once the group agrees | joining branches | merge |
+| The guide who reads every version before it goes out | a colleague reviewing your change | code review |
+| "Please check and approve Version 3" | a request to merge your branch | pull request |
 
 ### Save points in a game
 
@@ -120,7 +120,7 @@ git branch -d feature/gst-rounding    # delete a branch that has been merged
 A **remote** is another copy of the repository, usually on a server such as GitHub, GitLab or Azure DevOps, named `origin` by default.
 
 ```text
-git clone https://github.com/example/site-billing.git   # copy a repository, with full history
+git clone https://github.com/example/shop-billing.git   # copy a repository, with full history
 git fetch                      # download new commits from origin, change nothing locally
 git pull                       # fetch, then integrate into your current branch
 git push -u origin feature/gst-rounding    # upload your branch the first time
@@ -345,12 +345,12 @@ This sequence diagram follows one change from a laptop to the staging server. Th
 
 ## Step-by-step example
 
-Asha and Ravi work on a site-billing service. Follow along in a scratch folder; every command is real.
+Asha and Ravi work on a shop-billing service for an online store. Follow along in a scratch folder; every command is real.
 
 ### Step 1: create the repository and the first commit
 
 ```text
-mkdir site-billing && cd site-billing
+mkdir shop-billing && cd shop-billing
 git init -b main
 dotnet new console -n Billing
 dotnet new gitignore
@@ -823,7 +823,7 @@ public static class Program
             "wip",
             "Added retry for the SMS gateway when it returns 503 Service Unavailable errors",
             "fix(billing): handle empty invoices\nThey caused a divide by zero.",
-            "feat(reports): add chainage-wise progress export\n\nSite engineers asked for an Excel export per 1 km section.",
+            "feat(reports): add weekly payout export\n\nRestaurant partners asked for an Excel statement per week.",
             "",
         ];
 
@@ -1255,7 +1255,7 @@ Add a `diff3` style option that includes `||||||| base` and the base lines insid
 :::
 
 :::exercise id=m01-git-ex4 difficulty=intermediate kind=written title="Review the reviewer"
-Here are six comments from a real-looking code review of a PR that adds a measurement-book export for a highway project. Rewrite each one so that it is kind, specific and actionable, and label it **blocking**, **suggestion**, **question** or **nit**. Then write a short PR description the author *should* have written.
+Here are six comments from a real-looking code review of a PR that adds a weekly payout export for restaurant partners on a food-delivery platform. Rewrite each one so that it is kind, specific and actionable, and label it **blocking**, **suggestion**, **question** or **nit**. Then write a short PR description the author *should* have written.
 
 1. "Wrong."
 2. "Why didn't you use LINQ? Everyone knows loops are old-fashioned."
@@ -1264,7 +1264,7 @@ Here are six comments from a real-looking code review of a PR that adds a measur
 5. "Did you even test this?"
 6. "I would have done this completely differently." (on a 400-line file, with no further detail)
 
-PR facts: exports chainage-wise quantities (earthwork, GSB, WMM layers) per 1 km section to Excel; 280 lines changed; adds 9 unit tests; tested manually with the NH-48 sample data; does not yet handle sections with no measurements; the ticket is #731.
+PR facts: exports each restaurant's weekly totals (food value, packaging charges, platform commission, net payout) to Excel; 280 lines changed; adds 9 unit tests; tested manually with the Pune sample data; does not yet handle weeks in which a restaurant had no orders; the ticket is #731.
 ::acceptance
 - All six comments rewritten, each with a label and a reason the author can act on.
 - At least one rewritten comment asks a question instead of stating a conclusion.
@@ -1277,30 +1277,31 @@ A useful pattern: observation, impact, suggestion. "When X, Y happens, which mea
 ::hint
 For comment 6, ask yourself whether a large redesign belongs in a PR comment at all, or in a conversation before the next piece of work.
 ::solution
-1. **Blocking.** "The section total adds `WmmQuantity` twice (lines 84 and 91), so the 1 km totals come out about 20 % high on the sample data. I think line 91 should be `GsbQuantity`?"
-2. **Nit (or no comment).** "Optional: `sections.Sum(s => s.Earthwork)` would make this a one-liner. The loop is perfectly fine and arguably clearer here, so feel free to keep it." Often the best version is not to post a preference as if it were a rule.
-3. **Blocking.** "If a 1 km section has no measurements, `measurements.Max()` throws `InvalidOperationException`, and the whole export fails. That happens for sections not yet started. Could we export an empty row for those sections, and add a test with an empty section?"
+1. **Blocking.** "The weekly total adds `PackagingCharges` twice (lines 84 and 91), so net payouts come out about 20 % high on the sample data. I think line 91 should subtract `Commission` instead?"
+2. **Nit (or no comment).** "Optional: `weeks.Sum(w => w.FoodValue)` would make this a one-liner. The loop is perfectly fine and arguably clearer here, so feel free to keep it." Often the best version is not to post a preference as if it were a rule.
+3. **Blocking.** "If a restaurant has no orders in a week, `orders.Max()` throws `InvalidOperationException`, and the whole export fails. That happens for restaurants that were closed for a week. Could we export a zero row for those weeks, and add a test with an empty week?"
 4. **Nit.** "Small one: our convention is PascalCase for methods (`ExportSection`, not `export_section`); see CONTRIBUTING.md. Running `dotnet format` will fix it automatically."
-5. **Question.** "I couldn't see a test for a section that spans the start of the project (chainage 0+000). Did the NH-48 sample include one? If not, would you add one? The nine tests for layer totals read really clearly, by the way."
-6. **Suggestion, moved out of the PR.** "This works and is well tested, so I'm approving. I have some ideas about separating the Excel formatting from the quantity calculation for when we add PDF export. Shall we talk for 15 minutes before that ticket starts?"
+5. **Question.** "I couldn't see a test for a week that spans the end of the financial year (orders on 31 March and 1 April). Did the Pune sample include one? If not, would you add one? The nine tests for payout totals read really clearly, by the way."
+6. **Suggestion, moved out of the PR.** "This works and is well tested, so I'm approving. I have some ideas about separating the Excel formatting from the payout calculation for when we add PDF export. Shall we talk for 15 minutes before that ticket starts?"
 
 PR description:
 
 ```text
-Add chainage-wise measurement export to Excel (#731)
+Add weekly payout export to Excel (#731)
 
-What: Exports earthwork, GSB and WMM quantities per 1 km section of the
-selected project to an .xlsx file from the Measurement Book screen.
+What: Exports food value, packaging charges, commission and net payout
+per restaurant per week to an .xlsx file from the Payouts screen.
 
-Why: Site engineers currently copy these totals by hand for the monthly
-progress report.
+Why: Restaurant partners currently ask support to email these totals,
+and the finance team copies them by hand every Monday.
 
-How tested: 9 new unit tests for section grouping and layer totals.
-Exported the NH-48 sample project and compared 5 sections by hand
-with the existing PDF report.
+How tested: 9 new unit tests for weekly grouping and payout totals.
+Exported the Pune sample data and compared 5 restaurants by hand
+with the existing PDF statement.
 
-Known limitations: sections with no measurements are not handled yet
-(follow-up #745). Large projects over 200 km not performance-tested.
+Known limitations: weeks with no orders are not handled yet
+(follow-up #745). Restaurants with over 10,000 orders a week not
+performance-tested.
 ```
 ::mistakes
 - Softening a blocking issue so much that the author doesn't realise it must be fixed.

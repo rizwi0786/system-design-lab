@@ -8,7 +8,7 @@ template: lesson
 minutes: 95
 prerequisites: [m08-aggregates, m08-domain-events, m08-application-services, m09-transactions-acid, m09-locking]
 related: [m12-sagas, m12-eventual-consistency, m12-outbox, m12-idempotent-consumers, m08-ddd-modular-monolith, m09-isolation-levels]
-tags: [ddd, transactions, consistency, eventual-consistency, process-manager, optimistic-concurrency, procurement, budget]
+tags: [ddd, transactions, consistency, eventual-consistency, process-manager, optimistic-concurrency, college, budget]
 patterns: [Aggregate, Process Manager, Optimistic Offline Lock, Transactional Outbox]
 summary: Change one aggregate per transaction, let other aggregates catch up through events (eventual consistency), coordinate multi-step workflows with an explicit process manager even inside a monolith, and protect each aggregate with a version number and a retry on conflict.
 references:
@@ -24,7 +24,7 @@ references:
     url: https://learn.microsoft.com/ef/core/saving/concurrency
 ---
 
-A purchase order (PO) for ₹18 lakh of reinforcement steel is ready to go to the vendor. Before it is released, the project's budget must have room for it. The tempting design is one database transaction that marks the PO as released **and** adds ₹18 lakh to the project's committed budget. It works on day one. Six months later the project has 400 open POs, ten site engineers release POs at the same time every Monday morning, and every one of those transactions fights over the same budget row. Users see "someone else changed this record, please try again". Worse, a developer "fixes" it by loading the budget without a version check, and two POs both squeeze into the last ₹20 lakh of headroom.
+A college's computer-science department has a purchase order (PO) for ₹18 lakh of laptops for its new lab, ready to go to the vendor. Before it is released, the department's annual budget must have room for it. The tempting design is one database transaction that marks the PO as released **and** adds ₹18 lakh to the department's committed budget. It works on day one. Six months later the department has 400 open POs, ten staff members release POs in the same few minutes at the start of every semester, and every one of those transactions fights over the same budget row. Users see "someone else changed this record, please try again". Worse, a developer "fixes" it by loading the budget without a version check, and two POs both squeeze into the last ₹20 lakh of headroom.
 
 This lesson is about **where to draw transaction lines** in a domain model. The rule of thumb is short: **one aggregate per transaction**. The skill is in what you do with everything else: eventual consistency between aggregates, an explicit **process manager** to coordinate multi-step workflows, and **optimistic concurrency** to keep each aggregate honest when many users touch it at once.
 
@@ -66,7 +66,7 @@ That is the whole lesson in one picture:
 
 An aggregate is defined as the boundary inside which rules must be true *after every operation* (its invariants). By construction, nothing outside it needs to be updated in the same instant for the aggregate to be valid. So a transaction that changes two aggregates is buying a guarantee that, by your own design, you said you did not need. And it is not free:
 
-1. **Contention.** A transaction holds row locks until it commits. If every PO release also updates the project budget row, every release on that project is serialised through one row. With 10 concurrent releases and roughly 50 ms each (an estimate for a typical web request doing a few queries), the last one waits about half a second, and under PostgreSQL's default `READ COMMITTED` with version checks, several fail with conflicts and must retry.
+1. **Contention.** A transaction holds row locks until it commits. If every PO release also updates the department budget row, every release in that department is serialised through one row. With 10 concurrent releases and roughly 50 ms each (an estimate for a typical web request doing a few queries), the last one waits about half a second, and under PostgreSQL's default `READ COMMITTED` with version checks, several fail with conflicts and must retry.
 2. **Deadlocks.** Transaction A updates PO 1 then budget X; transaction B updates budget X then PO 2 then PO 1 (via some other use case). Lock ordering across aggregates is hard to control, and PostgreSQL will abort one of them.
 3. **Coupling.** The PO and the budget can no longer be stored separately, scaled separately, or extracted into separate modules or services. The transaction has welded them together.
 4. **Bigger failure blast radius.** A bug in the budget code now rolls back PO releases.
@@ -80,9 +80,9 @@ Not every rule that *sounds* atomic is. For each cross-aggregate rule, ask the d
 | Rule | Boundary | Why |
 |---|---|---|
 | "PO line total must equal sum of lines" | Inside `PurchaseOrder` | Same aggregate. Always immediate |
-| "Committed budget must never exceed sanctioned budget" | Inside `ProjectBudget` | Budget owns its commitments. Immediate within the budget |
-| "A PO is released only if budget was committed for it" | Across `PurchaseOrder` and `ProjectBudget` | A few seconds in "pending budget" status is fine. Eventual |
-| "When a contract is signed, its value appears in the project commitment" | Across `Contract` and `ProjectBudget` | The dashboard can lag by seconds. Eventual |
+| "Committed budget must never exceed sanctioned budget" | Inside `DepartmentBudget` | Budget owns its commitments. Immediate within the budget |
+| "A PO is released only if budget was committed for it" | Across `PurchaseOrder` and `DepartmentBudget` | A few seconds in "pending budget" status is fine. Eventual |
+| "When an annual maintenance contract is signed, its value appears in the department's commitments" | Across `Contract` and `DepartmentBudget` | The dashboard can lag by seconds. Eventual |
 | "Seat 14C cannot be sold twice" | Inside `Flight` (or `SeatMap`) | Selling twice is real harm. Keep the seats in one aggregate |
 
 Notice the trick in the third row. The rule "never release a PO without budget" is enforced **without** a shared transaction: the PO goes into an intermediate state (`PendingBudget`) and only becomes `Released` after the budget aggregate has *itself* committed the money. The budget's own invariant (never over-commit) is enforced immediately inside the budget. The *combination* is eventually consistent, but it is never wrong in a harmful way: a PO can be "pending" while budget is being checked, never "released without budget".
@@ -125,7 +125,7 @@ Choreography vs orchestration:
 
 ### Optimistic concurrency: protecting one aggregate
 
-Even with one aggregate per transaction, two transactions can change the **same** aggregate. Two buyers commit two POs against the same project budget at the same moment. Both read "₹20 lakh available". Both add ₹15 lakh. Without protection, the second write overwrites the first ("lost update"), or both are kept and the budget is over-committed by ₹10 lakh.
+Even with one aggregate per transaction, two transactions can change the **same** aggregate. Two staff members commit two POs against the same department budget at the same moment. Both read "₹20 lakh available". Both add ₹15 lakh. Without protection, the second write overwrites the first ("lost update"), or both are kept and the budget is over-committed by ₹10 lakh.
 
 **Optimistic concurrency** (Fowler's Optimistic Offline Lock) assumes conflicts are rare and checks for them at save time:
 
@@ -137,13 +137,13 @@ Even with one aggregate per transaction, two transactions can change the **same*
 
 ```sql
 -- PostgreSQL 17: optimistic update of a budget row
-UPDATE project_budgets
+UPDATE department_budgets
 SET    committed = @committed, commitments = @commitments, version = version + 1
 WHERE  id = @id AND version = @expected_version;
 -- 0 rows affected  =>  concurrency conflict, reload and retry
 ```
 
-EF Core does this for you when a property is marked as a concurrency token (`IsConcurrencyToken()`, or PostgreSQL's system column `xmin` via the Npgsql provider) and throws `DbUpdateConcurrencyException`.
+EF Core does this for you when a property is marked as a concurrency token (`IsConcurrencyToken()` on your own `Version` column, or, with the Npgsql provider, a `uint` property configured with `IsRowVersion()`, which maps to PostgreSQL's `xmin` system column) and throws `DbUpdateConcurrencyException`.
 
 **Pessimistic locking** (`SELECT ... FOR UPDATE`) is the alternative: lock the row on read so others wait. It avoids retries but holds locks for the whole use case and is a bad fit for anything with user think-time. Use it for short, very hot rows where conflicts would otherwise be frequent, or for queue-like "claim the next job" patterns (`FOR UPDATE SKIP LOCKED`).
 
@@ -188,7 +188,7 @@ classDiagram
         +ConfirmRelease() void
         +RejectRelease(reason) void
     }
-    class ProjectBudget {
+    class DepartmentBudget {
         +decimal Sanctioned
         +decimal Committed
         +TryCommit(poId, amount) bool
@@ -221,31 +221,31 @@ classDiagram
         +ExecuteAsync(attempt, maxAttempts) Task
     }
     AggregateRoot <|-- PurchaseOrder
-    AggregateRoot <|-- ProjectBudget
+    AggregateRoot <|-- DepartmentBudget
     PoReleaseProcessManager --> PoReleaseProcessState : owns
     PoReleaseProcessManager ..> CommitBudgetHandler : sends CommitBudget
     PoReleaseProcessManager ..> PoCommandHandlers : sends Confirm or Reject
-    CommitBudgetHandler --> ProjectBudget : changes one
+    CommitBudgetHandler --> DepartmentBudget : changes one
     PoCommandHandlers --> PurchaseOrder : changes one
     CommitBudgetHandler ..> OptimisticRetry
     PoCommandHandlers ..> OptimisticRetry
     PurchaseOrder ..> VersionedTable~T~ : stored in
-    ProjectBudget ..> VersionedTable~T~ : stored in
+    DepartmentBudget ..> VersionedTable~T~ : stored in
 ```
 
-How to read it: there are two aggregates, `PurchaseOrder` and `ProjectBudget`, each with a `Version`. No class changes both. Each handler changes exactly one aggregate ("changes one"), wrapped in `OptimisticRetry` for conflicts. The `PoReleaseProcessManager` owns its own small state record and never touches the aggregates directly: it only **sends commands** (dotted arrows) that the handlers execute. All state, including the process state, is stored in versioned tables, so every save is a compare-and-swap on the version.
+How to read it: there are two aggregates, `PurchaseOrder` and `DepartmentBudget`, each with a `Version`. No class changes both. Each handler changes exactly one aggregate ("changes one"), wrapped in `OptimisticRetry` for conflicts. The `PoReleaseProcessManager` owns its own small state record and never touches the aggregates directly: it only **sends commands** (dotted arrows) that the handlers execute. All state, including the process state, is stored in versioned tables, so every save is a compare-and-swap on the version.
 
 ### Sequence diagram
 
 ```mermaid
 sequenceDiagram
-    participant U as Site engineer
+    participant U as Head of department
     participant App as ReleasePurchaseOrderService
     participant PO as PurchaseOrder
     participant OB as Outbox and relay
     participant PM as PoReleaseProcessManager
     participant BH as CommitBudgetHandler
-    participant B as ProjectBudget
+    participant B as DepartmentBudget
     participant PH as PoCommandHandlers
     U->>App: release PO 4471 for 18 lakh
     App->>PO: RequestRelease()
@@ -277,7 +277,7 @@ public async Task ReleaseAsync(Guid poId)
 {
     await using var tx = await db.Database.BeginTransactionAsync();
     var po = await db.PurchaseOrders.FindAsync(poId);
-    var budget = await db.Budgets.FindAsync(po!.ProjectId);
+    var budget = await db.Budgets.FindAsync(po!.DepartmentId);
     if (budget!.Committed + po.Amount > budget.Sanctioned) throw new DomainException("No budget");
     budget.Committed += po.Amount;
     po.Status = PoStatus.Released;
@@ -290,7 +290,7 @@ Two aggregates, one transaction, and no version check on the budget. Under concu
 
 ### Step 2: add a version and see the conflicts
 
-Mark `Version` as a concurrency token. Over-commitment stops, but Monday-morning releases now fail with conflicts on the hot budget row, and the error rolls back the PO change too.
+Mark `Version` as a concurrency token. Over-commitment stops, but start-of-semester releases now fail with conflicts on the hot budget row, and the error rolls back the PO change too.
 
 ### Step 3: split the transaction with an intermediate state
 
@@ -312,7 +312,7 @@ Procurement.Api/
   Domain/
     Primitives.cs              (DomainException, ConcurrencyException, AggregateRoot, IDomainEvent)
     PurchaseOrder.cs
-    ProjectBudget.cs
+    DepartmentBudget.cs
   Application/
     Messages.cs                (commands)
     Ports.cs
@@ -368,9 +368,9 @@ namespace Procurement.Domain;
 
 public enum PoStatus { Draft, PendingBudget, Released, Rejected }
 
-public sealed record PurchaseOrderState(Guid Id, Guid ProjectId, string Number, decimal Amount, PoStatus Status, string? RejectionReason);
+public sealed record PurchaseOrderState(Guid Id, Guid DepartmentId, string Number, decimal Amount, PoStatus Status, string? RejectionReason);
 
-public sealed record PurchaseOrderReleaseRequested(Guid PoId, Guid ProjectId, decimal Amount, DateTimeOffset RequestedAt) : IDomainEvent;
+public sealed record PurchaseOrderReleaseRequested(Guid PoId, Guid DepartmentId, decimal Amount, DateTimeOffset RequestedAt) : IDomainEvent;
 public sealed record PurchaseOrderReleased(Guid PoId) : IDomainEvent;
 public sealed record PurchaseOrderReleaseRejected(Guid PoId, string Reason) : IDomainEvent;
 
@@ -378,32 +378,32 @@ public sealed class PurchaseOrder : AggregateRoot
 {
     private PurchaseOrder(PurchaseOrderState s, int version)
     {
-        Id = s.Id; Version = version; ProjectId = s.ProjectId; Number = s.Number;
+        Id = s.Id; Version = version; DepartmentId = s.DepartmentId; Number = s.Number;
         Amount = s.Amount; Status = s.Status; RejectionReason = s.RejectionReason;
     }
 
-    public Guid ProjectId { get; }
+    public Guid DepartmentId { get; }
     public string Number { get; }
     public decimal Amount { get; }
     public PoStatus Status { get; private set; }
     public string? RejectionReason { get; private set; }
 
-    public static PurchaseOrder Draft(Guid id, Guid projectId, string number, decimal amount)
+    public static PurchaseOrder Draft(Guid id, Guid departmentId, string number, decimal amount)
     {
         if (amount <= 0) throw new DomainException("PO amount must be positive.");
-        return new PurchaseOrder(new PurchaseOrderState(id, projectId, number, amount, PoStatus.Draft, null), version: 0);
+        return new PurchaseOrder(new PurchaseOrderState(id, departmentId, number, amount, PoStatus.Draft, null), version: 0);
     }
 
     public static PurchaseOrder FromState(PurchaseOrderState state, int version) => new(state, version);
 
-    public PurchaseOrderState ToState() => new(Id, ProjectId, Number, Amount, Status, RejectionReason);
+    public PurchaseOrderState ToState() => new(Id, DepartmentId, Number, Amount, Status, RejectionReason);
 
     /// <summary>Step 1 of the release process. Only the PO changes; the budget reacts later.</summary>
     public void RequestRelease(DateTimeOffset at)
     {
         if (Status != PoStatus.Draft) throw new DomainException($"A PO in status {Status} cannot be released.");
         Status = PoStatus.PendingBudget;
-        Raise(new PurchaseOrderReleaseRequested(Id, ProjectId, Amount, at));
+        Raise(new PurchaseOrderReleaseRequested(Id, DepartmentId, Amount, at));
     }
 
     /// <summary>Idempotent: confirming an already released PO does nothing.</summary>
@@ -426,40 +426,40 @@ public sealed class PurchaseOrder : AggregateRoot
 }
 ```
 
-```csharp file=Domain/ProjectBudget.cs
+```csharp file=Domain/DepartmentBudget.cs
 namespace Procurement.Domain;
 
-public sealed record ProjectBudgetState(Guid Id, string ProjectCode, decimal Sanctioned, IReadOnlyDictionary<Guid, decimal> Commitments);
+public sealed record DepartmentBudgetState(Guid Id, string DepartmentCode, decimal Sanctioned, IReadOnlyDictionary<Guid, decimal> Commitments);
 
 public sealed record BudgetCommitted(Guid BudgetId, Guid PoId, decimal Amount) : IDomainEvent;
 public sealed record BudgetCommitmentRefused(Guid BudgetId, Guid PoId, string Reason) : IDomainEvent;
 public sealed record BudgetCommitmentReleased(Guid BudgetId, Guid PoId, decimal Amount) : IDomainEvent;
 
 /// <summary>Aggregate root. Invariant: committed never exceeds sanctioned. Remembers commitments per PO for idempotency.</summary>
-public sealed class ProjectBudget : AggregateRoot
+public sealed class DepartmentBudget : AggregateRoot
 {
     private readonly Dictionary<Guid, decimal> _commitments;
 
-    private ProjectBudget(ProjectBudgetState s, int version)
+    private DepartmentBudget(DepartmentBudgetState s, int version)
     {
-        Id = s.Id; Version = version; ProjectCode = s.ProjectCode; Sanctioned = s.Sanctioned;
+        Id = s.Id; Version = version; DepartmentCode = s.DepartmentCode; Sanctioned = s.Sanctioned;
         _commitments = new Dictionary<Guid, decimal>(s.Commitments);
     }
 
-    public string ProjectCode { get; }
+    public string DepartmentCode { get; }
     public decimal Sanctioned { get; }
     public decimal Committed => _commitments.Values.Sum();
     public decimal Available => Sanctioned - Committed;
 
-    public static ProjectBudget Open(Guid id, string projectCode, decimal sanctioned)
+    public static DepartmentBudget Open(Guid id, string departmentCode, decimal sanctioned)
     {
         if (sanctioned <= 0) throw new DomainException("Sanctioned budget must be positive.");
-        return new ProjectBudget(new ProjectBudgetState(id, projectCode, sanctioned, new Dictionary<Guid, decimal>()), version: 0);
+        return new DepartmentBudget(new DepartmentBudgetState(id, departmentCode, sanctioned, new Dictionary<Guid, decimal>()), version: 0);
     }
 
-    public static ProjectBudget FromState(ProjectBudgetState s, int version) => new(s, version);
+    public static DepartmentBudget FromState(DepartmentBudgetState s, int version) => new(s, version);
 
-    public ProjectBudgetState ToState() => new(Id, ProjectCode, Sanctioned, new Dictionary<Guid, decimal>(_commitments));
+    public DepartmentBudgetState ToState() => new(Id, DepartmentCode, Sanctioned, new Dictionary<Guid, decimal>(_commitments));
 
     public bool TryCommit(Guid poId, decimal amount)
     {
@@ -489,8 +489,8 @@ public sealed class ProjectBudget : AggregateRoot
 namespace Procurement.Application;
 
 // Commands: instructions, each handled by exactly one handler that changes exactly one aggregate.
-public sealed record CommitBudget(Guid ProjectId, Guid PoId, decimal Amount);
-public sealed record ReleaseBudgetCommitment(Guid ProjectId, Guid PoId);
+public sealed record CommitBudget(Guid DepartmentId, Guid PoId, decimal Amount);
+public sealed record ReleaseBudgetCommitment(Guid DepartmentId, Guid PoId);
 public sealed record ConfirmPoRelease(Guid PoId);
 public sealed record RejectPoRelease(Guid PoId, string Reason);
 ```
@@ -507,15 +507,15 @@ public interface IPurchaseOrderRepository
     Task SaveAsync(PurchaseOrder po, CancellationToken ct = default);
 }
 
-public interface IProjectBudgetRepository
+public interface IDepartmentBudgetRepository
 {
-    Task<ProjectBudget?> GetAsync(Guid id, CancellationToken ct = default);
-    Task SaveAsync(ProjectBudget budget, CancellationToken ct = default);
+    Task<DepartmentBudget?> GetAsync(Guid id, CancellationToken ct = default);
+    Task SaveAsync(DepartmentBudget budget, CancellationToken ct = default);
 }
 
 public enum ProcessStep { AwaitingBudget, Completed, Rejected, TimedOut }
 
-public sealed record PoReleaseProcessState(Guid PoId, Guid ProjectId, decimal Amount, ProcessStep Step, DateTimeOffset Deadline);
+public sealed record PoReleaseProcessState(Guid PoId, Guid DepartmentId, decimal Amount, ProcessStep Step, DateTimeOffset Deadline);
 
 public interface IProcessStore
 {
@@ -593,12 +593,12 @@ using Procurement.Domain;
 namespace Procurement.Application;
 
 /// <summary>Changes only the budget. Idempotent because the budget remembers commitments by PO id.</summary>
-public sealed class CommitBudgetHandler(IProjectBudgetRepository budgets)
+public sealed class CommitBudgetHandler(IDepartmentBudgetRepository budgets)
 {
     public Task HandleAsync(CommitBudget cmd, CancellationToken ct) =>
         OptimisticRetry.ExecuteAsync(async () =>
         {
-            var budget = await budgets.GetAsync(cmd.ProjectId, ct) ?? throw new DomainException($"No budget for project {cmd.ProjectId}.");
+            var budget = await budgets.GetAsync(cmd.DepartmentId, ct) ?? throw new DomainException($"No budget for department {cmd.DepartmentId}.");
             budget.TryCommit(cmd.PoId, cmd.Amount);
             await budgets.SaveAsync(budget, ct);
         }, ct: ct);
@@ -606,7 +606,7 @@ public sealed class CommitBudgetHandler(IProjectBudgetRepository budgets)
     public Task HandleAsync(ReleaseBudgetCommitment cmd, CancellationToken ct) =>
         OptimisticRetry.ExecuteAsync(async () =>
         {
-            var budget = await budgets.GetAsync(cmd.ProjectId, ct);
+            var budget = await budgets.GetAsync(cmd.DepartmentId, ct);
             if (budget is null) return;
             budget.ReleaseCommitment(cmd.PoId);
             await budgets.SaveAsync(budget, ct);
@@ -652,10 +652,10 @@ public sealed class PoReleaseProcessManager(IProcessStore store, TimeProvider cl
     {
         if (await store.GetAsync(e.PoId, ct) is not null) return;   // duplicate delivery
 
-        var state = new PoReleaseProcessState(e.PoId, e.ProjectId, e.Amount, ProcessStep.AwaitingBudget, e.RequestedAt + BudgetTimeout);
+        var state = new PoReleaseProcessState(e.PoId, e.DepartmentId, e.Amount, ProcessStep.AwaitingBudget, e.RequestedAt + BudgetTimeout);
         try
         {
-            await store.SaveAsync(state, expectedVersion: 0, new object[] { new CommitBudget(e.ProjectId, e.PoId, e.Amount) }, ct);
+            await store.SaveAsync(state, expectedVersion: 0, new object[] { new CommitBudget(e.DepartmentId, e.PoId, e.Amount) }, ct);
         }
         catch (ConcurrencyException)
         {
@@ -674,7 +674,7 @@ public sealed class PoReleaseProcessManager(IProcessStore store, TimeProvider cl
                 break;
             case ProcessStep.TimedOut:
                 // Compensation: the money arrived after we gave up. Give it back.
-                await store.SaveAsync(state, version, new object[] { new ReleaseBudgetCommitment(state.ProjectId, e.PoId) }, ct);
+                await store.SaveAsync(state, version, new object[] { new ReleaseBudgetCommitment(state.DepartmentId, e.PoId) }, ct);
                 break;
             default:
                 break;   // Completed or Rejected: duplicate, ignore
@@ -762,7 +762,7 @@ public sealed class InMemoryDatabase
     private readonly Channel<object> _outbox = Channel.CreateUnbounded<object>();
 
     public VersionedTable<PurchaseOrderState> PurchaseOrders { get; } = new("PurchaseOrder");
-    public VersionedTable<ProjectBudgetState> Budgets { get; } = new("ProjectBudget");
+    public VersionedTable<DepartmentBudgetState> Budgets { get; } = new("DepartmentBudget");
     public VersionedTable<PoReleaseProcessState> Processes { get; } = new("PoReleaseProcess");
 
     public ChannelReader<object> Outbox => _outbox.Reader;
@@ -791,12 +791,12 @@ public sealed class PurchaseOrderRepository(InMemoryDatabase db) : IPurchaseOrde
     }
 }
 
-public sealed class ProjectBudgetRepository(InMemoryDatabase db) : IProjectBudgetRepository
+public sealed class DepartmentBudgetRepository(InMemoryDatabase db) : IDepartmentBudgetRepository
 {
-    public Task<ProjectBudget?> GetAsync(Guid id, CancellationToken ct = default) =>
-        Task.FromResult(db.Budgets.Get(id) is { } row ? ProjectBudget.FromState(row.State, row.Version) : null);
+    public Task<DepartmentBudget?> GetAsync(Guid id, CancellationToken ct = default) =>
+        Task.FromResult(db.Budgets.Get(id) is { } row ? DepartmentBudget.FromState(row.State, row.Version) : null);
 
-    public Task SaveAsync(ProjectBudget budget, CancellationToken ct = default)
+    public Task SaveAsync(DepartmentBudget budget, CancellationToken ct = default)
     {
         var events = budget.DomainEvents.ToList();
         db.Commit(() => db.Budgets.Save(budget.Id, budget.ToState(), budget.Version), events);
@@ -896,7 +896,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<InMemoryDatabase>();
 builder.Services.AddScoped<IPurchaseOrderRepository, PurchaseOrderRepository>();
-builder.Services.AddScoped<IProjectBudgetRepository, ProjectBudgetRepository>();
+builder.Services.AddScoped<IDepartmentBudgetRepository, DepartmentBudgetRepository>();
 builder.Services.AddScoped<IProcessStore, InMemoryProcessStore>();
 
 builder.Services.AddScoped<ReleasePurchaseOrderService>();
@@ -909,9 +909,9 @@ builder.Services.AddHostedService<ProcessTimeoutWorker>();
 
 var app = builder.Build();
 
-app.MapPost("/budgets", async (OpenBudgetRequest req, IProjectBudgetRepository budgets, CancellationToken ct) =>
+app.MapPost("/budgets", async (OpenBudgetRequest req, IDepartmentBudgetRepository budgets, CancellationToken ct) =>
 {
-    var budget = ProjectBudget.Open(Guid.NewGuid(), req.ProjectCode, req.Sanctioned);
+    var budget = DepartmentBudget.Open(Guid.NewGuid(), req.DepartmentCode, req.Sanctioned);
     await budgets.SaveAsync(budget, ct);
     return Results.Created($"/budgets/{budget.Id}", new { budget.Id });
 });
@@ -939,7 +939,7 @@ app.MapGet("/purchase-orders/{id:guid}", async (Guid id, ReleasePurchaseOrderSer
 
 app.Run();
 
-public sealed record OpenBudgetRequest(string ProjectCode, decimal Sanctioned);
+public sealed record OpenBudgetRequest(string DepartmentCode, decimal Sanctioned);
 public sealed record DraftPoRequest(Guid BudgetId, string Number, decimal Amount);
 ```
 
@@ -961,7 +961,7 @@ If one budget receives hundreds of commitments per second, optimistic retries wi
 ```csharp
 await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
 var po = await db.PurchaseOrders.FindAsync(id);
-var budget = await db.Budgets.FindAsync(po.ProjectId);
+var budget = await db.Budgets.FindAsync(po.DepartmentId);
 var vendor = await db.Vendors.FindAsync(po.VendorId);
 budget.Committed += po.Amount;
 vendor.OpenOrderValue += po.Amount;
@@ -976,7 +976,7 @@ Three aggregates, `SERIALIZABLE` isolation (more serialisation failures under lo
 ### Bad: no version check
 
 ```csharp
-var budget = await budgets.GetAsync(projectId);   // reads Available = 20 lakh
+var budget = await budgets.GetAsync(departmentId);   // reads Available = 20 lakh
 budget.TryCommit(poId, 15_00_000m);
 await budgets.SaveWithoutVersionCheckAsync(budget); // last writer wins
 ```
@@ -989,11 +989,11 @@ One aggregate per transaction, intermediate states, events through an outbox, id
 
 ### Is the improvement worth it?
 
-For a procurement platform with dozens of concurrent users per project and an audit requirement, yes. For a 3-user internal tool, one transaction across two aggregates with a version check may be the sensible, simpler choice. Write the decision down.
+For a university purchasing platform with dozens of concurrent users per department and an audit requirement, yes. For a 3-user internal tool, one transaction across two aggregates with a version check may be the sensible, simpler choice. Write the decision down.
 
 ## Practical playground
 
-The playground simulates ten POs racing to commit against one project budget of ₹1 crore, each for ₹15 lakh, with optimistic concurrency and retries. Run it: exactly six should succeed (₹90 lakh), four should be refused, and the budget should never go over. Then remove the version check in `Save` and run it again to watch the invariant break.
+The playground simulates ten POs racing to commit against one department budget of ₹1 crore, each for ₹15 lakh, with optimistic concurrency and retries. Run it: exactly six should succeed (₹90 lakh), four should be refused, and the budget should never go over. Then remove the version check in `Save` and run it again to watch the invariant break.
 
 :::playground type=csharp title="Ten POs, one budget, optimistic concurrency"
 ```csharp file=Program.cs
@@ -1233,7 +1233,7 @@ An infrastructure contract-management system has these rules. For each, say whet
 
 1. "The sum of a contract's milestone values must equal the contract value."
 2. "A running-account bill cannot be paid if the contract has been terminated."
-3. "The project dashboard's 'total committed' figure includes every signed contract."
+3. "The department dashboard's 'total committed' figure includes every signed contract."
 4. "A vendor cannot be awarded more than 3 active contracts in the same district."
 5. "A measurement-book entry cannot be edited after the bill that includes it is certified."
 6. "A cancelled purchase order's budget commitment is released."
@@ -1254,7 +1254,7 @@ For item 4, a rule over a *set* of aggregates is only enforceable immediately if
 3. **Eventual.** The dashboard is a read model updated by `ContractSigned` events. A lag of a few seconds is harmless. A nightly reconciliation job rebuilds the figure to correct any missed update.
 4. **Cross-aggregate set rule.** Options: (a) model `VendorDistrictAwards` as its own small aggregate keyed by (vendor, district) that must "admit" each award, so the limit is enforced immediately, with contention only per vendor-district pair (low); or (b) check at award time and compensate via a review queue if a concurrent award slips through. For a regulatory limit, (a) is safer and cheap.
 5. **Immediate, but via a fact the entry can check.** Simplest: make measurement entries part of the `Bill` aggregate once they are included in it, so `Bill.Certify()` freezes them in the same aggregate. Alternative: the entry holds `IncludedInBillId` and a `Locked` flag set by a `BillCertified` handler, accepting a small window. If audit requires zero edits after certification, choose the first.
-6. **Eventual.** `PurchaseOrderCancelled` → `ReleaseBudgetCommitment` command, handled idempotently by `ProjectBudget`. For a few seconds the budget shows the money as committed, which is conservative (it can only block a new PO, not over-commit).
+6. **Eventual.** `PurchaseOrderCancelled` → `ReleaseBudgetCommitment` command, handled idempotently by `DepartmentBudget`. For a few seconds the budget shows the money as committed, which is conservative (it can only block a new PO, not over-commit).
 ::mistakes
 - Saying "immediate" for everything because it feels safer, without weighing contention and coupling.
 - Choosing eventual consistency without describing what the user sees in the meantime.
@@ -1615,14 +1615,14 @@ Check the PO id before the switch. Every message record has a `PoId` property, s
 using System;
 using System.Collections.Generic;
 
-public sealed record PoReleaseRequested(Guid PoId, Guid ProjectId, decimal Amount, DateTimeOffset At);
-public sealed record BudgetCommitted(Guid PoId, Guid ProjectId, decimal Amount);
+public sealed record PoReleaseRequested(Guid PoId, Guid DepartmentId, decimal Amount, DateTimeOffset At);
+public sealed record BudgetCommitted(Guid PoId, Guid DepartmentId, decimal Amount);
 public sealed record BudgetRefused(Guid PoId, string Reason);
 
-public sealed record CommitBudget(Guid ProjectId, Guid PoId, decimal Amount);
+public sealed record CommitBudget(Guid DepartmentId, Guid PoId, decimal Amount);
 public sealed record ConfirmPoRelease(Guid PoId);
 public sealed record RejectPoRelease(Guid PoId, string Reason);
-public sealed record ReleaseBudgetCommitment(Guid ProjectId, Guid PoId);
+public sealed record ReleaseBudgetCommitment(Guid DepartmentId, Guid PoId);
 
 public enum ProcessStep { NotStarted, AwaitingBudget, Completed, Rejected, TimedOut }
 
@@ -1633,7 +1633,7 @@ public sealed class PoReleaseProcess
     public PoReleaseProcess(Guid poId) => throw new NotImplementedException();
 
     public Guid PoId { get; }
-    public Guid ProjectId { get; private set; }
+    public Guid DepartmentId { get; private set; }
     public ProcessStep Step { get; private set; }
     public DateTimeOffset? Deadline { get; private set; }
 
@@ -1651,13 +1651,13 @@ using Xunit;
 public class PoReleaseProcessTests
 {
     private static readonly Guid Po = Guid.NewGuid();
-    private static readonly Guid Project = Guid.NewGuid();
+    private static readonly Guid Department = Guid.NewGuid();
     private static readonly DateTimeOffset T0 = new DateTimeOffset(2026, 10, 19, 10, 0, 0, TimeSpan.FromHours(5.5));
 
     private static PoReleaseProcess Started()
     {
         var p = new PoReleaseProcess(Po);
-        p.Handle(new PoReleaseRequested(Po, Project, 1_800_000m, T0));
+        p.Handle(new PoReleaseRequested(Po, Department, 1_800_000m, T0));
         return p;
     }
 
@@ -1665,8 +1665,8 @@ public class PoReleaseProcessTests
     public void Start_sends_commit_budget_and_sets_deadline()
     {
         var p = new PoReleaseProcess(Po);
-        var cmds = p.Handle(new PoReleaseRequested(Po, Project, 1_800_000m, T0));
-        Assert.Equal(new CommitBudget(Project, Po, 1_800_000m), Assert.Single(cmds));
+        var cmds = p.Handle(new PoReleaseRequested(Po, Department, 1_800_000m, T0));
+        Assert.Equal(new CommitBudget(Department, Po, 1_800_000m), Assert.Single(cmds));
         Assert.Equal(ProcessStep.AwaitingBudget, p.Step);
         Assert.Equal(T0.AddHours(2), p.Deadline);
     }
@@ -1675,7 +1675,7 @@ public class PoReleaseProcessTests
     public void Duplicate_start_is_ignored()
     {
         var p = Started();
-        Assert.Empty(p.Handle(new PoReleaseRequested(Po, Project, 1_800_000m, T0)));
+        Assert.Empty(p.Handle(new PoReleaseRequested(Po, Department, 1_800_000m, T0)));
         Assert.Equal(ProcessStep.AwaitingBudget, p.Step);
     }
 
@@ -1683,10 +1683,10 @@ public class PoReleaseProcessTests
     public void Budget_committed_confirms()
     {
         var p = Started();
-        var cmds = p.Handle(new BudgetCommitted(Po, Project, 1_800_000m));
+        var cmds = p.Handle(new BudgetCommitted(Po, Department, 1_800_000m));
         Assert.Equal(new ConfirmPoRelease(Po), Assert.Single(cmds));
         Assert.Equal(ProcessStep.Completed, p.Step);
-        Assert.Empty(p.Handle(new BudgetCommitted(Po, Project, 1_800_000m)));
+        Assert.Empty(p.Handle(new BudgetCommitted(Po, Department, 1_800_000m)));
     }
 
     [Fact]
@@ -1722,17 +1722,17 @@ public class PoReleaseProcessTests
     {
         var p = Started();
         p.Tick(T0.AddHours(2));
-        var cmds = p.Handle(new BudgetCommitted(Po, Project, 1_800_000m));
-        Assert.Equal(new ReleaseBudgetCommitment(Project, Po), Assert.Single(cmds));
+        var cmds = p.Handle(new BudgetCommitted(Po, Department, 1_800_000m));
+        Assert.Equal(new ReleaseBudgetCommitment(Department, Po), Assert.Single(cmds));
         Assert.Equal(ProcessStep.TimedOut, p.Step);
-        Assert.Empty(p.Handle(new BudgetCommitted(Po, Project, 1_800_000m)));
+        Assert.Empty(p.Handle(new BudgetCommitted(Po, Department, 1_800_000m)));
     }
 
     [Fact]
     public void Events_before_start_are_ignored()
     {
         var p = new PoReleaseProcess(Po);
-        Assert.Empty(p.Handle(new BudgetCommitted(Po, Project, 1m)));
+        Assert.Empty(p.Handle(new BudgetCommitted(Po, Department, 1m)));
         Assert.Empty(p.Tick(T0.AddDays(1)));
         Assert.Equal(ProcessStep.NotStarted, p.Step);
     }
@@ -1741,7 +1741,7 @@ public class PoReleaseProcessTests
     public void Refusal_after_completion_is_ignored()
     {
         var p = Started();
-        p.Handle(new BudgetCommitted(Po, Project, 1_800_000m));
+        p.Handle(new BudgetCommitted(Po, Department, 1_800_000m));
         Assert.Empty(p.Handle(new BudgetRefused(Po, "late")));
         Assert.Equal(ProcessStep.Completed, p.Step);
     }
@@ -1750,7 +1750,7 @@ public class PoReleaseProcessTests
     public void Other_po_is_rejected()
     {
         var p = Started();
-        Assert.Throws<ArgumentException>(() => p.Handle(new BudgetCommitted(Guid.NewGuid(), Project, 1m)));
+        Assert.Throws<ArgumentException>(() => p.Handle(new BudgetCommitted(Guid.NewGuid(), Department, 1m)));
     }
 
     [Fact]
@@ -1767,14 +1767,14 @@ The process is a pure function of (current step, message) that returns commands 
 using System;
 using System.Collections.Generic;
 
-public sealed record PoReleaseRequested(Guid PoId, Guid ProjectId, decimal Amount, DateTimeOffset At);
-public sealed record BudgetCommitted(Guid PoId, Guid ProjectId, decimal Amount);
+public sealed record PoReleaseRequested(Guid PoId, Guid DepartmentId, decimal Amount, DateTimeOffset At);
+public sealed record BudgetCommitted(Guid PoId, Guid DepartmentId, decimal Amount);
 public sealed record BudgetRefused(Guid PoId, string Reason);
 
-public sealed record CommitBudget(Guid ProjectId, Guid PoId, decimal Amount);
+public sealed record CommitBudget(Guid DepartmentId, Guid PoId, decimal Amount);
 public sealed record ConfirmPoRelease(Guid PoId);
 public sealed record RejectPoRelease(Guid PoId, string Reason);
-public sealed record ReleaseBudgetCommitment(Guid ProjectId, Guid PoId);
+public sealed record ReleaseBudgetCommitment(Guid DepartmentId, Guid PoId);
 
 public enum ProcessStep { NotStarted, AwaitingBudget, Completed, Rejected, TimedOut }
 
@@ -1791,7 +1791,7 @@ public sealed class PoReleaseProcess
     }
 
     public Guid PoId { get; }
-    public Guid ProjectId { get; private set; }
+    public Guid DepartmentId { get; private set; }
     public ProcessStep Step { get; private set; }
     public DateTimeOffset? Deadline { get; private set; }
 
@@ -1820,10 +1820,10 @@ public sealed class PoReleaseProcess
 
     private IReadOnlyList<object> Start(PoReleaseRequested r)
     {
-        ProjectId = r.ProjectId;
+        DepartmentId = r.DepartmentId;
         Deadline = r.At + BudgetTimeout;
         Step = ProcessStep.AwaitingBudget;
-        return new object[] { new CommitBudget(r.ProjectId, PoId, r.Amount) };
+        return new object[] { new CommitBudget(r.DepartmentId, PoId, r.Amount) };
     }
 
     private IReadOnlyList<object> Move(ProcessStep to, object command)
@@ -1835,7 +1835,7 @@ public sealed class PoReleaseProcess
     private IReadOnlyList<object> Compensate()
     {
         _compensationSent = true;
-        return new object[] { new ReleaseBudgetCommitment(ProjectId, PoId) };
+        return new object[] { new ReleaseBudgetCommitment(DepartmentId, PoId) };
     }
 
     private static Guid? PoIdOf(object m) => m switch
@@ -1875,8 +1875,8 @@ public async Task Release_flows_to_released_when_budget_has_room()
 {
     var db = new InMemoryDatabase();
     var orders = new PurchaseOrderRepository(db);
-    var budgets = new ProjectBudgetRepository(db);
-    var budget = ProjectBudget.Open(Guid.NewGuid(), "NH-44-PKG2", 10_000_000m);
+    var budgets = new DepartmentBudgetRepository(db);
+    var budget = DepartmentBudget.Open(Guid.NewGuid(), "CSE-LAB-2026", 10_000_000m);
     await budgets.SaveAsync(budget);
     var po = PurchaseOrder.Draft(Guid.NewGuid(), budget.Id, "PO-4471", 1_800_000m);
     await orders.SaveAsync(po);
@@ -1894,7 +1894,7 @@ Against real PostgreSQL, add one integration test per repository that loads the 
 
 ## Real-world application
 
-- **Procurement and project-controls systems** commit budgets per PO, per contract and per variation. Splitting "PO" and "budget" into separate transactions with a pending state is how they stay responsive at month-end peaks.
+- **Purchasing and expense systems** (universities, hospitals, corporate spend tools) commit budgets per PO, per contract and per expense claim. Splitting "PO" and "budget" into separate transactions with a pending state is how they stay responsive at month-end and year-end peaks.
 - **E-commerce flash sales** reserve stock per SKU aggregate and confirm orders through a process (reserve, pay, confirm, or release), because a single order-plus-stock transaction does not survive sale-day concurrency.
 - **Banking transfers** between accounts are textbook process managers: debit, credit, and compensate on failure, with every account protected by its own version or ledger sequence.
 - **Ride-hailing and food-delivery platforms** run order lifecycles as explicit state machines (placed, accepted, picked up, delivered) with timeouts ("no driver accepted in 60 seconds: re-dispatch").
@@ -1966,7 +1966,7 @@ A: Outbox delivery is at-least-once, so the same message can arrive more than on
 
 :::quiz pass=70
 ::q single
-Ten site engineers release POs against the same project at 9 a.m. Each release updates the PO and the project budget in one transaction. Users report frequent "record changed" errors. What is the best structural fix?
+Ten staff members release POs against the same department budget at 9 a.m. on the first day of the financial year. Each release updates the PO and the department budget in one transaction. Users report frequent "record changed" errors. What is the best structural fix?
 - [ ] Switch to `SERIALIZABLE` isolation.
 - [ ] Remove the version check on the budget.
 - [x] Change only the PO in the release transaction (status PendingBudget), and commit budget in a separate transaction triggered by an event.

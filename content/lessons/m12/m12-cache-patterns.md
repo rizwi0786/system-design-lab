@@ -144,7 +144,7 @@ Costs:
 
 **Failure behaviour.** Always write the **database first**. If the database write fails, nothing changed and the cache is untouched. If the database succeeds but the cache write fails, try to delete the key (turning it into a cache-aside miss); if that also fails, the TTL bounds the staleness. Never write the cache first: if the database write then fails, readers see a value that never existed.
 
-**When to use:** small, read-after-write-sensitive data where writes are rare compared to reads — user settings, feature flags, restaurant open/closed status, a project's current approval stage.
+**When to use:** small, read-after-write-sensitive data where writes are rare compared to reads — user settings, feature flags, restaurant open/closed status, an order's current delivery stage.
 
 ### 4. Write-behind (write-back)
 
@@ -195,7 +195,7 @@ Benefits: misses disappear for hot keys, so p99 latency stops spiking every TTL 
 
 ### Where HybridCache fits
 
-ASP.NET Core's `HybridCache` (in the `Microsoft.Extensions.Caching.Hybrid` package) gives you a read-through API over two levels: a fast in-process cache (L1) and an optional distributed cache such as Redis (L2). Its `GetOrCreateAsync` runs your loader once per key even when many requests miss together, and it supports tag-based removal. For most read paths, it replaces hand-written cache-aside code:
+ASP.NET Core's `HybridCache` (in the `Microsoft.Extensions.Caching.Hybrid` package) gives you a read-through API over two levels: a fast in-process cache (L1) and an optional distributed cache such as Redis (L2). It shipped as a stable package with .NET 9 and is the recommended default on .NET 9 and 10. Its `GetOrCreateAsync` runs your loader once per key **per instance** even when many requests miss together (it does not coordinate across servers), and it supports tag-based removal (`RemoveByTagAsync`). Any registered `IDistributedCache` becomes its L2 — Redis, or Valkey, the open-source fork that most Linux distributions and cloud providers adopted after Redis's 2024 licence change (Redis 8 later added AGPLv3 as an option); both speak the same protocol and work with the same StackExchange.Redis client. For most read paths, it replaces hand-written cache-aside code:
 
 ```csharp
 // Not compiled in this lesson: HybridCache lives in a NuGet package.
@@ -1769,7 +1769,7 @@ public async Task Update_then_read_returns_new_menu()
 - **User sessions and settings** often use write-through so the next request on any server sees the change.
 - **Counters** (likes, views, "people viewing now", API usage for billing previews) commonly use write-behind: increments in Redis, a periodic job writes totals to the database. Billing itself is then computed from durable data, not from the counters.
 - **Exchange rates, fuel prices, tax tables, feature flags** suit refresh-ahead: a few hundred keys, expensive or rate-limited to fetch, read constantly.
-- **Infrastructure dashboards.** A highway project's chainage-wise progress, aggregated from thousands of daily entries, is a good refresh-ahead candidate: recompute every few minutes in a background job instead of on each dashboard load.
+- **Dashboards.** A food-delivery city dashboard ("orders per zone in the last hour"), aggregated from hundreds of thousands of order rows, is a good refresh-ahead candidate: recompute every minute in a background job instead of on each dashboard load.
 - **Libraries.** `HybridCache` in .NET, and similar libraries in other ecosystems, package read-through with request coalescing and two cache levels.
 
 ## Interview questions

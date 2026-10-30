@@ -84,7 +84,7 @@ traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
              └─ version: 00
 ```
 
-Rules worth memorising: the header is exactly 55 characters; all hex is lowercase; a trace ID or parent ID of all zeros is invalid; a receiver that gets a malformed header must start a new trace rather than fail the request. The second header, `tracestate`, carries vendor-specific key–value pairs and should be passed along unchanged if you do not understand it.
+Rules worth memorising: the header is exactly 55 characters; all hex is lowercase; a trace ID or parent ID of all zeros is invalid; a receiver that gets a malformed header must start a new trace rather than fail the request. (Strictly, the specification also asks parsers to accept a *higher* version if its first four fields still parse, and to reject version `ff`; the teaching parser in this lesson accepts only `00`.) The second header, `tracestate`, carries vendor-specific key–value pairs and should be passed along unchanged if you do not understand it.
 
 ### Activity: .NET's span
 
@@ -93,7 +93,9 @@ Rules worth memorising: the header is exactly 55 characters; all hex is lowercas
 Two pieces of the framework do the heavy lifting:
 
 - **ASP.NET Core hosting** starts an `Activity` for each incoming request. If the request carries a valid `traceparent`, the new activity becomes a child of that remote span (same trace ID, parent ID taken from the header). If not, it starts a new trace. This happens when logging is enabled or when an `ActivityListener` is registered, which in practice is always.
-- **`HttpClient`** attaches `traceparent` (and `baggage`) to every outgoing request when `Activity.Current` is set. No handler to write, no header to remember.
+- **`HttpClient`** attaches `traceparent`, `tracestate` and `baggage` to every outgoing request when `Activity.Current` is set. No handler to write, no header to remember. (Since .NET 10 the default propagator follows the W3C specs for all three; earlier versions sent baggage in a legacy `Correlation-Context` header.)
+
+Automatic propagation has one sharp edge: it also happens on calls to **third parties**. The SMS provider in our scenario receives your trace ID and every baggage entry. Never put personal data in baggage, and for external partners consider an `HttpClient` that strips `baggage` (and, if your policy requires it, `traceparent`) at the egress point.
 
 That covers synchronous HTTP hops end to end. Where you *do* write code is: adding your own spans around meaningful work (`ActivitySource.StartActivity("ChargeCard")`), pushing the IDs into your logs, and crossing non-HTTP boundaries.
 
@@ -202,7 +204,7 @@ We will add correlation to the complaints API in four steps.
 
 ### Step 1 — observe what you already have
 
-Run a plain ASP.NET Core app, make a request, and log something. With the default console logger you already see `TraceId` and `SpanId` on each line, because hosting created an `Activity` and the logger's activity tracking is on. Call another service with `HttpClient` and that service's logs show the *same* `TraceId`. You wrote zero lines for this.
+Run a plain ASP.NET Core app, make a request, and log something. Turn on scopes in the console logger (`IncludeScopes = true`, or use the JSON formatter with scopes) and you see `TraceId` and `SpanId` on each line, because hosting created an `Activity` and the host's default `ActivityTrackingOptions` add them as a scope. With the out-of-the-box simple console settings, scopes are off, which is why many people never notice the IDs are there. Call another service with `HttpClient` and that service's logs show the *same* `TraceId`. You wrote zero lines for this.
 
 ### Step 2 — add a correlation ID that reaches the client
 
@@ -382,23 +384,33 @@ public static class TracePropagation
         headers[CorrelationHeader] = correlationId;
     }
 
-    /// <summary>Starts a consumer activity whose parent is the producer's span, or a new root if no valid header exists.</summary>
-    public static Activity StartConsumerActivity(string name, IReadOnlyDictionary<string, string> headers)
+    /// <summary>Starts a Consumer-kind activity whose parent is the producer's span, or a new root if no valid header exists.
+    /// It is created through an ActivitySource, not `new Activity`, because OpenTelemetry and other exporters only see
+    /// activities from sources they subscribe to. Returns null when nothing is listening, so callers must cope.</summary>
+    public static Activity? StartConsumerActivity(ActivitySource source, string name, IReadOnlyDictionary<string, string> headers)
     {
-        var activity = new Activity(name);
-        if (headers.TryGetValue(TraceParentHeader, out var tp) && TraceParent.TryParse(tp, out var parent) && parent is not null)
+        ActivityContext parent = default;
+        if (headers.TryGetValue(TraceParentHeader, out var tp) && TraceParent.TryParse(tp, out var p) && p is not null)
         {
-            activity.SetParentId(parent.TraceId, parent.ParentId, parent.Flags);
-            if (headers.TryGetValue(TraceStateHeader, out var ts)) activity.TraceStateString = ts;
+            headers.TryGetValue(TraceStateHeader, out var ts);
+            parent = new ActivityContext(p.TraceId, p.ParentId, p.Flags, ts, isRemote: true);
         }
-        activity.SetTag("messaging.operation", "process");
-        return activity.Start();
+        var activity = source.StartActivity(name, ActivityKind.Consumer, parent);
+        activity?.SetTag("messaging.operation.type", "process");   // OpenTelemetry messaging semantic convention
+        return activity;
     }
 
-    public static string ExtractCorrelationId(IReadOnlyDictionary<string, string> headers, Activity activity) =>
+    /// <summary>The trace id carried in the headers, for logging even when no span was started locally.</summary>
+    public static string TraceIdFrom(IReadOnlyDictionary<string, string> headers, Activity? activity) =>
+        activity?.TraceId.ToHexString()
+        ?? (headers.TryGetValue(TraceParentHeader, out var tp) && TraceParent.TryParse(tp, out var p) && p is not null
+            ? p.TraceId.ToHexString()
+            : string.Empty);
+
+    public static string ExtractCorrelationId(IReadOnlyDictionary<string, string> headers, Activity? activity) =>
         headers.TryGetValue(CorrelationHeader, out var id) && CorrelationIdMiddleware.IsAcceptable(id)
             ? id
-            : activity.TraceId.ToHexString();
+            : activity?.TraceId.ToHexString() ?? Guid.NewGuid().ToString("N");
 }
 ```
 
@@ -430,26 +442,27 @@ namespace Complaints.Api.Messaging;
 
 /// <summary>Consumes ComplaintFiled messages. Each message is processed inside a child Activity of the
 /// producer's span and a logging scope carrying the original correlation id.</summary>
-public sealed class SmsWorker(IMessageBus bus, ILogger<SmsWorker> logger) : BackgroundService
+public sealed class SmsWorker(IMessageBus bus, ActivitySource source, ILogger<SmsWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         await foreach (var envelope in bus.ReadAllAsync(stoppingToken))
         {
-            using var activity = TracePropagation.StartConsumerActivity("SmsWorker.Process", envelope.Headers);
+            using var activity = TracePropagation.StartConsumerActivity(source, "SmsWorker.Process", envelope.Headers);
             var correlationId = TracePropagation.ExtractCorrelationId(envelope.Headers, activity);
+            var traceId = TracePropagation.TraceIdFrom(envelope.Headers, activity);
 
-            using (logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = correlationId, ["TraceId"] = activity.TraceId.ToHexString() }))
+            using (logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = correlationId, ["TraceId"] = traceId }))
             {
                 try
                 {
                     logger.LogInformation("Sending SMS for {MessageType}: {Body}", envelope.Type, envelope.Body);
                     await Task.Delay(20, stoppingToken);                     // pretend to call the SMS provider
-                    activity.SetTag("sms.status", "sent");
+                    activity?.SetTag("sms.status", "sent");
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    activity.SetStatus(ActivityStatusCode.Error, ex.Message);
+                    activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
                     logger.LogError(ex, "SMS send failed");
                 }
             }
@@ -536,7 +549,7 @@ builder.Services.AddOpenTelemetry()
         .AddOtlpExporter());                       // to a collector, Tempo, Jaeger, etc.
 ```
 
-`ParentBasedSampler` honours the `trace-flags` bit from upstream: if the gateway decided to sample a trace, every service keeps it, so you never get half a trace.
+`ParentBasedSampler` honours the `trace-flags` bit from upstream: if the gateway decided to sample a trace, every service keeps it, so you never get half a trace. Add `builder.Logging.AddOpenTelemetry(o => o.AddOtlpExporter())` as well and every exported log record carries its trace and span IDs as first-class fields, so the backend can jump from a span to its log lines without any text search. Once a listener such as OpenTelemetry subscribes to `Complaints.Api`, the `RouteToWard` and `SmsWorker.Process` spans in the code above stop being `null` and appear in the trace tree; without one, `StartActivity` returns `null` and the code still works, logging the IDs it received.
 
 ### Propagating to PostgreSQL
 
@@ -920,7 +933,7 @@ public static class TracePropagation
 }
 ```
 
-The consumer becomes a child of the producer's span even though it starts later and elsewhere. In a real worker, wrap the whole message handler in `using var activity = StartConsumerActivity(...)` and open a logging scope with the correlation ID immediately after.
+The consumer becomes a child of the producer's span even though it starts later and elsewhere. In a real worker, wrap the whole message handler in `using var activity = StartConsumerActivity(...)` and open a logging scope with the correlation ID immediately after. One production difference: `new Activity(...)` keeps this exercise testable without a listener, but exporters such as OpenTelemetry only see activities created by an `ActivitySource` they subscribe to. The lesson's `SmsWorker` therefore uses `source.StartActivity(name, ActivityKind.Consumer, parentContext)` and copes with a `null` result.
 ::alternatives
 With OpenTelemetry installed, `Propagators.DefaultTextMapPropagator.Inject(...)` and `.Extract(...)` do the same with a carrier delegate, and the broker instrumentation packages call them for you. Use those in production; this exercise shows what they do.
 ::mistakes
@@ -1124,7 +1137,8 @@ public async Task Invalid_incoming_header_is_replaced()
 - **Payment and banking integrations** commonly require a client reference on every call and echo it back; it doubles as both idempotency key and correlation ID. See [Idempotency keys](#/lesson/m10-idempotency).
 - **Government service portals** that integrate several departments' systems lean heavily on correlation IDs because the departments rarely share a tracing backend. The ID in logs is the lowest common denominator that still works.
 - **OpenTelemetry** is now the default way to export spans from .NET; its instrumentation libraries for ASP.NET Core, `HttpClient`, Npgsql, RabbitMQ and Kafka do the inject/extract work shown in this lesson. The [Logs, metrics, traces and OpenTelemetry](#/lesson/m14-observability) lesson covers the backends and dashboards.
-- **Infrastructure monitoring platforms** that ingest site data from mobile apps, drones and contractor portals need correlation across uploads, processing jobs and report generation that may be hours apart. A correlation ID stored on the upload record and reused by each job's logs is what makes a "why is my report missing?" question answerable.
+- **Document and photo pipelines** (KYC uploads on a fintech app, menu photos on a food-delivery platform, prescriptions on a pharmacy app) pass each upload through virus scanning, OCR and manual review jobs that may be hours apart. A correlation ID stored on the upload record and reused by each job's logs is what makes a "why is my KYC still pending?" question answerable.
+
 
 ## Interview questions
 

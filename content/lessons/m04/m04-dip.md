@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 80
 prerequisites: [m01-interfaces-abstract, m03-dependency-injection, m04-isp]
-related: [m04-di-vs-service-locator, m04-testability, m02-hexagonal, m02-clean-onion, m08-domain-vs-infra, m06-adapter]
+related: [m04-solid-in-practice, m04-di-vs-service-locator, m04-testability, m02-hexagonal, m02-clean-onion, m08-domain-vs-infra, m06-adapter]
 tags: [solid, architecture, ports-and-adapters, testing, gst]
 patterns: [Ports and Adapters]
 summary: Make business rules own the interfaces they need, and make databases, HTTP clients and clocks plug into them — so the important code never depends on the replaceable code.
@@ -47,7 +47,7 @@ Think about a wall socket in your house. Your laptop charger doesn't care whethe
 
 Now imagine the opposite: your laptop is wired directly into the coal plant. When the city switches to solar, you need a new laptop.
 
-Most beginner code is wired like that second laptop. An `InvoiceService` (the important part: business rules about tax and invoices) directly creates an HTTP client for a government portal, opens a database connection, reads the system clock and sends email. When the portal changes its API, the business rules have to be edited. When you want to test a tax rule, you need the real portal, a real database and the right date.
+Most beginner code is wired like that second laptop. Picture a pharmacy chain's billing code. An `InvoiceService` (the important part: business rules about GST on medicines sold to hospitals) directly creates an HTTP client for a government portal, opens a database connection, reads the system clock and sends email. When the portal changes its API, the business rules have to be edited. When you want to test a tax rule, you need the real portal, a real database and the right date.
 
 DIP says: **let the important code define the socket.** The invoice code says "I need *something that can register an invoice with the tax authority*" and declares that as an interface. The HTTP code then implements that interface. Now the HTTP code depends on the business code, not the other way round. That reversal of the arrow is the "inversion".
 
@@ -66,6 +66,12 @@ Robert C. Martin's 1996 formulation:
 
 "High-level" means *closer to the purpose of the system*: the rule that an inter-state invoice charges IGST instead of CGST + SGST. "Low-level" means *closer to the machine*: JSON over HTTPS, SQL, SMTP.
 
+A precise one-line version you can say in an interview: **source-code dependencies should point towards policy; the policy declares the abstractions it needs, and the details implement them.** Three words in that sentence carry the weight:
+
+- **Abstraction** means an interface or abstract class *shaped by the needs of its user*, not a mirror of whatever the detail happens to offer. `IInvoiceStore.SaveAsync(Invoice)` is an abstraction; `INpgsqlWrapper.ExecuteAsync(string sql)` is the detail wearing an interface.
+- **Depend** means "names it in source code" (a `using`, a type in a signature, a project reference), not "calls it at runtime".
+- **Owns** means the abstraction ships in the policy's package and changes only when the policy's needs change.
+
 ### What exactly is inverted?
 
 In naive layered code, both the *call* and the *source-code dependency* go downward: `InvoiceService` → `GspClient` → `HttpClient`. With DIP, calls still go downward at runtime (the service still triggers the HTTP request), but the **source-code dependency points upward**: `GspHttpRegistrationPortal` (infrastructure) references `IInvoiceRegistrationPortal` (application). The flow of control and the direction of dependency now point in opposite directions. That's the inversion.
@@ -82,6 +88,18 @@ A second inversion is easy to miss: **ownership**. The interface lives *with the
 
 You can do DI without DIP (inject a concrete `SqlInvoiceRepository` from the infrastructure project). You can do DIP without a container (wire everything by hand with `new` in `Main`). In ASP.NET Core you usually use all three together, which is why they blur.
 
+A fourth term, **inversion of control (IoC)**, is the broadest of all: *the framework calls your code instead of your code calling the framework* (the "Hollywood principle": don't call us, we'll call you). ASP.NET Core calling your endpoint handler, xUnit calling your `[Fact]` and a `BackgroundService` loop are all IoC. Dependency injection is one form of IoC (the container, not your class, decides which object you get); DIP is a separate rule about which way source dependencies point.
+
+### Classic examples interviewers use
+
+**Button and lamp (from Martin's 1996 paper).** A `Button` class that calls `Lamp.TurnOn()` directly can only ever switch lamps. Invert it: `Button` owns an `ISwitchable` interface with `TurnOn()`/`TurnOff()`, and `Lamp`, `Fan` and `Geyser` implement it. The button (policy: "a press toggles the device") is now reusable, and the arrow from `Lamp` points up at `ISwitchable`. The important detail is *where `ISwitchable` lives*: next to `Button`, not next to `Lamp`.
+
+**The copy program (same paper).** `Copy()` reads characters from the keyboard and writes them to a printer. When someone needs "copy to disk", the naive fix adds a flag and an `if`. The DIP fix: `Copy(IReader reader, IWriter writer)`. The copy rule never changes again; new devices are new implementations.
+
+**Report generator and database.** `SalesReport` creates a `MySqlConnection` and runs SQL inline. Moving to PostgreSQL, or testing the report's totals, means editing or running the report against a real database. Invert it: `SalesReport` asks an `ISalesSource` (owned by the reporting code) for `IReadOnlyList<Sale> ForMonth(int year, int month)`, and a `PostgresSalesSource` implements it.
+
+All three have the same shape as this lesson's invoicing example: a rule that should outlive its devices, an interface written in the rule's words, and devices that plug in from outside. If you want to see DIP working alongside the other four SOLID principles on one feature, see [SOLID in practice](#/lesson/m04-solid-in-practice).
+
 ### Why it exists — the problem
 
 When business rules depend directly on details:
@@ -93,7 +111,7 @@ When business rules depend directly on details:
 
 ### How it works internally
 
-At compile time, a project reference is a one-way arrow. If `Billing.Infrastructure` references `Billing.Application`, then the application project cannot reference infrastructure back, or you'd have a cycle, which MSBuild rejects. That compile-time rule is what *enforces* DIP: the application project literally cannot see `HttpClient`-based adapters.
+At compile time, a project reference is a one-way arrow. If `Pharmacy.Infrastructure` references `Pharmacy.Application`, then the application project cannot reference infrastructure back, or you'd have a cycle, which MSBuild rejects. That compile-time rule is what *enforces* DIP: the application project literally cannot see `HttpClient`-based adapters.
 
 At runtime, something must create the adapter and hand it to the use case. That place is the **composition root**: `Program.cs` in ASP.NET Core. It's the one place allowed to know every concrete type. The container resolves `IssueInvoiceHandler`, sees it needs an `IInvoiceRegistrationPortal`, finds the registered `GspHttpRegistrationPortal`, builds it (with its typed `HttpClient`), and injects it.
 
@@ -104,11 +122,12 @@ At runtime, something must create the adapter and hand it to the use case. That 
 - Several **hosts** (API, worker, CLI) share the same business logic.
 - Teams work on business logic and integrations **in parallel**.
 
-### When it is unnecessary
+### When it is unnecessary (and when it is overkill)
 
 - The dependency is **stable, pure and in-process**: `Math`, `string`, `List<T>`, `decimal`, a pure `GstCalculator` you wrote yourself. Wrapping these in interfaces adds indirection and nothing else.
 - A **small CRUD app or a script** where the "business logic" is "save the form". Use the framework directly (EF Core `DbContext` in the endpoint) and keep it simple.
 - The code is **at the edge already**: an adapter can depend on `HttpClient` directly. That's its job.
+- **A prototype or a throwaway spike.** If the code will be deleted in two weeks, the extra projects and interfaces are cost with no payback. Add the port when the second implementation (or the first test) actually appears; extracting an interface from a concrete class is a two-minute refactoring in any IDE.
 
 ### Trade-offs it introduces
 
@@ -203,7 +222,7 @@ The handler talks only to ports. The tax calculation is a pure step with no depe
 
 ## Step-by-step example
 
-The scenario: an engineering consultancy issues GST e-invoices to state road agencies. Indian e-invoicing requires the invoice to be registered on an Invoice Registration Portal (IRP), usually through a GST Suvidha Provider (GSP), which returns an Invoice Reference Number (IRN). Intra-state invoices charge CGST + SGST; inter-state ones charge IGST.
+The scenario: a pharmacy chain also runs a wholesale arm that supplies medicines in bulk to hospitals and clinics. These are business-to-business (B2B) sales, and because the chain's turnover is above the e-invoicing threshold (₹5 crore at the time of writing), every B2B invoice must be registered on a government Invoice Registration Portal (IRP), usually through a GST Suvidha Provider (GSP). The portal returns an Invoice Reference Number (IRN) that must be printed on the invoice. Intra-state invoices (a Bengaluru store supplying a Bengaluru hospital) charge CGST + SGST; inter-state ones (Haryana warehouse to a Mumbai hospital) charge IGST.
 
 ### Step 1 — list every dependency of the business class
 
@@ -244,27 +263,27 @@ The HTTP code moves into `GspHttpRegistrationPortal`, which maps `Invoice` to th
 
 ## Production-style C# implementation
 
-Project layout (shown as folders; in a real solution these are three projects, and `Billing.Infrastructure` references `Billing.Application`, never the reverse):
+Project layout (shown as folders; in a real solution these are three projects, and `Pharmacy.Infrastructure` references `Pharmacy.Application`, never the reverse):
 
 ```text
-Billing.Application/
+Pharmacy.Application/
   Invoices/Invoice.cs
   Invoices/Ports.cs
   Invoices/IssueInvoiceHandler.cs
-Billing.Infrastructure/
+Pharmacy.Infrastructure/
   Gsp/GspHttpRegistrationPortal.cs
   Persistence/PostgresInvoiceStore.cs
   Persistence/InMemoryInvoiceStore.cs
-Billing.Api/
+Pharmacy.Api/
   Program.cs
 ```
 
-```csharp file=Billing.Application/Invoices/Invoice.cs
-namespace Billing.Application.Invoices;
+```csharp file=Pharmacy.Application/Invoices/Invoice.cs
+namespace Pharmacy.Application.Invoices;
 
 public enum InvoiceStatus { Draft, Registered, Rejected, PendingRegistration }
 
-public sealed record InvoiceLine(string Description, string SacCode, decimal TaxableValue, decimal GstRatePercent);
+public sealed record InvoiceLine(string Description, string HsnCode, decimal TaxableValue, decimal GstRatePercent);
 
 public sealed record TaxBreakup(decimal Taxable, decimal Cgst, decimal Sgst, decimal Igst)
 {
@@ -304,8 +323,8 @@ public static class GstCalculator
 }
 ```
 
-```csharp file=Billing.Application/Invoices/Ports.cs
-namespace Billing.Application.Invoices;
+```csharp file=Pharmacy.Application/Invoices/Ports.cs
+namespace Pharmacy.Application.Invoices;
 
 // Ports: owned by the application, written in its language. Adapters in Infrastructure implement them.
 
@@ -330,10 +349,10 @@ public interface IInvoiceStore
 }
 ```
 
-```csharp file=Billing.Application/Invoices/IssueInvoiceHandler.cs
+```csharp file=Pharmacy.Application/Invoices/IssueInvoiceHandler.cs
 using Microsoft.Extensions.Logging;
 
-namespace Billing.Application.Invoices;
+namespace Pharmacy.Application.Invoices;
 
 public sealed record IssueInvoiceCommand(string InvoiceNo, string SupplierGstin, string BuyerGstin, IReadOnlyList<InvoiceLine> Lines);
 public sealed record IssueInvoiceResult(string InvoiceNo, InvoiceStatus Status, string? Irn, decimal Total, string? Reason);
@@ -383,12 +402,12 @@ public sealed class IssueInvoiceHandler(
 }
 ```
 
-```csharp file=Billing.Infrastructure/Gsp/GspHttpRegistrationPortal.cs
+```csharp file=Pharmacy.Infrastructure/Gsp/GspHttpRegistrationPortal.cs
 using System.Net;
 using System.Net.Http.Json;
-using Billing.Application.Invoices;
+using Pharmacy.Application.Invoices;
 
-namespace Billing.Infrastructure.Gsp;
+namespace Pharmacy.Infrastructure.Gsp;
 
 /// <summary>Adapter: translates the application's port into the provider's HTTP API, and HTTP failures into business outcomes.</summary>
 public sealed class GspHttpRegistrationPortal(HttpClient http) : IInvoiceRegistrationPortal
@@ -427,12 +446,12 @@ public sealed class GspHttpRegistrationPortal(HttpClient http) : IInvoiceRegistr
 }
 ```
 
-```csharp file=Billing.Infrastructure/Persistence/PostgresInvoiceStore.cs
+```csharp file=Pharmacy.Infrastructure/Persistence/PostgresInvoiceStore.cs
 using System.Data.Common;
 using System.Text.Json;
-using Billing.Application.Invoices;
+using Pharmacy.Application.Invoices;
 
-namespace Billing.Infrastructure.Persistence;
+namespace Pharmacy.Infrastructure.Persistence;
 
 /// <summary>Adapter over ADO.NET's DbDataSource. In production the DbDataSource is an NpgsqlDataSource.
 /// Table: invoices(invoice_no text primary key, status text, irn text null, body jsonb).</summary>
@@ -461,11 +480,11 @@ public sealed class PostgresInvoiceStore(DbDataSource db) : IInvoiceStore
 }
 ```
 
-```csharp file=Billing.Infrastructure/Persistence/InMemoryInvoiceStore.cs
+```csharp file=Pharmacy.Infrastructure/Persistence/InMemoryInvoiceStore.cs
 using System.Collections.Concurrent;
-using Billing.Application.Invoices;
+using Pharmacy.Application.Invoices;
 
-namespace Billing.Infrastructure.Persistence;
+namespace Pharmacy.Infrastructure.Persistence;
 
 /// <summary>Second real implementation of the port: local development and integration tests.</summary>
 public sealed class InMemoryInvoiceStore : IInvoiceStore
@@ -477,9 +496,9 @@ public sealed class InMemoryInvoiceStore : IInvoiceStore
 ```
 
 ```csharp file=Program.cs
-using Billing.Application.Invoices;
-using Billing.Infrastructure.Gsp;
-using Billing.Infrastructure.Persistence;
+using Pharmacy.Application.Invoices;
+using Pharmacy.Infrastructure.Gsp;
+using Pharmacy.Infrastructure.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -518,6 +537,8 @@ Points worth noticing:
 - **`GstCalculator` is concrete and static.** It's pure and deterministic; inverting it would add an interface with no second implementation.
 - **`TimeProvider` is used as-is.** It's already an abstraction from the BCL. Defining your own `IClock` is no longer needed on .NET 8+.
 - **`PostgresInvoiceStore` depends on `DbDataSource`**, an ADO.NET abstraction. In production, `AddNpgsqlDataSource` registers an `NpgsqlDataSource`, which *is* a `DbDataSource`. Even the adapter depends on an abstraction where one already exists.
+- **Resilience belongs to the adapter's wiring, not the policy.** In production add `.AddStandardResilienceHandler()` (package `Microsoft.Extensions.Http.Resilience`) to the typed client for timeouts, retries with jitter and a circuit breaker. Retrying registration is safe because the IRP rejects a second registration of the same invoice number for the same GSTIN and financial year, which the adapter can map back to the existing IRN.
+- **"Pending" needs an owner.** A `PendingRegistration` invoice must not be forgotten: a `BackgroundService` (or a scheduled job) re-submits pending invoices through the same port, and a metric or alert on "pending older than 1 hour" tells operations the portal has been down too long. Hospitals cannot book an invoice without an IRN, so this is a business problem, not just a technical one.
 
 ## Bad design vs good design
 
@@ -542,7 +563,7 @@ public class InvoiceService
         await conn.OpenAsync();
         // INSERT ... with string-concatenated values
 
-        new SmtpClient("smtp.office.example").Send("billing@...", "agency@...", "Invoice " + invoiceNo, "IRN " + irn);
+        new SmtpClient("smtp.office.example").Send("billing@...", "accounts@hospital...", "Invoice " + invoiceNo, "IRN " + irn);
         return irn!;
     }
 }
@@ -569,7 +590,7 @@ The implementation above: the handler owns the ports, the adapters translate tec
 
 Other common ways DIP goes wrong:
 
-- **Interfaces in the wrong project.** `IInvoiceRepository` sitting in `Billing.Infrastructure` next to its implementation. The application must still reference infrastructure, so nothing is inverted.
+- **Interfaces in the wrong project.** `IInvoiceRepository` sitting in `Pharmacy.Infrastructure` next to its implementation. The application must still reference infrastructure, so nothing is inverted.
 - **Leaky ports.** `IInvoiceStore.Query()` returning `IQueryable<InvoiceEntity>`, or `IPortal.Send(HttpRequestMessage)`. The port exposes the technology it was meant to hide, and every caller now writes EF or HTTP code.
 - **Mock-heavy tests that mirror the implementation.** "Verify `SaveAsync` was called exactly twice" breaks on every refactor. Prefer stateful fakes and assert on outcomes.
 - **Wrapping a framework you're committed to.** A generic `IRepository<T>` over `DbContext` "in case we change ORM" costs features (`Include`, projections) and buys nothing if you never switch.
@@ -580,7 +601,7 @@ A good test for a new interface: can you name a **second implementation** you ac
 
 ## Practical playground
 
-`ReportScheduler` decides whether to send the monthly progress report. It reads `DateTime.Now` and writes to the console directly, so you can't test "sends on the 1st, skips on the 2nd". Invert both dependencies: inject `TimeProvider` and an `IReportSender` port owned by the scheduler. Then run `Main` with a fixed clock set to the 1st of a month.
+`ReportScheduler` decides whether a pharmacy store should send its monthly expiry report (the list of medicines that expire in the next 90 days). It reads `DateTime.Now` and writes to the console directly, so you can't test "sends on the 1st, skips on the 2nd". Invert both dependencies: inject `TimeProvider` and an `IReportSender` port owned by the scheduler. Then run `Main` with a fixed clock set to the 1st of a month.
 
 :::playground type=csharp title="Invert the clock and the sender"
 ```csharp file=Program.cs
@@ -590,10 +611,10 @@ public sealed class ReportScheduler
 {
     // TODO 1: depend on TimeProvider instead of DateTime.Now.
     // TODO 2: depend on an IReportSender port instead of Console.
-    public bool RunIfDue(string projectCode)
+    public bool RunIfDue(string storeCode)
     {
         if (DateTime.Now.Day != 1) return false;
-        Console.WriteLine($"Sending MPR for {projectCode}");
+        Console.WriteLine($"Sending expiry report for store {storeCode}");
         return true;
     }
 }
@@ -608,7 +629,7 @@ public static class Program
     public static void Main()
     {
         var scheduler = new ReportScheduler();
-        Console.WriteLine($"Sent: {scheduler.RunIfDue("NH-48-PKG-3")}");
+        Console.WriteLine($"Sent: {scheduler.RunIfDue("BLR-KOR-07")}");
         // After refactoring:
         // var scheduler = new ReportScheduler(new FixedClock(new DateTimeOffset(2026, 11, 1, 4, 0, 0, TimeSpan.Zero)), new ConsoleSender());
     }
@@ -618,16 +639,17 @@ public static class Program
 
 ## Exercises
 
-:::exercise id=m04-dip-ex1 difficulty=beginner kind=code title="Inject the clock into the retention checker"
-On infrastructure contracts, the client holds back 5 % of each bill as **retention money**, released when the defect liability period (DLP) ends — here, 365 days after completion. `RetentionReleaseChecker` reads `DateTime.UtcNow` directly, so nobody can test day 364 versus day 365.
+:::exercise id=m04-dip-ex1 difficulty=beginner kind=code title="Inject the clock into the near-expiry checker"
+The pharmacy chain's policy: a medicine batch must be pulled from the shelf (and returned to the distributor for credit) once it is **90 days or less from its expiry date**. `NearExpiryChecker` reads `DateTime.UtcNow` directly, so nobody can test "91 days left" versus "90 days left" without waiting for the calendar.
 
-Refactor it to take a `TimeProvider` through its **only** constructor and implement `IsDue`.
+Refactor it to take a `TimeProvider` through its **only** constructor and implement `MustPull`.
 ::requirements
-- The class has exactly one constructor: `RetentionReleaseChecker(TimeProvider clock)`.
-- `IsDue(DateOnly completionDate)` is true when today (UTC date) is on or after `completionDate + 365 days`.
+- The class has exactly one constructor: `NearExpiryChecker(TimeProvider clock)`.
+- `MustPull(DateOnly expiryDate)` is true when today (UTC date) is on or after `expiryDate − 90 days`.
 ::acceptance
-- Completion 2025-01-10, today 2026-01-09 → false.
-- Completion 2025-01-10, today 2026-01-10 → true.
+- Expiry 2026-04-10, today 2026-01-09 (91 days left) → false.
+- Expiry 2026-04-10, today 2026-01-10 (90 days left) → true.
+- Expiry 2026-04-10, today 2027-06-01 (already expired) → true.
 - No use of `DateTime.Now` or `DateTime.UtcNow`.
 ::hint
 The clock is a dependency. Where do dependencies come from in DI-friendly code?
@@ -637,70 +659,72 @@ The clock is a dependency. Where do dependencies come from in DI-friendly code?
 `DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime)` gives today.
 ::hint
 ```csharp
-public bool IsDue(DateOnly completion) => Today() >= completion.AddDays(365);
+public bool MustPull(DateOnly expiry) => Today() >= expiry.AddDays(-PullWindowDays);
 ```
 ::starter
-```csharp file=RetentionReleaseChecker.cs
+```csharp file=NearExpiryChecker.cs
 using System;
 
-public sealed class RetentionReleaseChecker
+public sealed class NearExpiryChecker
 {
-    public const int DefectLiabilityDays = 365;
+    public const int PullWindowDays = 90;
 
-    public RetentionReleaseChecker() { }
+    public NearExpiryChecker() { }
 
-    public bool IsDue(DateOnly completionDate) => throw new NotImplementedException("Use DateTime.UtcNow? No — inject a clock.");
+    public bool MustPull(DateOnly expiryDate) => throw new NotImplementedException("Use DateTime.UtcNow? No — inject a clock.");
 }
 ```
 ::tests
-```csharp file=RetentionReleaseCheckerTests.cs
+```csharp file=NearExpiryCheckerTests.cs
 using System;
 using System.Linq;
 using Xunit;
 
-public class RetentionReleaseCheckerTests
+public class NearExpiryCheckerTests
 {
     private sealed class FixedClock(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
     }
 
-    private static RetentionReleaseChecker At(int y, int m, int d) =>
-        (RetentionReleaseChecker)Activator.CreateInstance(typeof(RetentionReleaseChecker),
+    private static readonly DateOnly Expiry = new(2026, 4, 10);
+
+    private static NearExpiryChecker At(int y, int m, int d) =>
+        (NearExpiryChecker)Activator.CreateInstance(typeof(NearExpiryChecker),
             new FixedClock(new DateTimeOffset(y, m, d, 10, 0, 0, TimeSpan.Zero)))!;
 
     [Fact]
     public void Single_constructor_takes_TimeProvider() =>
-        Assert.Equal(typeof(TimeProvider), typeof(RetentionReleaseChecker).GetConstructors().Single().GetParameters().Single().ParameterType);
+        Assert.Equal(typeof(TimeProvider), typeof(NearExpiryChecker).GetConstructors().Single().GetParameters().Single().ParameterType);
 
     [Fact]
-    public void Day_before_end_of_dlp_is_not_due() =>
-        Assert.False(At(2026, 1, 9).IsDue(new DateOnly(2025, 1, 10)));
+    public void Ninety_one_days_left_stays_on_shelf() =>
+        Assert.False(At(2026, 1, 9).MustPull(Expiry));
 
     [Fact]
-    public void Last_day_of_dlp_is_due() =>
-        Assert.True(At(2026, 1, 10).IsDue(new DateOnly(2025, 1, 10)));
+    public void Ninety_days_left_must_be_pulled() =>
+        Assert.True(At(2026, 1, 10).MustPull(Expiry));
 
     [Fact]
-    public void Long_after_is_due() =>
-        Assert.True(At(2027, 6, 1).IsDue(new DateOnly(2025, 1, 10)));
+    public void Expired_batch_must_be_pulled() =>
+        Assert.True(At(2027, 6, 1).MustPull(Expiry));
 }
 ```
 ::solution
-```csharp file=RetentionReleaseChecker.cs
+```csharp file=NearExpiryChecker.cs
 using System;
 
-public sealed class RetentionReleaseChecker
+public sealed class NearExpiryChecker
 {
-    public const int DefectLiabilityDays = 365;
+    public const int PullWindowDays = 90;
     private readonly TimeProvider _clock;
 
-    public RetentionReleaseChecker(TimeProvider clock) => _clock = clock;
+    public NearExpiryChecker(TimeProvider clock) => _clock = clock;
 
-    public bool IsDue(DateOnly completionDate)
+    public bool MustPull(DateOnly expiryDate)
     {
         var today = DateOnly.FromDateTime(_clock.GetUtcNow().UtcDateTime);
-        return today >= completionDate.AddDays(DefectLiabilityDays);
+        return today >= expiryDate.AddDays(-PullWindowDays);
     }
 }
 ```
@@ -713,191 +737,191 @@ Register `TimeProvider.System` as a singleton in `Program.cs`. In tests, a three
 :::
 
 :::exercise id=m04-dip-ex2 difficulty=beginner kind=written title="Who owns the interface?"
-A bridge-health monitoring system reads strain-gauge sensors, flags readings above a threshold, stores alerts in PostgreSQL and sends SMS to the bridge engineer through a third-party SMS gateway.
+Vaccines and insulin must be stored between 2 °C and 8 °C. The pharmacy chain fits every store's medicine fridge with a temperature sensor. A cold-chain monitoring system reads the sensors, flags readings outside 2–8 °C, stores alerts in PostgreSQL and sends an SMS to the store's on-duty pharmacist through a third-party SMS gateway.
 
 1. List the high-level policy and the low-level details.
 2. Name the ports you'd create, with one method each, written in business language.
 3. Say which project each port and each adapter lives in.
 ::acceptance
 - Policy and details correctly separated.
-- Port names and methods use domain words (alert, engineer, reading), not technology words (HTTP, SQL, SMS API).
+- Port names and methods use domain words (alert, pharmacist, reading), not technology words (HTTP, SQL, SMS API).
 - Ports live with the policy; adapters live with infrastructure.
 ::hint
-Policy is whatever a bridge engineer would recognise as "the rules".
+Policy is whatever a store pharmacist or a quality auditor would recognise as "the rules".
 ::hint
-Ask what the policy *needs*: "notify the engineer", not "POST to the SMS API".
+Ask what the policy *needs*: "notify the pharmacist", not "POST to the SMS API".
 ::hint
-Should the port be `ISmsGateway` or `IEngineerNotifier`? Which one survives a switch to WhatsApp or email?
+Should the port be `ISmsGateway` or `IPharmacistNotifier`? Which one survives a switch to WhatsApp or a push notification?
 ::solution
-**Policy:** "a reading above X microstrain for Y consecutive samples raises an alert; alerts are stored and the on-duty engineer is notified; repeat alerts within 30 minutes are suppressed."
+**Policy:** "a reading outside 2–8 °C for 3 consecutive samples (one per minute) raises an alert; alerts are stored for the audit trail and the on-duty pharmacist is notified; repeat alerts for the same fridge within 30 minutes are suppressed; if the excursion lasts more than 60 minutes, the stock is quarantined pending review."
 
-**Details:** sensor protocol (MQTT/Modbus), PostgreSQL, the SMS gateway, the system clock.
+**Details:** the sensor protocol (MQTT), PostgreSQL, the SMS gateway, the system clock.
 
-**Ports (in `BridgeHealth.Application`):**
-- `ISensorReadingSource` — `IAsyncEnumerable<StrainReading> ReadAsync(ct)`
-- `IAlertStore` — `Task SaveAsync(Alert alert)`, `Task<Alert?> LastForSensorAsync(string sensorId)`
-- `IEngineerNotifier` — `Task NotifyAsync(Alert alert, EngineerOnDuty engineer)`
-- `TimeProvider` from the BCL for the 30-minute window.
+**Ports (in `ColdChain.Application`):**
+- `ITemperatureReadingSource` — `IAsyncEnumerable<TemperatureReading> ReadAsync(ct)`
+- `IAlertStore` — `Task SaveAsync(Alert alert)`, `Task<Alert?> LastForFridgeAsync(string fridgeId)`
+- `IPharmacistNotifier` — `Task NotifyAsync(Alert alert, PharmacistOnDuty pharmacist)`
+- `TimeProvider` from the BCL for the 30- and 60-minute windows.
 
-**Adapters (in `BridgeHealth.Infrastructure`):** `MqttSensorReadingSource`, `PostgresAlertStore`, `SmsEngineerNotifier`. `IEngineerNotifier` instead of `ISmsGateway` means a later switch to WhatsApp adds an adapter and changes nothing in the policy.
+**Adapters (in `ColdChain.Infrastructure`):** `MqttTemperatureReadingSource`, `PostgresAlertStore`, `SmsPharmacistNotifier`. `IPharmacistNotifier` instead of `ISmsGateway` means a later switch to WhatsApp adds an adapter and changes nothing in the policy.
 ::mistakes
 - Naming the port after the vendor (`ITwilioClient`).
 - Putting `IAlertStore` in the infrastructure project.
-- Inverting the threshold calculation, which is pure and should stay concrete.
+- Inverting the threshold check, which is pure and should stay concrete.
 :::
 
 :::exercise id=m04-dip-ex3 difficulty=intermediate kind=code title="A use case that talks only to ports"
-Implement `RaBillSubmissionHandler.SubmitAsync` for a contractor's running-account (RA) bill. It depends on two ports: `IMeasurementBook` (gets the measured quantities) and `IBillArchive` (stores submitted bills).
+Some of the chain's stores are franchises. Every week, head office settles with each franchise owner: it adds up the store's sales, keeps a 5 % brand commission, and pays out the rest. Implement `FranchiseSettlementHandler.SettleAsync`. It depends on two ports: `ISalesLedger` (gets the week's sale lines for a store) and `ISettlementArchive` (stores completed settlements).
 
 Rules:
-1. Bill amount = Σ(quantity × rate) over the measurement entries, rounded to 2 decimals (half away from zero, as accounts teams expect).
-2. Retention = 5 % of the bill amount, rounded the same way. Net payable = amount − retention.
-3. If there are no measurement entries, return `null` and archive nothing.
-4. Archive the bill exactly once and return it.
+1. Gross sales = Σ(quantity × unit price) over the sale lines, rounded to 2 decimals (half away from zero, as accounts teams expect).
+2. Commission = 5 % of gross sales, rounded the same way. Net payout = gross − commission.
+3. If there are no sale lines, return `null` and archive nothing.
+4. Archive the settlement exactly once and return it.
 ::acceptance
-- 120 m³ × ₹4,500 + 30 t × ₹62,000 → amount ₹24,00,000, retention ₹1,20,000, net ₹22,80,000.
-- No entries → `null`, archive untouched.
+- 4,000 strips × ₹150 + 1,500 insulin pens × ₹1,200 → gross ₹24,00,000, commission ₹1,20,000, net payout ₹22,80,000.
+- No sale lines → `null`, archive untouched.
 - The handler references no concrete infrastructure type.
 ::hint
-Write the test fakes first: a measurement book that returns a fixed list, and an archive that records what it was given.
+Write the test fakes first: a sales ledger that returns a fixed list, and an archive that records what it was given.
 ::hint
 The calculation is pure. Do it in the handler or a static helper; it doesn't need an interface.
 ::hint
-`var amount = Math.Round(entries.Sum(e => e.Quantity * e.Rate), 2, MidpointRounding.AwayFromZero);` — the default `Math.Round` uses banker's rounding (to even).
+`var gross = Math.Round(lines.Sum(l => l.Quantity * l.UnitPrice), 2, MidpointRounding.AwayFromZero);` — the default `Math.Round` uses banker's rounding (to even), so ₹16.665 would become ₹16.66 instead of ₹16.67.
 ::hint
-Check for empty before calling the archive, then `await archive.SaveAsync(bill, ct)` once.
+Check for empty before calling the archive, then `await archive.SaveAsync(settlement, ct)` once.
 ::starter
-```csharp file=RaBillSubmissionHandler.cs
+```csharp file=FranchiseSettlementHandler.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-public sealed record MeasurementEntry(string Item, decimal Quantity, decimal Rate);
-public sealed record RaBill(string ContractNo, int BillNo, decimal Amount, decimal Retention, decimal NetPayable);
+public sealed record SaleLine(string Item, decimal Quantity, decimal UnitPrice);
+public sealed record Settlement(string StoreCode, int WeekNo, decimal GrossSales, decimal Commission, decimal NetPayout);
 
-public interface IMeasurementBook
+public interface ISalesLedger
 {
-    Task<IReadOnlyList<MeasurementEntry>> GetEntriesAsync(string contractNo, int billNo, CancellationToken ct);
+    Task<IReadOnlyList<SaleLine>> GetSalesAsync(string storeCode, int weekNo, CancellationToken ct);
 }
 
-public interface IBillArchive
+public interface ISettlementArchive
 {
-    Task SaveAsync(RaBill bill, CancellationToken ct);
+    Task SaveAsync(Settlement settlement, CancellationToken ct);
 }
 
-public sealed class RaBillSubmissionHandler(IMeasurementBook book, IBillArchive archive)
+public sealed class FranchiseSettlementHandler(ISalesLedger ledger, ISettlementArchive archive)
 {
-    public const decimal RetentionPercent = 5m;
+    public const decimal CommissionPercent = 5m;
 
-    public Task<RaBill?> SubmitAsync(string contractNo, int billNo, CancellationToken ct) =>
+    public Task<Settlement?> SettleAsync(string storeCode, int weekNo, CancellationToken ct) =>
         throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=RaBillSubmissionHandlerTests.cs
+```csharp file=FranchiseSettlementHandlerTests.cs
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-public class RaBillSubmissionHandlerTests
+public class FranchiseSettlementHandlerTests
 {
-    private sealed class FakeBook(params MeasurementEntry[] entries) : IMeasurementBook
+    private sealed class FakeLedger(params SaleLine[] lines) : ISalesLedger
     {
-        public Task<IReadOnlyList<MeasurementEntry>> GetEntriesAsync(string c, int b, CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<MeasurementEntry>>(entries);
+        public Task<IReadOnlyList<SaleLine>> GetSalesAsync(string s, int w, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<SaleLine>>(lines);
     }
 
-    private sealed class RecordingArchive : IBillArchive
+    private sealed class RecordingArchive : ISettlementArchive
     {
-        public List<RaBill> Saved { get; } = new();
-        public Task SaveAsync(RaBill bill, CancellationToken ct) { Saved.Add(bill); return Task.CompletedTask; }
+        public List<Settlement> Saved { get; } = new();
+        public Task SaveAsync(Settlement settlement, CancellationToken ct) { Saved.Add(settlement); return Task.CompletedTask; }
     }
 
     [Fact]
-    public async Task Calculates_amount_retention_and_net()
+    public async Task Calculates_gross_commission_and_net()
     {
         var archive = new RecordingArchive();
-        var handler = new RaBillSubmissionHandler(
-            new FakeBook(new MeasurementEntry("Earthwork m3", 120m, 4_500m), new MeasurementEntry("Steel t", 30m, 62_000m)), archive);
+        var handler = new FranchiseSettlementHandler(
+            new FakeLedger(new SaleLine("Antibiotic strip", 4_000m, 150m), new SaleLine("Insulin pen", 1_500m, 1_200m)), archive);
 
-        var bill = await handler.SubmitAsync("NH-48/PKG-3", 7, CancellationToken.None);
+        var settlement = await handler.SettleAsync("PUN-AUN-12", 42, CancellationToken.None);
 
-        Assert.NotNull(bill);
-        Assert.Equal(2_400_000m, bill!.Amount);
-        Assert.Equal(120_000m, bill.Retention);
-        Assert.Equal(2_280_000m, bill.NetPayable);
+        Assert.NotNull(settlement);
+        Assert.Equal(2_400_000m, settlement!.GrossSales);
+        Assert.Equal(120_000m, settlement.Commission);
+        Assert.Equal(2_280_000m, settlement.NetPayout);
         Assert.Single(archive.Saved);
     }
 
     [Fact]
-    public async Task No_entries_returns_null_and_archives_nothing()
+    public async Task No_sales_returns_null_and_archives_nothing()
     {
         var archive = new RecordingArchive();
-        var bill = await new RaBillSubmissionHandler(new FakeBook(), archive).SubmitAsync("C1", 1, CancellationToken.None);
-        Assert.Null(bill);
+        var settlement = await new FranchiseSettlementHandler(new FakeLedger(), archive).SettleAsync("S1", 1, CancellationToken.None);
+        Assert.Null(settlement);
         Assert.Empty(archive.Saved);
     }
 
     [Fact]
-    public async Task Rounds_to_two_decimals()
+    public async Task Rounds_half_away_from_zero()
     {
         var archive = new RecordingArchive();
-        var bill = await new RaBillSubmissionHandler(new FakeBook(new MeasurementEntry("Paint m2", 3.333m, 100m)), archive)
-            .SubmitAsync("C1", 2, CancellationToken.None);
-        Assert.Equal(333.30m, bill!.Amount);
-        Assert.Equal(16.67m, bill.Retention);
-        Assert.Equal(316.63m, bill.NetPayable);
+        var settlement = await new FranchiseSettlementHandler(new FakeLedger(new SaleLine("Cough syrup 100 ml", 3m, 111.10m)), archive)
+            .SettleAsync("S1", 2, CancellationToken.None);
+        Assert.Equal(333.30m, settlement!.GrossSales);
+        Assert.Equal(16.67m, settlement.Commission);   // 16.665 rounds up, not to even
+        Assert.Equal(316.63m, settlement.NetPayout);
     }
 }
 ```
 ::solution
-```csharp file=RaBillSubmissionHandler.cs
+```csharp file=FranchiseSettlementHandler.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-public sealed record MeasurementEntry(string Item, decimal Quantity, decimal Rate);
-public sealed record RaBill(string ContractNo, int BillNo, decimal Amount, decimal Retention, decimal NetPayable);
+public sealed record SaleLine(string Item, decimal Quantity, decimal UnitPrice);
+public sealed record Settlement(string StoreCode, int WeekNo, decimal GrossSales, decimal Commission, decimal NetPayout);
 
-public interface IMeasurementBook
+public interface ISalesLedger
 {
-    Task<IReadOnlyList<MeasurementEntry>> GetEntriesAsync(string contractNo, int billNo, CancellationToken ct);
+    Task<IReadOnlyList<SaleLine>> GetSalesAsync(string storeCode, int weekNo, CancellationToken ct);
 }
 
-public interface IBillArchive
+public interface ISettlementArchive
 {
-    Task SaveAsync(RaBill bill, CancellationToken ct);
+    Task SaveAsync(Settlement settlement, CancellationToken ct);
 }
 
-public sealed class RaBillSubmissionHandler(IMeasurementBook book, IBillArchive archive)
+public sealed class FranchiseSettlementHandler(ISalesLedger ledger, ISettlementArchive archive)
 {
-    public const decimal RetentionPercent = 5m;
+    public const decimal CommissionPercent = 5m;
 
-    public async Task<RaBill?> SubmitAsync(string contractNo, int billNo, CancellationToken ct)
+    public async Task<Settlement?> SettleAsync(string storeCode, int weekNo, CancellationToken ct)
     {
-        var entries = await book.GetEntriesAsync(contractNo, billNo, ct);
-        if (entries.Count == 0) return null;
+        var lines = await ledger.GetSalesAsync(storeCode, weekNo, ct);
+        if (lines.Count == 0) return null;
 
-        var amount = Math.Round(entries.Sum(e => e.Quantity * e.Rate), 2, MidpointRounding.AwayFromZero);
-        var retention = Math.Round(amount * RetentionPercent / 100m, 2, MidpointRounding.AwayFromZero);
-        var bill = new RaBill(contractNo, billNo, amount, retention, amount - retention);
+        var gross = Math.Round(lines.Sum(l => l.Quantity * l.UnitPrice), 2, MidpointRounding.AwayFromZero);
+        var commission = Math.Round(gross * CommissionPercent / 100m, 2, MidpointRounding.AwayFromZero);
+        var settlement = new Settlement(storeCode, weekNo, gross, commission, gross - commission);
 
-        await archive.SaveAsync(bill, ct);
-        return bill;
+        await archive.SaveAsync(settlement, ct);
+        return settlement;
     }
 }
 ```
 
-The handler knows nothing about where measurements come from (a mobile app's database, an Excel import) or where bills go. Both ports are owned here, and the fakes in the tests are a few lines each.
+The handler knows nothing about where sales come from (the store's point-of-sale database, a nightly CSV upload) or where settlements go. Both ports are owned here, and the fakes in the tests are a few lines each. In production, the archive write should also be idempotent per `(StoreCode, WeekNo)` (a unique key), so a re-run of the weekly job cannot pay a franchise twice.
 ::mistakes
 - Using `double` for money.
-- Computing net from an unrounded retention, so amount ≠ retention + net by a paisa.
-- Creating an `IRetentionCalculator` interface for a one-line pure formula.
+- Computing net from an unrounded commission, so gross ≠ commission + net by a paisa.
+- Creating an `ICommissionCalculator` interface for a one-line pure formula.
 :::
 
 :::exercise id=m04-dip-ex4 difficulty=intermediate kind=design title="Draw the project references"
@@ -930,7 +954,7 @@ Every arrow points towards the domain. `ILeaveRepository` and `IHolidayCalendar`
 :::
 
 :::exercise id=m04-dip-ex5 difficulty=advanced kind=code title="A caching, fault-tolerant adapter behind a port"
-Billing validates buyer GSTINs through the port `IGstinVerifier`. The real adapter calls a slow external API that sometimes fails. Implement `CachingGstinVerifier`, a decorator that implements the same port:
+The wholesale billing service validates each hospital's GSTIN through the port `IGstinVerifier`. The real adapter calls a slow external API that sometimes fails. Implement `CachingGstinVerifier`, a decorator that implements the same port:
 
 1. Cache each result (active or inactive) for the configured TTL, using the injected `TimeProvider`.
 2. After the TTL, call the inner verifier again.
@@ -1130,7 +1154,7 @@ public class IssueInvoiceHandlerTests
     private sealed class FixedClock(DateTimeOffset now) : TimeProvider { public override DateTimeOffset GetUtcNow() => now; }
 
     private static readonly IssueInvoiceCommand InterState = new("INV-2026-0042", "06AAACR1234A1Z5", "27AAACM9876B1Z2",
-        new[] { new InvoiceLine("Supervision consultancy, Oct 2026", "998332", 10_00_000m, 18m) });
+        new[] { new InvoiceLine("Medicines (bulk supply), Oct 2026", "3004", 10_00_000m, 5m) });
 
     private static IssueInvoiceHandler Create(IInvoiceRegistrationPortal portal, IInvoiceStore store, DateTimeOffset now) =>
         new(store, portal, new FixedClock(now), NullLogger<IssueInvoiceHandler>.Instance);
@@ -1143,8 +1167,8 @@ public class IssueInvoiceHandlerTests
             .HandleAsync(InterState, CancellationToken.None);
 
         Assert.Equal(InvoiceStatus.Registered, result.Status);
-        Assert.Equal(11_80_000m, result.Total);
-        Assert.Equal(1_80_000m, (await store.FindAsync("INV-2026-0042", CancellationToken.None))!.Tax.Igst);
+        Assert.Equal(10_50_000m, result.Total);
+        Assert.Equal(50_000m, (await store.FindAsync("INV-2026-0042", CancellationToken.None))!.Tax.Igst);
     }
 
     [Fact]
@@ -1176,7 +1200,7 @@ public class IssueInvoiceHandlerTests
 }
 ```
 
-**2. Pure-logic tests with no fakes at all.** `GstCalculator.Calculate` is static and pure, so tests call it directly with `[Theory]` rows: intra-state ₹1,000 at 18 % → CGST ₹90 + SGST ₹90; odd paise split (₹0.01 tax → CGST ₹0.01, SGST ₹0.00).
+**2. Pure-logic tests with no fakes at all.** `GstCalculator.Calculate` is static and pure, so tests call it directly with `[Theory]` rows: intra-state ₹1,000 of medicines at 5 % → CGST ₹25 + SGST ₹25; odd paise split (₹0.01 tax → CGST ₹0.01, SGST ₹0.00).
 
 **3. Adapter tests against the real thing.** Test `GspHttpRegistrationPortal` with a stub `HttpMessageHandler` returning canned 200/400/503 responses, and test `PostgresInvoiceStore` against a real PostgreSQL 17 in a container (Testcontainers is a common choice). These are slower and fewer. Their job is to prove each adapter honours the port's contract — the same contract the fakes promise. A shared "contract test" base class, run against both `InMemoryInvoiceStore` and `PostgresInvoiceStore`, keeps the fake honest.
 
@@ -1185,7 +1209,7 @@ public class IssueInvoiceHandlerTests
 - **ASP.NET Core is built on it.** Your code depends on `ILogger<T>`, `IOptions<T>`, `IDistributedCache` and `IHttpClientFactory`. The framework owns these abstractions, and providers (Serilog, Redis, Azure) implement them. Swapping Redis for SQL Server distributed cache is a registration change.
 - **`TimeProvider` (.NET 8)** standardised the clock abstraction that every team used to hand-roll as `IClock`.
 - **Clean / Onion / Hexagonal architecture** are DIP at project scale: domain and application at the centre, infrastructure at the edge, references pointing inward. See [Hexagonal architecture](#/lesson/m02-hexagonal) and [Clean and Onion](#/lesson/m02-clean-onion).
-- **Government integrations** (e-invoicing, e-way bills, GSTIN lookup, PFMS payments) change schemas and endpoints on their own timelines. Keeping them behind ports means a schema revision is an adapter release, not a change to billing rules.
+- **Government integrations** (e-invoicing, e-way bills, GSTIN lookup, drug-licence verification) change schemas and endpoints on their own timelines. Keeping them behind ports means a schema revision is an adapter release, not a change to billing rules.
 
 ## Interview questions
 
@@ -1206,6 +1230,10 @@ No. The application still references the infrastructure project to see the inter
 Which dependencies would you *not* put behind an interface?
 ::a
 Stable, pure, in-process code: BCL types (`string`, `List<T>`, `Math`), value objects, and your own pure calculators like a GST calculator. They're fast and deterministic, so tests can use them directly. An interface there adds files and indirection without enabling anything. Also edges that are already abstractions (`TimeProvider`, `ILogger<T>`, `DbDataSource`). Invert where the dependency is volatile, slow, non-deterministic or owned by someone else.
+::q intermediate
+Walk me through the button-and-lamp example. Where does the interface live, and why does that matter?
+::a
+A `Button` that calls `Lamp.TurnOn()` directly can only switch lamps, and every change to `Lamp` can break `Button`. Applying DIP, `Button` declares the interface it needs, `ISwitchable { TurnOn(); TurnOff(); }`, and `Lamp`, `Fan` or a smart plug implement it. The interface must live **with the button** (the policy: "a press toggles a device"). If it lived in the lamp's package, the button would still depend on the lamp package and nothing would be inverted; you'd only have added an interface. The same reasoning places `IInvoiceStore` in the application project, not next to `PostgresInvoiceStore`.
 ::q advanced
 How do you stop a port from becoming a leaky abstraction over a specific vendor?
 ::a
@@ -1227,6 +1255,8 @@ Push back for apps committed to EF Core and PostgreSQL: `DbContext` already is a
 - Keep pure, stable code concrete. Invert volatile, slow and non-deterministic dependencies: network, database, clock, randomness, third-party services.
 - Use existing abstractions (`TimeProvider`, `ILogger<T>`, `DbDataSource`) before inventing your own.
 - Test use cases with stateful fakes, adapters against real infrastructure, and use contract tests to keep both honest.
+- Skip it for prototypes, small CRUD apps and pure code; add the port when a second implementation or the first test needs it.
+- To see DIP combined with SRP, OCP, LSP and ISP on one feature, continue with [SOLID in practice](#/lesson/m04-solid-in-practice).
 
 **Terminology**: high-level policy, low-level detail, port, adapter, composition root, leaky abstraction, contract test.
 
@@ -1245,6 +1275,8 @@ Q: Name a dependency you should not invert.
 A: Pure, stable, in-process code such as Math, List<T> or your own GstCalculator.
 Q: Why use TimeProvider instead of DateTime.Now?
 A: It's an injectable BCL abstraction (.NET 8+), so tests can fix or advance time, and time-zone logic becomes explicit.
+Q: What is inversion of control (IoC), and how does it differ from DIP?
+A: IoC: the framework calls your code ("don't call us, we'll call you"); DI is one form of it. DIP is a separate rule: source dependencies point towards policy, which owns the abstractions.
 Q: What is a leaky abstraction in a port?
 A: A port whose signature exposes the technology it should hide, e.g. IQueryable or HttpResponseMessage.
 :::

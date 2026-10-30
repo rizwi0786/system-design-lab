@@ -242,6 +242,8 @@ All mutable state (cars, unassigned calls) is guarded by a single `lock (_sync)`
 
 The rule that goes with a coarse lock: **don't call unknown code while holding it.** No logging sinks, no SignalR pushes, no database writes inside `lock`. `Tick` collects `ArrivalEvent`s into a list and returns it; the caller publishes after the lock is released.
 
+The dispatcher is the one exception, and it is a deliberate one: "read every car, choose, assign" must be atomic, or two simultaneous presses could each see car 2 as free and both pick it on stale data. So `IDispatchStrategy` runs under the lock, and its contract says so: it must be a fast, pure function of the snapshots it is given, with no I/O, no logging and no waiting. A strategy that needs outside data (a traffic forecast, a load sensor reading) gets it *before* the lock, as an input, not by calling out during `Choose`.
+
 ### Discrete time: `Tick()` instead of timers inside cars
 
 Each car advances only when `Step()` is called. In production, a `BackgroundService` with a `PeriodicTimer` calls `controller.Tick()` once per second. In tests, a loop calls `Tick()` 50 times in a microsecond. This one decision makes the whole system deterministic and testable. The alternative, a `Timer` per car with real delays, makes every test slow and flaky.
@@ -598,7 +600,9 @@ public sealed class ElevatorController
             foreach (var car in _cars)
                 if (car.HasHallCall(call)) return car.Id;   // pressed again: idempotent
             if (_unassigned.Contains(call)) return null;
-            return AssignLocked(call);
+            var assigned = AssignLocked(call);
+            if (assigned is null) _unassigned.Add(call);
+            return assigned;
         }
     }
 
@@ -612,12 +616,7 @@ public sealed class ElevatorController
     {
         lock (_sync)
         {
-            if (_unassigned.Count > 0)
-            {
-                var retry = _unassigned.ToList();
-                _unassigned.Clear();
-                foreach (var call in retry) AssignLocked(call);
-            }
+            RetryUnassignedLocked();
             var events = new List<ArrivalEvent>();
             foreach (var car in _cars)
                 if (car.Step() is { } e) events.Add(e);
@@ -628,7 +627,13 @@ public sealed class ElevatorController
     public void TakeOutOfService(int carId)
     {
         lock (_sync)
-            foreach (var call in Car(carId).TakeOutOfService()) AssignLocked(call);
+        {
+            // Park the orphaned calls in the queue first, then try to place them. If anything below throws,
+            // the calls are still queued and the next tick retries them: nothing is lost.
+            foreach (var call in Car(carId).TakeOutOfService())
+                if (!_unassigned.Contains(call)) _unassigned.Add(call);
+            RetryUnassignedLocked();
+        }
     }
 
     public void ReturnToService(int carId)
@@ -646,10 +651,18 @@ public sealed class ElevatorController
         get { lock (_sync) return _unassigned.Count == 0 && _cars.All(c => c.State is CarState.Idle or CarState.OutOfService); }
     }
 
+    /// <summary>A queued call leaves the queue only after a car has accepted it.</summary>
+    private void RetryUnassignedLocked()
+    {
+        foreach (var call in _unassigned.ToList())
+            if (AssignLocked(call) is not null) _unassigned.Remove(call);
+    }
+
+    /// <summary>Asks the dispatcher and assigns. Never touches the queue, so callers decide what failure means.</summary>
     private int? AssignLocked(HallCall call)
     {
         var chosen = _dispatch.Choose(_cars.Select(c => c.Snapshot()).ToList(), call);
-        if (chosen is null) { _unassigned.Add(call); return null; }
+        if (chosen is null) return null;
         var car = Car(chosen.Value);
         if (!car.InService) throw new InvalidOperationException($"Dispatcher chose out-of-service car {car.Id}.");
         car.AssignHallCall(call);
@@ -740,8 +753,14 @@ app.MapPost("/cars/{carId:int}/stops", (int carId, CarStopRequest req, ElevatorC
 
 app.MapPost("/cars/{carId:int}/out-of-service", (int carId, ElevatorController c) =>
 {
-    c.TakeOutOfService(carId);
-    return Results.NoContent();
+    try { c.TakeOutOfService(carId); return Results.NoContent(); }
+    catch (KeyNotFoundException ex) { return Results.Problem(ex.Message, statusCode: 404); }
+});
+
+app.MapPost("/cars/{carId:int}/in-service", (int carId, ElevatorController c) =>
+{
+    try { c.ReturnToService(carId); return Results.NoContent(); }
+    catch (KeyNotFoundException ex) { return Results.Problem(ex.Message, statusCode: 404); }
 });
 
 app.MapGet("/cars", (ElevatorController c) => Results.Ok(c.Snapshot()));
@@ -758,6 +777,7 @@ Design notes on the code:
 - **`ArgumentOutOfRangeException` derives from `ArgumentException`**, so the endpoint's single `catch (ArgumentException)` covers both bad floors and bad directions.
 - **Idempotent hall calls.** People press a lit button five times. The controller checks whether any car already holds the call and returns that car's id. Without this check, two cars could race to the same floor.
 - **Queued calls when all cars are out of service.** The call goes into `_unassigned` and is retried on every tick. This is graceful degradation rather than an error.
+- **A queued call leaves the queue only after a car accepts it.** An earlier draft copied the queue, cleared it, then reassigned each call. If the dispatcher threw halfway (say, a buggy strategy picked a broken car), every call after that point vanished, and people stood under lit buttons forever. "Remove after success" makes a failure retryable on the next tick instead of silent data loss. Taking a car out of service uses the same rule: its orphaned calls go into the queue *first*, then get placed.
 
 ## Automated testing
 
@@ -905,6 +925,32 @@ public class ElevatorControllerTests
         Assert.Contains(Sim.RunUntilQuiet(c), e => e.Floor == 5);
     }
 
+    /// <summary>A dispatcher that throws while Broken is set, standing in for a buggy strategy.</summary>
+    private sealed class BreakableDispatch : IDispatchStrategy
+    {
+        private readonly LeastCostDispatchStrategy _inner = new();
+        public bool Broken { get; set; }
+        public int? Choose(IReadOnlyList<CarSnapshot> cars, HallCall call) =>
+            Broken ? throw new InvalidOperationException("dispatcher bug") : _inner.Choose(cars, call);
+    }
+
+    [Fact]
+    public void A_failing_dispatcher_never_loses_orphaned_calls()
+    {
+        var dispatch = new BreakableDispatch();
+        var c = new ElevatorController(Enumerable.Range(1, 2).Select(i => new ElevatorCar(i, 0, 20, 0)), dispatch);
+        var car = c.RequestHall(12, Direction.Down)!.Value;
+        c.RequestCarStop(car, 15);                         // the same car also has a passenger for 15
+
+        dispatch.Broken = true;
+        Assert.Throws<InvalidOperationException>(() => c.TakeOutOfService(car));
+        Assert.False(c.IsQuiet);                           // the 12-down call is still queued, not lost
+
+        dispatch.Broken = false;
+        var served = Sim.RunUntilQuiet(c);
+        Assert.Contains(served, e => e.Floor == 12 && e.CarId != car);
+    }
+
     [Fact]
     public void Concurrent_presses_are_neither_lost_nor_duplicated()
     {
@@ -927,6 +973,7 @@ What the tests cover, and why it matters:
 - **Scheduling order** (`2, 5, 8` regardless of request order) and the **turnaround rule** are the behaviours passengers notice. They're asserted through observable arrivals, not by peeking into private sets.
 - **Dispatch** is tested with hand-built snapshots. No car simulation is needed, because the strategy only reads records.
 - **The concurrency test** fires 4,000 presses from 16 threads at 38 distinct buttons, then checks that exactly 38 calls exist across all cars and that all 38 get served. Without the lock, `HashSet` corruption or double assignment shows up quickly. As always with race tests, a pass is evidence, not proof; the design argument (one lock around every read-decide-write) is the proof.
+- **Failure atomicity**: `A_failing_dispatcher_never_loses_orphaned_calls` breaks the dispatcher in the middle of a reassignment and checks the call is still queued and later served. Concurrency bugs and partial-failure bugs look alike from the lobby: a lit button that no car ever answers.
 - **Liveness**: `RunUntilQuiet` throws if the building doesn't settle within the tick budget, which catches "car bounces forever" bugs, a real risk when you edit the stop rule.
 
 ## Bad design vs good design

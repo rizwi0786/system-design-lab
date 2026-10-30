@@ -22,7 +22,7 @@ references:
     url: https://learn.microsoft.com/dotnet/core/diagnostics/metrics-instrumentation
 ---
 
-The [sagas lesson](#/lesson/m12-sagas) taught the mechanics: local transactions, compensations, pivots and idempotent steps. This lesson is about what happens after you ship one. In production, a saga waits two days for a human, a bank API answers "pending" for an hour, a compensation fails at 2 a.m., a deploy changes the process while 4,000 instances are halfway through, and someone in finance asks "where is bill 8812?". We build a **process manager** for paying contractor bills, with durable timers, escalation, compensation retries that end in a human queue, and the traces and metrics that make all of it visible.
+The [sagas lesson](#/lesson/m12-sagas) taught the mechanics: local transactions, compensations, pivots and idempotent steps. This lesson is about what happens after you ship one. In production, a saga waits two days for a human, a bank API answers "pending" for an hour, a compensation fails at 2 a.m., a deploy changes the process while 4,000 instances are halfway through, and a seller phones support asking "where is settlement 8812?". We build a **process manager** for paying an online marketplace's sellers, with durable timers, escalation, compensation retries that end in a human queue, and the traces and metrics that make all of it visible.
 
 ## Learning objectives
 
@@ -46,16 +46,16 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Picture a file moving through a government office. A contractor submits a bill for road work. The file goes to the budget section (is money available?), then to accounts (deduct tax), then to an officer who must sign, then to the bank. A **file clerk** keeps a register: "Bill 8812, now with the officer since Monday." That clerk is the **process manager**. They do not do the work of any section; they know where the file is, what comes next, and how long each desk is allowed to hold it.
+Picture an online marketplace paying one of its big sellers for last week's orders. The payment file goes to the escrow desk (is the buyers' money really there, after returns and refunds?), then to the tax desk (deduct tax, check the seller's GST number), then to a finance manager who must sign because the amount is large, then to the bank. A **file clerk** keeps a register: "Settlement 8812, with the finance manager since Monday." That clerk is the **process manager**. They do not do the work of any section; they know where the file is, what comes next, and how long each desk is allowed to hold it.
 
 Now the production problems:
 
-- **The officer is on leave.** After 48 hours the clerk does not cancel the bill; they send a reminder to the officer's senior (an **escalation**). Only after two reminders do they return the file.
+- **The finance manager is on leave.** After 48 hours the clerk does not cancel the settlement; they send it to the manager's boss (an **escalation**). Only after two escalations do they return the file.
 - **The bank says "we are checking".** Money may or may not have left. The clerk must never "cancel" a payment they are unsure about; they phone the bank and ask (a **status query**).
-- **Returning the file fails.** The budget section's system is down when the clerk tries to release the reserved money. The clerk tries again in 1 minute, then 2, then 4, and after five tries puts the file in a red tray marked "needs a supervisor" (**parking**).
-- **The register must be readable by anyone.** A supervisor should see "37 files with officers, 2 in the red tray, oldest file 3 days" at a glance (**observability**).
+- **Returning the file fails.** The escrow desk's system is down when the clerk tries to release the money that was put on hold. The clerk tries again in 1 minute, then 2, then 4, and after five tries puts the file in a red tray marked "needs a supervisor" (**parking**).
+- **The register must be readable by anyone.** A supervisor should see "37 files with approvers, 2 in the red tray, oldest file 3 days" at a glance (**observability**).
 
-The alternative to a clerk is **choreography**: each desk passes the file to the next and nobody keeps a register. It works for a short, simple chain, but then answering "where is bill 8812?" means asking every desk.
+The alternative to a clerk is **choreography**: each desk passes the file to the next and nobody keeps a register. It works for a short, simple chain, but then answering "where is settlement 8812?" means asking every desk.
 
 ## First-principles explanation
 
@@ -79,19 +79,19 @@ The decision is about **where the knowledge of the whole process lives**. If a p
 | Do teams need to add listeners without asking anyone? | Choreography |
 | Is it a fixed linear pipeline with no waiting? | Routing slip or choreography |
 
-Most real systems are **hybrid**: a process manager runs the core flow and publishes domain events ("BillPaid") that any number of services consume by choreography (analytics, notifications, the contractor portal).
+Most real systems are **hybrid**: a process manager runs the core flow and publishes domain events ("SettlementPaid") that any number of services consume by choreography (analytics, notifications, the seller portal).
 
-### The running example: paying a running-account bill
+### The running example: paying a marketplace seller's settlement
 
-A state infrastructure agency pays contractors for completed work in **running-account (RA) bills**: periodic bills for measured work done so far. Paying one involves:
+An online marketplace collects money from buyers into an escrow account and pays each seller a weekly **settlement**: orders delivered, minus returns, refunds, commission and tax. Small settlements are paid by a simple automatic job. Settlements above ₹5 lakh go through this process, because policy says a person in finance must approve them. Paying one involves:
 
-1. **Budget service**: commit the amount against the project's sanctioned budget. Compensation: release the commitment.
-2. **Tax service**: record TDS (tax deducted at source) and validate the contractor's GST details with an external API. Compensation: reverse the tax entries.
-3. **Treasury officer**: a human approves or rejects in the Approvals app. Business deadline: 48 hours, then escalate to a senior, at most twice.
-4. **Bank payout**: release money through the bank's payout API. This is the **pivot**: money that has left cannot be "compensated" by our system.
-5. **Retriable steps**: post to the general ledger, notify the contractor.
+1. **Escrow service**: put the settlement amount on hold in the escrow ledger, so a refund batch cannot spend the same money. Compensation: release the hold.
+2. **Tax service**: record the tax the marketplace must deduct or collect on the seller's sales (TDS under the Income-tax Act, TCS under GST) and validate the seller's GSTIN with an external GST API. Compensation: reverse the tax entries.
+3. **Finance approver**: a finance manager approves or rejects in the Approvals app. Business deadline: 48 hours, then escalate to the finance head, at most twice.
+4. **Bank payout**: send the money to the seller's bank account through the bank's payout API (NEFT, RTGS or IMPS). This is the **pivot**: money that has left cannot be "compensated" by our system.
+5. **Retriable steps**: post to the general ledger, notify the seller.
 
-Scale (estimates): 300 projects × about 8 bills a month ≈ 2,400 bills/month, peaking at 400 bills on the last working day of a quarter. That is under 0.01 processes per second; throughput is irrelevant. What matters is that each process involves ₹10 lakh to ₹5 crore, waits up to four days, and touches an external bank. **A process that silently stops is the main failure, not load.**
+Scale (estimates): about 560 large sellers settled weekly ≈ 2,400 settlements a month, peaking at 400 on the first settlement day after a festive sale. That is under 0.01 processes per second; throughput is irrelevant. What matters is that each process involves ₹5 lakh to ₹2 crore, waits up to four days, and touches an external bank. **A process that silently stops is the main failure, not load.**
 
 ### Three kinds of waiting
 
@@ -99,8 +99,8 @@ Every waiting state needs a timer, but not every timer means "failure".
 
 | Kind | Example | Typical length | What happens when it fires |
 |---|---|---|---|
-| Technical timeout | Budget service did not reply | Seconds to minutes (well above p99 latency) | Treat outcome as unknown: compensate if safe, or ask |
-| Business deadline | Officer has not approved | Hours to days | Escalate, remind, then reject by policy |
+| Technical timeout | Escrow service did not reply | Seconds to minutes (well above p99 latency) | Treat outcome as unknown: compensate if safe, or ask |
+| Business deadline | Finance manager has not approved | Hours to days | Escalate, remind, then reject by policy |
 | Retry or poll timer | Compensation failed; bank says "pending" | Backoff: 30 s, 1 min, 2 min … | Try again, until a cap, then park |
 
 All three are the same mechanism: a **durable timer** (a deadline row in a table, or a scheduled message in a broker such as Azure Service Bus) that delivers a `DeadlineReached` event to the process. "Durable" matters: an in-memory `Task.Delay` of 48 hours dies with the next deploy.
@@ -111,7 +111,7 @@ A process arms a timer each time it starts waiting. When the reply arrives in ti
 
 ### Unknown outcomes at the pivot
 
-At earlier steps, the m12 rule was "on timeout, compensate the uncertain step; compensations tolerate nothing to undo". **That rule is wrong for the pivot.** If the payout request timed out, the bank may have paid. "Compensating" would mean releasing the budget and marking the bill unpaid while ₹48 lakh has reached the contractor; a later retry might pay twice.
+At earlier steps, the m12 rule was "on timeout, compensate the uncertain step; compensations tolerate nothing to undo". **That rule is wrong for the pivot.** If the payout request timed out, the bank may have paid. "Compensating" would mean releasing the escrow hold and marking the settlement unpaid while ₹48 lakh has reached the seller; a later retry might pay twice.
 
 At a non-compensatable step:
 
@@ -123,24 +123,24 @@ At a non-compensatable step:
 
 Compensations are the least-exercised code in the system and they run when things are already going wrong. Production rules:
 
-- **Retry with exponential backoff.** 30 s, 1 min, 2 min, 4 min, capped at 30 min. The budget service being down for ten minutes should not need a human.
+- **Retry with exponential backoff.** 30 s, 1 min, 2 min, 4 min, capped at 30 min. The escrow service being down for ten minutes should not need a human.
 - **Cap the attempts and park.** After five failed attempts the process goes to `Parked` and raises an operator alert. Parked is not terminal: an operator fixes the cause and presses "retry", which resumes the compensation with the counter reset.
-- **Separate technical from business failures.** "Timeout" or HTTP 503 is retried; "commitment already closed by year-end" is a business refusal that no retry will fix, so park immediately with that reason.
+- **Separate technical from business failures.** "Timeout" or HTTP 503 is retried; "hold already rolled into next week's settlement cycle" is a business refusal that no retry will fix, so park immediately with that reason.
 - **Record every attempt** (time, error) on the instance or in an audit table. The operator needs the history, not just the last error.
-- **Reconcile.** A daily job compares process states with each participant's records ("budget commitments with no active process", "payouts in the bank statement with no `Paid` process"). Reconciliation catches what every other mechanism missed.
+- **Reconcile.** A daily job compares process states with each participant's records ("escrow holds with no active process", "payouts in the bank statement with no `Paid` process"). Reconciliation catches what every other mechanism missed.
 
 ### Observability: answer four questions in under a minute
 
-1. **Where is case X?** The process table, keyed by business id (`bill_id`), shows state, time in state, attempts and failure reason. Expose it to support staff through an ops screen.
-2. **What happened to case X?** A trace that follows the process across every message hop, plus logs carrying `ProcessId` and `BillId`. Asynchronous hops break tracing unless you **propagate the trace context in message headers** (the W3C `traceparent`). Because one process may last days, many teams start a new trace per step and link it to the process with the `ProcessId` attribute rather than one giant trace.
+1. **Where is case X?** The process table, keyed by business id (`settlement_id`), shows state, time in state, attempts and failure reason. Expose it to support staff through an ops screen.
+2. **What happened to case X?** A trace that follows the process across every message hop, plus logs carrying `ProcessId` and `SettlementId`. Asynchronous hops break tracing unless you **propagate the trace context in message headers** (the W3C `traceparent`). Because one process may last days, many teams start a new trace per step and link it to the process with the `ProcessId` attribute rather than one giant trace.
 3. **Is the system healthy?** Metrics: processes started and finished (tagged by outcome), duration histogram, count by state, number stuck beyond the per-state SLA, number parked, age of the oldest active process.
 4. **Should someone wake up?** Alerts on symptoms: parked > 0 for more than 15 minutes; stuck count rising; completion rate falling below, say, 90 % of starts over a day; oldest active process older than the overall SLA (5 days here).
 
-"Stuck" must be per state. Forty hours in `AwaitingApproval` is normal; forty minutes in `AwaitingBudget` is not.
+"Stuck" must be per state. Forty hours in `AwaitingApproval` is normal; forty minutes in `AwaitingEscrow` is not.
 
 ### Making choreography observable
 
-If you choose choreography, add a **tracking projection**: a small consumer that listens to every event of the flow and maintains one row per business case (`bill_id`, last event, last event time, expected next event). It changes no business behaviour; it only lets you see. Combine it with a "nothing heard for N minutes" check and you get most of the visibility of a process manager without central control. Without it, a choreographed flow fails silently: a consumer crashes, its queue fills, and the flow simply stops.
+If you choose choreography, add a **tracking projection**: a small consumer that listens to every event of the flow and maintains one row per business case (`settlement_id`, last event, last event time, expected next event). It changes no business behaviour; it only lets you see. Combine it with a "nothing heard for N minutes" check and you get most of the visibility of a process manager without central control. Without it, a choreographed flow fails silently: a consumer crashes, its queue fills, and the flow simply stops.
 
 Other choreography hazards to watch in production:
 
@@ -172,10 +172,10 @@ A process with a four-day lifetime will always have instances in flight during a
 
 ### When a simpler alternative is better
 
-- **One database, one transaction.** If budget and tax are tables in the same service, a single transaction is shorter, stronger and easier to test than a saga between them.
+- **One database, one transaction.** If escrow holds and tax entries are tables in the same service, a single transaction is shorter, stronger and easier to test than a saga between them.
 - **Outbox plus retries.** If no later step can fail for business reasons, you need reliable delivery, not compensations or a state machine.
-- **A batch job.** If the business accepts "bills are paid in a nightly run", a batch with a clear report may beat a real-time process with timers.
-- **A workflow engine** ([Workflow engines](#/lesson/m16-workflow-engines)). Temporal, Azure Durable Functions or AWS Step Functions give you durable timers, retries, history and a UI. If you have more than a handful of long processes, writing your own timer tables and ops screens is undifferentiated work. You still design compensations and idempotency; the engine only runs them.
+- **A batch job.** If the business accepts "settlements are paid in a nightly run", a batch with a clear report may beat a real-time process with timers.
+- **A workflow engine** ([Workflow engines](#/lesson/m16-workflow-engines)). Temporal, Azure Durable Functions, Dapr Workflow or AWS Step Functions give you durable timers, retries, history and a UI. If you have more than a handful of long processes, writing your own timer tables and ops screens is undifferentiated work. You still design compensations and idempotency; the engine only runs them.
 
 ### What it costs
 
@@ -193,12 +193,12 @@ A process with a four-day lifetime will always have instances in flight during a
 
 ```mermaid
 flowchart LR
-    BILL["Billing app"] -->|"PaymentRequested"| PM["Bill payment process manager"]
+    BILL["Seller accounts app"] -->|"PaymentRequested"| PM["Settlement process manager"]
     PM -->|"state, outbox, deadline: one tx"| PDB[("Process store (PostgreSQL)")]
     PDB -->|"outbox relay"| CQ["Command queues"]
-    CQ --> BUD["Budget service"]
+    CQ --> BUD["Escrow service"]
     CQ --> TAX["Tax service"]
-    CQ --> APR["Approvals app (officers)"]
+    CQ --> APR["Approvals app (finance managers)"]
     CQ --> PAY["Payout service"]
     PAY -->|"payout API, idempotency key"| BANK["Bank (external)"]
     BUD -->|"replies"| RQ["Reply queue"]
@@ -213,7 +213,7 @@ flowchart LR
     REC["Nightly reconciliation"] -->|"compare with bank statement"| PDB
 ```
 
-The billing app starts a process and moves on. The process manager saves state, outgoing commands and the next timer in one transaction. The outbox relay delivers commands; participants reply on a shared reply queue. The deadline worker turns due timer rows into `DeadlineReached` events carrying the token they were armed with. Every handling step emits a span, metrics and logs to the collector. Operators use the ops console to see parked processes and request a retry, and a nightly reconciliation job compares the store with the bank statement to catch anything all of the above missed.
+The seller accounts app starts a process and moves on. The process manager saves state, outgoing commands and the next timer in one transaction. The outbox relay delivers commands; participants reply on a shared reply queue. The deadline worker turns due timer rows into `DeadlineReached` events carrying the token they were armed with. Every handling step emits a span, metrics and logs to the collector. Operators use the ops console to see parked processes and request a retry, and a nightly reconciliation job compares the store with the bank statement to catch anything all of the above missed.
 
 ### Sequence: escalation, then an unknown payout outcome
 
@@ -224,12 +224,12 @@ sequenceDiagram
     participant A as Approvals app
     participant P as Payout service
     participant B as Bank
-    PM->>A: RequestApproval bill 8812
+    PM->>A: RequestApproval settlement 8812
     Note over PM: arm timer 48 h, token 3
     T->>PM: DeadlineReached token 3
     PM->>A: EscalateApproval level 1
     Note over PM: arm timer 24 h, token 4
-    A-->>PM: ApprovalGranted by senior officer
+    A-->>PM: ApprovalGranted by finance head
     PM->>P: ReleasePayout 48 lakh, key 8812-payout
     Note over PM: arm timer 15 min, token 5
     P->>B: payout request with client reference
@@ -238,19 +238,19 @@ sequenceDiagram
     P->>B: status of client reference
     B-->>P: Paid, UTR 4471
     P-->>PM: PayoutStatusReported Paid
-    Note over PM: state Paid, post ledger, notify contractor
+    Note over PM: state Paid, post ledger, notify seller
 ```
 
-The officer's 48-hour deadline fires, so the process escalates instead of failing, and re-arms a shorter timer with a new token. The senior approves. The payout is sent with an idempotency key; the bank is slow and the 15-minute technical timeout fires. Because the payout is the pivot, the process asks the bank instead of compensating. The bank reports it paid, so the process completes and sends the retriable steps. If the timer with token 3 had fired again later (a duplicate delivery), it would be ignored because the current token is 5.
+The finance manager's 48-hour deadline fires, so the process escalates instead of failing, and re-arms a shorter timer with a new token. The finance head approves. The payout is sent with an idempotency key; the bank is slow and the 15-minute technical timeout fires. Because the payout is the pivot, the process asks the bank instead of compensating. The bank reports it paid, so the process completes and sends the retriable steps. If the timer with token 3 had fired again later (a duplicate delivery), it would be ignored because the current token is 5.
 
 ### The process as a state machine
 
 ```mermaid
 stateDiagram-v2
-    [*] --> AwaitingBudget: PaymentRequested
-    AwaitingBudget --> AwaitingTax: BudgetCommitted
-    AwaitingBudget --> Cancelled: BudgetRejected
-    AwaitingBudget --> Compensating: timeout
+    [*] --> AwaitingEscrow: PaymentRequested
+    AwaitingEscrow --> AwaitingTax: EscrowHeld
+    AwaitingEscrow --> Cancelled: EscrowRejected
+    AwaitingEscrow --> Compensating: timeout
     AwaitingTax --> AwaitingApproval: TaxRecorded
     AwaitingTax --> Compensating: rejected or timeout
     AwaitingApproval --> AwaitingApproval: deadline, escalate
@@ -275,19 +275,19 @@ Compared with a textbook saga, three things are new. Self-loops on `AwaitingAppr
 
 ```mermaid
 flowchart LR
-    BILL["Billing"] -->|"BillSubmitted"| BUD["Budget"]
-    BUD -->|"BudgetCommitted"| TAX["Tax"]
+    BILL["Seller accounts"] -->|"SettlementDue"| BUD["Escrow"]
+    BUD -->|"EscrowHeld"| TAX["Tax"]
     TAX -->|"TaxRecorded"| APR["Approvals"]
-    APR -->|"BillApproved"| PAY["Payout"]
+    APR -->|"SettlementApproved"| PAY["Payout"]
     BUD -.->|"all events"| TRK["Tracking projection"]
     TAX -.-> TRK
     APR -.-> TRK
     PAY -.-> TRK
-    TRK --> TDB[("bill_tracking: last event, expected next, since")]
+    TRK --> TDB[("settlement_tracking: last event, expected next, since")]
     MON["Monitor: nothing heard in N min"] --> TDB
 ```
 
-The same flow as choreography: each service reacts to the previous event. The dotted arrows are the tracking projection, which consumes every event and keeps one row per bill. A monitor queries that table for bills whose expected next event is overdue. This restores "where is bill X?" without giving any component control, but escalations and compensations must still be coded inside each service, which is why the core flow here uses a process manager.
+The same flow as choreography: each service reacts to the previous event. The dotted arrows are the tracking projection, which consumes every event and keeps one row per settlement. A monitor queries that table for settlements whose expected next event is overdue. This restores "where is settlement X?" without giving any component control, but escalations and compensations must still be coded inside each service, which is why the core flow here uses a process manager.
 
 ## Step-by-step example
 
@@ -297,7 +297,7 @@ Start from the m12 design: steps, compensations in reverse, and one timeout per 
 
 ### Step 2: the first production week
 
-Three incidents arrive. An officer on leave caused 11 bills to be cancelled after the 10-minute "step timeout". A payout timeout triggered compensation for a bill the bank had actually paid. And the budget service's 20-minute outage left 30 processes in `Compensating` with exhausted retries and no alert.
+Three incidents arrive. A finance manager on leave caused 11 settlements to be cancelled after the 10-minute "step timeout". A payout timeout triggered compensation for a settlement the bank had actually paid. And the escrow service's 20-minute outage left 30 processes in `Compensating` with exhausted retries and no alert.
 
 ### Step 3: classify every wait
 
@@ -321,8 +321,8 @@ The definition is a pure state machine (no I/O), so every path is testable. Arou
 
 ### Messages
 
-```csharp file=Process/BillMessages.cs
-namespace ContractorPay.Process;
+```csharp file=Process/SettlementMessages.cs
+namespace SellerPay.Process;
 
 public abstract record ProcessEvent(Guid ProcessId)
 {
@@ -332,13 +332,13 @@ public abstract record ProcessEvent(Guid ProcessId)
     public string? TraceParent { get; init; }
 }
 
-public sealed record PaymentRequested(Guid ProcessId, string BillId, string ContractorId, decimal NetAmountInr) : ProcessEvent(ProcessId);
-public sealed record BudgetCommitted(Guid ProcessId, string CommitmentId) : ProcessEvent(ProcessId);
-public sealed record BudgetRejected(Guid ProcessId, string Reason) : ProcessEvent(ProcessId);
+public sealed record PaymentRequested(Guid ProcessId, string SettlementId, string SellerId, decimal NetAmountInr) : ProcessEvent(ProcessId);
+public sealed record EscrowHeld(Guid ProcessId, string HoldId) : ProcessEvent(ProcessId);
+public sealed record EscrowRejected(Guid ProcessId, string Reason) : ProcessEvent(ProcessId);
 public sealed record TaxRecorded(Guid ProcessId, string TaxEntryId, decimal TdsInr) : ProcessEvent(ProcessId);
 public sealed record TaxRejected(Guid ProcessId, string Reason) : ProcessEvent(ProcessId);
-public sealed record ApprovalGranted(Guid ProcessId, string OfficerId) : ProcessEvent(ProcessId);
-public sealed record ApprovalRejected(Guid ProcessId, string OfficerId, string Reason) : ProcessEvent(ProcessId);
+public sealed record ApprovalGranted(Guid ProcessId, string ApproverId) : ProcessEvent(ProcessId);
+public sealed record ApprovalRejected(Guid ProcessId, string ApproverId, string Reason) : ProcessEvent(ProcessId);
 public sealed record PayoutSucceeded(Guid ProcessId, string BankReference) : ProcessEvent(ProcessId);
 
 /// <summary>A definite rejection by the bank: no money moved, so compensation is safe.</summary>
@@ -358,46 +358,46 @@ public abstract record ProcessCommand(Guid ProcessId, string Step)
     public string? TraceParent { get; init; }
 }
 
-public sealed record CommitBudget(Guid ProcessId, string BillId, decimal AmountInr) : ProcessCommand(ProcessId, "commit-budget");
-public sealed record RecordTax(Guid ProcessId, string BillId, string ContractorId, decimal AmountInr) : ProcessCommand(ProcessId, "record-tax");
-public sealed record RequestApproval(Guid ProcessId, string BillId, decimal PayableInr) : ProcessCommand(ProcessId, "request-approval");
-public sealed record EscalateApproval(Guid ProcessId, string BillId, int Level) : ProcessCommand(ProcessId, $"escalate-approval-{Level}");
-public sealed record ReleasePayout(Guid ProcessId, string BillId, string ContractorId, decimal PayableInr) : ProcessCommand(ProcessId, "release-payout");
-public sealed record QueryPayoutStatus(Guid ProcessId, string BillId) : ProcessCommand(ProcessId, "query-payout");
-public sealed record PostLedger(Guid ProcessId, string BillId, string BankReference) : ProcessCommand(ProcessId, "post-ledger");
-public sealed record NotifyContractor(Guid ProcessId, string ContractorId, string Message) : ProcessCommand(ProcessId, "notify-contractor");
-public sealed record ReleaseBudget(Guid ProcessId, string? CommitmentId) : ProcessCommand(ProcessId, "release-budget");
+public sealed record HoldEscrow(Guid ProcessId, string SettlementId, decimal AmountInr) : ProcessCommand(ProcessId, "hold-escrow");
+public sealed record RecordTax(Guid ProcessId, string SettlementId, string SellerId, decimal AmountInr) : ProcessCommand(ProcessId, "record-tax");
+public sealed record RequestApproval(Guid ProcessId, string SettlementId, decimal PayableInr) : ProcessCommand(ProcessId, "request-approval");
+public sealed record EscalateApproval(Guid ProcessId, string SettlementId, int Level) : ProcessCommand(ProcessId, $"escalate-approval-{Level}");
+public sealed record ReleasePayout(Guid ProcessId, string SettlementId, string SellerId, decimal PayableInr) : ProcessCommand(ProcessId, "release-payout");
+public sealed record QueryPayoutStatus(Guid ProcessId, string SettlementId) : ProcessCommand(ProcessId, "query-payout");
+public sealed record PostLedger(Guid ProcessId, string SettlementId, string BankReference) : ProcessCommand(ProcessId, "post-ledger");
+public sealed record NotifySeller(Guid ProcessId, string SellerId, string Message) : ProcessCommand(ProcessId, "notify-seller");
+public sealed record ReleaseEscrow(Guid ProcessId, string? HoldId) : ProcessCommand(ProcessId, "release-escrow");
 public sealed record ReverseTax(Guid ProcessId, string? TaxEntryId) : ProcessCommand(ProcessId, "reverse-tax");
 public sealed record RaiseOperatorAlert(Guid ProcessId, string Reason) : ProcessCommand(ProcessId, "operator-alert");
 ```
 
 ### Process state
 
-```csharp file=Process/BillPaymentInstance.cs
-namespace ContractorPay.Process;
+```csharp file=Process/SettlementInstance.cs
+namespace SellerPay.Process;
 
-public enum BillProcessState
+public enum SettlementState
 {
-    AwaitingBudget, AwaitingTax, AwaitingApproval, AwaitingPayout, Paid, Compensating, Cancelled, Parked
+    AwaitingEscrow, AwaitingTax, AwaitingApproval, AwaitingPayout, Paid, Compensating, Cancelled, Parked
 }
 
-public static class BillSteps
+public static class SettlementSteps
 {
-    public const string Budget = "budget";
+    public const string Escrow = "escrow";
     public const string Tax = "tax";
 }
 
-public sealed class BillPaymentInstance
+public sealed class SettlementInstance
 {
     public required Guid ProcessId { get; init; }
-    public required string BillId { get; init; }
-    public required string ContractorId { get; init; }
+    public required string SettlementId { get; init; }
+    public required string SellerId { get; init; }
     public required decimal NetAmountInr { get; init; }
-    public int DefinitionVersion { get; init; } = BillPaymentDefinition.CurrentVersion;
+    public int DefinitionVersion { get; init; } = SettlementDefinition.CurrentVersion;
 
-    public BillProcessState State { get; set; }
-    public BillProcessState? ParkedFrom { get; set; }
-    public string? CommitmentId { get; set; }
+    public SettlementState State { get; set; }
+    public SettlementState? ParkedFrom { get; set; }
+    public string? HoldId { get; set; }
     public string? TaxEntryId { get; set; }
     public decimal TdsInr { get; set; }
     public string? BankReference { get; set; }
@@ -415,14 +415,14 @@ public sealed class BillPaymentInstance
     public DateTimeOffset StateEnteredAt { get; set; }
     public long Version { get; set; }
 
-    public bool IsTerminal => State is BillProcessState.Paid or BillProcessState.Cancelled;
+    public bool IsTerminal => State is SettlementState.Paid or SettlementState.Cancelled;
     public decimal PayableInr => NetAmountInr - TdsInr;
 
-    public BillPaymentInstance Clone() => new()
+    public SettlementInstance Clone() => new()
     {
-        ProcessId = ProcessId, BillId = BillId, ContractorId = ContractorId, NetAmountInr = NetAmountInr,
+        ProcessId = ProcessId, SettlementId = SettlementId, SellerId = SellerId, NetAmountInr = NetAmountInr,
         DefinitionVersion = DefinitionVersion, State = State, ParkedFrom = ParkedFrom,
-        CommitmentId = CommitmentId, TaxEntryId = TaxEntryId, TdsInr = TdsInr, BankReference = BankReference,
+        HoldId = HoldId, TaxEntryId = TaxEntryId, TdsInr = TdsInr, BankReference = BankReference,
         FailureReason = FailureReason, CompletedSteps = new List<string>(CompletedSteps),
         DeadlineToken = DeadlineToken, Escalations = Escalations, PayoutQueries = PayoutQueries,
         CompensationAttempts = CompensationAttempts, StartedAt = StartedAt, StateEnteredAt = StateEnteredAt,
@@ -439,14 +439,14 @@ public sealed record Transition(IReadOnlyList<ProcessCommand> Commands, TimeSpan
 
 ### The definition: a pure state machine
 
-```csharp file=Process/BillPaymentDefinition.cs
+```csharp file=Process/SettlementDefinition.cs
 using Microsoft.Extensions.Options;
 
-namespace ContractorPay.Process;
+namespace SellerPay.Process;
 
-public sealed class BillProcessOptions
+public sealed class SettlementProcessOptions
 {
-    public TimeSpan BudgetTimeout { get; set; } = TimeSpan.FromMinutes(1);
+    public TimeSpan EscrowTimeout { get; set; } = TimeSpan.FromMinutes(1);
     public TimeSpan TaxTimeout { get; set; } = TimeSpan.FromMinutes(3);
     public TimeSpan ApprovalDeadline { get; set; } = TimeSpan.FromHours(48);
     public TimeSpan EscalationDeadline { get; set; } = TimeSpan.FromHours(24);
@@ -460,103 +460,103 @@ public sealed class BillProcessOptions
     public int MaxCompensationAttempts { get; set; } = 5;
 }
 
-public sealed class BillPaymentDefinition(IOptions<BillProcessOptions> options)
+public sealed class SettlementDefinition(IOptions<SettlementProcessOptions> options)
 {
     public const int CurrentVersion = 2;
-    private BillProcessOptions O => options.Value;
+    private SettlementProcessOptions O => options.Value;
 
-    public (BillPaymentInstance Instance, Transition Transition) Start(PaymentRequested e, DateTimeOffset now)
+    public (SettlementInstance Instance, Transition Transition) Start(PaymentRequested e, DateTimeOffset now)
     {
-        var p = new BillPaymentInstance
+        var p = new SettlementInstance
         {
-            ProcessId = e.ProcessId, BillId = e.BillId, ContractorId = e.ContractorId, NetAmountInr = e.NetAmountInr,
-            State = BillProcessState.AwaitingBudget, StartedAt = now, StateEnteredAt = now
+            ProcessId = e.ProcessId, SettlementId = e.SettlementId, SellerId = e.SellerId, NetAmountInr = e.NetAmountInr,
+            State = SettlementState.AwaitingEscrow, StartedAt = now, StateEnteredAt = now
         };
-        return (p, Arm(p, O.BudgetTimeout, new CommitBudget(p.ProcessId, p.BillId, p.NetAmountInr)));
+        return (p, Arm(p, O.EscrowTimeout, new HoldEscrow(p.ProcessId, p.SettlementId, p.NetAmountInr)));
     }
 
-    public Transition Handle(BillPaymentInstance p, ProcessEvent e)
+    public Transition Handle(SettlementInstance p, ProcessEvent e)
     {
         if (e is DeadlineReached stale && stale.Token != p.DeadlineToken) return Transition.None;   // old timer
 
         switch (p.State, e)
         {
-            // ---- budget ---------------------------------------------------------------------
-            case (BillProcessState.AwaitingBudget, BudgetCommitted b):
-                p.CommitmentId = b.CommitmentId;
-                p.CompletedSteps.Add(BillSteps.Budget);
-                p.State = BillProcessState.AwaitingTax;
-                return Arm(p, O.TaxTimeout, new RecordTax(p.ProcessId, p.BillId, p.ContractorId, p.NetAmountInr));
-            case (BillProcessState.AwaitingBudget, BudgetRejected r):
-                return Finish(p, BillProcessState.Cancelled, r.Reason);
-            case (BillProcessState.AwaitingBudget, DeadlineReached):
-                p.CompletedSteps.Add(BillSteps.Budget);                       // may have happened: undo it too
-                return BeginCompensation(p, "Budget commitment timed out");
+            // ---- escrow ---------------------------------------------------------------------
+            case (SettlementState.AwaitingEscrow, EscrowHeld b):
+                p.HoldId = b.HoldId;
+                p.CompletedSteps.Add(SettlementSteps.Escrow);
+                p.State = SettlementState.AwaitingTax;
+                return Arm(p, O.TaxTimeout, new RecordTax(p.ProcessId, p.SettlementId, p.SellerId, p.NetAmountInr));
+            case (SettlementState.AwaitingEscrow, EscrowRejected r):
+                return Finish(p, SettlementState.Cancelled, r.Reason);
+            case (SettlementState.AwaitingEscrow, DeadlineReached):
+                p.CompletedSteps.Add(SettlementSteps.Escrow);                       // may have happened: undo it too
+                return BeginCompensation(p, "Escrow hold timed out");
 
             // ---- tax ------------------------------------------------------------------------
-            case (BillProcessState.AwaitingTax, TaxRecorded t):
+            case (SettlementState.AwaitingTax, TaxRecorded t):
                 p.TaxEntryId = t.TaxEntryId;
                 p.TdsInr = t.TdsInr;
-                p.CompletedSteps.Add(BillSteps.Tax);
-                p.State = BillProcessState.AwaitingApproval;
-                return Arm(p, O.ApprovalDeadline, new RequestApproval(p.ProcessId, p.BillId, p.PayableInr));
-            case (BillProcessState.AwaitingTax, TaxRejected r):
+                p.CompletedSteps.Add(SettlementSteps.Tax);
+                p.State = SettlementState.AwaitingApproval;
+                return Arm(p, O.ApprovalDeadline, new RequestApproval(p.ProcessId, p.SettlementId, p.PayableInr));
+            case (SettlementState.AwaitingTax, TaxRejected r):
                 return BeginCompensation(p, r.Reason);
-            case (BillProcessState.AwaitingTax, DeadlineReached):
-                p.CompletedSteps.Add(BillSteps.Tax);
+            case (SettlementState.AwaitingTax, DeadlineReached):
+                p.CompletedSteps.Add(SettlementSteps.Tax);
                 return BeginCompensation(p, "Tax recording timed out");
 
             // ---- human approval: a business deadline escalates before it fails ---------------
-            case (BillProcessState.AwaitingApproval, ApprovalGranted):
-                p.State = BillProcessState.AwaitingPayout;
-                return Arm(p, O.PayoutTimeout, new ReleasePayout(p.ProcessId, p.BillId, p.ContractorId, p.PayableInr));
-            case (BillProcessState.AwaitingApproval, ApprovalRejected r):
-                return BeginCompensation(p, $"Rejected by {r.OfficerId}: {r.Reason}");
-            case (BillProcessState.AwaitingApproval, DeadlineReached) when p.Escalations < O.MaxEscalations:
+            case (SettlementState.AwaitingApproval, ApprovalGranted):
+                p.State = SettlementState.AwaitingPayout;
+                return Arm(p, O.PayoutTimeout, new ReleasePayout(p.ProcessId, p.SettlementId, p.SellerId, p.PayableInr));
+            case (SettlementState.AwaitingApproval, ApprovalRejected r):
+                return BeginCompensation(p, $"Rejected by {r.ApproverId}: {r.Reason}");
+            case (SettlementState.AwaitingApproval, DeadlineReached) when p.Escalations < O.MaxEscalations:
                 p.Escalations++;
-                return Arm(p, O.EscalationDeadline, new EscalateApproval(p.ProcessId, p.BillId, p.Escalations));
-            case (BillProcessState.AwaitingApproval, DeadlineReached):
+                return Arm(p, O.EscalationDeadline, new EscalateApproval(p.ProcessId, p.SettlementId, p.Escalations));
+            case (SettlementState.AwaitingApproval, DeadlineReached):
                 return BeginCompensation(p, "Approval not given within the escalation policy");
 
             // ---- payout: the pivot. A timeout means "ask", never "compensate" -----------------
-            case (BillProcessState.AwaitingPayout, PayoutSucceeded s):
+            case (SettlementState.AwaitingPayout, PayoutSucceeded s):
                 return CompletePaid(p, s.BankReference);
-            case (BillProcessState.AwaitingPayout, PayoutFailed f):
+            case (SettlementState.AwaitingPayout, PayoutFailed f):
                 return BeginCompensation(p, "Bank rejected payout: " + f.Reason);
-            case (BillProcessState.AwaitingPayout, DeadlineReached) when p.PayoutQueries < O.MaxPayoutQueries:
+            case (SettlementState.AwaitingPayout, DeadlineReached) when p.PayoutQueries < O.MaxPayoutQueries:
                 p.PayoutQueries++;
-                return Arm(p, O.PayoutQueryInterval, new QueryPayoutStatus(p.ProcessId, p.BillId));
-            case (BillProcessState.AwaitingPayout, DeadlineReached):
+                return Arm(p, O.PayoutQueryInterval, new QueryPayoutStatus(p.ProcessId, p.SettlementId));
+            case (SettlementState.AwaitingPayout, DeadlineReached):
                 return Park(p, "Payout outcome unknown after status checks; reconcile with the bank statement");
-            case (BillProcessState.AwaitingPayout, PayoutStatusReported { Status: PayoutStatus.Paid } r):
+            case (SettlementState.AwaitingPayout, PayoutStatusReported { Status: PayoutStatus.Paid } r):
                 return CompletePaid(p, r.BankReference ?? "unreported");
-            case (BillProcessState.AwaitingPayout, PayoutStatusReported { Status: PayoutStatus.Rejected }):
+            case (SettlementState.AwaitingPayout, PayoutStatusReported { Status: PayoutStatus.Rejected }):
                 return BeginCompensation(p, "Bank reports the payout as rejected");
-            case (BillProcessState.AwaitingPayout, PayoutStatusReported { Status: PayoutStatus.NotFound }):
+            case (SettlementState.AwaitingPayout, PayoutStatusReported { Status: PayoutStatus.NotFound }):
                 // The bank never received it: resend. Same command id = same idempotency key, so no double pay.
-                return Arm(p, O.PayoutTimeout, new ReleasePayout(p.ProcessId, p.BillId, p.ContractorId, p.PayableInr));
-            case (BillProcessState.AwaitingPayout, PayoutStatusReported):
+                return Arm(p, O.PayoutTimeout, new ReleasePayout(p.ProcessId, p.SettlementId, p.SellerId, p.PayableInr));
+            case (SettlementState.AwaitingPayout, PayoutStatusReported):
                 return Transition.None;                                       // Pending: the armed timer asks again
 
             // ---- compensating: retry with backoff, then park ---------------------------------
-            case (BillProcessState.Compensating, CompensationDone c) when IsCurrentCompensation(p, c.Step):
+            case (SettlementState.Compensating, CompensationDone c) when IsCurrentCompensation(p, c.Step):
                 p.CompletedSteps.RemoveAt(p.CompletedSteps.Count - 1);
                 p.CompensationAttempts = 0;
                 return NextCompensation(p);
-            case (BillProcessState.Compensating, CompensationFailed f) when IsCurrentCompensation(p, f.Step):
+            case (SettlementState.Compensating, CompensationFailed f) when IsCurrentCompensation(p, f.Step):
                 p.FailureReason = $"Compensation '{f.Step}' attempt {p.CompensationAttempts} failed: {f.Error}";
                 return ArmOnly(p, Backoff(p.CompensationAttempts));
-            case (BillProcessState.Compensating, DeadlineReached):
+            case (SettlementState.Compensating, DeadlineReached):
                 return NextCompensation(p);                                   // timeout or backoff elapsed: resend
-            case (BillProcessState.Compensating, BudgetCommitted b):
-                p.CommitmentId ??= b.CommitmentId;                            // late success: planned release covers it
+            case (SettlementState.Compensating, EscrowHeld b):
+                p.HoldId ??= b.HoldId;                            // late success: planned release covers it
                 return Transition.None;
-            case (BillProcessState.Compensating, TaxRecorded t):
+            case (SettlementState.Compensating, TaxRecorded t):
                 p.TaxEntryId ??= t.TaxEntryId;
                 return Transition.None;
 
             // ---- a person resumes a parked process ------------------------------------------
-            case (BillProcessState.Parked, OperatorRetryRequested):
+            case (SettlementState.Parked, OperatorRetryRequested):
                 return Resume(p);
 
             default:
@@ -564,7 +564,7 @@ public sealed class BillPaymentDefinition(IOptions<BillProcessOptions> options)
         }
     }
 
-    private static bool IsCurrentCompensation(BillPaymentInstance p, string step) =>
+    private static bool IsCurrentCompensation(SettlementInstance p, string step) =>
         p.CompletedSteps.Count > 0 && p.CompletedSteps[^1] == step;
 
     public TimeSpan Backoff(int failedAttempts)
@@ -574,63 +574,63 @@ public sealed class BillPaymentDefinition(IOptions<BillProcessOptions> options)
         return delay < O.CompensationMaxDelay ? delay : O.CompensationMaxDelay;
     }
 
-    private Transition BeginCompensation(BillPaymentInstance p, string reason)
+    private Transition BeginCompensation(SettlementInstance p, string reason)
     {
         p.FailureReason = reason;
-        p.State = BillProcessState.Compensating;
+        p.State = SettlementState.Compensating;
         p.CompensationAttempts = 0;
         return NextCompensation(p);
     }
 
-    private Transition NextCompensation(BillPaymentInstance p)
+    private Transition NextCompensation(SettlementInstance p)
     {
-        if (p.CompletedSteps.Count == 0) return Finish(p, BillProcessState.Cancelled, p.FailureReason);
+        if (p.CompletedSteps.Count == 0) return Finish(p, SettlementState.Cancelled, p.FailureReason);
         p.CompensationAttempts++;
         if (p.CompensationAttempts > O.MaxCompensationAttempts)
             return Park(p, $"Compensation '{p.CompletedSteps[^1]}' failed {O.MaxCompensationAttempts} times. Last: {p.FailureReason}");
 
         ProcessCommand command = p.CompletedSteps[^1] switch
         {
-            BillSteps.Tax => new ReverseTax(p.ProcessId, p.TaxEntryId),
-            BillSteps.Budget => new ReleaseBudget(p.ProcessId, p.CommitmentId),
+            SettlementSteps.Tax => new ReverseTax(p.ProcessId, p.TaxEntryId),
+            SettlementSteps.Escrow => new ReleaseEscrow(p.ProcessId, p.HoldId),
             var other => throw new InvalidOperationException($"No compensation for step '{other}'.")
         };
         return Arm(p, O.CompensationTimeout, command);
     }
 
-    private Transition Resume(BillPaymentInstance p)
+    private Transition Resume(SettlementInstance p)
     {
         var from = p.ParkedFrom;
         p.ParkedFrom = null;
         switch (from)
         {
-            case BillProcessState.Compensating:
-                p.State = BillProcessState.Compensating;
+            case SettlementState.Compensating:
+                p.State = SettlementState.Compensating;
                 p.CompensationAttempts = 0;
                 return NextCompensation(p);
-            case BillProcessState.AwaitingPayout:
-                p.State = BillProcessState.AwaitingPayout;
+            case SettlementState.AwaitingPayout:
+                p.State = SettlementState.AwaitingPayout;
                 p.PayoutQueries = 0;
-                return Arm(p, O.PayoutQueryInterval, new QueryPayoutStatus(p.ProcessId, p.BillId));
+                return Arm(p, O.PayoutQueryInterval, new QueryPayoutStatus(p.ProcessId, p.SettlementId));
             default:
                 p.ParkedFrom = from;
                 return Transition.None;
         }
     }
 
-    private static Transition CompletePaid(BillPaymentInstance p, string bankReference)
+    private static Transition CompletePaid(SettlementInstance p, string bankReference)
     {
         p.BankReference = bankReference;
-        p.State = BillProcessState.Paid;
+        p.State = SettlementState.Paid;
         p.DeadlineToken++;                                                    // disarm any pending timer
         return new Transition(new ProcessCommand[]
         {
-            new PostLedger(p.ProcessId, p.BillId, bankReference),
-            new NotifyContractor(p.ProcessId, p.ContractorId, $"Bill {p.BillId} paid: Rs {p.PayableInr:N0}, ref {bankReference}")
+            new PostLedger(p.ProcessId, p.SettlementId, bankReference),
+            new NotifySeller(p.ProcessId, p.SellerId, $"Settlement {p.SettlementId} paid: Rs {p.PayableInr:N0}, ref {bankReference}")
         }, null);
     }
 
-    private static Transition Finish(BillPaymentInstance p, BillProcessState state, string? reason)
+    private static Transition Finish(SettlementInstance p, SettlementState state, string? reason)
     {
         p.State = state;
         p.FailureReason = reason;
@@ -638,22 +638,22 @@ public sealed class BillPaymentDefinition(IOptions<BillProcessOptions> options)
         return Transition.None;
     }
 
-    private static Transition Park(BillPaymentInstance p, string reason)
+    private static Transition Park(SettlementInstance p, string reason)
     {
         p.ParkedFrom = p.State;
-        p.State = BillProcessState.Parked;
+        p.State = SettlementState.Parked;
         p.FailureReason = reason;
         p.DeadlineToken++;
         return new Transition(new ProcessCommand[] { new RaiseOperatorAlert(p.ProcessId, reason) }, null);
     }
 
-    private static Transition Arm(BillPaymentInstance p, TimeSpan timeout, ProcessCommand command)
+    private static Transition Arm(SettlementInstance p, TimeSpan timeout, ProcessCommand command)
     {
         p.DeadlineToken++;
         return new Transition(new[] { command }, timeout);
     }
 
-    private static Transition ArmOnly(BillPaymentInstance p, TimeSpan delay)
+    private static Transition ArmOnly(SettlementInstance p, TimeSpan delay)
     {
         p.DeadlineToken++;
         return new Transition(Array.Empty<ProcessCommand>(), delay);
@@ -666,43 +666,43 @@ public sealed class BillPaymentDefinition(IOptions<BillProcessOptions> options)
 ```csharp file=Process/ProcessStore.cs
 using System.Threading.Channels;
 
-namespace ContractorPay.Process;
+namespace SellerPay.Process;
 
 public sealed class ProcessConcurrencyException(Guid id) : Exception($"Process {id} was modified concurrently.");
 
 public sealed record DueDeadline(Guid ProcessId, int Token, DateTimeOffset DueAt);
 
 public sealed record ProcessHealth(
-    IReadOnlyDictionary<BillProcessState, int> CountByState, int StuckBeyondSla, int Parked, TimeSpan OldestActiveAge);
+    IReadOnlyDictionary<SettlementState, int> CountByState, int StuckBeyondSla, int Parked, TimeSpan OldestActiveAge);
 
 public interface IProcessStore
 {
-    Task<BillPaymentInstance?> GetAsync(Guid processId, CancellationToken ct);
+    Task<SettlementInstance?> GetAsync(Guid processId, CancellationToken ct);
 
     /// <summary>One transaction: update the row (version check), append commands to the outbox,
     /// and replace the process's timer if the transition armed one.</summary>
-    Task SaveAsync(BillPaymentInstance p, long expectedVersion, Transition t, DateTimeOffset now, CancellationToken ct);
+    Task SaveAsync(SettlementInstance p, long expectedVersion, Transition t, DateTimeOffset now, CancellationToken ct);
 
     Task<IReadOnlyList<DueDeadline>> TakeDueDeadlinesAsync(DateTimeOffset now, int max, CancellationToken ct);
-    Task<IReadOnlyList<BillPaymentInstance>> ListByStateAsync(BillProcessState state, int max, CancellationToken ct);
-    Task<ProcessHealth> GetHealthAsync(DateTimeOffset now, IReadOnlyDictionary<BillProcessState, TimeSpan> sla, CancellationToken ct);
+    Task<IReadOnlyList<SettlementInstance>> ListByStateAsync(SettlementState state, int max, CancellationToken ct);
+    Task<ProcessHealth> GetHealthAsync(DateTimeOffset now, IReadOnlyDictionary<SettlementState, TimeSpan> sla, CancellationToken ct);
 }
 
 public sealed class InMemoryProcessStore : IProcessStore
 {
     private readonly Lock _gate = new();
-    private readonly Dictionary<Guid, BillPaymentInstance> _rows = new();
+    private readonly Dictionary<Guid, SettlementInstance> _rows = new();
     private readonly Dictionary<Guid, DueDeadline> _deadlines = new();      // one active timer per process
     private readonly Channel<ProcessCommand> _outbox = Channel.CreateUnbounded<ProcessCommand>();
 
     public ChannelReader<ProcessCommand> Outbox => _outbox.Reader;
 
-    public Task<BillPaymentInstance?> GetAsync(Guid processId, CancellationToken ct)
+    public Task<SettlementInstance?> GetAsync(Guid processId, CancellationToken ct)
     {
         lock (_gate) return Task.FromResult(_rows.TryGetValue(processId, out var p) ? p.Clone() : null);
     }
 
-    public Task SaveAsync(BillPaymentInstance p, long expectedVersion, Transition t, DateTimeOffset now, CancellationToken ct)
+    public Task SaveAsync(SettlementInstance p, long expectedVersion, Transition t, DateTimeOffset now, CancellationToken ct)
     {
         lock (_gate)
         {
@@ -712,7 +712,7 @@ public sealed class InMemoryProcessStore : IProcessStore
             _rows[p.ProcessId] = p.Clone();
             foreach (var c in t.Commands) _outbox.Writer.TryWrite(c);
             if (t.ArmDeadline is { } delay) _deadlines[p.ProcessId] = new DueDeadline(p.ProcessId, p.DeadlineToken, now + delay);
-            else if (p.IsTerminal || p.State == BillProcessState.Parked) _deadlines.Remove(p.ProcessId);
+            else if (p.IsTerminal || p.State == SettlementState.Parked) _deadlines.Remove(p.ProcessId);
         }
         return Task.CompletedTask;
     }
@@ -727,14 +727,14 @@ public sealed class InMemoryProcessStore : IProcessStore
         }
     }
 
-    public Task<IReadOnlyList<BillPaymentInstance>> ListByStateAsync(BillProcessState state, int max, CancellationToken ct)
+    public Task<IReadOnlyList<SettlementInstance>> ListByStateAsync(SettlementState state, int max, CancellationToken ct)
     {
         lock (_gate)
-            return Task.FromResult<IReadOnlyList<BillPaymentInstance>>(
+            return Task.FromResult<IReadOnlyList<SettlementInstance>>(
                 _rows.Values.Where(r => r.State == state).OrderBy(r => r.StateEnteredAt).Take(max).Select(r => r.Clone()).ToList());
     }
 
-    public Task<ProcessHealth> GetHealthAsync(DateTimeOffset now, IReadOnlyDictionary<BillProcessState, TimeSpan> sla, CancellationToken ct)
+    public Task<ProcessHealth> GetHealthAsync(DateTimeOffset now, IReadOnlyDictionary<SettlementState, TimeSpan> sla, CancellationToken ct)
     {
         lock (_gate)
         {
@@ -742,7 +742,7 @@ public sealed class InMemoryProcessStore : IProcessStore
             var counts = active.GroupBy(r => r.State).ToDictionary(g => g.Key, g => g.Count());
             var stuck = active.Count(r => sla.TryGetValue(r.State, out var max) && now - r.StateEnteredAt > max);
             var oldest = active.Count == 0 ? TimeSpan.Zero : now - active.Min(r => r.StartedAt);
-            var parked = active.Count(r => r.State == BillProcessState.Parked);
+            var parked = active.Count(r => r.State == SettlementState.Parked);
             return Task.FromResult(new ProcessHealth(counts, stuck, parked, oldest));
         }
     }
@@ -752,9 +752,9 @@ public sealed class InMemoryProcessStore : IProcessStore
 In PostgreSQL the same contract is three tables written in one transaction:
 
 ```sql
-CREATE TABLE bill_processes (
+CREATE TABLE settlement_processes (
     process_id         uuid PRIMARY KEY,
-    bill_id            text NOT NULL UNIQUE,          -- one process per bill: idempotent start
+    settlement_id      text NOT NULL UNIQUE,          -- one process per settlement: idempotent start
     definition_version int  NOT NULL,
     state              text NOT NULL,
     parked_from        text,
@@ -764,11 +764,11 @@ CREATE TABLE bill_processes (
     state_entered_at   timestamptz NOT NULL,
     version            bigint NOT NULL
 );
-CREATE INDEX bill_processes_active ON bill_processes (state, state_entered_at)
+CREATE INDEX settlement_processes_active ON settlement_processes (state, state_entered_at)
     WHERE state NOT IN ('Paid', 'Cancelled');
 
 CREATE TABLE process_deadlines (
-    process_id uuid PRIMARY KEY REFERENCES bill_processes,   -- one timer per process; arming replaces it
+    process_id uuid PRIMARY KEY REFERENCES settlement_processes,   -- one timer per process; arming replaces it
     token      int NOT NULL,
     due_at     timestamptz NOT NULL
 );
@@ -780,17 +780,19 @@ CREATE INDEX process_deadlines_due ON process_deadlines (due_at);
 --   ORDER BY due_at LIMIT 100 FOR UPDATE SKIP LOCKED) RETURNING process_id, token;
 ```
 
+One production detail: if the worker commits that `DELETE` and then crashes before the process handles `DeadlineReached`, the timer is gone for good and the process waits forever. Either run the `DELETE` in the same transaction that loads the process, applies the event and saves it (a crash rolls the delete back), or lease rows with a `locked_until` column and delete them only after the event is handled. A daily query for active processes with no timer row catches anything that still slips through.
+
 ### Telemetry: traces across hops, metrics, health gauges
 
 ```csharp file=Process/ProcessTelemetry.cs
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 
-namespace ContractorPay.Process;
+namespace SellerPay.Process;
 
 public sealed class ProcessTelemetry
 {
-    public const string Name = "ContractorPay.BillPayment";
+    public const string Name = "SellerPay.Settlement";
     public static readonly ActivitySource Source = new(Name);
 
     private readonly Counter<long> _started;
@@ -802,27 +804,27 @@ public sealed class ProcessTelemetry
     public ProcessTelemetry(IMeterFactory meterFactory)
     {
         var meter = meterFactory.Create(Name);
-        _started = meter.CreateCounter<long>("billpay.process.started");
-        _finished = meter.CreateCounter<long>("billpay.process.finished", description: "Tagged by outcome: Paid, Cancelled");
-        _transitions = meter.CreateCounter<long>("billpay.process.transitions");
-        _duration = meter.CreateHistogram<double>("billpay.process.duration", unit: "s");
-        meter.CreateObservableGauge("billpay.process.stuck", () => _health?.StuckBeyondSla ?? 0);
-        meter.CreateObservableGauge("billpay.process.parked", () => _health?.Parked ?? 0);
-        meter.CreateObservableGauge("billpay.process.oldest_active_age", () => _health?.OldestActiveAge.TotalSeconds ?? 0, unit: "s");
+        _started = meter.CreateCounter<long>("settlement.process.started");
+        _finished = meter.CreateCounter<long>("settlement.process.finished", description: "Tagged by outcome: Paid, Cancelled");
+        _transitions = meter.CreateCounter<long>("settlement.process.transitions");
+        _duration = meter.CreateHistogram<double>("settlement.process.duration", unit: "s");
+        meter.CreateObservableGauge("settlement.process.stuck", () => _health?.StuckBeyondSla ?? 0);
+        meter.CreateObservableGauge("settlement.process.parked", () => _health?.Parked ?? 0);
+        meter.CreateObservableGauge("settlement.process.oldest_active_age", () => _health?.OldestActiveAge.TotalSeconds ?? 0, unit: "s");
     }
 
     /// <summary>Continue the trace that the sender put in the message headers (W3C traceparent).</summary>
     public Activity? StartHandling(ProcessEvent e)
     {
         ActivityContext.TryParse(e.TraceParent, null, out var parent);
-        var activity = Source.StartActivity($"billpay handle {e.GetType().Name}", ActivityKind.Consumer, parent);
+        var activity = Source.StartActivity($"settlement handle {e.GetType().Name}", ActivityKind.Consumer, parent);
         activity?.SetTag("process.id", e.ProcessId.ToString());
         return activity;
     }
 
     public void RecordStarted() => _started.Add(1);
 
-    public void RecordTransition(BillProcessState from, BillPaymentInstance p, DateTimeOffset now)
+    public void RecordTransition(SettlementState from, SettlementInstance p, DateTimeOffset now)
     {
         if (from == p.State) return;
         _transitions.Add(1, new KeyValuePair<string, object?>("from", from.ToString()), new KeyValuePair<string, object?>("to", p.State.ToString()));
@@ -838,18 +840,18 @@ public sealed class ProcessTelemetry
 
 ### The process manager service
 
-```csharp file=Process/BillPaymentProcessManager.cs
+```csharp file=Process/SettlementProcessManager.cs
 using System.Collections.Concurrent;
 using System.Diagnostics;
 
-namespace ContractorPay.Process;
+namespace SellerPay.Process;
 
-public sealed class BillPaymentProcessManager(
+public sealed class SettlementProcessManager(
     IProcessStore store,
-    BillPaymentDefinition definition,
+    SettlementDefinition definition,
     ProcessTelemetry telemetry,
     TimeProvider clock,
-    ILogger<BillPaymentProcessManager> logger)
+    ILogger<SettlementProcessManager> logger)
 {
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _locks = new();
 
@@ -861,7 +863,7 @@ public sealed class BillPaymentProcessManager(
         var (instance, transition) = definition.Start(request, now);
         await store.SaveAsync(instance, 0, Stamp(transition), now, ct);
         telemetry.RecordStarted();
-        logger.LogInformation("Bill payment process started for {BillId}, Rs {Amount}", request.BillId, request.NetAmountInr);
+        logger.LogInformation("Settlement process started for {SettlementId}, Rs {Amount}", request.SettlementId, request.NetAmountInr);
     }
 
     public async Task HandleAsync(ProcessEvent e, CancellationToken ct)
@@ -877,7 +879,7 @@ public sealed class BillPaymentProcessManager(
                 var p = await store.GetAsync(e.ProcessId, ct);
                 if (p is null) { logger.LogWarning("{Event} for unknown process", e.GetType().Name); return; }
                 if (p.IsTerminal) return;
-                if (p.DefinitionVersion != BillPaymentDefinition.CurrentVersion)
+                if (p.DefinitionVersion != SettlementDefinition.CurrentVersion)
                 {
                     // Old instances keep their own logic until they drain; a v1 handler would be called here.
                     logger.LogInformation("Process on definition v{Version}", p.DefinitionVersion);
@@ -899,10 +901,10 @@ public sealed class BillPaymentProcessManager(
                 }
 
                 telemetry.RecordTransition(before, p, now);
-                if (p.State == BillProcessState.Parked && before != BillProcessState.Parked)
-                    logger.LogError("Process parked for bill {BillId}: {Reason}", p.BillId, p.FailureReason);
+                if (p.State == SettlementState.Parked && before != SettlementState.Parked)
+                    logger.LogError("Process parked for settlement {SettlementId}: {Reason}", p.SettlementId, p.FailureReason);
                 else if (p.State != before)
-                    logger.LogInformation("Bill {BillId}: {From} -> {To}", p.BillId, before, p.State);
+                    logger.LogInformation("Settlement {SettlementId}: {From} -> {To}", p.SettlementId, before, p.State);
                 return;
             }
         }
@@ -923,9 +925,9 @@ public sealed class BillPaymentProcessManager(
 ### Background workers: timers and health
 
 ```csharp file=Process/ProcessWorkers.cs
-namespace ContractorPay.Process;
+namespace SellerPay.Process;
 
-public sealed class DeadlineWorker(IProcessStore store, BillPaymentProcessManager manager, TimeProvider clock, ILogger<DeadlineWorker> logger)
+public sealed class DeadlineWorker(IProcessStore store, SettlementProcessManager manager, TimeProvider clock, ILogger<DeadlineWorker> logger)
     : BackgroundService
 {
     public async Task<int> RunOnceAsync(CancellationToken ct)
@@ -936,7 +938,9 @@ public sealed class DeadlineWorker(IProcessStore store, BillPaymentProcessManage
             try { await manager.HandleAsync(new DeadlineReached(d.ProcessId, d.Token), ct); }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                logger.LogError(ex, "Deadline for {ProcessId} failed; it will be retried by the store's redelivery", d.ProcessId);
+                // The in-memory store already removed this timer. A production store leases timer rows and deletes
+                // them only in the transaction that handles the event, so a crash here means redelivery, not loss.
+                logger.LogError(ex, "Deadline for {ProcessId} failed", d.ProcessId);
             }
         }
         return due.Count;
@@ -953,14 +957,14 @@ public sealed class DeadlineWorker(IProcessStore store, BillPaymentProcessManage
 public sealed class ProcessHealthReporter(IProcessStore store, ProcessTelemetry telemetry, TimeProvider clock, ILogger<ProcessHealthReporter> logger)
     : BackgroundService
 {
-    /// <summary>"Stuck" is per state: 40 hours awaiting approval is normal, 40 minutes awaiting budget is not.</summary>
-    public static readonly IReadOnlyDictionary<BillProcessState, TimeSpan> Sla = new Dictionary<BillProcessState, TimeSpan>
+    /// <summary>"Stuck" is per state: 40 hours awaiting approval is normal, 40 minutes awaiting escrow is not.</summary>
+    public static readonly IReadOnlyDictionary<SettlementState, TimeSpan> Sla = new Dictionary<SettlementState, TimeSpan>
     {
-        [BillProcessState.AwaitingBudget] = TimeSpan.FromMinutes(10),
-        [BillProcessState.AwaitingTax] = TimeSpan.FromMinutes(15),
-        [BillProcessState.AwaitingApproval] = TimeSpan.FromHours(100),
-        [BillProcessState.AwaitingPayout] = TimeSpan.FromHours(2),
-        [BillProcessState.Compensating] = TimeSpan.FromHours(1)
+        [SettlementState.AwaitingEscrow] = TimeSpan.FromMinutes(10),
+        [SettlementState.AwaitingTax] = TimeSpan.FromMinutes(15),
+        [SettlementState.AwaitingApproval] = TimeSpan.FromHours(100),
+        [SettlementState.AwaitingPayout] = TimeSpan.FromHours(2),
+        [SettlementState.Compensating] = TimeSpan.FromHours(1)
     };
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -973,15 +977,15 @@ public sealed class ProcessHealthReporter(IProcessStore store, ProcessTelemetry 
                 var health = await store.GetHealthAsync(clock.GetUtcNow(), Sla, stoppingToken);
                 telemetry.PublishHealth(health);
                 if (health.StuckBeyondSla > 0 || health.Parked > 0)
-                    logger.LogWarning("Bill processes: {Stuck} stuck beyond SLA, {Parked} parked", health.StuckBeyondSla, health.Parked);
+                    logger.LogWarning("Settlement processes: {Stuck} stuck beyond SLA, {Parked} parked", health.StuckBeyondSla, health.Parked);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
     }
 }
 
-/// <summary>Plays Budget, Tax and Payout for the demo. Real participants deduplicate by CommandId.</summary>
-public sealed class SimulatedBillParticipants(InMemoryProcessStore store, BillPaymentProcessManager manager) : BackgroundService
+/// <summary>Plays Escrow, Tax and Payout for the demo. Real participants deduplicate by CommandId.</summary>
+public sealed class SimulatedSettlementParticipants(InMemoryProcessStore store, SettlementProcessManager manager) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -992,13 +996,13 @@ public sealed class SimulatedBillParticipants(InMemoryProcessStore store, BillPa
                 var id = command.ProcessId.ToString("N")[..6];
                 ProcessEvent? reply = command switch
                 {
-                    CommitBudget c when c.AmountInr > 50_000_000m => new BudgetRejected(c.ProcessId, "Exceeds sanctioned budget"),
-                    CommitBudget c => new BudgetCommitted(c.ProcessId, "BC-" + id),
-                    RecordTax c => new TaxRecorded(c.ProcessId, "TX-" + id, Math.Round(c.AmountInr * 0.02m, 0)),
+                    HoldEscrow c when c.AmountInr > 20_000_000m => new EscrowRejected(c.ProcessId, "Escrow balance is lower than the settlement"),
+                    HoldEscrow c => new EscrowHeld(c.ProcessId, "EH-" + id),
+                    RecordTax c => new TaxRecorded(c.ProcessId, "TX-" + id, Math.Round(c.AmountInr * 0.01m, 0)),   // illustrative rate; real rates come from configuration
                     ReleasePayout c => new PayoutSucceeded(c.ProcessId, "UTR" + id),
                     QueryPayoutStatus c => new PayoutStatusReported(c.ProcessId, PayoutStatus.Pending, null),
-                    ReleaseBudget c => new CompensationDone(c.ProcessId, BillSteps.Budget),
-                    ReverseTax c => new CompensationDone(c.ProcessId, BillSteps.Tax),
+                    ReleaseEscrow c => new CompensationDone(c.ProcessId, SettlementSteps.Escrow),
+                    ReverseTax c => new CompensationDone(c.ProcessId, SettlementSteps.Tax),
                     _ => null                                                     // approvals come from people
                 };
                 if (reply is not null) await manager.HandleAsync(reply with { TraceParent = command.TraceParent }, stoppingToken);
@@ -1014,52 +1018,52 @@ public sealed class SimulatedBillParticipants(InMemoryProcessStore store, BillPa
 ```csharp file=Program.cs
 using System.Security.Cryptography;
 using System.Text;
-using ContractorPay.Process;
+using SellerPay.Process;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddMetrics();
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.Configure<BillProcessOptions>(builder.Configuration.GetSection("BillPayment:Process"));
-builder.Services.AddSingleton<BillPaymentDefinition>();
+builder.Services.Configure<SettlementProcessOptions>(builder.Configuration.GetSection("Settlement:Process"));
+builder.Services.AddSingleton<SettlementDefinition>();
 builder.Services.AddSingleton<ProcessTelemetry>();
 builder.Services.AddSingleton<InMemoryProcessStore>();
 builder.Services.AddSingleton<IProcessStore>(sp => sp.GetRequiredService<InMemoryProcessStore>());
-builder.Services.AddSingleton<BillPaymentProcessManager>();
+builder.Services.AddSingleton<SettlementProcessManager>();
 builder.Services.AddHostedService<DeadlineWorker>();
 builder.Services.AddHostedService<ProcessHealthReporter>();
-builder.Services.AddHostedService<SimulatedBillParticipants>();
+builder.Services.AddHostedService<SimulatedSettlementParticipants>();
 // In production: builder.Services.AddOpenTelemetry().WithTracing(t => t.AddSource(ProcessTelemetry.Name))
 //                                                   .WithMetrics(m => m.AddMeter(ProcessTelemetry.Name));
 
 var app = builder.Build();
 
-app.MapPost("/bills/{billId}/payment", async (string billId, PayBillRequest req, BillPaymentProcessManager pm, CancellationToken ct) =>
+app.MapPost("/settlements/{settlementId}/payout", async (string settlementId, PaySettlementRequest req, SettlementProcessManager pm, CancellationToken ct) =>
 {
-    var processId = ProcessIds.ForBill(billId);                      // retried POST starts nothing new
-    await pm.StartAsync(new PaymentRequested(processId, billId, req.ContractorId, req.NetAmountInr), ct);
+    var processId = ProcessIds.ForSettlement(settlementId);                      // retried POST starts nothing new
+    await pm.StartAsync(new PaymentRequested(processId, settlementId, req.SellerId, req.NetAmountInr), ct);
     return Results.Accepted($"/processes/{processId}", new { processId, status = "processing" });
 });
 
-app.MapPost("/approvals/{processId:guid}", async (Guid processId, ApprovalDecision d, BillPaymentProcessManager pm, CancellationToken ct) =>
+app.MapPost("/approvals/{processId:guid}", async (Guid processId, ApprovalDecision d, SettlementProcessManager pm, CancellationToken ct) =>
 {
     ProcessEvent e = d.Approve
-        ? new ApprovalGranted(processId, d.OfficerId)
-        : new ApprovalRejected(processId, d.OfficerId, d.Reason ?? "No reason given");
+        ? new ApprovalGranted(processId, d.ApproverId)
+        : new ApprovalRejected(processId, d.ApproverId, d.Reason ?? "No reason given");
     await pm.HandleAsync(e, ct);
     return Results.NoContent();
 });
 
 app.MapGet("/processes/{processId:guid}", async (Guid processId, IProcessStore store, CancellationToken ct) =>
     await store.GetAsync(processId, ct) is { } p
-        ? Results.Ok(new { p.BillId, State = p.State.ToString(), p.StateEnteredAt, p.FailureReason, p.CompensationAttempts, p.Escalations })
+        ? Results.Ok(new { p.SettlementId, State = p.State.ToString(), p.StateEnteredAt, p.FailureReason, p.CompensationAttempts, p.Escalations })
         : Results.NotFound());
 
 var ops = app.MapGroup("/ops/processes");                           // protect with an operator policy in production
-ops.MapGet("/", async (BillProcessState state, IProcessStore store, CancellationToken ct) =>
+ops.MapGet("/", async (SettlementState state, IProcessStore store, CancellationToken ct) =>
     Results.Ok((await store.ListByStateAsync(state, 200, ct))
-        .Select(p => new { p.ProcessId, p.BillId, p.ParkedFrom, p.FailureReason, p.StateEnteredAt })));
-ops.MapPost("/{processId:guid}/retry", async (Guid processId, OperatorAction a, BillPaymentProcessManager pm,
+        .Select(p => new { p.ProcessId, p.SettlementId, p.ParkedFrom, p.FailureReason, p.StateEnteredAt })));
+ops.MapPost("/{processId:guid}/retry", async (Guid processId, OperatorAction a, SettlementProcessManager pm,
     ILogger<OperatorAction> audit, CancellationToken ct) =>
 {
     audit.LogWarning("AUDIT operator {Operator} requested retry of {ProcessId}: {Note}", a.OperatorId, processId, a.Note);
@@ -1069,14 +1073,14 @@ ops.MapPost("/{processId:guid}/retry", async (Guid processId, OperatorAction a, 
 
 app.Run();
 
-public sealed record PayBillRequest(string ContractorId, decimal NetAmountInr);
-public sealed record ApprovalDecision(string OfficerId, bool Approve, string? Reason);
+public sealed record PaySettlementRequest(string SellerId, decimal NetAmountInr);
+public sealed record ApprovalDecision(string ApproverId, bool Approve, string? Reason);
 public sealed record OperatorAction(string OperatorId, string Note);
 
 public static class ProcessIds
 {
-    public static Guid ForBill(string billId) =>
-        new(SHA256.HashData(Encoding.UTF8.GetBytes("bill-payment:" + billId)).AsSpan(0, 16));
+    public static Guid ForSettlement(string settlementId) =>
+        new(SHA256.HashData(Encoding.UTF8.GetBytes("seller-settlement:" + settlementId)).AsSpan(0, 16));
 }
 ```
 
@@ -1091,17 +1095,17 @@ public static class ProcessIds
 if (now - saga.StepStartedAt > TimeSpan.FromMinutes(10)) BeginCompensation(saga);
 ```
 
-Officers on leave cancel valid bills, and a slow bank triggers "compensation" of a payment that happened. **Good:** classify each wait as a technical timeout, business deadline or poll, and give each its own action: compensate, escalate, or ask.
+Approvers on leave cancel valid settlements, and a slow bank triggers "compensation" of a payment that happened. **Good:** classify each wait as a technical timeout, business deadline or poll, and give each its own action: compensate, escalate, or ask.
 
 **Bad: timers without tokens.** The tax reply arrives after 50 seconds; the 3-minute timer still fires and the process compensates a step that succeeded. **Good:** each timer carries the token it was armed with; stale tokens are ignored.
 
-**Bad: infinite compensation retries.** A compensation that fails because the budget year is closed retries every 30 seconds forever, flooding logs and the budget service. **Good:** backoff, a cap, park with the reason, alert, and an operator retry after the cause is fixed.
+**Bad: infinite compensation retries.** A compensation that fails because the hold was already rolled into next week's cycle retries every 30 seconds forever, flooding logs and the escrow service. **Good:** backoff, a cap, park with the reason, alert, and an operator retry after the cause is fixed.
 
 **Bad: compensating the pivot on timeout.** **Good:** idempotency key, status query, park, reconcile.
 
-**Bad: logs without correlation.** "Compensation failed" with no ids. **Good:** a logging scope with `ProcessId` and `BillId` on every line, and `traceparent` on every message.
+**Bad: logs without correlation.** "Compensation failed" with no ids. **Good:** a logging scope with `ProcessId` and `SettlementId` on every line, and `traceparent` on every message.
 
-**Bad: a choreographed flow with no tracking.** When the tax consumer crashed, 60 bills stopped for six hours and nobody noticed until contractors phoned. **Good:** a tracking projection and a "nothing heard in N minutes" alert, or a process manager.
+**Bad: a choreographed flow with no tracking.** When the tax consumer crashed, 60 settlements stopped for six hours and nobody noticed until sellers phoned. **Good:** a tracking projection and a "nothing heard in N minutes" alert, or a process manager.
 
 :::callout type=tradeoff title="Build it or use a workflow engine?"
 The code above is roughly 600 lines before tests, and you still need an ops screen, metrics dashboards and a migration story. For one or two critical processes, owning it is reasonable and keeps your stack small. For ten processes, or processes with many human steps, a durable workflow engine usually wins on total cost. See [Workflow engines and feature flags](#/lesson/m16-workflow-engines).
@@ -1109,7 +1113,7 @@ The code above is roughly 600 lines before tests, and you still need an ops scre
 
 ## Practical playground
 
-The graph below is the bill flow built by choreography: each service calls the next, and nobody can answer "where is bill 8812?". Open it in the HLD canvas and turn it into a production process:
+The graph below is the settlement flow built by choreography: each service calls the next, and nobody can answer "where is settlement 8812?". Open it in the HLD canvas and turn it into a production process:
 
 1. Add a `worker` for the process manager and a `database` for the process store (state, outbox, timers).
 2. Make commands and replies `async` through `queue` nodes.
@@ -1122,9 +1126,9 @@ The graph below is the bill flow built by choreography: each service calls the n
 ```json
 {
   "nodes": [
-    { "id": "billing", "type": "app-server", "label": "Billing app" },
+    { "id": "accounts", "type": "app-server", "label": "Seller accounts app" },
     { "id": "bus", "type": "queue", "label": "Event bus" },
-    { "id": "budget", "type": "app-server", "label": "Budget service" },
+    { "id": "escrow", "type": "app-server", "label": "Escrow service" },
     { "id": "tax", "type": "app-server", "label": "Tax service" },
     { "id": "gst", "type": "external", "label": "GST validation API" },
     { "id": "approvals", "type": "app-server", "label": "Approvals app" },
@@ -1132,14 +1136,14 @@ The graph below is the bill flow built by choreography: each service calls the n
     { "id": "bank", "type": "external", "label": "Bank payout API" }
   ],
   "edges": [
-    { "from": "billing", "to": "bus", "kind": "async", "label": "BillSubmitted" },
-    { "from": "bus", "to": "budget", "kind": "async" },
-    { "from": "budget", "to": "bus", "kind": "async", "label": "BudgetCommitted" },
+    { "from": "accounts", "to": "bus", "kind": "async", "label": "SettlementDue" },
+    { "from": "bus", "to": "escrow", "kind": "async" },
+    { "from": "escrow", "to": "bus", "kind": "async", "label": "EscrowHeld" },
     { "from": "bus", "to": "tax", "kind": "async" },
     { "from": "tax", "to": "gst", "kind": "sync" },
     { "from": "tax", "to": "bus", "kind": "async", "label": "TaxRecorded" },
     { "from": "bus", "to": "approvals", "kind": "async" },
-    { "from": "approvals", "to": "bus", "kind": "async", "label": "BillApproved" },
+    { "from": "approvals", "to": "bus", "kind": "async", "label": "SettlementApproved" },
     { "from": "bus", "to": "payout", "kind": "async" },
     { "from": "payout", "to": "bank", "kind": "sync" }
   ]
@@ -1153,8 +1157,8 @@ The graph below is the bill flow built by choreography: each service calls the n
 For each flow, choose a process manager, choreography, a routing slip or "no saga at all", and justify it in two or three sentences.
 
 1. When an order is placed in an online store, send a confirmation email, update the analytics warehouse and add loyalty points.
-2. A land-acquisition compensation payment for a highway project: verify ownership documents (a revenue officer, up to 7 days), compute the award, get district collector approval, pay through the bank, publish the award.
-3. Resize an uploaded site photo, add a watermark, extract GPS coordinates and store the results. Each step takes under a second.
+2. A health-insurance reimbursement claim: verify the hospital bills and discharge summary (a claims assessor, up to 7 days), compute the payable amount, get a senior approver's sign-off for claims above ₹2 lakh, pay through the bank, notify the policyholder.
+3. Resize an uploaded product photo, add a watermark, strip GPS location metadata for privacy and store the results. Each step takes under a second.
 4. Move ₹5,000 between two wallets of the same user, both stored in the same PostgreSQL database.
 ::acceptance
 - Flow 1 is choreography (independent fan-out), with a reason.
@@ -1419,12 +1423,12 @@ public class CompensationTrackerTests
         var t = new CompensationTracker(Policy());
         for (var i = 1; i <= 4; i++)
         {
-            var d = t.OnResult("p1:release-budget", CompensationResult.TechnicalFailure);
+            var d = t.OnResult("p1:release-escrow", CompensationResult.TechnicalFailure);
             Assert.Equal(CompensationOutcome.RetryScheduled, d.Outcome);
             Assert.Equal(Policy().DelayFor(i), d.RetryAfter);
         }
-        Assert.Equal(CompensationOutcome.Parked, t.OnResult("p1:release-budget", CompensationResult.TechnicalFailure).Outcome);
-        Assert.Equal(5, t.Failures("p1:release-budget"));
+        Assert.Equal(CompensationOutcome.Parked, t.OnResult("p1:release-escrow", CompensationResult.TechnicalFailure).Outcome);
+        Assert.Equal(5, t.Failures("p1:release-escrow"));
     }
 
     [Fact]
@@ -1438,18 +1442,18 @@ public class CompensationTrackerTests
     public void Final_decisions_are_sticky()
     {
         var t = new CompensationTracker(Policy());
-        Assert.Equal(CompensationOutcome.Done, t.OnResult("p3:release-budget", CompensationResult.Succeeded).Outcome);
-        Assert.Equal(CompensationOutcome.Done, t.OnResult("p3:release-budget", CompensationResult.TechnicalFailure).Outcome);
+        Assert.Equal(CompensationOutcome.Done, t.OnResult("p3:release-escrow", CompensationResult.Succeeded).Outcome);
+        Assert.Equal(CompensationOutcome.Done, t.OnResult("p3:release-escrow", CompensationResult.TechnicalFailure).Outcome);
     }
 
     [Fact]
     public void Operator_retry_resets_a_parked_compensation()
     {
         var t = new CompensationTracker(Policy());
-        t.OnResult("p4:release-budget", CompensationResult.BusinessRefusal);
-        Assert.True(t.OperatorRetry("p4:release-budget"));
-        Assert.Equal(0, t.Failures("p4:release-budget"));
-        var d = t.OnResult("p4:release-budget", CompensationResult.TechnicalFailure);
+        t.OnResult("p4:release-escrow", CompensationResult.BusinessRefusal);
+        Assert.True(t.OperatorRetry("p4:release-escrow"));
+        Assert.Equal(0, t.Failures("p4:release-escrow"));
+        var d = t.OnResult("p4:release-escrow", CompensationResult.TechnicalFailure);
         Assert.Equal(CompensationOutcome.RetryScheduled, d.Outcome);
         Assert.Equal(TimeSpan.FromSeconds(30), d.RetryAfter);
         Assert.False(t.OperatorRetry("unknown"));
@@ -1550,14 +1554,14 @@ Record each attempt's time and error in a list, and expose `History(commandId)` 
 :::
 
 :::exercise id=m16-saga-orchestration-choreography-ex4 difficulty=intermediate kind=sql ordered=true title="Which processes are stuck?"
-The table `bill_processes` holds one row per bill payment process, and `state_sla` gives the maximum normal time in each state in minutes. Treat **now** as `TIMESTAMPTZ '2026-10-19 12:00:00+05:30'`.
+The table `settlement_processes` holds one row per settlement process, and `state_sla` gives the maximum normal time in each state in minutes. Treat **now** as `TIMESTAMPTZ '2026-10-19 12:00:00+05:30'`.
 
 For every **non-terminal** state (exclude `Paid` and `Cancelled`) that has at least one process, return: `state`, `active` (number of processes), `stuck` (processes whose time in the current state exceeds the state's SLA; states with no SLA row never count as stuck) and `oldest_minutes` (the largest time in state, in whole minutes, as an integer rounded down). Order by `stuck` descending, then `state`.
 ::setup
 ```sql
-CREATE TABLE bill_processes (
+CREATE TABLE settlement_processes (
   process_id       int PRIMARY KEY,
-  bill_id          text NOT NULL UNIQUE,
+  settlement_id          text NOT NULL UNIQUE,
   state            text NOT NULL,
   state_entered_at timestamptz NOT NULL
 );
@@ -1566,20 +1570,20 @@ CREATE TABLE state_sla (
   max_minutes int NOT NULL
 );
 INSERT INTO state_sla VALUES
- ('AwaitingBudget', 10), ('AwaitingTax', 15), ('AwaitingApproval', 6000),
+ ('AwaitingEscrow', 10), ('AwaitingTax', 15), ('AwaitingApproval', 6000),
  ('AwaitingPayout', 120), ('Compensating', 60);
-INSERT INTO bill_processes VALUES
- (1,  'RA-8801', 'Paid',             '2026-10-18 10:00:00+05:30'),
- (2,  'RA-8802', 'AwaitingBudget',   '2026-10-19 11:55:00+05:30'),
- (3,  'RA-8803', 'AwaitingBudget',   '2026-10-19 11:20:00+05:30'),
- (4,  'RA-8804', 'AwaitingApproval', '2026-10-17 09:00:00+05:30'),
- (5,  'RA-8805', 'AwaitingApproval', '2026-10-15 08:00:00+05:30'),
- (6,  'RA-8806', 'AwaitingPayout',   '2026-10-19 08:30:00+05:30'),
- (7,  'RA-8807', 'AwaitingPayout',   '2026-10-19 11:30:00+05:30'),
- (8,  'RA-8808', 'Compensating',     '2026-10-19 10:00:00+05:30'),
- (9,  'RA-8809', 'Parked',           '2026-10-19 06:00:00+05:30'),
- (10, 'RA-8810', 'Cancelled',        '2026-10-19 09:00:00+05:30'),
- (11, 'RA-8811', 'AwaitingTax',      '2026-10-19 11:50:00+05:30');
+INSERT INTO settlement_processes VALUES
+ (1,  'ST-8801', 'Paid',             '2026-10-18 10:00:00+05:30'),
+ (2,  'ST-8802', 'AwaitingEscrow',   '2026-10-19 11:55:00+05:30'),
+ (3,  'ST-8803', 'AwaitingEscrow',   '2026-10-19 11:20:00+05:30'),
+ (4,  'ST-8804', 'AwaitingApproval', '2026-10-17 09:00:00+05:30'),
+ (5,  'ST-8805', 'AwaitingApproval', '2026-10-15 08:00:00+05:30'),
+ (6,  'ST-8806', 'AwaitingPayout',   '2026-10-19 08:30:00+05:30'),
+ (7,  'ST-8807', 'AwaitingPayout',   '2026-10-19 11:30:00+05:30'),
+ (8,  'ST-8808', 'Compensating',     '2026-10-19 10:00:00+05:30'),
+ (9,  'ST-8809', 'Parked',           '2026-10-19 06:00:00+05:30'),
+ (10, 'ST-8810', 'Cancelled',        '2026-10-19 09:00:00+05:30'),
+ (11, 'ST-8811', 'AwaitingTax',      '2026-10-19 11:50:00+05:30');
 ```
 ::check
 ```sql
@@ -1588,7 +1592,7 @@ active AS (
   SELECT p.state,
          EXTRACT(EPOCH FROM (n.ts - p.state_entered_at)) / 60 AS minutes_in_state,
          s.max_minutes
-  FROM bill_processes p
+  FROM settlement_processes p
   CROSS JOIN now_ts n
   LEFT JOIN state_sla s ON s.state = p.state
   WHERE p.state NOT IN ('Paid', 'Cancelled')
@@ -1621,7 +1625,7 @@ active AS (
   SELECT p.state,
          EXTRACT(EPOCH FROM (n.ts - p.state_entered_at)) / 60 AS minutes_in_state,
          s.max_minutes
-  FROM bill_processes p
+  FROM settlement_processes p
   CROSS JOIN now_ts n
   LEFT JOIN state_sla s ON s.state = p.state
   WHERE p.state NOT IN ('Paid', 'Cancelled')
@@ -1635,7 +1639,7 @@ GROUP BY state
 ORDER BY stuck DESC, state;
 ```
 
-Expected reading: `AwaitingBudget` has one stuck process (RA-8803, 40 minutes against a 10-minute SLA), `AwaitingPayout` one (RA-8806, 210 minutes against 120), `Compensating` one (120 against 60), and `AwaitingApproval` none: RA-8805 has waited 4 days and 4 hours, exactly 6,000 minutes, which does not *exceed* its 6,000-minute business SLA (a boundary case worth noticing: decide whether your alert uses `>` or `>=`, and document it). `Parked` shows 1 active, 0 stuck, because parked processes are alerted separately. This is exactly the query behind the `billpay.process.stuck` gauge, and the partial index on `(state, state_entered_at)` keeps it cheap.
+Expected reading: `AwaitingEscrow` has one stuck process (ST-8803, 40 minutes against a 10-minute SLA), `AwaitingPayout` one (ST-8806, 210 minutes against 120), `Compensating` one (120 against 60), and `AwaitingApproval` none: ST-8805 has waited 4 days and 4 hours, exactly 6,000 minutes, which does not *exceed* its 6,000-minute business SLA (a boundary case worth noticing: decide whether your alert uses `>` or `>=`, and document it). `Parked` shows 1 active, 0 stuck, because parked processes are alerted separately. This is exactly the query behind the `settlement.process.stuck` gauge, and the partial index on `(state, state_entered_at)` keeps it cheap.
 ::mistakes
 - An inner join to `state_sla`, which silently drops `Parked`.
 - Using one global threshold ("older than 1 hour") instead of per-state SLAs.
@@ -1643,7 +1647,7 @@ Expected reading: `AwaitingBudget` has one stuck process (RA-8803, 40 minutes ag
 :::
 
 :::exercise id=m16-saga-orchestration-choreography-ex5 difficulty=advanced kind=hld title="A process platform for three long-running workflows"
-The agency now runs three long processes: RA bill payment (2,400 a month, up to 4 days), contractor onboarding (300 a month, document checks by people, up to 3 weeks) and land-compensation payments (1,000 a month during acquisition drives, a revenue officer's verification of up to 7 days, payout through the bank). Auditors require a full history for 8 years. Design the platform: process manager or workflow engine, where state and timers live, how traces and metrics flow, how operators handle parked cases, how definitions are versioned, and how reconciliation works. Extend the starter graph and explain your choices, including what breaks first.
+The marketplace now runs three long processes: seller settlement (2,400 a month, up to 4 days), seller onboarding (300 a month, KYC and GST document checks by people, up to 3 weeks) and refunds for disputed high-value orders (1,000 a month during sale seasons, a claims agent's investigation of up to 7 days, payout through the bank). Auditors require a full history for 8 years. Design the platform: process manager or workflow engine, where state and timers live, how traces and metrics flow, how operators handle parked cases, how definitions are versioned, and how reconciliation works. Extend the starter graph and explain your choices, including what breaks first.
 ::acceptance
 - A justified build-versus-engine decision, including team skills and total cost.
 - Durable timers for business deadlines, with escalation and stale-timer protection.
@@ -1655,18 +1659,18 @@ Three processes with human steps lasting weeks: compare the effort of three hand
 ::hint
 Where does "history for 8 years" live? Hot tables with partial indexes, or an append-only history table or event store moved to cheaper storage?
 ::hint
-What is the first thing to break: throughput (tiny), or the bank's status API rate limit during a quarter-end peak when hundreds of payouts time out together?
+What is the first thing to break: throughput (tiny), or the bank's status API rate limit on the settlement day after a festive sale, when hundreds of payouts time out together?
 ::hint
 Draw: API → process engine/manager workers → PostgreSQL (state, timers, outbox) → queues → participants; a monitoring node; an ops console; a reconciliation scheduler; object storage for archived history.
 ::starter
 ```json
 {
   "nodes": [
-    { "id": "portal", "type": "client", "label": "Contractor portal and officer apps" },
+    { "id": "portal", "type": "client", "label": "Seller portal and finance apps" },
     { "id": "api", "type": "app-server", "label": "Process API" },
-    { "id": "budget", "type": "app-server", "label": "Budget service" },
+    { "id": "escrow", "type": "app-server", "label": "Escrow service" },
     { "id": "tax", "type": "app-server", "label": "Tax service" },
-    { "id": "docs", "type": "app-server", "label": "Document verification" },
+    { "id": "docs", "type": "app-server", "label": "KYC document verification" },
     { "id": "payout", "type": "app-server", "label": "Payout service" },
     { "id": "bank", "type": "external", "label": "Bank payout API" }
   ],
@@ -1680,7 +1684,7 @@ Draw: API → process engine/manager workers → PostgreSQL (state, timers, outb
 ```json
 {
   "nodes": [
-    { "id": "portal", "type": "client", "label": "Contractor portal and officer apps" },
+    { "id": "portal", "type": "client", "label": "Seller portal and finance apps" },
     { "id": "ops", "type": "client", "label": "Ops console (parked cases, retry, audit)" },
     { "id": "api", "type": "app-server", "label": "Process API", "props": { "instances": 2 } },
     { "id": "engine", "type": "worker", "label": "Workflow workers (3 process definitions, versioned)", "props": { "instances": 3 } },
@@ -1688,9 +1692,9 @@ Draw: API → process engine/manager workers → PostgreSQL (state, timers, outb
     { "id": "timers", "type": "scheduler", "label": "Durable timers (deadline worker, tokens)" },
     { "id": "cmdq", "type": "queue", "label": "Command queues per participant" },
     { "id": "replyq", "type": "queue", "label": "Reply queue" },
-    { "id": "budget", "type": "app-server", "label": "Budget service" },
+    { "id": "escrow", "type": "app-server", "label": "Escrow service" },
     { "id": "tax", "type": "app-server", "label": "Tax service" },
-    { "id": "docs", "type": "app-server", "label": "Document verification (human tasks)" },
+    { "id": "docs", "type": "app-server", "label": "KYC document verification (human tasks)" },
     { "id": "payout", "type": "app-server", "label": "Payout service (idempotency keys, status rate limit)" },
     { "id": "bank", "type": "external", "label": "Bank payout API" },
     { "id": "recon", "type": "scheduler", "label": "Nightly reconciliation vs bank statement" },
@@ -1704,12 +1708,12 @@ Draw: API → process engine/manager workers → PostgreSQL (state, timers, outb
     { "from": "engine", "to": "pdb", "kind": "sync", "label": "state + outbox + timer, one tx" },
     { "from": "timers", "to": "engine", "kind": "async", "label": "DeadlineReached + token" },
     { "from": "engine", "to": "cmdq", "kind": "async", "label": "commands with traceparent" },
-    { "from": "cmdq", "to": "budget", "kind": "async" },
+    { "from": "cmdq", "to": "escrow", "kind": "async" },
     { "from": "cmdq", "to": "tax", "kind": "async" },
     { "from": "cmdq", "to": "docs", "kind": "async" },
     { "from": "cmdq", "to": "payout", "kind": "async" },
     { "from": "payout", "to": "bank", "kind": "sync", "label": "payout / status, client reference" },
-    { "from": "budget", "to": "replyq", "kind": "async" },
+    { "from": "escrow", "to": "replyq", "kind": "async" },
     { "from": "tax", "to": "replyq", "kind": "async" },
     { "from": "docs", "to": "replyq", "kind": "async" },
     { "from": "payout", "to": "replyq", "kind": "async" },
@@ -1723,13 +1727,13 @@ Draw: API → process engine/manager workers → PostgreSQL (state, timers, outb
 }
 ```
 
-**Build or buy.** Three definitions with human steps lasting days to weeks, plus an 8-year audit trail, tip the balance towards a durable workflow engine (self-hosted Temporal, or Azure Durable Functions if the agency is on Azure). The engine provides timers, retries, history and a UI. If the team is small and only knows ASP.NET Core and PostgreSQL, the hand-built process manager from this lesson, generalised to several definitions, is acceptable; the graph is the same either way.
+**Build or buy.** Three definitions with human steps lasting days to weeks, plus an 8-year audit trail, tip the balance towards a durable workflow engine (Temporal, self-hosted or Temporal Cloud, or Azure Durable Functions if the company is on Azure). The engine provides timers, retries, history and a UI. If the team is small and only knows ASP.NET Core and PostgreSQL, the hand-built process manager from this lesson, generalised to several definitions, is acceptable; the graph is the same either way.
 
-**Volume (estimates).** About 3,700 processes a month ≈ 120 a day; even at a quarter-end peak of 400 in one day, with about 15 messages each, that is roughly 6,000 messages a day. Throughput is not a concern; one PostgreSQL instance with a standby is ample.
+**Volume (estimates).** About 3,700 processes a month ≈ 120 a day; even at a festive-sale peak of 400 in one day, with about 15 messages each, that is roughly 6,000 messages a day. Throughput is not a concern; one PostgreSQL instance with a standby is ample.
 
-**Timers.** Business deadlines (officer 48 h, revenue officer 7 days) escalate twice before rejecting; technical timeouts are minutes. Every timer carries a token. Timers are rows in the process database (or engine timers), never in-memory delays.
+**Timers.** Business deadlines (finance approver 48 h, claims agent 7 days) escalate twice before rejecting; technical timeouts are minutes. Every timer carries a token. Timers are rows in the process database (or engine timers), never in-memory delays.
 
-**Payouts.** The payout service sends our command id as the bank's client reference. On timeout it asks for status; status queries are **rate-limited and spread with jitter** because what breaks first is the bank's status API at quarter end, when hundreds of payouts time out together. After the query cap, the case parks as "outcome unknown". Nightly reconciliation matches the bank statement to processes and resolves parked cases automatically where it can.
+**Payouts.** The payout service sends our command id as the bank's client reference. On timeout it asks for status; status queries are **rate-limited and spread with jitter** because what breaks first is the bank's status API on a post-sale settlement day, when hundreds of payouts time out together. After the query cap, the case parks as "outcome unknown". Nightly reconciliation matches the bank statement to processes and resolves parked cases automatically where it can.
 
 **Observability.** Commands and replies carry `traceparent`; each step is a span tagged with process id and business id. Metrics: started, finished by outcome, duration per definition, stuck per state (per-state SLA table), parked count, oldest active age. Alerts: parked > 0 for 15 minutes in working hours; stuck rising; reconciliation mismatches > 0.
 
@@ -1753,22 +1757,22 @@ Draw: API → process engine/manager workers → PostgreSQL (state, timers, outb
 [Fact]
 public void Payout_timeout_asks_the_bank_instead_of_compensating()
 {
-    var def = new BillPaymentDefinition(Options.Create(new BillProcessOptions()));
-    var p = Approved(def);                                       // helper: drives budget, tax, approval
+    var def = new SettlementDefinition(Options.Create(new SettlementProcessOptions()));
+    var p = Approved(def);                                       // helper: drives escrow, tax, approval
     var transition = def.Handle(p, new DeadlineReached(p.ProcessId, p.DeadlineToken));
-    Assert.Equal(BillProcessState.AwaitingPayout, p.State);
+    Assert.Equal(SettlementState.AwaitingPayout, p.State);
     Assert.IsType<QueryPayoutStatus>(Assert.Single(transition.Commands));
 }
 
 [Fact]
 public void Stale_deadline_is_ignored()
 {
-    var def = new BillPaymentDefinition(Options.Create(new BillProcessOptions()));
-    var (p, _) = def.Start(new PaymentRequested(Guid.NewGuid(), "RA-1", "C-1", 4_800_000m), DateTimeOffset.UnixEpoch);
+    var def = new SettlementDefinition(Options.Create(new SettlementProcessOptions()));
+    var (p, _) = def.Start(new PaymentRequested(Guid.NewGuid(), "ST-1", "S-1", 4_800_000m), DateTimeOffset.UnixEpoch);
     var oldToken = p.DeadlineToken;
-    def.Handle(p, new BudgetCommitted(p.ProcessId, "BC-1"));
+    def.Handle(p, new EscrowHeld(p.ProcessId, "EH-1"));
     Assert.Same(Transition.None, def.Handle(p, new DeadlineReached(p.ProcessId, oldToken)));
-    Assert.Equal(BillProcessState.AwaitingTax, p.State);
+    Assert.Equal(SettlementState.AwaitingTax, p.State);
 }
 ```
 
@@ -1781,17 +1785,17 @@ public void Stale_deadline_is_ignored()
 
 **Time.** Inject `TimeProvider` and use `FakeTimeProvider` (from `Microsoft.Extensions.TimeProvider.Testing`) in integration tests to move time forward by 48 hours without waiting.
 
-**Telemetry tests.** Use `MeterListener` to assert that a completed process increments `billpay.process.finished` with `outcome=Paid`, and `ActivityListener` to assert that a handled event's span has the parent from its `traceparent`. Telemetry that is never tested quietly breaks during refactors.
+**Telemetry tests.** Use `MeterListener` to assert that a completed process increments `settlement.process.finished` with `outcome=Paid`, and `ActivityListener` to assert that a handled event's span has the parent from its `traceparent`. Telemetry that is never tested quietly breaks during refactors.
 
-**Failure injection in staging.** Make the simulated bank time out 20 % of payouts and the budget service fail compensations 50 % of the time for an hour. Afterwards assert invariants: no payout without a `Paid` process, no budget commitment without an active or paid process, and every parked process has an alert.
+**Failure injection in staging.** Make the simulated bank time out 20 % of payouts and the escrow service fail compensations 50 % of the time for an hour. Afterwards assert invariants: no payout without a `Paid` process, no escrow hold without an active or paid process, and every parked process has an alert.
 
 ## Real-world application
 
-- **Government payments and treasury systems.** Bill payment, refunds and subsidy transfers have human approvals, statutory deadlines and bank payouts whose outcome must be confirmed by status checks and statement reconciliation.
+- **Marketplace, gig-platform and benefit payouts.** Seller settlements, delivery-partner and driver payouts, and government subsidy transfers have approvals for large amounts, tax deductions and bank payouts whose outcome must be confirmed by status checks and statement reconciliation.
 - **UPI-style and card payments.** "Pending" transactions are resolved by status-check requests and later reconciliation, never by assuming failure; reversals are compensations with their own retries.
 - **E-commerce returns and refunds.** A process manager waits days for the courier to collect the item and for warehouse inspection, with reminders and escalations, before refunding.
 - **Insurance claims and loan origination.** Long processes with document checks by people, where "where is my claim?" is the most common support question; a process table with per-state SLAs answers it.
-- **Workflow engines.** Temporal, Azure Durable Functions, AWS Step Functions and Camunda are widely used for exactly these processes. In .NET message-based systems, MassTransit and NServiceBus sagas provide persistence and timeouts.
+- **Workflow engines.** Temporal, Azure Durable Functions, Dapr Workflow, AWS Step Functions and Camunda are widely used for exactly these processes. In .NET message-based systems, MassTransit, NServiceBus and Wolverine sagas provide persistence and timeouts (check licences: NServiceBus is commercial, and MassTransit moved to a commercial licence from v9 while v8 stays open source).
 
 ## Interview questions
 
@@ -1815,7 +1819,7 @@ A process table keyed by business id with state, time in state, attempts and las
 ::q advanced
 A compensation keeps failing. Walk through how a production system should handle it.
 ::a
-Distinguish technical failures (timeouts, 503s) from business refusals (the budget year is closed). Retry technical failures with exponential backoff and jitter, keeping the same command id so the participant can deduplicate. Record every attempt with time and error. After a cap (say five attempts), or immediately for a business refusal, move the process to a parked state that is not terminal and raise an alert. An operator investigates, fixes the cause, and triggers a retry that resets the counter; the action is audited. Late or duplicate results after the compensation is done must not restart it. A daily reconciliation finds anything that slipped through, such as commitments with no live process.
+Distinguish technical failures (timeouts, 503s) from business refusals (the hold was already rolled into the next settlement cycle). Retry technical failures with exponential backoff and jitter, keeping the same command id so the participant can deduplicate. Record every attempt with time and error. After a cap (say five attempts), or immediately for a business refusal, move the process to a parked state that is not terminal and raise an alert. An operator investigates, fixes the cause, and triggers a retry that resets the counter; the action is audited. Late or duplicate results after the compensation is done must not restart it. A daily reconciliation finds anything that slipped through, such as escrow holds with no live process.
 ::q advanced
 You need to change a saga definition while thousands of instances are in flight. How?
 ::a
@@ -1855,7 +1859,7 @@ A: When the participant refuses it for a business reason that no retry will fix.
 Q: What is a tracking projection?
 A: A consumer that records the latest event per business case in a choreographed flow, so you can see where each case is and alert when nothing has happened for too long.
 Q: Why must "stuck" be defined per state?
-A: Normal waiting times differ hugely: two days awaiting approval is fine, twenty minutes awaiting a budget reply is not.
+A: Normal waiting times differ hugely: two days awaiting approval is fine, twenty minutes awaiting an escrow reply is not.
 Q: How do traces survive asynchronous hops?
 A: The sender writes the W3C traceparent into the message headers; the consumer starts its span with that as the parent.
 Q: How do you deploy a new process definition safely?
@@ -1866,9 +1870,9 @@ A: Version each instance, make changes additive, route instances to their versio
 
 :::quiz pass=70
 ::q single
-A treasury officer is on leave and does not approve a bill for 48 hours. What should the process do first?
-- [ ] Compensate: release the budget and reverse tax entries.
-- [x] Escalate to a senior officer and arm a new, shorter deadline.
+A finance manager is on leave and does not approve a settlement for 48 hours. What should the process do first?
+- [ ] Compensate: release the escrow hold and reverse tax entries.
+- [x] Escalate to the finance head and arm a new, shorter deadline.
 - [ ] Wait indefinitely; approvals have no timeout.
 - [ ] Retry the approval request every minute.
 > A business deadline triggers escalation first. Compensation is the last resort after the escalation policy is exhausted.
@@ -1877,7 +1881,7 @@ A payout request has had no reply for 15 minutes. Which response is correct?
 - [ ] Compensate, because compensations tolerate "nothing to undo".
 - [ ] Send a new payout request with a new idempotency key.
 - [x] Query the bank's status for the original client reference, and act on the answer.
-- [ ] Mark the bill as paid.
+- [ ] Mark the settlement as paid.
 > The payout is the pivot. Compensating or re-sending with a new key risks a false "unpaid" or a double payment.
 ::q single
 The tax service replied after 50 seconds, but the 3-minute timer for that step fired anyway at minute 3. What prevents a wrong compensation?
@@ -1887,7 +1891,7 @@ The tax service replied after 50 seconds, but the 3-minute timer for that step f
 - [ ] Processing timers in due order.
 > A timer may already be in flight when you delete it. Tokens make stale timers harmless.
 ::q single
-The budget service is down for 20 minutes and compensations fail. What is the best policy?
+The escrow service is down for 20 minutes and compensations fail. What is the best policy?
 - [ ] Retry every second until it succeeds.
 - [ ] Give up and mark the process Cancelled.
 - [x] Retry with exponential backoff and a cap; after the cap, park with an alert so an operator can resume it.
@@ -1916,7 +1920,7 @@ You deploy version 3 of a process definition. 1,200 instances are on version 2. 
 - [ ] Version 2 code is deleted in the same deploy.
 > Instances may be in states version 3 no longer has. Versioned routing and additive changes avoid breaking them.
 ::q single
-Budget and tax records are tables in the same service and database. A team proposes a saga between them. Best advice?
+Escrow holds and tax records are tables in the same service and database. A team proposes a saga between them. Best advice?
 - [x] Use one local transaction; a saga adds intermediate states and compensations for no benefit.
 - [ ] Use choreography between two modules.
 - [ ] Use two-phase commit.
@@ -1931,5 +1935,5 @@ You have finished this lesson when you can:
 - [ ] Score at least 70 % on the knowledge check.
 - [ ] Pass the tests for exercises 2 and 3 with `dotnet test`.
 - [ ] Write the stuck-process query in exercise 4 and explain each column.
-- [ ] Draw the bill payment state machine from memory, including escalation, status queries and parking.
+- [ ] Draw the settlement state machine from memory, including escalation, status queries and parking.
 - [ ] For one long process at your work, list each wait, its kind, its timer and what happens when it fires.

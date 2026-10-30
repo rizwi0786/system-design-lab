@@ -634,7 +634,17 @@ Deleting a secret in a later layer (`RUN rm secrets.json`) does not remove it fr
 :::
 
 :::callout type=tip title="No Dockerfile needed for simple cases"
-The .NET SDK can build a container image directly: `dotnet publish -t:PublishContainer` creates an image using Microsoft's base images, a non-root user and sensible defaults, without a Dockerfile. Use a Dockerfile when you need custom stages (like a test stage), extra OS packages or full control.
+The .NET SDK can build a container image directly: `dotnet publish -t:PublishContainer` creates an image using Microsoft's base images, a non-root user and port 8080, without a Dockerfile and without Docker installed when you push straight to a registry. Settings are MSBuild properties, for example:
+
+```xml
+<PropertyGroup>
+  <ContainerRepository>transitpass/api</ContainerRepository>
+  <!-- chiseled base with ICU and tzdata, as in the Dockerfile above -->
+  <ContainerFamily>noble-chiseled-extra</ContainerFamily>
+</PropertyGroup>
+```
+
+`dotnet publish -c Release -t:PublishContainer -p ContainerImageTag=2.14.0 -p ContainerRegistry=ghcr.io` builds and pushes in one step, which is handy in CI. Use a Dockerfile when you need custom stages (like a test stage), extra OS packages or full control.
 :::
 
 ## Practical playground

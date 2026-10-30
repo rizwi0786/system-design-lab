@@ -45,11 +45,11 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Imagine you are buying a vehicle for a small construction firm in Pune. You choose a pickup truck. Your partner asks, "Why not a big lorry? It carries more."
+Imagine you are buying a vehicle for a small catering business in Pune. You choose a pickup truck. Your partner asks, "Why not a big lorry? It carries more."
 
 A weak answer is "Lorries are bad" or "Everyone uses pickups." A strong answer is:
 
-> "I chose the pickup **because** we move about 500 kg of tools a day, **given** that our sites are in narrow city lanes. It **costs** us extra trips when we move cement in bulk, maybe twice a month. I would **revisit** it if we win the highway contract where we'd move 5 tonnes a day."
+> "I chose the pickup **because** we move about 500 kg of food and equipment a day, **given** that most of our customers' homes are in narrow city lanes. It **costs** us extra trips for big weddings, maybe twice a month. I would **revisit** it if we win the corporate canteen deal where we'd move 5 tonnes a day."
 
 Notice what happened. You did not say the lorry is bad. You said what your situation needs, what you gave up, and when the answer changes. Your partner can now disagree with a specific fact ("actually we move 2 tonnes a day") instead of arguing about opinions.
 
@@ -107,7 +107,7 @@ The default that rarely needs defending at moderate scale is a relational databa
 | Option | Model | Strengths | Costs | Typical fit |
 |---|---|---|---|---|
 | **Database-backed queue** (a jobs table polled with `FOR UPDATE SKIP LOCKED`) | Rows as jobs | No new infrastructure; jobs commit in the same transaction as the business data | Polling load on the database; modest throughput; no fan-out | Small systems, background jobs, an outbox |
-| **Work queue broker** (RabbitMQ, Azure Service Bus) | Messages delivered to competing consumers and removed when acknowledged | Per-message acknowledgement, retries, dead-letter queues, flexible routing, priorities, delayed delivery | Not built for replaying history; very high sustained throughput needs care | Commands and tasks: "send this email", "generate this PDF" |
+| **Work queue broker** (RabbitMQ, Azure Service Bus) | Messages delivered to competing consumers and removed when acknowledged | Per-message acknowledgement, retries, dead-letter queues, flexible routing, priorities, delayed delivery | Classic queues are not built for replaying history (RabbitMQ streams add a log-style option); very high sustained throughput needs care | Commands and tasks: "send this email", "generate this PDF" |
 | **Partitioned log** (Kafka, Azure Event Hubs) | An append-only log split into partitions, retained for a configured time; consumers track their own offsets | High throughput, replay from any offset, many independent consumer groups, ordering within a partition | Ordering only per partition; per-message retry and dead-lettering are your job; more operational surface | Event streams many teams consume, analytics pipelines, change data capture |
 | **Managed pub/sub** (SNS, Service Bus topics, Google Pub/Sub) | Topic fan-out to subscriptions | No servers, simple fan-out | Provider limits and pricing; features vary by provider | Notifications and fan-out where a cloud is already chosen |
 
@@ -115,6 +115,8 @@ Two questions decide most messaging choices:
 
 1. **Is the message a task (do this once) or a fact (this happened, anyone may care)?** Tasks fit queues. Facts that several consumers read independently, possibly later, fit logs.
 2. **Do you need replay?** If a new consumer next month must read the last 7 days of events, you need retention and offsets, which is a log.
+
+The line between the two is blurring: newer Kafka versions add share groups (queue-style consumption with per-record acknowledgement), and RabbitMQ streams offer retention and replay. In an interview, defend the *model* you need (task queue or replayable log) first, then the product, and check what your managed offering actually supports.
 
 ### Decision matrices
 
@@ -176,14 +178,14 @@ The candidate does not argue with "everyone uses it". They restate the requireme
 
 ## Step-by-step example
 
-We will defend the data and messaging choices for **SiteCheck**, a site-inspection system for an infrastructure consultancy: engineers fill in inspection forms on tablets at 400 road and bridge sites, attach photos, and raise non-conformance reports (NCRs) that contractors must close. Estimates (from the [estimation drills](#/lesson/m19-estimation-practice)): 3,000 engineers, about 20,000 inspections per day, peak 15 writes per second, photos in object storage. Downstream: a notification service, a monthly-report generator, and a planned analytics team.
+We will defend the data and messaging choices for **ServiceCheck**, a vehicle-inspection system for a chain of 400 car and two-wheeler service centres: technicians fill in inspection checklists on tablets, attach photos, and raise defect reports that the customer must approve and the workshop must close. Estimates (from the [estimation drills](#/lesson/m19-estimation-practice)): 3,000 technicians, about 20,000 inspections per day, peak 15 writes per second, photos in object storage. Downstream: a notification service, a monthly-report generator, and a planned analytics team.
 
 ### Step 1 — write the requirements that matter for the choice
 
-- R1: An NCR, its line items and its status history must change together (transactional).
-- R2: Inspection forms differ by asset type (bridge bearing, pavement, drainage); new fields appear monthly.
-- R3: Peak 15 writes per second, 200 reads per second. Five-year retention.
-- R4: When an NCR is raised, notify the contractor and the project manager, and update the report generator.
+- R1: A defect report, its line items (part, labour, estimate) and its status history must change together (transactional).
+- R2: Inspection checklists differ by vehicle type (two-wheeler, car, EV battery pack); new fields appear monthly as new models launch.
+- R3: Peak 15 writes per second, 200 reads per second. Five-year retention (warranty and insurance claims).
+- R4: When a defect report is raised, notify the customer and the service advisor, and update the report generator.
 - R5: Analytics team "maybe next year" wants history.
 - R6: Team of six, strong in C# and PostgreSQL, no one has run Kafka.
 
@@ -200,9 +202,9 @@ Weights from the requirements: transactions (R1) 5, flexible fields (R2) 3, scal
 | Ad-hoc reporting (3) | 5 | 3 | 1 |
 | **Weighted total** | 25 + 12 + 8 + 20 + 15 = **80** | 15 + 15 + 8 + 8 + 9 = **55** | 5 + 9 + 10 + 4 + 3 = **31** |
 
-Not a close call: 80 against 55. Decisive criteria: transactions and team skill. Flexible fields, where MongoDB wins, carries less weight and PostgreSQL's JSONB column for asset-specific fields closes most of the gap.
+Not a close call: 80 against 55. Decisive criteria: transactions and team skill. Flexible fields, where MongoDB wins, carries less weight and PostgreSQL's JSONB column for vehicle-specific fields closes most of the gap.
 
-**Defence:** "PostgreSQL, because NCRs need transactions across header, lines and history, given R1. Asset-specific form fields go in a JSONB column with a GIN index, so new fields need no migration. It costs us write scale-out, but we're at 15 writes per second. I'd revisit if we exceeded what one primary handles in a load test, which is not on any forecast."
+**Defence:** "PostgreSQL, because defect reports need transactions across header, lines and history, given R1. Vehicle-specific checklist fields go in a JSONB column with a GIN index, so new fields need no migration. It costs us write scale-out, but we're at 15 writes per second. I'd revisit if we exceeded what one primary handles in a load test, which is not on any forecast."
 
 ### Step 3 — the messaging matrix
 
@@ -219,11 +221,11 @@ Criteria: per-message retry and dead-lettering (R4, notifications must not be si
 
 RabbitMQ with an outbox wins at 61. Interesting detail: the humble jobs table (49) edges out Kafka (48) for second place, because simplicity carries the heaviest weight. Against that runner-up, the decisive criteria are fan-out (the jobs table cannot fan out cheaply) and retry with dead-lettering. How far would the replay weight have to rise before Kafka wins? Kafka gains 4 points per unit of replay weight over RabbitMQ (5 versus 1), and it is 13 points behind, so replay's weight would have to rise by 13 ÷ 4 = 3.25, from 2 to 5.25. That is above the 1–5 scale, so the result is robust.
 
-**Defence:** "RabbitMQ fed by a transactional outbox. Because it gives per-message acknowledgement, retries and dead-letter queues, given that a lost NCR notification is a contractual problem. The outbox makes the database write and the event atomic. It costs us replay: a future analytics team can't read last month's events from the broker. I'd revisit if analytics needs event history; then I'd add a log, or simply let analytics read from a replica, since the history is already in PostgreSQL."
+**Defence:** "RabbitMQ fed by a transactional outbox. Because it gives per-message acknowledgement, retries and dead-letter queues, given that a customer who never hears about a brake defect is a safety and liability problem. The outbox makes the database write and the event atomic. It costs us replay: a future analytics team can't read last month's events from the broker. I'd revisit if analytics needs event history; then I'd add a log, or simply let analytics read from a replica, since the history is already in PostgreSQL."
 
 ### Step 4 — anticipate the three most likely challenges
 
-1. "Why not MongoDB for flexible forms?" Answer with R1 and JSONB.
+1. "Why not MongoDB for flexible checklists?" Answer with R1 and JSONB.
 2. "Why not Kafka?" Answer with the matrix and the 3.25 swing.
 3. "What if RabbitMQ is down?" The outbox keeps unsent events in PostgreSQL; the relay retries; nothing is lost, notifications are delayed.
 
@@ -231,7 +233,7 @@ RabbitMQ with an outbox wins at 61. Interesting detail: the humble jobs table (4
 
 > **Interviewer:** Your forms change every month. Isn't a document database the obvious fit?
 >
-> **Candidate:** The forms are flexible, yes, and a document store would handle that well. Two things pushed me to PostgreSQL. NCRs must update header, lines and history atomically, which is PostgreSQL's home ground. And the team runs PostgreSQL today. For the flexible part, each inspection has typed common columns plus a JSONB column for asset-specific fields, with a GIN index for the few we filter on.
+> **Candidate:** The forms are flexible, yes, and a document store would handle that well. Two things pushed me to PostgreSQL. Defect reports must update header, lines and history atomically, which is PostgreSQL's home ground. And the team runs PostgreSQL today. For the flexible part, each inspection has typed common columns plus a JSONB column for vehicle-specific fields, with a GIN index for the few we filter on.
 >
 > **Interviewer:** Isn't JSONB a hack?
 >
@@ -241,7 +243,7 @@ RabbitMQ with an outbox wins at 61. Interesting detail: the humble jobs table (4
 
 > **Interviewer:** Kafka is the industry standard for events. Why RabbitMQ?
 >
-> **Candidate:** Kafka is the right tool when many consumers read a high-volume stream independently and need replay. We have three consumers, about 20,000 NCR and inspection events a day, and no replay requirement yet. What we do need is per-message retry and dead-lettering for notifications, which RabbitMQ gives us directly. With Kafka I'd build that myself with retry topics.
+> **Candidate:** Kafka is the right tool when many consumers read a high-volume stream independently and need replay. We have three consumers, about 20,000 inspection and defect events a day, and no replay requirement yet. What we do need is per-message retry and dead-lettering for notifications, which RabbitMQ gives us directly. With Kafka I'd build that myself with retry topics.
 >
 > **Interviewer:** And when analytics arrives?
 >
@@ -249,15 +251,15 @@ RabbitMQ with an outbox wins at 61. Interesting detail: the humble jobs table (4
 
 ### Sample dialogue 3 — "Redis as the primary store?"
 
-> **Interviewer:** Redis is much faster. Why not keep NCRs in Redis and skip PostgreSQL?
+> **Interviewer:** Redis is much faster. Why not keep defect reports in Redis and skip PostgreSQL?
 >
-> **Candidate:** Redis is faster for reads by key, and I'd use it for things like the per-site open-NCR counter if that became a hot spot. But NCRs are contractual records with five-year retention and audit. I want durable writes, transactions, ad-hoc queries for reports and a mature backup and point-in-time recovery story. Redis has persistence options, but making it the system of record for compliance data would be optimising for a latency we don't need, 200 reads per second, at the cost of the guarantees we do need.
+> **Candidate:** Redis is faster for reads by key, and I'd use it for things like the per-centre open-defect counter if that became a hot spot. But defect reports are warranty and insurance records with five-year retention and audit. I want durable writes, transactions, ad-hoc queries for reports and a mature backup and point-in-time recovery story. Redis has persistence options, but making it the system of record for compliance data would be optimising for a latency we don't need, 200 reads per second, at the cost of the guarantees we do need.
 
 ### Sample dialogue 4 — the changed requirement
 
-> **Interviewer:** New requirement: the client wants every event since day one available to a data platform team, replayable, and they expect 50 more event types next year.
+> **Interviewer:** New requirement: the business wants every event since day one available to a data platform team, replayable, and they expect 50 more event types next year.
 >
-> **Candidate:** That changes my answer for events. Replay and many independent consumers are exactly what a log is for. I'd introduce Kafka, or Event Hubs if we are on Azure, for domain events, keyed by site id so each site's events stay ordered. The outbox relay publishes there. I'd keep RabbitMQ for commands like "send this email", where per-message retry matters more than replay. Retention would be set by the data team's needs, with long-term history in object storage. The cost is a second messaging system to run, so I'd prefer a managed offering for a team our size.
+> **Candidate:** That changes my answer for events. Replay and many independent consumers are exactly what a log is for. I'd introduce Kafka, or Event Hubs if we are on Azure, for domain events, keyed by vehicle id so each vehicle's events stay ordered. The outbox relay publishes there. I'd keep RabbitMQ for commands like "send this email", where per-message retry matters more than replay. Retention would be set by the data team's needs, with long-term history in object storage. The cost is a second messaging system to run, so I'd prefer a managed offering for a team our size.
 
 Notice that in dialogue 4 the candidate changes their mind **because the requirement changed**, and says so explicitly. That is the opposite of being weak.
 
@@ -469,7 +471,7 @@ app.MapGet("/decisions", (IDecisionLog log) => Results.Ok(log.All()));
 app.Run();
 ```
 
-For the SiteCheck messaging matrix, the service returns RabbitMQ at 61, not a close call (the jobs table is second at 49), decisive criteria "Fanout" then "Retry" (then a little "Throughput"), and a swing list whose smallest entry is Kafka on "Replay" at weight 5.25 (above the 1–5 scale, so the defence sentence omits it). The arithmetic is the same as in step 3, which is the point: the tool makes a decision record reproducible and arguable.
+For the ServiceCheck messaging matrix, the service returns RabbitMQ at 61, not a close call (the jobs table is second at 49), decisive criteria "Fanout" then "Retry" (then a little "Throughput"), and a swing list whose smallest entry is Kafka on "Replay" at weight 5.25 (above the 1–5 scale, so the defence sentence omits it). The arithmetic is the same as in step 3, which is the point: the tool makes a decision record reproducible and arguable.
 
 Why integers for weights and scores? A 1–5 scale is coarse on purpose. Decimal weights such as 3.7 suggest a precision that the underlying judgement does not have.
 
@@ -487,7 +489,7 @@ What is wrong:
 - "What big companies use" is an appeal to authority, and big companies have problems you do not.
 - No cost, no trigger. The interviewer has nothing to probe except your confidence.
 
-**Good defence:** the two SiteCheck defences in the step-by-step example. Each ties the tool to a numbered requirement, admits a cost, and names a measurable trigger. Each is also modest: no technology is chosen for a problem the system does not have.
+**Good defence:** the two ServiceCheck defences in the step-by-step example. Each ties the tool to a numbered requirement, admits a cost, and names a measurable trigger. Each is also modest: no technology is chosen for a problem the system does not have.
 
 :::callout type=tradeoff title="Polyglot persistence has a running cost"
 Using the right store for each job (polyglot persistence) is sound in principle. In practice each extra store adds backups, monitoring, upgrades, security patching, on-call knowledge and data synchronisation. For a team of six, two well-understood stores usually beat five "ideal" ones.
@@ -499,22 +501,22 @@ If the interviewer changes the requirement that justified your choice, and you k
 
 ## Practical playground
 
-The starting graph is SiteCheck with PostgreSQL and nothing else. Add the messaging path and label each new component with the requirement (R1–R6) that justifies it. Then do the challenge: switch the design to handle dialogue 4's new requirement (replayable events for a data platform) and note which nodes you add and which you keep.
+The starting graph is ServiceCheck with PostgreSQL and nothing else. Add the messaging path and label each new component with the requirement (R1–R6) that justifies it. Then do the challenge: switch the design to handle dialogue 4's new requirement (replayable events for a data platform) and note which nodes you add and which you keep.
 
-:::playground type=hld title="SiteCheck: add messaging and defend each component"
+:::playground type=hld title="ServiceCheck: add messaging and defend each component"
 ```json
 {
   "nodes": [
-    { "id": "tab", "type": "client", "label": "Engineer tablets (3,000)", "props": { "rps": 200 } },
+    { "id": "tab", "type": "client", "label": "Technician tablets (3,000)", "props": { "rps": 200 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
-    { "id": "api", "type": "app-server", "label": "SiteCheck API", "props": { "instances": 2 } },
-    { "id": "db", "type": "database", "label": "PostgreSQL: inspections (JSONB fields), NCRs", "props": { "replicas": 1 } },
+    { "id": "api", "type": "app-server", "label": "ServiceCheck API", "props": { "instances": 2 } },
+    { "id": "db", "type": "database", "label": "PostgreSQL: inspections (JSONB fields), defect reports", "props": { "replicas": 1 } },
     { "id": "obj", "type": "object-storage", "label": "Inspection photos" }
   ],
   "edges": [
     { "from": "tab", "to": "lb", "kind": "sync" },
     { "from": "lb", "to": "api", "kind": "sync" },
-    { "from": "api", "to": "db", "kind": "sync", "label": "SQL, NCR in one transaction" },
+    { "from": "api", "to": "db", "kind": "sync", "label": "SQL, defect report in one transaction" },
     { "from": "tab", "to": "obj", "kind": "sync", "label": "pre-signed upload" }
   ]
 }
@@ -561,7 +563,7 @@ Implement `Matrix.Rank`, which takes criterion weights and option scores and ret
 - Invalid input throws `ArgumentException` with a message that names the problem.
 - At least two options are required.
 ::acceptance
-- The SiteCheck database matrix gives PostgreSQL 80, MongoDB 55, Cassandra 31 in that order.
+- The ServiceCheck database matrix gives PostgreSQL 80, MongoDB 55, Cassandra 31 in that order.
 - Two options with equal totals are ordered alphabetically.
 - A missing score, a score of 0 or 6, a weight of 0, or a single option throws `ArgumentException`.
 ::hint
@@ -611,7 +613,7 @@ public class MatrixTests
         new Dictionary<string, int> { ["tx"] = tx, ["flex"] = flex, ["scale"] = scale, ["team"] = team, ["reporting"] = rep };
 
     [Fact]
-    public void SiteCheck_database_matrix()
+    public void ServiceCheck_database_matrix()
     {
         var r = Matrix.Rank(W, new Dictionary<string, IReadOnlyDictionary<string, int>>
         {
@@ -800,7 +802,7 @@ Implement `Robustness.Swings`. For each criterion, find the weight at which some
 - For criterion c, a challenger B with score s_B > s_A (winner's score) ties at w = (baseA − baseB) ÷ (s_B − s_A), where base is the total without criterion c.
 - Thresholds are returned as `double`.
 ::acceptance
-- SiteCheck messaging matrix: the swing for "replay" is Kafka at 5.25.
+- ServiceCheck messaging matrix: the swing for "replay" is Kafka at 5.25.
 - PostgreSQL vs MongoDB (weights consistency 3, flex 1, team 2, ops 2): the "flex" swing is MongoDB at 7.
 - A criterion where the winner has the top score is omitted.
 - Results sorted by threshold ascending.
@@ -1058,15 +1060,15 @@ public class DecisionMatrixTests
 
     private static readonly Criterion[] Criteria =
     {
-        new("Retry", 4, "lost notifications are a contractual problem"),
+        new("Retry", 4, "a missed defect alert is a safety problem"),
         new("Replay", 2, "analytics may want history"),
         new("Simplicity", 5, "team of six, no Kafka experience"),
         new("Throughput", 1, "peak 15 events per second"),
-        new("Fanout", 3, "three consumers per NCR event"),
+        new("Fanout", 3, "three consumers per defect event"),
     };
 
     [Fact]
-    public void SiteCheck_messaging_is_rabbitmq_and_robust()
+    public void ServiceCheck_messaging_is_rabbitmq_and_robust()
     {
         var result = new DecisionMatrix(Criteria, new[]
         {
@@ -1095,7 +1097,7 @@ Add a test for the defence sentence too: that it contains the winner, the cost a
 - **Architecture decision records (ADRs).** The five-part sentence maps directly onto an ADR's Context (given), Decision (choice, because), and Consequences (cost, revisit trigger). Teams that write ADRs this way find old decisions easy to revisit, because the trigger is written down. See [ADRs](#/lesson/m02-adr).
 - **Vendor and platform selection.** Procurement for public-sector or enterprise systems often requires a documented evaluation with weighted criteria. The matrix and the "how robust is it" check turn that from a formality into a real analysis.
 - **Design reviews.** Reviewers ask the same questions as interviewers. A design document whose choices already have costs and triggers moves through review faster ([see design reviews](#/lesson/m19-design-review)).
-- **Stakeholder conversations.** "We chose PostgreSQL because..." is a conversation a project director can follow. "Because it's industry standard" invites the next consultant to say the opposite.
+- **Stakeholder conversations.** "We chose PostgreSQL because..." is a conversation a non-technical director can follow. "Because it's industry standard" invites the next consultant to say the opposite.
 
 ## Interview questions
 

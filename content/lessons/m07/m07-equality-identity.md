@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 65
 prerequisites: [m07-entities-values-services, m07-immutability, m01-value-reference-memory]
-related: [m01-collections-generics, m07-domain-modeling, m07-encapsulation-invariants, m06-flyweight]
+related: [m01-collections-generics, m07-domain-modeling, m07-encapsulation-invariants]
 tags: [equality, identity, records, hashing, value-objects, entities]
 patterns: [Value Object, Identity Field]
 summary: Decide what "the same" means for each type — same object, same identity, or same value — and implement Equals, GetHashCode, records and comparers so collections, caches and deduplication behave correctly.
@@ -62,7 +62,7 @@ Your job as a designer is to decide, for each type, which answer is right, and t
 | Kind | Question it answers | C# default for | Example |
 |---|---|---|---|
 | Reference identity | Is this the very same object in memory? | `class` | Two variables pointing at one `HttpClient` |
-| Entity identity | Is this the same business thing, even if details changed? | (you must implement it) | Invoice `INV-2026-0042`, an employee, a road project |
+| Entity identity | Is this the same business thing, even if details changed? | (you must implement it) | Invoice `INV-2026-0042`, an employee, a food-delivery order |
 | Value equality | Do these hold the same values? | `struct`, `record`, `string` | ₹500, a GSTIN, a date range, a GPS coordinate |
 
 `string` is the most famous value type that is actually a reference type. Two different string objects containing `"Delhi"` are equal with `==`, because Microsoft overrode equality for `string`. You will do the same for your own value objects.
@@ -72,8 +72,8 @@ Your job as a designer is to decide, for each type, which answer is right, and t
 Suppose `Vendor` is a plain class and you load the same vendor twice, once from the database and once from a CSV import:
 
 ```csharp
-var a = new Vendor { Gstin = "29ABCDE1234F1Z5", Name = "Shree Cement Traders" };
-var b = new Vendor { Gstin = "29ABCDE1234F1Z5", Name = "Shree Cement Traders" };
+var a = new Vendor { Gstin = "29ABCDE1234F1Z5", Name = "Shree Balaji Traders" };
+var b = new Vendor { Gstin = "29ABCDE1234F1Z5", Name = "Shree Balaji Traders" };
 Console.WriteLine(a == b);                          // False
 Console.WriteLine(new HashSet<Vendor> { a, b }.Count); // 2
 ```
@@ -495,9 +495,9 @@ public class Vendor
 }
 
 var payments = new Dictionary<Vendor, decimal>();
-var v = new Vendor { Gstin = "29ABCDE1234F1Z5", Name = "Shree Cement" };
+var v = new Vendor { Gstin = "29ABCDE1234F1Z5", Name = "Shree Balaji" };
 payments[v] = 1_25_000m;
-v.Name = "Shree Cement Traders Pvt Ltd";        // renamed after a KYC update
+v.Name = "Shree Balaji Traders Pvt Ltd";        // renamed after a KYC update
 Console.WriteLine(payments.ContainsKey(v));     // False — the key is now in the wrong bucket
 ```
 
@@ -558,9 +558,9 @@ public static class Program
         Console.WriteLine($"3. Route equal? {r1 == r2}   (try: override Equals to use SequenceEqual)");
 
         // 4. A mutable key gets lost in a HashSet.
-        var key = new MutableKey { Code = "NH-48" };
+        var key = new MutableKey { Code = "PNR-4521" };
         var set = new HashSet<MutableKey> { key };
-        key.Code = "NH-44";
+        key.Code = "PNR-4522";
         Console.WriteLine($"4. Contains after mutation? {set.Contains(key)}, count = {set.Count}");
 
         // 5. double vs decimal.
@@ -699,76 +699,76 @@ Add `IComparable<PinCode>` so PIN codes can be sorted, and check that `CompareTo
 :::
 
 :::exercise id=m07-equality-identity-ex2 difficulty=beginner kind=code title="Fix a record that holds a list"
-`SiteInspection` is a record with a list of observed defect codes. Two inspections with the same date, site and defects (in the same order) should be equal, but the generated equality compares the list by reference. Fix it without turning the record into a class.
+`RoomInspection` is a record a hotel's housekeeping app creates when a supervisor checks a room: the date, the room code and a list of observed defect codes. Two inspections with the same date, room and defects (in the same order) should be equal, but the generated equality compares the list by reference. Fix it without turning the record into a class.
 ::acceptance
 - Two inspections with equal fields and equal defect lists (same order) are equal with `==` and `Equals`.
 - Different defect lists make them unequal.
 - Equal inspections have equal hash codes.
 - `with` expressions still work.
 ::hint
-Records let you write your own `Equals(SiteInspection? other)`. The compiler then uses yours instead of generating one.
+Records let you write your own `Equals(RoomInspection? other)`. The compiler then uses yours instead of generating one.
 ::hint
 If you write `Equals`, you must also write `GetHashCode`, or the compiler warns and hash-based collections break.
 ::hint
 Use `SequenceEqual` for the list, and add each list item to a `HashCode` instance in a loop.
 ::hint
 ```csharp
-public bool Equals(SiteInspection? other) =>
-    other is not null && Date == other.Date && SiteCode == other.SiteCode && DefectCodes.SequenceEqual(other.DefectCodes);
+public bool Equals(RoomInspection? other) =>
+    other is not null && Date == other.Date && RoomCode == other.RoomCode && DefectCodes.SequenceEqual(other.DefectCodes);
 ```
 ::starter
-```csharp file=SiteInspection.cs
+```csharp file=RoomInspection.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public sealed record SiteInspection(DateOnly Date, string SiteCode, IReadOnlyList<string> DefectCodes)
+public sealed record RoomInspection(DateOnly Date, string RoomCode, IReadOnlyList<string> DefectCodes)
 {
     // TODO: make equality compare DefectCodes by content.
     public bool HasDefect(string code) => DefectCodes.Contains(code);
 }
 ```
 ::tests
-```csharp file=SiteInspectionTests.cs
+```csharp file=RoomInspectionTests.cs
 using System;
 using Xunit;
 
-public class SiteInspectionTests
+public class RoomInspectionTests
 {
-    private static SiteInspection Make(params string[] defects) =>
-        new(new DateOnly(2026, 3, 14), "NH48-KM112", defects.ToList());
+    private static RoomInspection Make(params string[] defects) =>
+        new(new DateOnly(2026, 3, 14), "BLR-ROOM-412", defects.ToList());
 
-    [Fact] public void Same_content_is_equal() => Assert.True(Make("CRACK", "POTHOLE") == Make("CRACK", "POTHOLE"));
-    [Fact] public void Different_content_is_not_equal() => Assert.False(Make("CRACK") == Make("POTHOLE"));
-    [Fact] public void Order_matters() => Assert.False(Make("CRACK", "POTHOLE").Equals(Make("POTHOLE", "CRACK")));
+    [Fact] public void Same_content_is_equal() => Assert.True(Make("AC_NOISY", "TOWEL_MISSING") == Make("AC_NOISY", "TOWEL_MISSING"));
+    [Fact] public void Different_content_is_not_equal() => Assert.False(Make("AC_NOISY") == Make("TOWEL_MISSING"));
+    [Fact] public void Order_matters() => Assert.False(Make("AC_NOISY", "TOWEL_MISSING").Equals(Make("TOWEL_MISSING", "AC_NOISY")));
     [Fact] public void Hash_codes_match() => Assert.Equal(Make("A", "B").GetHashCode(), Make("A", "B").GetHashCode());
-    [Fact] public void With_still_works() => Assert.Equal("NH48-KM113", (Make("A") with { SiteCode = "NH48-KM113" }).SiteCode);
+    [Fact] public void With_still_works() => Assert.Equal("BLR-ROOM-413", (Make("A") with { RoomCode = "BLR-ROOM-413" }).RoomCode);
     [Fact] public void Date_matters() => Assert.False(Make("A") == (Make("A") with { Date = new DateOnly(2026, 3, 15) }));
 }
 ```
 ::solution
-Write `Equals(SiteInspection?)` and `GetHashCode()` in the record body. The compiler keeps generating `==`, `!=` and `Equals(object)`, which call yours.
+Write `Equals(RoomInspection?)` and `GetHashCode()` in the record body. The compiler keeps generating `==`, `!=` and `Equals(object)`, which call yours.
 
-```csharp file=SiteInspection.cs
+```csharp file=RoomInspection.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public sealed record SiteInspection(DateOnly Date, string SiteCode, IReadOnlyList<string> DefectCodes)
+public sealed record RoomInspection(DateOnly Date, string RoomCode, IReadOnlyList<string> DefectCodes)
 {
     public bool HasDefect(string code) => DefectCodes.Contains(code);
 
-    public bool Equals(SiteInspection? other) =>
+    public bool Equals(RoomInspection? other) =>
         other is not null
         && Date == other.Date
-        && string.Equals(SiteCode, other.SiteCode, StringComparison.Ordinal)
+        && string.Equals(RoomCode, other.RoomCode, StringComparison.Ordinal)
         && DefectCodes.SequenceEqual(other.DefectCodes);
 
     public override int GetHashCode()
     {
         var h = new HashCode();
         h.Add(Date);
-        h.Add(SiteCode, StringComparer.Ordinal);
+        h.Add(RoomCode, StringComparer.Ordinal);
         foreach (var d in DefectCodes) h.Add(d, StringComparer.Ordinal);
         return h.ToHashCode();
     }
@@ -789,12 +789,12 @@ An HR system loads `Employee` objects from the database and from an HRMS sync. I
 ::requirements
 - Equality uses only the concrete type and `Id`, never names, phone numbers or other mutable fields.
 - An entity can't be created with a default ID (`Guid.Empty` inside `EmployeeId`).
-- An `Employee` and a `Contractor` with the same raw `Guid` are **not** equal.
+- An `Employee` and an `Intern` with the same raw `Guid` are **not** equal.
 - An employee whose phone number changes stays in any `HashSet` she was in.
 ::acceptance
 - Two `Employee` objects with the same `EmployeeId` and different names are equal.
 - `new Employee(new EmployeeId(Guid.Empty), ...)` throws `ArgumentException`.
-- `Employee` vs `Contractor` with the same Guid are unequal in both directions.
+- `Employee` vs `Intern` with the same Guid are unequal in both directions.
 - After `ChangePhone`, `set.Contains(employee)` is still true.
 ::hint
 What's the only thing about an employee that never changes?
@@ -810,7 +810,7 @@ using System;
 using System.Collections.Generic;
 
 public readonly record struct EmployeeId(Guid Value);
-public readonly record struct ContractorId(Guid Value);
+public readonly record struct InternId(Guid Value);
 
 public abstract class Entity<TId> : IEquatable<Entity<TId>> where TId : notnull, IEquatable<TId>
 {
@@ -831,10 +831,10 @@ public sealed class Employee : Entity<EmployeeId>
 }
 
 /// <summary>Deliberately uses a Guid Id too, to show that the raw value isn't enough.</summary>
-public sealed class Contractor : Entity<Guid>
+public sealed class Intern : Entity<Guid>
 {
-    public Contractor(Guid id, string agency) : base(id) => Agency = agency;
-    public string Agency { get; }
+    public Intern(Guid id, string college) : base(id) => College = college;
+    public string College { get; }
 }
 ```
 ::tests
@@ -859,13 +859,13 @@ public class EntityTests
     public void Default_id_throws() => Assert.Throws<ArgumentException>(() => new Employee(new EmployeeId(Guid.Empty), "A", "1"));
 
     [Fact]
-    public void Default_guid_throws_for_contractor() => Assert.Throws<ArgumentException>(() => new Contractor(Guid.Empty, "X"));
+    public void Default_guid_throws_for_intern() => Assert.Throws<ArgumentException>(() => new Intern(Guid.Empty, "X"));
 
     [Fact]
     public void Different_entity_types_are_not_equal()
     {
         object e = new Employee(new EmployeeId(G), "A", "1");
-        object c = new Contractor(G, "Agency");
+        object c = new Intern(G, "IIT Delhi");
         Assert.False(e.Equals(c));
         Assert.False(c.Equals(e));
     }
@@ -891,7 +891,7 @@ using System;
 using System.Collections.Generic;
 
 public readonly record struct EmployeeId(Guid Value);
-public readonly record struct ContractorId(Guid Value);
+public readonly record struct InternId(Guid Value);
 
 public abstract class Entity<TId> : IEquatable<Entity<TId>> where TId : notnull, IEquatable<TId>
 {
@@ -919,14 +919,14 @@ public sealed class Employee : Entity<EmployeeId>
     public void ChangePhone(string phone) => Phone = phone;
 }
 
-public sealed class Contractor : Entity<Guid>
+public sealed class Intern : Entity<Guid>
 {
-    public Contractor(Guid id, string agency) : base(id) => Agency = agency;
-    public string Agency { get; }
+    public Intern(Guid id, string college) : base(id) => College = college;
+    public string College { get; }
 }
 ```
 
-`Employee` and `Contractor` derive from *different* closed generic types (`Entity<EmployeeId>` and `Entity<Guid>`), so `obj is Entity<TId>` already fails across them. The `GetType()` check still matters when two entity types share the same ID type, for example `Invoice` and `CreditNote` both using `Guid`.
+`Employee` and `Intern` derive from *different* closed generic types (`Entity<EmployeeId>` and `Entity<Guid>`), so `obj is Entity<TId>` already fails across them. The `GetType()` check still matters when two entity types share the same ID type, for example `Invoice` and `CreditNote` both using `Guid`.
 ::alternatives
 Many teams skip the base class and give each entity its own `Equals` by ID. It's more code but avoids an inheritance hierarchy. With EF Core, beware that lazy-loading proxies are subclasses, so `GetType()` differs from the entity type. Compare the unproxied type in that case, or disable proxies.
 ::mistakes
@@ -935,10 +935,10 @@ Many teams skip the base class and give each entity its own `Equals` by ID. It's
 - Comparing only `Id`, so an `Invoice` and a `CreditNote` with the same Guid look equal.
 :::
 
-:::exercise id=m07-equality-identity-ex4 difficulty=intermediate kind=design title="Classify a material-delivery model by sameness"
-A construction-site app records cement and steel deliveries. The current model treats everything as a mutable class with reference equality. Redesign it in the LLD designer: for each type, choose entity, value object or service, decide what equality it needs, and add any comparers.
+:::exercise id=m07-equality-identity-ex4 difficulty=intermediate kind=design title="Classify a stock-delivery model by sameness"
+A quick-commerce dark store (a small warehouse that serves 10-minute grocery orders) records inbound deliveries of rice, onions and flour from its suppliers. The current model treats everything as a mutable class with reference equality. Redesign it in the LLD designer: for each type, choose entity, value object or service, decide what equality it needs, and add any comparers.
 
-Types today: `Delivery` (truck arrives with a challan), `ChallanNumber`, `Supplier`, `Quantity` (amount + unit, e.g. 40 tonnes), `VehicleNumber` (e.g. `HR 26 DQ 5521`), `DeliveryService`, and a weekly report that must count deliveries per *supplier group* (one company, several GSTINs).
+Types today: `Delivery` (truck arrives with a challan), `ChallanNumber`, `Supplier`, `Quantity` (amount + unit, e.g. 4 tonnes), `VehicleNumber` (e.g. `HR 26 DQ 5521`), `DeliveryService`, and a weekly report that must count deliveries per *supplier group* (one company, several GSTINs).
 ::acceptance
 - `Delivery` and `Supplier` are entities with strongly typed IDs and identity equality.
 - `ChallanNumber`, `Quantity`, `VehicleNumber` are immutable value objects; `VehicleNumber` normalises spacing and case.
@@ -1000,11 +1000,11 @@ The report needs "same group", which is a second definition of sameness: an `IEq
 Key decisions:
 
 - **Delivery** holds a `SupplierId`, not a `Supplier` object. Holding the ID avoids comparing or loading the whole supplier, and it makes the reference across entities explicit.
-- **Quantity** normalises to kilograms. A 40 t truck and a 40,000 kg entry are the same physical amount, so they should be equal and deduplicate. If your business genuinely treats "bags" and "kg" as incomparable, use a `Unit` field and make mixed units unequal, but then never add or compare them without converting.
+- **Quantity** normalises to kilograms. A 4 t truck load and a 4,000 kg entry are the same physical amount, so they should be equal and deduplicate. If your business genuinely treats "bags" and "kg" as incomparable, use a `Unit` field and make mixed units unequal, but then never add or compare them without converting.
 - **SameGroupComparer** keeps `Supplier.Equals` meaning "same supplier record" while the report asks "same company group".
 ::mistakes
 - Making `Supplier` a record. When its address changes, it would stop being equal to itself.
-- Comparing `Quantity` with `decimal` and a free-text unit: `40 "T"` vs `40 "t"` vs `40000 "kg"` gives three different values.
+- Comparing `Quantity` with `decimal` and a free-text unit: `4 "T"` vs `4 "t"` vs `4000 "kg"` gives three different values.
 - Changing `Supplier.Equals` to compare group PAN, which then silently merges suppliers everywhere else.
 :::
 
@@ -1233,7 +1233,8 @@ Property-based testing tools (such as FsCheck) are good at finding contract viol
 - **Caching.** `IMemoryCache` keys are compared with `Equals`/`GetHashCode`. A record such as `ReportKey(ProjectId, DateOnly Month)` makes a safe cache key. A mutable class key is a cache that silently misses.
 - **Deduplication of master data.** Vendor, employee and asset masters in ERPs suffer from near-duplicates. Comparers with normalisation catch the easy cases; a review queue handles the fuzzy ones.
 - **Event deduplication.** Message consumers keep a set of processed message IDs to handle a message delivered twice. The ID is a value object; the comparison must be exact and stable.
-- **Government and infrastructure systems.** Land parcels (survey numbers), chainage markers on a highway (km 112+450) and asset tags are values that arrive in many spellings. Getting their canonical form and equality right is a large part of data quality.
+- **Travel and ticketing.** PNRs, flight numbers (`AI 865` vs `AI865`), station codes and vehicle registration numbers are values that arrive in many spellings from different channels. Getting their canonical form and equality right is a large part of data quality, and the difference between "one booking" and "a duplicate refund".
+
 
 ## Interview questions
 

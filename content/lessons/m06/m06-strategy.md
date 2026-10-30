@@ -391,7 +391,7 @@ app.MapPost("/pay/{method}", async (string method, decimal amount, IServiceProvi
 });
 ```
 
-Resolving from `IServiceProvider` inside an endpoint is acceptable here because the key really is only known at request time. Don't scatter `GetService` calls through your domain code; that is the Service Locator anti-pattern ([see the lesson](#/lesson/m04-di-vs-service-locator)). A cleaner option is a small `PaymentStrategyResolver` class that wraps this lookup and can be faked in tests.
+Resolving from `IServiceProvider` inside an endpoint is acceptable here because the key really is only known at request time. Don't scatter `GetService` calls through your domain code; that is the Service Locator anti-pattern ([see the lesson](#/lesson/m04-di-vs-service-locator)). A cleaner option is a small `PaymentStrategyResolver` class that wraps this lookup and can be faked in tests. In production, a charge also needs an idempotency key from the client (so a retried request never charges twice) and a timeout on the provider call. Those concerns are the same for every provider, so put them in one place around the strategies (a decorator or the calling service), not copied into each strategy.
 
 ## Bad design vs good design
 

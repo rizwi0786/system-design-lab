@@ -909,7 +909,7 @@ JOIN l ON l.line = p.line
 CROSS JOIN n
 ORDER BY p.station_code, p.line;
 ```
-Every single-column statistic here is exact (the table is small enough that `ANALYZE` read every row), yet the combined estimates are badly wrong: Hauz Khas + Yellow is underestimated about 4.5×, Rajiv Chowk + Blue about 2×, and Rajiv Chowk + Yellow is estimated at roughly 2,000 rows when there are none. The individual numbers are right; the *multiplication* is wrong, because a station determines its line. Your estimates should match what `EXPLAIN` prints for the same filters. Add `CREATE STATISTICS ... (dependencies, mcv) ON station_code, line` and `ANALYZE` in the playground and watch `EXPLAIN` agree with `actual_rows` instead.
+Every single-column statistic here is exact (the table is small enough that `ANALYZE` read every row), yet the combined estimates are badly wrong: Hauz Khas + Yellow is underestimated about 4.5× (371 versus 1,667), New Delhi + Orange about 7× (116 versus 833), Rajiv Chowk + Blue about 2× (4,838 versus 9,166), and Rajiv Chowk + Yellow is estimated at roughly 2,000 rows when there are none. The individual numbers are right; the *multiplication* is wrong, because a station determines its line. Your estimates should match what `EXPLAIN` prints for the same filters. Add `CREATE STATISTICS ... (dependencies, mcv) ON station_code, line` and `ANALYZE` in the playground and watch `EXPLAIN` agree with `actual_rows` instead.
 ::mistakes
 - Unnesting `most_common_vals` without the `::text::text[]` cast, which fails because `anyarray` cannot be unnested directly.
 - Using `count(*)` to compute frequencies, which gives the truth rather than the planner's view.
@@ -1143,7 +1143,7 @@ After 9 million new rows, has autovacuum's analyze necessarily run yet? What doe
 ::solution
 **1. Why no index.** Both conditions appear under `Filter`, meaning they are checked row by row after a sequential read of 9 million rows. The month condition wraps `tapped_at` in `date_trunc`, so the B-tree on `(card_id, tapped_at)` cannot use its second column. It could still seek on `card_id = $1` alone, and with good statistics a lookup of one card's few thousand taps would beat a seq scan. That the planner chose a seq scan points to a second problem: the estimate.
 
-**2. Statistics after the backfill.** The backfill grew the table enormously. Autoanalyze triggers after `autovacuum_analyze_threshold + autovacuum_analyze_scale_factor × reltuples` changed rows (50 + 10 %), but it runs asynchronously and may not have finished, or may have run mid-load. Meanwhile `card_id`'s statistics may describe the old table: if `n_distinct` is stored as a negative fraction, or the MCV list now misrepresents frequent cards, per-card estimates can be badly off. Separately, the app uses a prepared statement. After five executions PostgreSQL may switch to a **generic plan** that cannot see the actual `$1` and `$2` values. For a generic plan, a function of a parameter on an expression without statistics gets a default selectivity. Either way the fix starts with a sargable query and fresh statistics.
+**2. Statistics after the backfill.** The backfill grew the table enormously. Autoanalyze triggers after `autovacuum_analyze_threshold + autovacuum_analyze_scale_factor × reltuples` changed rows (50 + 10 %), but it runs asynchronously and may not have finished, or may have run mid-load. Meanwhile `card_id`'s statistics may describe the old table: if `n_distinct` is stored as a negative fraction, or the MCV list now misrepresents frequent cards, per-card estimates can be badly off. Separately, the app uses a prepared statement (Npgsql prepares on the server when you call `PrepareAsync` or set `Max Auto Prepare` in the connection string). After five executions PostgreSQL may switch to a **generic plan** that cannot see the actual `$1` and `$2` values. For a generic plan, a function of a parameter on an expression without statistics gets a default selectivity. Either way the fix starts with a sargable query and fresh statistics.
 
 **3. Fix.**
 
@@ -1158,7 +1158,7 @@ WHERE t.card_id = $1
 ORDER BY t.tapped_at;
 ```
 
-Note `$2` is a `date`; comparing a `timestamptz` column with a `date` converts the *parameter*, not the column, so the index stays usable. Expected plan:
+Note `$2` is a `date`; comparing a `timestamptz` column with a `date` (or with `$2 + interval '1 month'`, which is a `timestamp`) converts the *parameter side*, not the column, so the index stays usable. That conversion uses the session `TimeZone`, so the month starts at midnight in the session's zone; pass a `timestamptz` from C# (`DateTimeOffset`, or a UTC `DateTime` with Npgsql) when the boundary must be exact. Expected plan:
 
 ```text
 Nested Loop
@@ -1213,7 +1213,7 @@ public class PlanAdvisorTests
 - **Transit and payments**: card and wallet statements are "one owner, one time range, newest first", served by a composite index and a sargable range. Backfills and migrations are the usual trigger for regressions.
 - **Multi-tenant SaaS**: tenant sizes are wildly skewed. A generic plan tuned for a small tenant can be terrible for the largest one, which is why teams check `EXPLAIN (GENERIC_PLAN)` and sometimes force custom plans for tenant-scoped queries.
 - **E-commerce and catalogues**: correlated attributes (category and brand, city and PIN code) are classic extended-statistics cases.
-- **Infrastructure project dashboards**: reports joining packages, measurements and bills across several years are where hash joins spill to disk; per-report `work_mem` and pre-aggregated summaries help.
+- **Food-delivery and retail reporting**: month-end reports joining orders, order items and restaurant payouts across several years are where hash joins and sorts spill to disk; per-report `work_mem` (set with `SET LOCAL` for that transaction) and pre-aggregated daily summaries help more than a bigger server.
 - **Analytics on OLTP replicas**: parallel sequential scans and hash aggregates are normal and fine there; the same plan on the primary during peak hours is not.
 
 ## Interview questions

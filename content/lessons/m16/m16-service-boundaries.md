@@ -80,7 +80,7 @@ Boundaries are expensive to move once services are deployed: data must migrate, 
 
 ### Heuristic 1 — language changes meaning
 
-Where the same word means different things, there is probably a boundary. In a building-materials marketplace, "product" means:
+Where the same word means different things, there is probably a boundary. In a B2B wholesale grocery marketplace, "product" means:
 
 | Context | What "product" means | Key fields |
 |---|---|---|
@@ -121,7 +121,7 @@ Every fact has **exactly one owner** — the only service that may write it. Oth
 | **Snapshot at the moment of a business act** | Copy the value into your own record when the act happens | "Price at time of order", "address at time of dispatch" | None — it is your fact now |
 | **Analytics copy** | Change data capture into a warehouse | Reports across contexts | Lag of minutes; not for operational logic |
 
-The **snapshot** option is underused. An order should store the price the customer agreed to. That is not a copy of Pricing's data; it is Ordering's own fact ("the customer accepted ₹385 per bag"). If Pricing changes the list price tomorrow, the order must not change.
+The **snapshot** option is underused. An order should store the price the customer agreed to. That is not a copy of Pricing's data; it is Ordering's own fact ("the shop accepted ₹385 per 10 kg bag of atta"). If Pricing changes the list price tomorrow, the order must not change.
 
 ### The chatty-boundary smell
 
@@ -195,15 +195,15 @@ sequenceDiagram
     participant A as Ordering ACL
     participant S as Snapshot store
     participant O as Ordering API
-    P->>B: PriceChanged sku CEM-53 v7 price 385
-    P->>B: PriceChanged sku CEM-53 v8 price 392
+    P->>B: PriceChanged sku ATTA-10 v7 price 385
+    P->>B: PriceChanged sku ATTA-10 v8 price 392
     B->>A: v8 delivered first
     A->>S: upsert if v8 is newer than stored v6
     S-->>A: stored v8
     B->>A: v7 delivered late
     A->>S: upsert if v7 is newer than stored v8
     S-->>A: ignored (older)
-    O->>S: read CEM-53 for order review
+    O->>S: read ATTA-10 for order review
     S-->>O: price 392 (v8)
     Note over O: Order lines snapshot 392 at placement time
 ```
@@ -212,7 +212,7 @@ Pricing publishes two changes. The broker delivers them out of order — normal 
 
 ## Step-by-step example
 
-Scenario: a B2B marketplace for building materials (cement, steel, tiles) serving contractors in 40 cities. It started as four "microservices": `ProductService`, `CustomerService`, `OrderService`, `WarehouseService` — each a CRUD API over tables. Symptoms: placing an order makes 23 synchronous calls; the order page p95 is 1.4 s; every pricing change needs three teams.
+Scenario: a B2B wholesale marketplace for groceries (rice, atta, cooking oil, detergent) that supplies kirana stores (neighbourhood shops) in 40 cities, often on credit. It started as four "microservices": `ProductService`, `CustomerService`, `OrderService`, `WarehouseService` — each a CRUD API over tables. Symptoms: placing an order makes 23 synchronous calls; the order page p95 is 1.4 s; every pricing change needs three teams.
 
 ### Step 1 — list the business capabilities and their words
 
@@ -268,7 +268,7 @@ namespace Marketplace.Catalogue.PublishedLanguage;
 public sealed record ProductPublishedV2(
     string Sku,
     string DisplayName,
-    string UnitOfMeasure,     // e.g. "BAG_50KG", "TONNE", "BOX_10"
+    string UnitOfMeasure,     // e.g. "BAG_10KG", "TIN_15L", "BOX_10"
     long ListPricePaise,      // Pricing publishes regional prices separately; this is the national list price
     string HsnCode,
     long Version,
@@ -339,9 +339,9 @@ public sealed class CatalogueTranslator(IProductSnapshotStore store, ILogger<Cat
     // HSN code prefix to GST rate. In production this comes from Pricing's own events, not a hard-coded table.
     private static readonly Dictionary<string, decimal> GstByHsnPrefix = new()
     {
-        ["2523"] = 0.28m,   // cement (rate shown for illustration; always load current rates from the owner)
-        ["7214"] = 0.18m,   // steel bars
-        ["6907"] = 0.18m,   // ceramic tiles
+        ["1101"] = 0.05m,   // packaged wheat flour (rates shown for illustration; always load current rates from the owner)
+        ["1512"] = 0.05m,   // sunflower oil
+        ["3402"] = 0.18m,   // detergent
     };
 
     public bool Handle(ProductPublishedV2 evt)
@@ -368,8 +368,8 @@ public sealed class CatalogueTranslator(IProductSnapshotStore store, ILogger<Cat
 
     private static string TranslateUnit(string code) => code switch
     {
-        "BAG_50KG" => "50 kg bag",
-        "TONNE" => "1 tonne",
+        "BAG_10KG" => "10 kg bag",
+        "TIN_15L" => "15 litre tin",
         _ when code.StartsWith("BOX_", StringComparison.Ordinal) => $"box of {code[4..]}",
         _ => code,
     };
@@ -1074,7 +1074,7 @@ public void Unknown_hsn_makes_product_not_orderable()
 
 - **Retail and marketplaces** commonly separate catalogue, pricing, inventory, ordering and fulfilment because each changes on its own rhythm (catalogue daily, pricing hourly in sales, inventory every second).
 - **Banking** keeps the ledger as its own bounded context with a strict published language; product teams (cards, loans, UPI) never write ledger tables directly.
-- **Infrastructure project platforms** often confuse "project" across contexts: for planning it is a schedule of activities, for billing it is a contract with BOQ items and RA bills, for quality it is a set of inspection lots. Separate models linked by project code avoid a 300-column `projects` table.
+- **Travel booking platforms** often confuse "booking" across contexts: for search it is a seat or room held for ten minutes, for payments it is a charge and a refund policy, for customer support it is a case with a history of changes. Separate models linked by the booking reference (PNR) avoid a 300-column `bookings` table.
 - **Healthcare**: standards like HL7 FHIR act as a published language between hospital systems; each system keeps its own internal model and translates at the edge — an anti-corruption layer in practice.
 
 ## Interview questions

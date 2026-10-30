@@ -24,11 +24,11 @@ references:
     url: https://cqrs.files.wordpress.com/2010/11/cqrs_documents.pdf
 ---
 
-Most business systems read data far more often than they change it. A contractor submits a bill once, but project managers, finance staff and auditors look at lists of bills hundreds of times. Yet many codebases use the very same classes, the same repository and the same table shape for both jobs. The write side wants rich objects that guard rules. The read side wants flat rows, filters and totals. Forcing one model to serve both makes both worse.
+Most business systems read data far more often than they change it. An employee submits an expense claim once, but managers, finance staff and auditors look at lists of claims hundreds of times. Yet many codebases use the very same classes, the same repository and the same table shape for both jobs. The write side wants rich objects that guard rules. The read side wants flat rows, filters and totals. Forcing one model to serve both makes both worse.
 
 **CQRS (Command Query Responsibility Segregation)** is the name for splitting them. This lesson teaches the *simple* version first: one database, two code paths, and a read model that is just another table or view. Event sourcing, message buses and separate databases are optional extras, and we will be honest about when you need them (rarely at first).
 
-The running example is a **running-account bill (RA bill)** system for road projects. Contractors submit bills for work done each month. A site engineer certifies each bill, sometimes for a lower amount than claimed. The finance team needs a dashboard of pending bills per project, sorted by how long they have waited.
+The running example is an **expense-claim** feature in a SaaS expense tool (the kind of app where you photograph a receipt and get reimbursed). Employees submit claims for travel, meals and client visits. A manager approves each claim, sometimes for a lower amount than claimed (the hotel bill is approved, the minibar is not). The finance team needs a dashboard of pending claims per team, sorted by how long they have waited.
 
 ## Learning objectives
 
@@ -62,8 +62,8 @@ Now imagine the railway asked every passenger to read the master register itself
 
 CQRS says: **keep the careful register for changes (the write model), and print separate charts for reading (read models).**
 
-- A request that changes something ("book this seat", "certify this bill") is a **command**.
-- A request that only asks something ("show pending bills for NH-48 package 3") is a **query**.
+- A request that changes something ("book this seat", "approve this claim") is a **command**.
+- A request that only asks something ("show pending claims for the Bengaluru sales team") is a **query**.
 - The printed chart is a **read model** (also called a projection or view model).
 - Printing the chart from the register is **projecting**.
 
@@ -91,19 +91,19 @@ CQRS means the code that handles writes and the code that handles reads are sepa
 
 ### Why it exists — the problem
 
-Look at what a single shared model does in the RA bill system:
+Look at what a single shared model does in the expense-claim system:
 
-1. **The domain object grows reading baggage.** The finance dashboard wants `ContractorName`, `ProjectName`, `DaysPending` and `CertifiedPercent`. Developers add those to the `RaBill` entity, and load the `Contractor` and `Project` navigations "just for display". Now saving one bill drags three tables into memory.
-2. **Queries go through repositories that were built for one-at-a-time loading.** `GetAll()` followed by LINQ filtering in memory is a classic outcome: 40,000 bills loaded to show 25.
-3. **The read shape fights the write shape.** The dashboard needs a sum per project and a count per status. The aggregate is shaped around one bill's rules. Every report becomes a clumsy join through objects.
-4. **Changes collide.** A tweak to the dashboard (add a column) risks breaking the certification rules, because both live in the same class.
+1. **The domain object grows reading baggage.** The finance dashboard wants `EmployeeName`, `TeamName`, `DaysPending` and `ApprovedPercent`. Developers add those to the `ExpenseClaim` entity, and load the `Employee` and `Team` navigations "just for display". Now saving one claim drags three tables into memory.
+2. **Queries go through repositories that were built for one-at-a-time loading.** `GetAll()` followed by LINQ filtering in memory is a classic outcome: 40,000 claims loaded to show 25.
+3. **The read shape fights the write shape.** The dashboard needs a sum per team and a count per status. The aggregate is shaped around one claim's rules. Every report becomes a clumsy join through objects.
+4. **Changes collide.** A tweak to the dashboard (add a column) risks breaking the approval rules, because both live in the same class.
 
 ### How it works internally
 
 At the simplest level, CQRS is just a code organisation:
 
-1. Each **command** is a small record (`SubmitBillCommand`, `CertifyBillCommand`) handled by exactly one **command handler**. The handler loads the aggregate through a repository, calls a domain method, saves it, and returns at most an id or a version.
-2. Each **query** is a small record (`GetPendingBillsQuery`) handled by one **query handler**. It reads a read model directly and returns DTOs. It never loads aggregates and never calls `SaveChanges`.
+1. Each **command** is a small record (`SubmitClaimCommand`, `ApproveClaimCommand`) handled by exactly one **command handler**. The handler loads the aggregate through a repository, calls a domain method, saves it, and returns at most an id or a version.
+2. Each **query** is a small record (`GetPendingClaimsQuery`) handled by one **query handler**. It reads a read model directly and returns DTOs. It never loads aggregates and never calls `SaveChanges`.
 3. The **read model** is kept up to date by a **projector**: code that turns write-side changes into read-side rows.
 
 There are three common ways to keep the read model current, from simplest to most complex:
@@ -111,7 +111,7 @@ There are three common ways to keep the read model current, from simplest to mos
 | Option | How | Consistency | Cost |
 |---|---|---|---|
 | A. Same tables, different queries | Query handlers run SQL (or a database view) over the write tables | Always current | Lowest. Most systems should start here |
-| B. Synchronous projection | Command handler writes the aggregate **and** updates a `bill_summaries` table in the same transaction | Always current | Low. Slightly slower writes |
+| B. Synchronous projection | Command handler writes the aggregate **and** updates a `claim_summaries` table in the same transaction | Always current | Low. Slightly slower writes |
 | C. Asynchronous projection | Write side records an event (via an [outbox](#/lesson/m12-outbox)). A background worker updates the read model later | Eventually consistent: usually milliseconds to seconds behind | Higher: workers, retries, idempotency, monitoring |
 
 Option A is still CQRS. The split is in the *code*: the query path does not use the domain model. Many teams get 80 % of the benefit here.
@@ -120,14 +120,14 @@ Option A is still CQRS. The split is in the *code*: the query path does not use 
 
 **A good command:**
 
-- Is named in the imperative, in the business language: `CertifyBill`, not `UpdateBillStatus`.
-- Carries the intent and only the data needed: `BillId`, `CertifiedAmount`, `EngineerId`.
-- Can be rejected. A command is a *request*: "please certify", and the domain may say no ("certified amount cannot exceed the claimed amount").
+- Is named in the imperative, in the business language: `ApproveClaim`, not `UpdateClaimStatus`.
+- Carries the intent and only the data needed: `ClaimId`, `ApprovedAmount`, `ApproverId`.
+- Can be rejected. A command is a *request*: "please approve", and the domain may say no ("approved amount cannot exceed the claimed amount").
 - Returns little. Returning an id (for a create) or a new version number (for concurrency and read-your-writes) is fine and practical. Returning a full screen DTO couples the write path to the read shape again.
 
 **A good query:**
 
-- Is named after the question: `GetPendingBills`, `GetBillHistory`.
+- Is named after the question: `GetPendingClaims`, `GetClaimHistory`.
 - Has no side effects. Calling it twice gives the same answer if nothing else changed.
 - Returns exactly the shape the caller needs, already filtered, sorted, paged and totalled.
 
@@ -135,13 +135,13 @@ Option A is still CQRS. The split is in the *code*: the query path does not use 
 
 - Reads and writes have **very different shapes**: rich rules on write, wide joined reports on read.
 - Reads vastly outnumber writes (100 : 1 is common) and you want to scale or cache reads independently.
-- Several screens need **different views of the same data**: a contractor's view, an engineer's queue, a finance summary.
+- Several screens need **different views of the same data**: an employee's "my claims" view, a manager's approval queue, a finance summary.
 - The domain model is complex enough to deserve protection from display concerns.
 - You plan, or already have, domain events. A projection is a natural consumer.
 
 ### When it is unnecessary
 
-- **Simple CRUD.** A master-data screen for "material types" with five fields does not need two models. A single EF Core entity and a controller are fine.
+- **Simple CRUD.** A master-data screen for "expense categories" with five fields does not need two models. A single EF Core entity and a controller are fine.
 - Small apps with a handful of users, where a few joins are fast enough.
 - When the team is not ready for eventual consistency and the business cannot tolerate it, avoid option C. Options A and B still apply.
 
@@ -165,53 +165,53 @@ Fowler's warning is worth repeating: for most systems CQRS adds risky complexity
 flowchart LR
     UI["Web UI / mobile app"]
     subgraph Write["Write side"]
-        CE["POST /bills, POST /bills/{id}/certify"]
+        CE["POST /claims, POST /claims/{id}/approve"]
         CH["Command handlers"]
-        AGG["RaBill aggregate (rules)"]
+        AGG["ExpenseClaim aggregate (rules)"]
         REPO["Repository"]
     end
     subgraph Read["Read side"]
-        QE["GET /projects/{id}/pending-bills"]
+        QE["GET /teams/{code}/pending-claims"]
         QH["Query handlers"]
     end
     PROJ["Projector"]
-    WDB[("bills table")]
-    RDB[("bill_summaries table")]
+    WDB[("claims table")]
+    RDB[("claim_summaries table")]
     UI --> CE --> CH --> AGG
     CH --> REPO --> WDB
     CH --> PROJ --> RDB
     UI --> QE --> QH --> RDB
 ```
 
-Read it from the left. Changes enter through command endpoints. The command handler asks the `RaBill` aggregate to apply the business rule, and saves it through a repository into the `bills` table. The same handler calls a projector, which updates the flat `bill_summaries` table (option B, same transaction). Queries enter through separate GET endpoints and go straight to `bill_summaries` without touching the aggregate or the repository. In option C the arrow from command handler to projector would be replaced by an event and a background worker. In option A the query handlers would read the `bills` table directly, and there would be no projector at all.
+Read it from the left. Changes enter through command endpoints. The command handler asks the `ExpenseClaim` aggregate to apply the business rule, and saves it through a repository into the `claims` table. The same handler calls a projector, which updates the flat `claim_summaries` table (option B, same transaction). Queries enter through separate GET endpoints and go straight to `claim_summaries` without touching the aggregate or the repository. In option C the arrow from command handler to projector would be replaced by an event and a background worker. In option A the query handlers would read the `claims` table directly, and there would be no projector at all.
 
 ### Command and query, step by step
 
 ```mermaid
 sequenceDiagram
-    participant Eng as Site engineer
-    participant API as POST certify endpoint
-    participant H as CertifyBillHandler
-    participant R as IRaBillRepository
-    participant B as RaBill
-    participant P as BillSummaryProjector
+    participant Eng as Manager
+    participant API as POST approve endpoint
+    participant H as ApproveClaimHandler
+    participant R as IExpenseClaimRepository
+    participant B as ExpenseClaim
+    participant P as ClaimSummaryProjector
     participant Fin as Finance dashboard
-    participant Q as GetPendingBillsHandler
-    Eng->>API: certify bill 17 for 9,40,000
-    API->>H: HandleAsync(CertifyBillCommand)
-    H->>R: GetAsync(billId)
-    R-->>H: RaBill version 3
-    H->>B: Certify(940000, engineer, now)
-    B-->>H: ok or BillingRuleException
-    H->>R: SaveAsync(bill, expectedVersion 3)
-    H->>P: Project(bill)
+    participant Q as GetPendingClaimsHandler
+    Eng->>API: approve claim 17 for ₹9,400
+    API->>H: HandleAsync(ApproveClaimCommand)
+    H->>R: GetAsync(claimId)
+    R-->>H: ExpenseClaim version 3
+    H->>B: Approve(9400, approver, now)
+    B-->>H: ok or ClaimRuleException
+    H->>R: SaveAsync(claim, expectedVersion 3)
+    H->>P: Project(claim)
     H-->>API: new version 4
     API-->>Eng: 200 OK with version 4
-    Fin->>Q: GetPendingBills(project NH48-P3)
-    Q-->>Fin: rows from bill_summaries
+    Fin->>Q: GetPendingClaims(team SALES-BLR)
+    Q-->>Fin: rows from claim_summaries
 ```
 
-The engineer's request becomes a `CertifyBillCommand`. The handler loads the aggregate, and the aggregate decides whether certification is allowed. If the rule fails, nothing is saved and the API returns an error. On success, the handler saves with an expected version (optimistic concurrency, from the aggregates lesson), updates the read model, and returns only the new version number. Separately, and at any time, the finance dashboard asks a query handler for pending bills. That path never loads `RaBill`.
+The manager's request becomes an `ApproveClaimCommand`. The handler loads the aggregate, and the aggregate decides whether approval is allowed. If the rule fails, nothing is saved and the API returns an error. On success, the handler saves with an expected version (optimistic concurrency, from the aggregates lesson), updates the read model, and returns only the new version number. Separately, and at any time, the finance dashboard asks a query handler for pending claims. That path never loads `ExpenseClaim`.
 
 ### The pieces as classes
 
@@ -225,82 +225,82 @@ classDiagram
         <<interface>>
         +HandleAsync(TQuery query, CancellationToken ct) Task~TResult~
     }
-    class CertifyBillHandler {
-        -IRaBillRepository repository
-        -BillSummaryProjector projector
+    class ApproveClaimHandler {
+        -IExpenseClaimRepository repository
+        -ClaimSummaryProjector projector
     }
-    class GetPendingBillsHandler {
-        -IBillReadStore readStore
+    class GetPendingClaimsHandler {
+        -IClaimReadStore readStore
     }
-    class RaBill {
+    class ExpenseClaim {
         +Guid Id
-        +BillStatus Status
-        +Certify(decimal amount, string engineer, DateTimeOffset at)
+        +ClaimStatus Status
+        +Approve(decimal amount, string approver, DateTimeOffset at)
     }
-    class BillSummaryRow {
+    class ClaimSummaryRow {
         <<record>>
-        +Guid BillId
-        +string ProjectCode
+        +Guid ClaimId
+        +string TeamCode
         +decimal Claimed
         +string Status
     }
-    ICommandHandler <|.. CertifyBillHandler
-    IQueryHandler <|.. GetPendingBillsHandler
-    CertifyBillHandler --> RaBill : loads and saves
-    CertifyBillHandler --> BillSummaryRow : projects
-    GetPendingBillsHandler --> BillSummaryRow : reads
+    ICommandHandler <|.. ApproveClaimHandler
+    IQueryHandler <|.. GetPendingClaimsHandler
+    ApproveClaimHandler --> ExpenseClaim : loads and saves
+    ApproveClaimHandler --> ClaimSummaryRow : projects
+    GetPendingClaimsHandler --> ClaimSummaryRow : reads
 ```
 
-Notice the asymmetry. The command handler depends on the aggregate. The query handler depends only on a flat record. Nothing on the read side knows `RaBill` exists, which means you can change the dashboard freely, and you can change certification rules without breaking any screen.
+Notice the asymmetry. The command handler depends on the aggregate. The query handler depends only on a flat record. Nothing on the read side knows `ExpenseClaim` exists, which means you can change the dashboard freely, and you can change approval rules without breaking any screen.
 
 ## Step-by-step example
 
 ### Step 1 — the "one service does everything" version
 
 ```csharp
-public class BillService(AppDbContext db)
+public class ClaimService(AppDbContext db)
 {
-    public async Task<BillDto> Certify(Guid id, decimal amount)
+    public async Task<ClaimDto> Approve(Guid id, decimal amount)
     {
-        var bill = await db.Bills.Include(b => b.Contractor).Include(b => b.Project)
+        var claim = await db.Claims.Include(b => b.Employee).Include(b => b.Team)
                                  .Include(b => b.Items).SingleAsync(b => b.Id == id);
-        if (amount > bill.Claimed) throw new Exception("too much");
-        bill.Status = "Certified";            // rule lives in the service, not the entity
-        bill.CertifiedAmount = amount;
+        if (amount > claim.Claimed) throw new Exception("too much");
+        claim.Status = "Approved";            // rule lives in the service, not the entity
+        claim.ApprovedAmount = amount;
         await db.SaveChangesAsync();
-        return Map(bill);                     // returns the dashboard DTO from a command
+        return Map(claim);                     // returns the dashboard DTO from a command
     }
 
-    public async Task<List<BillDto>> Pending(string project) =>
-        (await db.Bills.Include(b => b.Contractor).Include(b => b.Items).ToListAsync())
-            .Where(b => b.Project.Code == project && b.Status == "Submitted")
-            .Select(Map).ToList();            // loads every bill, filters in memory
+    public async Task<List<ClaimDto>> Pending(string team) =>
+        (await db.Claims.Include(b => b.Employee).Include(b => b.Items).ToListAsync())
+            .Where(b => b.Team.Code == team && b.Status == "Submitted")
+            .Select(Map).ToList();            // loads every claim, filters in memory
 }
 ```
 
-Three smells: the command returns a read DTO, the query loads full entity graphs (and every bill in the database), and the rule "certified ≤ claimed" sits in a service where any other method can skip it.
+Three smells: the command returns a read DTO, the query loads full entity graphs (and every claim in the database), and the rule "approved ≤ claimed" sits in a service where any other method can skip it.
 
 ### Step 2 — separate the methods (CQS)
 
-Split `Certify` so it returns nothing but the new version, and move the rule into the entity: `bill.Certify(amount, engineer, now)`. The query method stops calling `Include` and uses `Select` to project straight into the DTO in SQL. This is already a big improvement, and costs almost nothing.
+Split `Approve` so it returns nothing but the new version, and move the rule into the entity: `claim.Approve(amount, approver, now)`. The query method stops calling `Include` and uses `Select` to project straight into the DTO in SQL. This is already a big improvement, and costs almost nothing.
 
 ### Step 3 — separate the classes (CQRS, option A)
 
-One handler class per use case: `CertifyBillHandler`, `SubmitBillHandler`, `GetPendingBillsHandler`. Command handlers use a repository. Query handlers use a thin read-only data access (Dapper, raw SQL, or EF Core with `AsNoTracking()` and `Select`). The read side might be a PostgreSQL view:
+One handler class per use case: `ApproveClaimHandler`, `SubmitClaimHandler`, `GetPendingClaimsHandler`. Command handlers use a repository. Query handlers use a thin read-only data access (Dapper, raw SQL, or EF Core with `AsNoTracking()` and `Select`). The read side might be a PostgreSQL view:
 
 ```sql
-CREATE VIEW pending_bills AS
-SELECT b.id, p.code AS project_code, c.name AS contractor_name, b.bill_no,
-       b.claimed_amount, b.submitted_on
-FROM bills b
-JOIN projects p ON p.id = b.project_id
-JOIN contractors c ON c.id = b.contractor_id
-WHERE b.status = 'Submitted';
+CREATE VIEW pending_claims AS
+SELECT c.id, t.code AS team_code, e.name AS employee_name, c.claim_no,
+       c.claimed_amount, c.submitted_on
+FROM claims c
+JOIN teams t ON t.id = c.team_id
+JOIN employees e ON e.id = c.employee_id
+WHERE c.status = 'Submitted';
 ```
 
 ### Step 4 — a dedicated read table (option B)
 
-When the view becomes slow (say, joins across 2 million bill items to compute totals) or several screens need precomputed figures, add a `bill_summaries` table. The command handler updates it in the same transaction as the bill. Reads become single-table, indexed lookups.
+When the view becomes slow (say, joins across 2 million receipt lines to compute totals) or several screens need precomputed figures, add a `claim_summaries` table. The command handler updates it in the same transaction as the claim. Reads become single-table, indexed lookups.
 
 ### Step 5 — only if you must: asynchronous projections (option C)
 
@@ -311,78 +311,78 @@ If the read model lives in a different store (a search index, a reporting databa
 The code below implements option B: one process, an in-memory store standing in for PostgreSQL, and a projector called inside the command handler. In production, both stores would be tables in the same PostgreSQL database, written in one transaction.
 
 ```text
-Billing.Api/
+Expenses.Api/
   Program.cs
-  Billing/
-    Domain/RaBill.cs
+  Expenses/
+    Domain/ExpenseClaim.cs
     Cqrs/Handlers.cs
-    Write/RaBillRepository.cs
-    Read/BillReadModel.cs
-    Commands/SubmitBill.cs
-    Commands/CertifyBill.cs
-    Queries/GetPendingBills.cs
+    Write/ExpenseClaimRepository.cs
+    Read/ClaimReadModel.cs
+    Commands/SubmitClaim.cs
+    Commands/ApproveClaim.cs
+    Queries/GetPendingClaims.cs
 ```
 
-```csharp file=Billing/Domain/RaBill.cs
-namespace Billing.Domain;
+```csharp file=Expenses/Domain/ExpenseClaim.cs
+namespace Expenses.Domain;
 
-public enum BillStatus { Submitted, Certified, Rejected }
+public enum ClaimStatus { Submitted, Approved, Rejected }
 
-public sealed class BillingRuleException(string message) : Exception(message);
+public sealed class ClaimRuleException(string message) : Exception(message);
 
-/// <summary>Write model: a running-account bill. All rules live here.</summary>
-public sealed class RaBill
+/// <summary>Write model: an expense claim. All rules live here.</summary>
+public sealed class ExpenseClaim
 {
     public Guid Id { get; }
-    public string ProjectCode { get; }
-    public string ContractorName { get; }
-    public int BillNo { get; }
+    public string TeamCode { get; }
+    public string EmployeeName { get; }
+    public int ClaimNo { get; }
     public decimal ClaimedAmount { get; }
     public DateOnly SubmittedOn { get; }
-    public BillStatus Status { get; private set; } = BillStatus.Submitted;
-    public decimal? CertifiedAmount { get; private set; }
-    public string? CertifiedBy { get; private set; }
-    public DateTimeOffset? CertifiedAt { get; private set; }
+    public ClaimStatus Status { get; private set; } = ClaimStatus.Submitted;
+    public decimal? ApprovedAmount { get; private set; }
+    public string? ApprovedBy { get; private set; }
+    public DateTimeOffset? ApprovedAt { get; private set; }
     public string? RejectionReason { get; private set; }
     public int Version { get; internal set; }
 
-    private RaBill(Guid id, string projectCode, string contractorName, int billNo, decimal claimed, DateOnly submittedOn)
+    private ExpenseClaim(Guid id, string teamCode, string employeeName, int claimNo, decimal claimed, DateOnly submittedOn)
     {
-        Id = id; ProjectCode = projectCode; ContractorName = contractorName;
-        BillNo = billNo; ClaimedAmount = claimed; SubmittedOn = submittedOn;
+        Id = id; TeamCode = teamCode; EmployeeName = employeeName;
+        ClaimNo = claimNo; ClaimedAmount = claimed; SubmittedOn = submittedOn;
     }
 
-    public static RaBill Submit(string projectCode, string contractorName, int billNo, decimal claimed, DateOnly submittedOn)
+    public static ExpenseClaim Submit(string teamCode, string employeeName, int claimNo, decimal claimed, DateOnly submittedOn)
     {
-        if (string.IsNullOrWhiteSpace(projectCode)) throw new BillingRuleException("Project code is required.");
-        if (string.IsNullOrWhiteSpace(contractorName)) throw new BillingRuleException("Contractor is required.");
-        if (billNo <= 0) throw new BillingRuleException("Bill number must be positive.");
-        if (claimed <= 0) throw new BillingRuleException("Claimed amount must be positive.");
-        return new RaBill(Guid.NewGuid(), projectCode.Trim().ToUpperInvariant(), contractorName.Trim(), billNo, claimed, submittedOn);
+        if (string.IsNullOrWhiteSpace(teamCode)) throw new ClaimRuleException("Team code is required.");
+        if (string.IsNullOrWhiteSpace(employeeName)) throw new ClaimRuleException("Employee is required.");
+        if (claimNo <= 0) throw new ClaimRuleException("Claim number must be positive.");
+        if (claimed <= 0) throw new ClaimRuleException("Claimed amount must be positive.");
+        return new ExpenseClaim(Guid.NewGuid(), teamCode.Trim().ToUpperInvariant(), employeeName.Trim(), claimNo, claimed, submittedOn);
     }
 
-    public void Certify(decimal amount, string engineer, DateTimeOffset at)
+    public void Approve(decimal amount, string approver, DateTimeOffset at)
     {
-        if (Status != BillStatus.Submitted) throw new BillingRuleException($"Bill is {Status}; only submitted bills can be certified.");
-        if (amount <= 0) throw new BillingRuleException("Certified amount must be positive.");
-        if (amount > ClaimedAmount) throw new BillingRuleException("Certified amount cannot exceed the claimed amount.");
-        if (string.IsNullOrWhiteSpace(engineer)) throw new BillingRuleException("Certifying engineer is required.");
-        Status = BillStatus.Certified; CertifiedAmount = amount; CertifiedBy = engineer; CertifiedAt = at;
+        if (Status != ClaimStatus.Submitted) throw new ClaimRuleException($"Claim is {Status}; only submitted claims can be approved.");
+        if (amount <= 0) throw new ClaimRuleException("Approved amount must be positive.");
+        if (amount > ClaimedAmount) throw new ClaimRuleException("Approved amount cannot exceed the claimed amount.");
+        if (string.IsNullOrWhiteSpace(approver)) throw new ClaimRuleException("Approver is required.");
+        Status = ClaimStatus.Approved; ApprovedAmount = amount; ApprovedBy = approver; ApprovedAt = at;
     }
 
     public void Reject(string reason)
     {
-        if (Status != BillStatus.Submitted) throw new BillingRuleException($"Bill is {Status}; only submitted bills can be rejected.");
-        if (string.IsNullOrWhiteSpace(reason)) throw new BillingRuleException("A rejection reason is required.");
-        Status = BillStatus.Rejected; RejectionReason = reason;
+        if (Status != ClaimStatus.Submitted) throw new ClaimRuleException($"Claim is {Status}; only submitted claims can be rejected.");
+        if (string.IsNullOrWhiteSpace(reason)) throw new ClaimRuleException("A rejection reason is required.");
+        Status = ClaimStatus.Rejected; RejectionReason = reason;
     }
 }
 ```
 
-The aggregate has no display fields such as `DaysPending` or `ProjectName`. Those belong to the read side.
+The aggregate has no display fields such as `DaysPending` or `TeamName`. Those belong to the read side.
 
-```csharp file=Billing/Cqrs/Handlers.cs
-namespace Billing.Cqrs;
+```csharp file=Expenses/Cqrs/Handlers.cs
+namespace Expenses.Cqrs;
 
 /// <summary>Changes state. Returns at most an id or a version.</summary>
 public interface ICommandHandler<in TCommand, TResult>
@@ -397,174 +397,176 @@ public interface IQueryHandler<in TQuery, TResult>
 }
 ```
 
-Two tiny interfaces are all the "framework" you need. Libraries such as MediatR or Wolverine add a dispatcher and pipelines, but they are optional. Injecting the handler directly into an endpoint is explicit and easy to follow.
+Two tiny interfaces are all the "framework" you need. Libraries such as MediatR or Wolverine add a dispatcher and pipelines, but they are optional (and note that MediatR moved to a commercial licence for new versions in 2025, so check the terms before adopting it). Injecting the handler directly into an endpoint is explicit, easy to follow and easy to debug: "go to definition" lands on the real code.
 
-```csharp file=Billing/Write/RaBillRepository.cs
+```csharp file=Expenses/Write/ExpenseClaimRepository.cs
 using System.Collections.Concurrent;
-using Billing.Domain;
+using Expenses.Domain;
 
-namespace Billing.Write;
+namespace Expenses.Write;
 
 public sealed class ConcurrencyException(string message) : Exception(message);
 
-public interface IRaBillRepository
+public interface IExpenseClaimRepository
 {
-    Task<RaBill?> GetAsync(Guid id, CancellationToken ct);
-    Task<bool> ExistsAsync(string projectCode, int billNo, CancellationToken ct);
+    Task<ExpenseClaim?> GetAsync(Guid id, CancellationToken ct);
+    Task<bool> ExistsAsync(string teamCode, int claimNo, CancellationToken ct);
     /// <summary>Saves and bumps Version. Throws ConcurrencyException if the stored version differs.</summary>
-    Task SaveAsync(RaBill bill, int expectedVersion, CancellationToken ct);
+    Task SaveAsync(ExpenseClaim claim, int expectedVersion, CancellationToken ct);
 }
 
 /// <summary>Stands in for PostgreSQL. A real version uses EF Core with a concurrency token.</summary>
-public sealed class InMemoryRaBillRepository : IRaBillRepository
+public sealed class InMemoryExpenseClaimRepository : IExpenseClaimRepository
 {
-    private readonly ConcurrentDictionary<Guid, RaBill> _bills = new();
+    private readonly ConcurrentDictionary<Guid, ExpenseClaim> _claims = new();
     private readonly Lock _gate = new();
 
-    public Task<RaBill?> GetAsync(Guid id, CancellationToken ct) =>
-        Task.FromResult(_bills.TryGetValue(id, out var b) ? b : null);
+    public Task<ExpenseClaim?> GetAsync(Guid id, CancellationToken ct) =>
+        Task.FromResult(_claims.TryGetValue(id, out var b) ? b : null);
 
-    public Task<bool> ExistsAsync(string projectCode, int billNo, CancellationToken ct) =>
-        Task.FromResult(_bills.Values.Any(b => b.ProjectCode == projectCode.ToUpperInvariant() && b.BillNo == billNo));
+    public Task<bool> ExistsAsync(string teamCode, int claimNo, CancellationToken ct) =>
+        Task.FromResult(_claims.Values.Any(b => b.TeamCode == teamCode.ToUpperInvariant() && b.ClaimNo == claimNo));
 
-    public Task SaveAsync(RaBill bill, int expectedVersion, CancellationToken ct)
+    public Task SaveAsync(ExpenseClaim claim, int expectedVersion, CancellationToken ct)
     {
         lock (_gate)
         {
-            var currentVersion = _bills.TryGetValue(bill.Id, out var existing) ? existing.Version : 0;
+            var currentVersion = _claims.TryGetValue(claim.Id, out var existing) ? existing.Version : 0;
             if (currentVersion != expectedVersion)
-                throw new ConcurrencyException($"Bill {bill.Id} is at version {currentVersion}, expected {expectedVersion}.");
-            bill.Version = expectedVersion + 1;
-            _bills[bill.Id] = bill;
+                throw new ConcurrencyException($"Claim {claim.Id} is at version {currentVersion}, expected {expectedVersion}.");
+            claim.Version = expectedVersion + 1;
+            _claims[claim.Id] = claim;
         }
         return Task.CompletedTask;
     }
 }
 ```
 
-```csharp file=Billing/Read/BillReadModel.cs
+```csharp file=Expenses/Read/ClaimReadModel.cs
 using System.Collections.Concurrent;
-using Billing.Domain;
+using Expenses.Domain;
 
-namespace Billing.Read;
+namespace Expenses.Read;
 
-/// <summary>One flat row per bill, shaped for lists and dashboards. No behaviour.</summary>
-public sealed record BillSummaryRow(
-    Guid BillId, string ProjectCode, string ContractorName, int BillNo,
-    decimal Claimed, decimal? Certified, string Status, DateOnly SubmittedOn, int Version);
+/// <summary>One flat row per claim, shaped for lists and dashboards. No behaviour.</summary>
+public sealed record ClaimSummaryRow(
+    Guid ClaimId, string TeamCode, string EmployeeName, int ClaimNo,
+    decimal Claimed, decimal? Approved, string Status, DateOnly SubmittedOn, int Version);
 
-public interface IBillReadStore
+public interface IClaimReadStore
 {
-    void Upsert(BillSummaryRow row);
-    IEnumerable<BillSummaryRow> ForProject(string projectCode);
+    void Upsert(ClaimSummaryRow row);
+    IEnumerable<ClaimSummaryRow> ForProject(string teamCode);
 }
 
-public sealed class InMemoryBillReadStore : IBillReadStore
+public sealed class InMemoryClaimReadStore : IClaimReadStore
 {
-    private readonly ConcurrentDictionary<Guid, BillSummaryRow> _rows = new();
+    private readonly ConcurrentDictionary<Guid, ClaimSummaryRow> _rows = new();
 
-    public void Upsert(BillSummaryRow row) =>
-        _rows.AddOrUpdate(row.BillId, row, (_, old) => row.Version >= old.Version ? row : old);
+    public void Upsert(ClaimSummaryRow row) =>
+        _rows.AddOrUpdate(row.ClaimId, row, (_, old) => row.Version >= old.Version ? row : old);
 
-    public IEnumerable<BillSummaryRow> ForProject(string projectCode) =>
-        _rows.Values.Where(r => r.ProjectCode == projectCode.ToUpperInvariant());
+    public IEnumerable<ClaimSummaryRow> ForProject(string teamCode) =>
+        _rows.Values.Where(r => r.TeamCode == teamCode.ToUpperInvariant());
 }
 
 /// <summary>Turns the write model into read rows. Called inside the command's transaction (option B).</summary>
-public sealed class BillSummaryProjector(IBillReadStore store)
+public sealed class ClaimSummaryProjector(IClaimReadStore store)
 {
-    public void Project(RaBill bill) => store.Upsert(new BillSummaryRow(
-        bill.Id, bill.ProjectCode, bill.ContractorName, bill.BillNo,
-        bill.ClaimedAmount, bill.CertifiedAmount, bill.Status.ToString(), bill.SubmittedOn, bill.Version));
+    public void Project(ExpenseClaim claim) => store.Upsert(new ClaimSummaryRow(
+        claim.Id, claim.TeamCode, claim.EmployeeName, claim.ClaimNo,
+        claim.ClaimedAmount, claim.ApprovedAmount, claim.Status.ToString(), claim.SubmittedOn, claim.Version));
 }
 ```
 
 The `Upsert` ignores a row whose version is older than the stored one. That costs one comparison and protects against out-of-order updates if you later move to asynchronous projection.
 
-```csharp file=Billing/Commands/SubmitBill.cs
-using Billing.Cqrs;
-using Billing.Domain;
-using Billing.Read;
-using Billing.Write;
+```csharp file=Expenses/Commands/SubmitClaim.cs
+using Expenses.Cqrs;
+using Expenses.Domain;
+using Expenses.Read;
+using Expenses.Write;
 
-namespace Billing.Commands;
+namespace Expenses.Commands;
 
-public sealed record SubmitBillCommand(string ProjectCode, string ContractorName, int BillNo, decimal ClaimedAmount);
+public sealed record SubmitClaimCommand(string TeamCode, string EmployeeName, int ClaimNo, decimal ClaimedAmount);
 
-public sealed class SubmitBillHandler(IRaBillRepository repository, BillSummaryProjector projector, TimeProvider clock)
-    : ICommandHandler<SubmitBillCommand, Guid>
+public sealed class SubmitClaimHandler(IExpenseClaimRepository repository, ClaimSummaryProjector projector, TimeProvider clock)
+    : ICommandHandler<SubmitClaimCommand, Guid>
 {
-    public async Task<Guid> HandleAsync(SubmitBillCommand c, CancellationToken ct)
+    public async Task<Guid> HandleAsync(SubmitClaimCommand c, CancellationToken ct)
     {
-        if (await repository.ExistsAsync(c.ProjectCode, c.BillNo, ct))
-            throw new BillingRuleException($"Bill {c.BillNo} already exists for {c.ProjectCode}.");
+        if (await repository.ExistsAsync(c.TeamCode, c.ClaimNo, ct))
+            throw new ClaimRuleException($"Claim {c.ClaimNo} already exists for {c.TeamCode}.");
 
         var today = DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
-        var bill = RaBill.Submit(c.ProjectCode, c.ContractorName, c.BillNo, c.ClaimedAmount, today);
-        await repository.SaveAsync(bill, expectedVersion: 0, ct);
-        projector.Project(bill);       // same unit of work in production
-        return bill.Id;                // a create returns only the new id
+        var claim = ExpenseClaim.Submit(c.TeamCode, c.EmployeeName, c.ClaimNo, c.ClaimedAmount, today);
+        await repository.SaveAsync(claim, expectedVersion: 0, ct);
+        projector.Project(claim);       // same unit of work in production
+        return claim.Id;                // a create returns only the new id
     }
 }
 ```
 
-```csharp file=Billing/Commands/CertifyBill.cs
-using Billing.Cqrs;
-using Billing.Read;
-using Billing.Write;
+The `ExistsAsync` check gives a friendly error, but it is not a guarantee: two double-clicked submits can both pass it before either saves. In PostgreSQL, back it with a unique constraint on `(team_code, claim_no)` and map the unique-violation error (SQLSTATE `23505`) to the same 409 or 422 response. For mobile clients that retry on flaky networks, an `Idempotency-Key` header on `POST /claims` is the more general fix.
 
-namespace Billing.Commands;
+```csharp file=Expenses/Commands/ApproveClaim.cs
+using Expenses.Cqrs;
+using Expenses.Read;
+using Expenses.Write;
 
-public sealed record CertifyBillCommand(Guid BillId, decimal CertifiedAmount, string Engineer, int ExpectedVersion);
+namespace Expenses.Commands;
 
-public sealed class CertifyBillHandler(IRaBillRepository repository, BillSummaryProjector projector, TimeProvider clock)
-    : ICommandHandler<CertifyBillCommand, int>
+public sealed record ApproveClaimCommand(Guid ClaimId, decimal ApprovedAmount, string Approver, int ExpectedVersion);
+
+public sealed class ApproveClaimHandler(IExpenseClaimRepository repository, ClaimSummaryProjector projector, TimeProvider clock)
+    : ICommandHandler<ApproveClaimCommand, int>
 {
-    public async Task<int> HandleAsync(CertifyBillCommand c, CancellationToken ct)
+    public async Task<int> HandleAsync(ApproveClaimCommand c, CancellationToken ct)
     {
-        var bill = await repository.GetAsync(c.BillId, ct)
-                   ?? throw new KeyNotFoundException($"Bill {c.BillId} not found.");
-        if (bill.Version != c.ExpectedVersion)
-            throw new ConcurrencyException("The bill was changed by someone else. Reload and try again.");
+        var claim = await repository.GetAsync(c.ClaimId, ct)
+                   ?? throw new KeyNotFoundException($"Claim {c.ClaimId} not found.");
+        if (claim.Version != c.ExpectedVersion)
+            throw new ConcurrencyException("The claim was changed by someone else. Reload and try again.");
 
-        bill.Certify(c.CertifiedAmount, c.Engineer, clock.GetUtcNow());
-        await repository.SaveAsync(bill, c.ExpectedVersion, ct);
-        projector.Project(bill);
-        return bill.Version;           // new version, so the client can do read-your-writes
+        claim.Approve(c.ApprovedAmount, c.Approver, clock.GetUtcNow());
+        await repository.SaveAsync(claim, c.ExpectedVersion, ct);
+        projector.Project(claim);
+        return claim.Version;           // new version, so the client can do read-your-writes
     }
 }
 ```
 
-```csharp file=Billing/Queries/GetPendingBills.cs
-using Billing.Cqrs;
-using Billing.Read;
+```csharp file=Expenses/Queries/GetPendingClaims.cs
+using Expenses.Cqrs;
+using Expenses.Read;
 
-namespace Billing.Queries;
+namespace Expenses.Queries;
 
-public sealed record GetPendingBillsQuery(string ProjectCode, int Page = 1, int PageSize = 25);
+public sealed record GetPendingClaimsQuery(string TeamCode, int Page = 1, int PageSize = 25);
 
-public sealed record PendingBillDto(Guid BillId, int BillNo, string Contractor, decimal Claimed, int DaysPending, int Version);
+public sealed record PendingClaimDto(Guid ClaimId, int ClaimNo, string Employee, decimal Claimed, int DaysPending, int Version);
 
-public sealed record PendingBillsPage(IReadOnlyList<PendingBillDto> Items, int TotalCount, decimal TotalClaimed);
+public sealed record PendingClaimsPage(IReadOnlyList<PendingClaimDto> Items, int TotalCount, decimal TotalClaimed);
 
-public sealed class GetPendingBillsHandler(IBillReadStore store, TimeProvider clock)
-    : IQueryHandler<GetPendingBillsQuery, PendingBillsPage>
+public sealed class GetPendingClaimsHandler(IClaimReadStore store, TimeProvider clock)
+    : IQueryHandler<GetPendingClaimsQuery, PendingClaimsPage>
 {
-    public Task<PendingBillsPage> HandleAsync(GetPendingBillsQuery q, CancellationToken ct)
+    public Task<PendingClaimsPage> HandleAsync(GetPendingClaimsQuery q, CancellationToken ct)
     {
         var page = Math.Max(1, q.Page);
         var size = Math.Clamp(q.PageSize, 1, 100);   // input check, not a business rule
         var today = DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
 
-        var pending = store.ForProject(q.ProjectCode).Where(r => r.Status == "Submitted").ToList();
+        var pending = store.ForProject(q.TeamCode).Where(r => r.Status == "Submitted").ToList();
         var items = pending
-            .Select(r => new PendingBillDto(r.BillId, r.BillNo, r.ContractorName, r.Claimed,
+            .Select(r => new PendingClaimDto(r.ClaimId, r.ClaimNo, r.EmployeeName, r.Claimed,
                                             today.DayNumber - r.SubmittedOn.DayNumber, r.Version))
-            .OrderByDescending(d => d.DaysPending).ThenBy(d => d.BillNo)
+            .OrderByDescending(d => d.DaysPending).ThenBy(d => d.ClaimNo)
             .Skip((page - 1) * size).Take(size)
             .ToList();
 
-        return Task.FromResult(new PendingBillsPage(items, pending.Count, pending.Sum(r => r.Claimed)));
+        return Task.FromResult(new PendingClaimsPage(items, pending.Count, pending.Sum(r => r.Claimed)));
     }
 }
 ```
@@ -572,49 +574,49 @@ public sealed class GetPendingBillsHandler(IBillReadStore store, TimeProvider cl
 The query handler computes `DaysPending` at read time because it depends on today's date. Storing it would make the row wrong tomorrow. That is a good rule of thumb: **store facts in the read model, compute time-relative values at query time.**
 
 ```csharp file=Program.cs
-using Billing.Commands;
-using Billing.Cqrs;
-using Billing.Domain;
-using Billing.Queries;
-using Billing.Read;
-using Billing.Write;
+using Expenses.Commands;
+using Expenses.Cqrs;
+using Expenses.Domain;
+using Expenses.Queries;
+using Expenses.Read;
+using Expenses.Write;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<IRaBillRepository, InMemoryRaBillRepository>();
-builder.Services.AddSingleton<IBillReadStore, InMemoryBillReadStore>();
-builder.Services.AddSingleton<BillSummaryProjector>();
-builder.Services.AddScoped<ICommandHandler<SubmitBillCommand, Guid>, SubmitBillHandler>();
-builder.Services.AddScoped<ICommandHandler<CertifyBillCommand, int>, CertifyBillHandler>();
-builder.Services.AddScoped<IQueryHandler<GetPendingBillsQuery, PendingBillsPage>, GetPendingBillsHandler>();
+builder.Services.AddSingleton<IExpenseClaimRepository, InMemoryExpenseClaimRepository>();
+builder.Services.AddSingleton<IClaimReadStore, InMemoryClaimReadStore>();
+builder.Services.AddSingleton<ClaimSummaryProjector>();
+builder.Services.AddScoped<ICommandHandler<SubmitClaimCommand, Guid>, SubmitClaimHandler>();
+builder.Services.AddScoped<ICommandHandler<ApproveClaimCommand, int>, ApproveClaimHandler>();
+builder.Services.AddScoped<IQueryHandler<GetPendingClaimsQuery, PendingClaimsPage>, GetPendingClaimsHandler>();
 
 var app = builder.Build();
 
-app.MapPost("/bills", async (SubmitBillCommand cmd, ICommandHandler<SubmitBillCommand, Guid> handler, CancellationToken ct) =>
+app.MapPost("/claims", async (SubmitClaimCommand cmd, ICommandHandler<SubmitClaimCommand, Guid> handler, CancellationToken ct) =>
 {
-    try { return Results.Created($"/bills/{await handler.HandleAsync(cmd, ct)}", null); }
-    catch (BillingRuleException ex) { return Results.Problem(ex.Message, statusCode: 422); }
+    try { return Results.Created($"/claims/{await handler.HandleAsync(cmd, ct)}", null); }
+    catch (ClaimRuleException ex) { return Results.Problem(ex.Message, statusCode: 422); }
 });
 
-app.MapPost("/bills/{id:guid}/certify", async (Guid id, CertifyRequest body, ICommandHandler<CertifyBillCommand, int> handler, CancellationToken ct) =>
+app.MapPost("/claims/{id:guid}/approve", async (Guid id, ApproveRequest body, ICommandHandler<ApproveClaimCommand, int> handler, CancellationToken ct) =>
 {
     try
     {
-        var version = await handler.HandleAsync(new CertifyBillCommand(id, body.Amount, body.Engineer, body.ExpectedVersion), ct);
+        var version = await handler.HandleAsync(new ApproveClaimCommand(id, body.Amount, body.Approver, body.ExpectedVersion), ct);
         return Results.Ok(new { version });
     }
     catch (KeyNotFoundException) { return Results.NotFound(); }
     catch (ConcurrencyException ex) { return Results.Problem(ex.Message, statusCode: 409); }
-    catch (BillingRuleException ex) { return Results.Problem(ex.Message, statusCode: 422); }
+    catch (ClaimRuleException ex) { return Results.Problem(ex.Message, statusCode: 422); }
 });
 
-app.MapGet("/projects/{code}/pending-bills", async (string code, int? page, IQueryHandler<GetPendingBillsQuery, PendingBillsPage> handler, CancellationToken ct) =>
-    Results.Ok(await handler.HandleAsync(new GetPendingBillsQuery(code, page ?? 1), ct)));
+app.MapGet("/teams/{code}/pending-claims", async (string code, int? page, IQueryHandler<GetPendingClaimsQuery, PendingClaimsPage> handler, CancellationToken ct) =>
+    Results.Ok(await handler.HandleAsync(new GetPendingClaimsQuery(code, page ?? 1), ct)));
 
 app.Run();
 
-public sealed record CertifyRequest(decimal Amount, string Engineer, int ExpectedVersion);
+public sealed record ApproveRequest(decimal Amount, string Approver, int ExpectedVersion);
 ```
 
 ### What changes with PostgreSQL and EF Core
@@ -622,33 +624,33 @@ public sealed record CertifyRequest(decimal Amount, string Engineer, int Expecte
 In a real deployment the two in-memory stores become two tables. The write side uses EF Core with a concurrency token. The read side is best served by plain SQL (or EF Core `AsNoTracking()` with `Select`), because it never needs change tracking:
 
 ```sql
-CREATE TABLE bill_summaries (
-    bill_id         uuid PRIMARY KEY,
-    project_code    text        NOT NULL,
-    contractor_name text        NOT NULL,
-    bill_no         int         NOT NULL,
+CREATE TABLE claim_summaries (
+    claim_id         uuid PRIMARY KEY,
+    team_code    text        NOT NULL,
+    employee_name text        NOT NULL,
+    claim_no         int         NOT NULL,
     claimed         numeric(14,2) NOT NULL,
-    certified       numeric(14,2),
+    approved       numeric(14,2),
     status          text        NOT NULL,
     submitted_on    date        NOT NULL,
     version         int         NOT NULL
 );
--- The dashboard query filters by project and status, then sorts by age.
-CREATE INDEX ix_bill_summaries_pending ON bill_summaries (project_code, submitted_on)
+-- The dashboard query filters by team and status, then sorts by age.
+CREATE INDEX ix_claim_summaries_pending ON claim_summaries (team_code, submitted_on)
     WHERE status = 'Submitted';
 ```
 
-A partial index keeps only pending rows in the index, so it stays small even when 95 % of bills are already certified. The command handler wraps `SaveChangesAsync` for the bill and the upsert into `bill_summaries` in one transaction, so both change or neither does.
+A partial index keeps only pending rows in the index, so it stays small even when 95 % of claims are already approved. The command handler wraps `SaveChangesAsync` for the claim and the upsert into `claim_summaries` in one transaction, so both change or neither does.
 
 ## Bad design vs good design
 
-**Bad: CQRS everywhere, by default.** A team reads a blog post and splits every entity into commands, queries, handlers, read tables and a message bus. The "material units" lookup (kg, bag, m³) now has six classes and an asynchronous projection. A new developer needs a day to add one field. Users see a unit they just created disappear for two seconds, then reappear.
+**Bad: CQRS everywhere, by default.** A team reads a blog post and splits every entity into commands, queries, handlers, read tables and a message bus. The "currencies" lookup (INR, USD, EUR) now has six classes and an asynchronous projection. A new developer needs a day to add one field. Users see a currency they just created disappear for two seconds, then reappear.
 
-**Bad: commands that return read models.** `CertifyBill` returns the full `PendingBillsPage` "to save a round trip". Now every change to the dashboard shape touches the command path, and the command handler must load everything the dashboard needs.
+**Bad: commands that return read models.** `ApproveClaim` returns the full `PendingClaimsPage` "to save a round trip". Now every change to the dashboard shape touches the command path, and the command handler must load everything the dashboard needs.
 
-**Bad: queries that go through the aggregate.** `GetPendingBills` loads 2,000 `RaBill` aggregates through the repository and maps them. Each one is tracked by EF Core, with rule-checking code that never runs. It's slow, and it tempts someone to add `DaysPending` to the aggregate.
+**Bad: queries that go through the aggregate.** `GetPendingClaims` loads 2,000 `ExpenseClaim` aggregates through the repository and maps them. Each one is tracked by EF Core, with rule-checking code that never runs. It's slow, and it tempts someone to add `DaysPending` to the aggregate.
 
-**Good:** apply CQRS to the RA bill area because the dashboards and the certification rules really differ. Start with option A (separate handlers, SQL queries over the same tables). Add a read table (option B) when a measured query gets slow. Move to asynchronous projection (option C) only when the read store must be separate or projection is heavy. Keep CRUD screens as CRUD.
+**Good:** apply CQRS to the expense-claim area because the dashboards and the approval rules really differ. Start with option A (separate handlers, SQL queries over the same tables). Add a read table (option B) when a measured query gets slow. Move to asynchronous projection (option C) only when the read store must be separate or projection is heavy. Keep CRUD screens as CRUD.
 
 :::callout type=tradeoff title="CQRS does not mean event sourcing"
 CQRS is about separating read and write models. Event sourcing is about storing changes as a sequence of events instead of current state. They work well together, because events are a natural feed for projections, but either can be used without the other. Everything in this lesson uses ordinary state-based tables. See [Event sourcing fundamentals](#/lesson/m08-event-sourcing) for the other half.
@@ -660,7 +662,7 @@ A separate read database brings replication, lag, monitoring and failure modes. 
 
 ## Practical playground
 
-The playground has a tiny command side and a tiny read side in one file. Run it, then try the challenges in the comments: add a "rejected bills" query, and make the projector skip stale versions.
+The playground has a tiny command side and a tiny read side in one file. Run it, then try the challenges in the comments: add a "rejected claims" query, and make the projector skip stale versions.
 
 :::playground type=csharp title="Commands, queries and a read model"
 ```csharp file=Program.cs
@@ -668,70 +670,70 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public enum Status { Submitted, Certified }
+public enum Status { Submitted, Approved }
 
-public sealed class Bill
+public sealed class Claim
 {
     public Guid Id { get; } = Guid.NewGuid();
-    public string Project { get; }
+    public string Team { get; }
     public int No { get; }
     public decimal Claimed { get; }
     public Status Status { get; private set; } = Status.Submitted;
-    public decimal? Certified { get; private set; }
+    public decimal? Approved { get; private set; }
     public int Version { get; set; }
-    public Bill(string project, int no, decimal claimed) { Project = project; No = no; Claimed = claimed; }
-    public void Certify(decimal amount)
+    public Claim(string team, int no, decimal claimed) { Team = team; No = no; Claimed = claimed; }
+    public void Approve(decimal amount)
     {
-        if (Status != Status.Submitted) throw new InvalidOperationException("Already certified");
-        if (amount > Claimed) throw new InvalidOperationException("Cannot certify more than claimed");
-        Status = Status.Certified; Certified = amount;
+        if (Status != Status.Submitted) throw new InvalidOperationException("Already approved");
+        if (amount > Claimed) throw new InvalidOperationException("Cannot approve more than claimed");
+        Status = Status.Approved; Approved = amount;
     }
 }
 
-public sealed record SummaryRow(Guid Id, string Project, int No, decimal Claimed, decimal? Certified, string Status, int Version);
+public sealed record SummaryRow(Guid Id, string Team, int No, decimal Claimed, decimal? Approved, string Status, int Version);
 
 public static class Program
 {
-    static readonly Dictionary<Guid, Bill> WriteStore = new();
+    static readonly Dictionary<Guid, Claim> WriteStore = new();
     static readonly Dictionary<Guid, SummaryRow> ReadStore = new();
 
     // Projector: write model -> read row. Challenge: ignore rows with an older Version.
-    static void Project(Bill b) =>
-        ReadStore[b.Id] = new SummaryRow(b.Id, b.Project, b.No, b.Claimed, b.Certified, b.Status.ToString(), b.Version);
+    static void Project(Claim b) =>
+        ReadStore[b.Id] = new SummaryRow(b.Id, b.Team, b.No, b.Claimed, b.Approved, b.Status.ToString(), b.Version);
 
     // Command: returns only an id.
-    static Guid Submit(string project, int no, decimal claimed)
+    static Guid Submit(string team, int no, decimal claimed)
     {
-        var b = new Bill(project, no, claimed) { Version = 1 };
+        var b = new Claim(team, no, claimed) { Version = 1 };
         WriteStore[b.Id] = b; Project(b);
         return b.Id;
     }
 
     // Command: returns only the new version.
-    static int Certify(Guid id, decimal amount)
+    static int Approve(Guid id, decimal amount)
     {
         var b = WriteStore[id];
-        b.Certify(amount); b.Version++;
+        b.Approve(amount); b.Version++;
         Project(b);
         return b.Version;
     }
 
-    // Query: reads only the read store, never the Bill class.
-    static IEnumerable<SummaryRow> Pending(string project) =>
-        ReadStore.Values.Where(r => r.Project == project && r.Status == "Submitted").OrderBy(r => r.No);
+    // Query: reads only the read store, never the Claim class.
+    static IEnumerable<SummaryRow> Pending(string team) =>
+        ReadStore.Values.Where(r => r.Team == team && r.Status == "Submitted").OrderBy(r => r.No);
 
     public static void Main()
     {
-        var a = Submit("NH48-P3", 16, 1_250_000m);
-        var b = Submit("NH48-P3", 17, 980_000m);
-        Submit("NH48-P3", 18, 410_000m);
-        Console.WriteLine($"Certified bill 17, new version {Certify(b, 940_000m)}");
-        try { Certify(a, 2_000_000m); } catch (InvalidOperationException ex) { Console.WriteLine($"Rejected: {ex.Message}"); }
+        var a = Submit("SALES-BLR", 16, 12_500m);
+        var b = Submit("SALES-BLR", 17, 9_800m);
+        Submit("SALES-BLR", 18, 4_100m);
+        Console.WriteLine($"Approved claim 17, new version {Approve(b, 9_400m)}");
+        try { Approve(a, 20_000m); } catch (InvalidOperationException ex) { Console.WriteLine($"Rejected: {ex.Message}"); }
 
-        foreach (var r in Pending("NH48-P3"))
-            Console.WriteLine($"Pending bill {r.No}: {r.Claimed:N0}");
-        Console.WriteLine($"Total pending: {Pending("NH48-P3").Sum(r => r.Claimed):N0}");
-        // Challenge: add a query that returns certified bills with the certified percentage of the claim.
+        foreach (var r in Pending("SALES-BLR"))
+            Console.WriteLine($"Pending claim {r.No}: {r.Claimed:N0}");
+        Console.WriteLine($"Total pending: {Pending("SALES-BLR").Sum(r => r.Claimed):N0}");
+        // Challenge: add a query that returns approved claims with the approved percentage of the claim.
     }
 }
 ```
@@ -739,89 +741,89 @@ public static class Program
 
 ## Exercises
 
-:::exercise id=m08-cqrs-fundamentals-ex1 difficulty=beginner kind=code title="Write the pending-bills query handler"
-The finance team wants a list of bills that are waiting for certification on one project, oldest first. The read model already exists. Write the query handler.
+:::exercise id=m08-cqrs-fundamentals-ex1 difficulty=beginner kind=code title="Write the pending-claims query handler"
+The finance team wants a list of claims that are waiting for approval in one team, oldest first. The read model already exists. Write the query handler.
 ::requirements
-- Return only rows with `Status == "Submitted"` for the requested project (case-insensitive project code).
+- Return only rows with `Status == "Submitted"` for the requested team (case-insensitive team code).
 - `DaysPending` is the number of days between `SubmittedOn` and the query's `Today`.
-- Sort by `DaysPending` descending, then by `BillNo` ascending.
-- The handler must only read from `IBillReadStore`. It must not modify anything.
+- Sort by `DaysPending` descending, then by `ClaimNo` ascending.
+- The handler must only read from `IClaimReadStore`. It must not modify anything.
 ::acceptance
-- A project with 3 pending and 1 certified bill returns 3 rows.
-- A bill submitted on 1 Oct, queried on 20 Oct, shows 19 days pending.
-- Two bills with the same age are ordered by bill number.
-- Bills from other projects never appear.
+- A team with 3 pending and 1 approved claim returns 3 rows.
+- A claim submitted on 1 Oct, queried on 20 Oct, shows 19 days pending.
+- Two claims with the same age are ordered by claim number.
+- Claims from other teams never appear.
 ::hint
 A query handler is just a function from a question to an answer. Start by filtering, then shape, then sort.
 ::hint
 `DateOnly.DayNumber` gives you an integer day count, so subtraction gives the number of days.
 ::hint
-Use `string.Equals(a, b, StringComparison.OrdinalIgnoreCase)` for the project code.
+Use `string.Equals(a, b, StringComparison.OrdinalIgnoreCase)` for the team code.
 ::hint
 ```csharp
 return store.All()
-    .Where(r => /* project and status */)
-    .Select(r => new PendingBillDto(r.BillId, r.BillNo, r.ContractorName, r.Claimed, q.Today.DayNumber - r.SubmittedOn.DayNumber))
-    .OrderByDescending(d => d.DaysPending).ThenBy(d => d.BillNo)
+    .Where(r => /* team and status */)
+    .Select(r => new PendingClaimDto(r.ClaimId, r.ClaimNo, r.EmployeeName, r.Claimed, q.Today.DayNumber - r.SubmittedOn.DayNumber))
+    .OrderByDescending(d => d.DaysPending).ThenBy(d => d.ClaimNo)
     .ToList();
 ```
 ::starter
-```csharp file=PendingBills.cs
+```csharp file=PendingClaims.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public sealed record BillSummaryRow(Guid BillId, string ProjectCode, string ContractorName, int BillNo,
+public sealed record ClaimSummaryRow(Guid ClaimId, string TeamCode, string EmployeeName, int ClaimNo,
     decimal Claimed, string Status, DateOnly SubmittedOn);
 
-public interface IBillReadStore { IEnumerable<BillSummaryRow> All(); }
+public interface IClaimReadStore { IEnumerable<ClaimSummaryRow> All(); }
 
-public sealed class ListReadStore(IEnumerable<BillSummaryRow> rows) : IBillReadStore
+public sealed class ListReadStore(IEnumerable<ClaimSummaryRow> rows) : IClaimReadStore
 {
-    private readonly List<BillSummaryRow> _rows = rows.ToList();
-    public IEnumerable<BillSummaryRow> All() => _rows;
+    private readonly List<ClaimSummaryRow> _rows = rows.ToList();
+    public IEnumerable<ClaimSummaryRow> All() => _rows;
 }
 
-public sealed record GetPendingBillsQuery(string ProjectCode, DateOnly Today);
-public sealed record PendingBillDto(Guid BillId, int BillNo, string Contractor, decimal Claimed, int DaysPending);
+public sealed record GetPendingClaimsQuery(string TeamCode, DateOnly Today);
+public sealed record PendingClaimDto(Guid ClaimId, int ClaimNo, string Employee, decimal Claimed, int DaysPending);
 
-public sealed class GetPendingBillsHandler(IBillReadStore store)
+public sealed class GetPendingClaimsHandler(IClaimReadStore store)
 {
-    public IReadOnlyList<PendingBillDto> Handle(GetPendingBillsQuery q) => throw new NotImplementedException();
+    public IReadOnlyList<PendingClaimDto> Handle(GetPendingClaimsQuery q) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=PendingBillsTests.cs
+```csharp file=PendingClaimsTests.cs
 using System;
 using System.Linq;
 using Xunit;
 
-public class PendingBillsTests
+public class PendingClaimsTests
 {
     private static readonly DateOnly Today = new(2026, 10, 20);
-    private static BillSummaryRow Row(string project, int no, string status, DateOnly on) =>
-        new(Guid.NewGuid(), project, "Contractor " + no, no, 100_000m * no, status, on);
+    private static ClaimSummaryRow Row(string team, int no, string status, DateOnly on) =>
+        new(Guid.NewGuid(), team, "Employee " + no, no, 1_000m * no, status, on);
 
-    private static GetPendingBillsHandler Handler(params BillSummaryRow[] rows) => new(new ListReadStore(rows));
+    private static GetPendingClaimsHandler Handler(params ClaimSummaryRow[] rows) => new(new ListReadStore(rows));
 
     [Fact]
-    public void Returns_only_submitted_rows_for_the_project()
+    public void Returns_only_submitted_rows_for_the_team()
     {
         var h = Handler(
-            Row("NH48-P3", 1, "Submitted", new(2026, 10, 1)),
-            Row("NH48-P3", 2, "Submitted", new(2026, 10, 5)),
-            Row("NH48-P3", 3, "Certified", new(2026, 9, 1)),
-            Row("NH48-P3", 4, "Submitted", new(2026, 10, 10)),
-            Row("SH12-P1", 5, "Submitted", new(2026, 9, 1)));
-        var result = h.Handle(new GetPendingBillsQuery("nh48-p3", Today));
+            Row("SALES-BLR", 1, "Submitted", new(2026, 10, 1)),
+            Row("SALES-BLR", 2, "Submitted", new(2026, 10, 5)),
+            Row("SALES-BLR", 3, "Approved", new(2026, 9, 1)),
+            Row("SALES-BLR", 4, "Submitted", new(2026, 10, 10)),
+            Row("ENG-PUN", 5, "Submitted", new(2026, 9, 1)));
+        var result = h.Handle(new GetPendingClaimsQuery("sales-blr", Today));
         Assert.Equal(3, result.Count);
-        Assert.DoesNotContain(result, d => d.BillNo == 3 || d.BillNo == 5);
+        Assert.DoesNotContain(result, d => d.ClaimNo == 3 || d.ClaimNo == 5);
     }
 
     [Fact]
     public void Computes_days_pending()
     {
-        var result = Handler(Row("P", 1, "Submitted", new(2026, 10, 1))).Handle(new GetPendingBillsQuery("P", Today));
+        var result = Handler(Row("P", 1, "Submitted", new(2026, 10, 1))).Handle(new GetPendingClaimsQuery("P", Today));
         Assert.Equal(19, result.Single().DaysPending);
     }
 
@@ -832,47 +834,47 @@ public class PendingBillsTests
             Row("P", 7, "Submitted", new(2026, 10, 15)),
             Row("P", 9, "Submitted", new(2026, 10, 1)),
             Row("P", 8, "Submitted", new(2026, 10, 1)));
-        var nos = h.Handle(new GetPendingBillsQuery("P", Today)).Select(d => d.BillNo).ToArray();
+        var nos = h.Handle(new GetPendingClaimsQuery("P", Today)).Select(d => d.ClaimNo).ToArray();
         Assert.Equal(new[] { 8, 9, 7 }, nos);
     }
 
     [Fact]
     public void Empty_when_nothing_pending() =>
-        Assert.Empty(Handler(Row("P", 1, "Certified", Today)).Handle(new GetPendingBillsQuery("P", Today)));
+        Assert.Empty(Handler(Row("P", 1, "Approved", Today)).Handle(new GetPendingClaimsQuery("P", Today)));
 }
 ```
 ::solution
 Filter, project to the DTO with the computed age, then sort. The handler touches only the read store.
 
-```csharp file=PendingBills.cs
+```csharp file=PendingClaims.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public sealed record BillSummaryRow(Guid BillId, string ProjectCode, string ContractorName, int BillNo,
+public sealed record ClaimSummaryRow(Guid ClaimId, string TeamCode, string EmployeeName, int ClaimNo,
     decimal Claimed, string Status, DateOnly SubmittedOn);
 
-public interface IBillReadStore { IEnumerable<BillSummaryRow> All(); }
+public interface IClaimReadStore { IEnumerable<ClaimSummaryRow> All(); }
 
-public sealed class ListReadStore(IEnumerable<BillSummaryRow> rows) : IBillReadStore
+public sealed class ListReadStore(IEnumerable<ClaimSummaryRow> rows) : IClaimReadStore
 {
-    private readonly List<BillSummaryRow> _rows = rows.ToList();
-    public IEnumerable<BillSummaryRow> All() => _rows;
+    private readonly List<ClaimSummaryRow> _rows = rows.ToList();
+    public IEnumerable<ClaimSummaryRow> All() => _rows;
 }
 
-public sealed record GetPendingBillsQuery(string ProjectCode, DateOnly Today);
-public sealed record PendingBillDto(Guid BillId, int BillNo, string Contractor, decimal Claimed, int DaysPending);
+public sealed record GetPendingClaimsQuery(string TeamCode, DateOnly Today);
+public sealed record PendingClaimDto(Guid ClaimId, int ClaimNo, string Employee, decimal Claimed, int DaysPending);
 
-public sealed class GetPendingBillsHandler(IBillReadStore store)
+public sealed class GetPendingClaimsHandler(IClaimReadStore store)
 {
-    public IReadOnlyList<PendingBillDto> Handle(GetPendingBillsQuery q) =>
+    public IReadOnlyList<PendingClaimDto> Handle(GetPendingClaimsQuery q) =>
         store.All()
-            .Where(r => string.Equals(r.ProjectCode, q.ProjectCode, StringComparison.OrdinalIgnoreCase)
+            .Where(r => string.Equals(r.TeamCode, q.TeamCode, StringComparison.OrdinalIgnoreCase)
                         && r.Status == "Submitted")
-            .Select(r => new PendingBillDto(r.BillId, r.BillNo, r.ContractorName, r.Claimed,
+            .Select(r => new PendingClaimDto(r.ClaimId, r.ClaimNo, r.EmployeeName, r.Claimed,
                                             q.Today.DayNumber - r.SubmittedOn.DayNumber))
             .OrderByDescending(d => d.DaysPending)
-            .ThenBy(d => d.BillNo)
+            .ThenBy(d => d.ClaimNo)
             .ToList();
 }
 ```
@@ -880,130 +882,130 @@ public sealed class GetPendingBillsHandler(IBillReadStore store)
 `Today` is part of the query rather than read from `DateTime.Now`, so the handler is deterministic and trivially testable. In the production version a `TimeProvider` does the same job.
 ::mistakes
 - Storing `DaysPending` in the read model. It becomes wrong at midnight.
-- Loading `RaBill` aggregates "because the repository already exists".
+- Loading `ExpenseClaim` aggregates "because the repository already exists".
 - Using `ToUpper()` comparisons with culture-sensitive rules. Use ordinal ignore-case.
 ::extensions
-Add paging (`Page`, `PageSize` with a cap of 100) and return the total claimed amount for all pending bills, not just the current page.
+Add paging (`Page`, `PageSize` with a cap of 100) and return the total claimed amount for all pending claims, not just the current page.
 :::
 
 :::exercise id=m08-cqrs-fundamentals-ex2 difficulty=beginner kind=code title="A command handler that returns only a version"
-Write `CertifyBillHandler`. It loads the bill, asks the aggregate to certify it, saves it with optimistic concurrency, updates the read model, and returns the new version number. It returns nothing else.
+Write `ApproveClaimHandler`. It loads the claim, asks the aggregate to approve it, saves it with optimistic concurrency, updates the read model, and returns the new version number. It returns nothing else.
 ::requirements
-- Unknown bill id: throw `KeyNotFoundException`.
+- Unknown claim id: throw `KeyNotFoundException`.
 - If the command's `ExpectedVersion` differs from the stored version, throw `ConcurrencyException` and change nothing.
-- Business rule failures come from `RaBill.Certify` itself. Do not duplicate them in the handler.
-- After a successful save, call the projector so the read row shows `Certified` and the certified amount.
+- Business rule failures come from `ExpenseClaim.Approve` itself. Do not duplicate them in the handler.
+- After a successful save, call the projector so the read row shows `Approved` and the approved amount.
 ::acceptance
-- Certifying version 1 returns 2, and the read row shows status `Certified`.
-- Certifying more than the claim throws `BillingRuleException`, and the read row still says `Submitted`.
+- Approving version 1 returns 2, and the read row shows status `Approved`.
+- Approving more than the claim throws `ClaimRuleException`, and the read row still says `Submitted`.
 - A stale `ExpectedVersion` throws `ConcurrencyException`.
 ::hint
 The handler is orchestration only: load, call one domain method, save, project, return.
 ::hint
 Order matters. If you project before saving and the save fails, the read model lies.
 ::hint
-`repository.Save(bill, expectedVersion)` already checks the version and bumps it. You can also check early to fail fast.
+`repository.Save(claim, expectedVersion)` already checks the version and bumps it. You can also check early to fail fast.
 ::hint
 ```csharp
-var bill = repository.Get(c.BillId) ?? throw new KeyNotFoundException();
-bill.Certify(c.Amount, c.Engineer);
-repository.Save(bill, c.ExpectedVersion);
-projector.Project(bill);
-return bill.Version;
+var claim = repository.Get(c.ClaimId) ?? throw new KeyNotFoundException();
+claim.Approve(c.Amount, c.Approver);
+repository.Save(claim, c.ExpectedVersion);
+projector.Project(claim);
+return claim.Version;
 ```
 ::starter
-```csharp file=CertifyBill.cs
+```csharp file=ApproveClaim.cs
 using System;
 using System.Collections.Generic;
 
-public enum BillStatus { Submitted, Certified }
-public sealed class BillingRuleException(string m) : Exception(m);
+public enum ClaimStatus { Submitted, Approved }
+public sealed class ClaimRuleException(string m) : Exception(m);
 public sealed class ConcurrencyException(string m) : Exception(m);
 
-public sealed class RaBill(Guid id, decimal claimed)
+public sealed class ExpenseClaim(Guid id, decimal claimed)
 {
     public Guid Id { get; } = id;
     public decimal Claimed { get; } = claimed;
-    public BillStatus Status { get; private set; } = BillStatus.Submitted;
-    public decimal? CertifiedAmount { get; private set; }
+    public ClaimStatus Status { get; private set; } = ClaimStatus.Submitted;
+    public decimal? ApprovedAmount { get; private set; }
     public int Version { get; set; } = 1;
 
-    public void Certify(decimal amount, string engineer)
+    public void Approve(decimal amount, string approver)
     {
-        if (Status != BillStatus.Submitted) throw new BillingRuleException("Only submitted bills can be certified.");
-        if (amount <= 0 || amount > Claimed) throw new BillingRuleException("Certified amount must be between 0 and the claim.");
-        if (string.IsNullOrWhiteSpace(engineer)) throw new BillingRuleException("Engineer required.");
-        Status = BillStatus.Certified; CertifiedAmount = amount;
+        if (Status != ClaimStatus.Submitted) throw new ClaimRuleException("Only submitted claims can be approved.");
+        if (amount <= 0 || amount > Claimed) throw new ClaimRuleException("Approved amount must be between 0 and the claim.");
+        if (string.IsNullOrWhiteSpace(approver)) throw new ClaimRuleException("Approver required.");
+        Status = ClaimStatus.Approved; ApprovedAmount = amount;
     }
 }
 
 public sealed class InMemoryRepository
 {
-    private readonly Dictionary<Guid, (decimal Claimed, BillStatus Status, decimal? Certified, int Version)> _rows = new();
-    public void Seed(RaBill b) => _rows[b.Id] = (b.Claimed, b.Status, b.CertifiedAmount, b.Version);
+    private readonly Dictionary<Guid, (decimal Claimed, ClaimStatus Status, decimal? Approved, int Version)> _rows = new();
+    public void Seed(ExpenseClaim b) => _rows[b.Id] = (b.Claimed, b.Status, b.ApprovedAmount, b.Version);
 
-    public RaBill? Get(Guid id)
+    public ExpenseClaim? Get(Guid id)
     {
         if (!_rows.TryGetValue(id, out var r)) return null;
-        var bill = new RaBill(id, r.Claimed) { Version = r.Version };
-        if (r.Status == BillStatus.Certified) bill.Certify(r.Certified!.Value, "restored");
-        return bill;
+        var claim = new ExpenseClaim(id, r.Claimed) { Version = r.Version };
+        if (r.Status == ClaimStatus.Approved) claim.Approve(r.Approved!.Value, "restored");
+        return claim;
     }
 
-    public void Save(RaBill bill, int expectedVersion)
+    public void Save(ExpenseClaim claim, int expectedVersion)
     {
-        if (_rows[bill.Id].Version != expectedVersion) throw new ConcurrencyException("Version changed.");
-        bill.Version = expectedVersion + 1;
-        _rows[bill.Id] = (bill.Claimed, bill.Status, bill.CertifiedAmount, bill.Version);
+        if (_rows[claim.Id].Version != expectedVersion) throw new ConcurrencyException("Version changed.");
+        claim.Version = expectedVersion + 1;
+        _rows[claim.Id] = (claim.Claimed, claim.Status, claim.ApprovedAmount, claim.Version);
     }
 }
 
-public sealed record SummaryRow(Guid BillId, string Status, decimal? Certified, int Version);
+public sealed record SummaryRow(Guid ClaimId, string Status, decimal? Approved, int Version);
 
 public sealed class Projector
 {
     public Dictionary<Guid, SummaryRow> Rows { get; } = new();
-    public void Project(RaBill b) => Rows[b.Id] = new SummaryRow(b.Id, b.Status.ToString(), b.CertifiedAmount, b.Version);
+    public void Project(ExpenseClaim b) => Rows[b.Id] = new SummaryRow(b.Id, b.Status.ToString(), b.ApprovedAmount, b.Version);
 }
 
-public sealed record CertifyBillCommand(Guid BillId, decimal Amount, string Engineer, int ExpectedVersion);
+public sealed record ApproveClaimCommand(Guid ClaimId, decimal Amount, string Approver, int ExpectedVersion);
 
-public sealed class CertifyBillHandler(InMemoryRepository repository, Projector projector)
+public sealed class ApproveClaimHandler(InMemoryRepository repository, Projector projector)
 {
-    public int Handle(CertifyBillCommand c) => throw new NotImplementedException();
+    public int Handle(ApproveClaimCommand c) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=CertifyBillTests.cs
+```csharp file=ApproveClaimTests.cs
 using System;
 using Xunit;
 
-public class CertifyBillTests
+public class ApproveClaimTests
 {
-    private static (CertifyBillHandler H, Projector P, Guid Id) Setup()
+    private static (ApproveClaimHandler H, Projector P, Guid Id) Setup()
     {
         var repo = new InMemoryRepository();
         var projector = new Projector();
-        var bill = new RaBill(Guid.NewGuid(), 980_000m);
-        repo.Seed(bill);
-        projector.Project(bill);
-        return (new CertifyBillHandler(repo, projector), projector, bill.Id);
+        var claim = new ExpenseClaim(Guid.NewGuid(), 9_800m);
+        repo.Seed(claim);
+        projector.Project(claim);
+        return (new ApproveClaimHandler(repo, projector), projector, claim.Id);
     }
 
     [Fact]
-    public void Certify_returns_new_version_and_updates_read_model()
+    public void Approve_returns_new_version_and_updates_read_model()
     {
         var (h, p, id) = Setup();
-        Assert.Equal(2, h.Handle(new CertifyBillCommand(id, 940_000m, "Er. Meena", 1)));
-        Assert.Equal("Certified", p.Rows[id].Status);
-        Assert.Equal(940_000m, p.Rows[id].Certified);
+        Assert.Equal(2, h.Handle(new ApproveClaimCommand(id, 9_400m, "Meena Iyer", 1)));
+        Assert.Equal("Approved", p.Rows[id].Status);
+        Assert.Equal(9_400m, p.Rows[id].Approved);
     }
 
     [Fact]
     public void Rule_failure_leaves_read_model_untouched()
     {
         var (h, p, id) = Setup();
-        Assert.Throws<BillingRuleException>(() => h.Handle(new CertifyBillCommand(id, 1_000_000m, "Er. Meena", 1)));
+        Assert.Throws<ClaimRuleException>(() => h.Handle(new ApproveClaimCommand(id, 10_000m, "Meena Iyer", 1)));
         Assert.Equal("Submitted", p.Rows[id].Status);
     }
 
@@ -1011,7 +1013,7 @@ public class CertifyBillTests
     public void Stale_version_is_rejected()
     {
         var (h, p, id) = Setup();
-        Assert.Throws<ConcurrencyException>(() => h.Handle(new CertifyBillCommand(id, 900_000m, "Er. Meena", 7)));
+        Assert.Throws<ConcurrencyException>(() => h.Handle(new ApproveClaimCommand(id, 9_000m, "Meena Iyer", 7)));
         Assert.Equal("Submitted", p.Rows[id].Status);
     }
 
@@ -1019,81 +1021,81 @@ public class CertifyBillTests
     public void Unknown_bill_is_not_found()
     {
         var (h, _, _) = Setup();
-        Assert.Throws<KeyNotFoundException>(() => h.Handle(new CertifyBillCommand(Guid.NewGuid(), 1m, "x", 1)));
+        Assert.Throws<KeyNotFoundException>(() => h.Handle(new ApproveClaimCommand(Guid.NewGuid(), 1m, "x", 1)));
     }
 }
 ```
 ::solution
 The handler checks the version early (so it fails before running domain logic on stale data), delegates the rule to the aggregate, saves, then projects.
 
-```csharp file=CertifyBill.cs
+```csharp file=ApproveClaim.cs
 using System;
 using System.Collections.Generic;
 
-public enum BillStatus { Submitted, Certified }
-public sealed class BillingRuleException(string m) : Exception(m);
+public enum ClaimStatus { Submitted, Approved }
+public sealed class ClaimRuleException(string m) : Exception(m);
 public sealed class ConcurrencyException(string m) : Exception(m);
 
-public sealed class RaBill(Guid id, decimal claimed)
+public sealed class ExpenseClaim(Guid id, decimal claimed)
 {
     public Guid Id { get; } = id;
     public decimal Claimed { get; } = claimed;
-    public BillStatus Status { get; private set; } = BillStatus.Submitted;
-    public decimal? CertifiedAmount { get; private set; }
+    public ClaimStatus Status { get; private set; } = ClaimStatus.Submitted;
+    public decimal? ApprovedAmount { get; private set; }
     public int Version { get; set; } = 1;
 
-    public void Certify(decimal amount, string engineer)
+    public void Approve(decimal amount, string approver)
     {
-        if (Status != BillStatus.Submitted) throw new BillingRuleException("Only submitted bills can be certified.");
-        if (amount <= 0 || amount > Claimed) throw new BillingRuleException("Certified amount must be between 0 and the claim.");
-        if (string.IsNullOrWhiteSpace(engineer)) throw new BillingRuleException("Engineer required.");
-        Status = BillStatus.Certified; CertifiedAmount = amount;
+        if (Status != ClaimStatus.Submitted) throw new ClaimRuleException("Only submitted claims can be approved.");
+        if (amount <= 0 || amount > Claimed) throw new ClaimRuleException("Approved amount must be between 0 and the claim.");
+        if (string.IsNullOrWhiteSpace(approver)) throw new ClaimRuleException("Approver required.");
+        Status = ClaimStatus.Approved; ApprovedAmount = amount;
     }
 }
 
 public sealed class InMemoryRepository
 {
-    private readonly Dictionary<Guid, (decimal Claimed, BillStatus Status, decimal? Certified, int Version)> _rows = new();
-    public void Seed(RaBill b) => _rows[b.Id] = (b.Claimed, b.Status, b.CertifiedAmount, b.Version);
+    private readonly Dictionary<Guid, (decimal Claimed, ClaimStatus Status, decimal? Approved, int Version)> _rows = new();
+    public void Seed(ExpenseClaim b) => _rows[b.Id] = (b.Claimed, b.Status, b.ApprovedAmount, b.Version);
 
-    public RaBill? Get(Guid id)
+    public ExpenseClaim? Get(Guid id)
     {
         if (!_rows.TryGetValue(id, out var r)) return null;
-        var bill = new RaBill(id, r.Claimed) { Version = r.Version };
-        if (r.Status == BillStatus.Certified) bill.Certify(r.Certified!.Value, "restored");
-        return bill;
+        var claim = new ExpenseClaim(id, r.Claimed) { Version = r.Version };
+        if (r.Status == ClaimStatus.Approved) claim.Approve(r.Approved!.Value, "restored");
+        return claim;
     }
 
-    public void Save(RaBill bill, int expectedVersion)
+    public void Save(ExpenseClaim claim, int expectedVersion)
     {
-        if (_rows[bill.Id].Version != expectedVersion) throw new ConcurrencyException("Version changed.");
-        bill.Version = expectedVersion + 1;
-        _rows[bill.Id] = (bill.Claimed, bill.Status, bill.CertifiedAmount, bill.Version);
+        if (_rows[claim.Id].Version != expectedVersion) throw new ConcurrencyException("Version changed.");
+        claim.Version = expectedVersion + 1;
+        _rows[claim.Id] = (claim.Claimed, claim.Status, claim.ApprovedAmount, claim.Version);
     }
 }
 
-public sealed record SummaryRow(Guid BillId, string Status, decimal? Certified, int Version);
+public sealed record SummaryRow(Guid ClaimId, string Status, decimal? Approved, int Version);
 
 public sealed class Projector
 {
     public Dictionary<Guid, SummaryRow> Rows { get; } = new();
-    public void Project(RaBill b) => Rows[b.Id] = new SummaryRow(b.Id, b.Status.ToString(), b.CertifiedAmount, b.Version);
+    public void Project(ExpenseClaim b) => Rows[b.Id] = new SummaryRow(b.Id, b.Status.ToString(), b.ApprovedAmount, b.Version);
 }
 
-public sealed record CertifyBillCommand(Guid BillId, decimal Amount, string Engineer, int ExpectedVersion);
+public sealed record ApproveClaimCommand(Guid ClaimId, decimal Amount, string Approver, int ExpectedVersion);
 
-public sealed class CertifyBillHandler(InMemoryRepository repository, Projector projector)
+public sealed class ApproveClaimHandler(InMemoryRepository repository, Projector projector)
 {
-    public int Handle(CertifyBillCommand c)
+    public int Handle(ApproveClaimCommand c)
     {
-        var bill = repository.Get(c.BillId) ?? throw new KeyNotFoundException($"Bill {c.BillId} not found.");
-        if (bill.Version != c.ExpectedVersion)
-            throw new ConcurrencyException("The bill changed since you loaded it.");
+        var claim = repository.Get(c.ClaimId) ?? throw new KeyNotFoundException($"Claim {c.ClaimId} not found.");
+        if (claim.Version != c.ExpectedVersion)
+            throw new ConcurrencyException("The claim changed since you loaded it.");
 
-        bill.Certify(c.Amount, c.Engineer);       // the rule lives in the aggregate
-        repository.Save(bill, c.ExpectedVersion); // bumps Version
-        projector.Project(bill);                  // only after a successful save
-        return bill.Version;
+        claim.Approve(c.Amount, c.Approver);       // the rule lives in the aggregate
+        repository.Save(claim, c.ExpectedVersion); // bumps Version
+        projector.Project(claim);                  // only after a successful save
+        return claim.Version;
     }
 }
 ```
@@ -1101,10 +1103,10 @@ public sealed class CertifyBillHandler(InMemoryRepository repository, Projector 
 Returning the version lets the client say "show me the list once it includes version 2", which is the basis of read-your-writes in exercise 5.
 ::mistakes
 - Re-checking `amount > Claimed` in the handler. Duplicated rules drift apart.
-- Projecting before saving, so a concurrency failure leaves a "Certified" row for an uncertified bill.
-- Returning a `BillDto` with every field "for convenience".
+- Projecting before saving, so a concurrency failure leaves a "Approved" row for an uncertified claim.
+- Returning a `ClaimDto` with every field "for convenience".
 ::extensions
-Add `RejectBillHandler` with a mandatory reason, and make both handlers share nothing except the repository and projector.
+Add `RejectClaimHandler` with a mandatory reason, and make both handlers share nothing except the repository and projector.
 :::
 
 :::exercise id=m08-cqrs-fundamentals-ex3 difficulty=intermediate kind=design title="Design CQRS for a metro smart-card system"
@@ -1188,185 +1190,185 @@ For a smaller network, footfall could be a SQL query with `GROUP BY station, dat
 - Letting the tap-out command return the rider's full journey list.
 :::
 
-:::exercise id=m08-cqrs-fundamentals-ex4 difficulty=intermediate kind=code title="An idempotent projector with per-project totals"
-In option C, events reach the projector at least once, so duplicates happen. Write a projector that maintains two read models from bill events: one summary row per bill, and one totals row per project.
+:::exercise id=m08-cqrs-fundamentals-ex4 difficulty=intermediate kind=code title="An idempotent projector with per-team totals"
+In option C, events reach the projector at least once, so duplicates happen. Write a projector that maintains two read models from claim events: one summary row per claim, and one totals row per team.
 ::requirements
-- Events: `BillSubmitted`, `BillCertified`, `BillRejected`. Each carries `BillId`, `ProjectCode` and a per-bill `Sequence` number (1, 2, 3...).
-- If an event's `Sequence` is less than or equal to the last applied sequence for that bill, ignore it (duplicate or old).
-- `ProjectTotals` tracks `PendingCount`, `PendingAmount` (sum of claims of submitted bills) and `CertifiedAmount` (sum of certified amounts).
-- Rejecting a bill removes it from pending figures.
+- Events: `ClaimSubmitted`, `ClaimApproved`, `ClaimRejected`. Each carries `ClaimId`, `TeamCode` and a per-claim `Sequence` number (1, 2, 3...).
+- If an event's `Sequence` is less than or equal to the last applied sequence for that claim, ignore it (duplicate or old).
+- `TeamTotals` tracks `PendingCount`, `PendingAmount` (sum of claimed amounts of submitted claims) and `ApprovedAmount` (sum of approved amounts).
+- Rejecting a claim removes it from pending figures.
 ::acceptance
-- Submit two bills of ₹5,00,000 and ₹3,00,000: pending count 2, pending amount ₹8,00,000.
-- Certify the first for ₹4,50,000: pending count 1, pending ₹3,00,000, certified ₹4,50,000.
-- Applying the same certify event twice gives the same totals.
-- Rejecting the second bill leaves pending count 0.
+- Submit two claims of ₹5,000 and ₹3,000: pending count 2, pending amount ₹8,000.
+- Approve the first for ₹4,500: pending count 1, pending ₹3,000, approved ₹4,500.
+- Applying the same approve event twice gives the same totals.
+- Rejecting the second claim leaves pending count 0.
 ::hint
 A projector is a small state machine per read row. What does each event change?
 ::hint
-Keep `LastSequence` on the bill summary row and check it first, before touching any totals.
+Keep `LastSequence` on the claim summary row and check it first, before touching any totals.
 ::hint
-For `BillCertified`, you need the claimed amount to subtract from pending. Where can you find it? (In the bill's summary row.)
+For `ClaimApproved`, you need the claimed amount to subtract from pending. Where can you find it? (In the claim's summary row.)
 ::hint
 ```csharp
-if (_bills.TryGetValue(e.BillId, out var row) && e.Sequence <= row.LastSequence) return;
+if (_claims.TryGetValue(e.ClaimId, out var row) && e.Sequence <= row.LastSequence) return;
 ```
 ::starter
-```csharp file=BillProjector.cs
+```csharp file=ClaimProjector.cs
 using System;
 using System.Collections.Generic;
 
-public abstract record BillEvent(Guid BillId, string ProjectCode, int Sequence);
-public sealed record BillSubmitted(Guid BillId, string ProjectCode, int Sequence, decimal Claimed) : BillEvent(BillId, ProjectCode, Sequence);
-public sealed record BillCertified(Guid BillId, string ProjectCode, int Sequence, decimal Certified) : BillEvent(BillId, ProjectCode, Sequence);
-public sealed record BillRejected(Guid BillId, string ProjectCode, int Sequence, string Reason) : BillEvent(BillId, ProjectCode, Sequence);
+public abstract record ClaimEvent(Guid ClaimId, string TeamCode, int Sequence);
+public sealed record ClaimSubmitted(Guid ClaimId, string TeamCode, int Sequence, decimal Claimed) : ClaimEvent(ClaimId, TeamCode, Sequence);
+public sealed record ClaimApproved(Guid ClaimId, string TeamCode, int Sequence, decimal Approved) : ClaimEvent(ClaimId, TeamCode, Sequence);
+public sealed record ClaimRejected(Guid ClaimId, string TeamCode, int Sequence, string Reason) : ClaimEvent(ClaimId, TeamCode, Sequence);
 
-public sealed record BillRow(Guid BillId, string ProjectCode, decimal Claimed, decimal? Certified, string Status, int LastSequence);
-public sealed record ProjectTotals(string ProjectCode, int PendingCount, decimal PendingAmount, decimal CertifiedAmount);
+public sealed record ClaimRow(Guid ClaimId, string TeamCode, decimal Claimed, decimal? Approved, string Status, int LastSequence);
+public sealed record TeamTotals(string TeamCode, int PendingCount, decimal PendingAmount, decimal ApprovedAmount);
 
-public sealed class BillProjector
+public sealed class ClaimProjector
 {
-    private readonly Dictionary<Guid, BillRow> _bills = new();
-    private readonly Dictionary<string, ProjectTotals> _totals = new();
+    private readonly Dictionary<Guid, ClaimRow> _claims = new();
+    private readonly Dictionary<string, TeamTotals> _totals = new();
 
-    public BillRow? Bill(Guid id) => _bills.TryGetValue(id, out var r) ? r : null;
-    public ProjectTotals Totals(string project) =>
-        _totals.TryGetValue(project, out var t) ? t : new ProjectTotals(project, 0, 0m, 0m);
+    public ClaimRow? Claim(Guid id) => _claims.TryGetValue(id, out var r) ? r : null;
+    public TeamTotals Totals(string team) =>
+        _totals.TryGetValue(team, out var t) ? t : new TeamTotals(team, 0, 0m, 0m);
 
-    public void Apply(BillEvent e) => throw new NotImplementedException();
+    public void Apply(ClaimEvent e) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=BillProjectorTests.cs
+```csharp file=ClaimProjectorTests.cs
 using System;
 using Xunit;
 
-public class BillProjectorTests
+public class ClaimProjectorTests
 {
     private static readonly Guid A = Guid.NewGuid();
     private static readonly Guid B = Guid.NewGuid();
 
-    private static BillProjector TwoSubmitted()
+    private static ClaimProjector TwoSubmitted()
     {
-        var p = new BillProjector();
-        p.Apply(new BillSubmitted(A, "NH48", 1, 500_000m));
-        p.Apply(new BillSubmitted(B, "NH48", 1, 300_000m));
+        var p = new ClaimProjector();
+        p.Apply(new ClaimSubmitted(A, "SALES", 1, 5_000m));
+        p.Apply(new ClaimSubmitted(B, "SALES", 1, 3_000m));
         return p;
     }
 
     [Fact]
     public void Submissions_add_to_pending()
     {
-        var t = TwoSubmitted().Totals("NH48");
+        var t = TwoSubmitted().Totals("SALES");
         Assert.Equal(2, t.PendingCount);
-        Assert.Equal(800_000m, t.PendingAmount);
+        Assert.Equal(8_000m, t.PendingAmount);
     }
 
     [Fact]
-    public void Certification_moves_money_from_pending_to_certified()
+    public void Approval_moves_money_from_pending_to_approved()
     {
         var p = TwoSubmitted();
-        p.Apply(new BillCertified(A, "NH48", 2, 450_000m));
-        var t = p.Totals("NH48");
+        p.Apply(new ClaimApproved(A, "SALES", 2, 4_500m));
+        var t = p.Totals("SALES");
         Assert.Equal(1, t.PendingCount);
-        Assert.Equal(300_000m, t.PendingAmount);
-        Assert.Equal(450_000m, t.CertifiedAmount);
-        Assert.Equal("Certified", p.Bill(A)!.Status);
+        Assert.Equal(3_000m, t.PendingAmount);
+        Assert.Equal(4_500m, t.ApprovedAmount);
+        Assert.Equal("Approved", p.Claim(A)!.Status);
     }
 
     [Fact]
     public void Duplicate_events_are_ignored()
     {
         var p = TwoSubmitted();
-        var e = new BillCertified(A, "NH48", 2, 450_000m);
+        var e = new ClaimApproved(A, "SALES", 2, 4_500m);
         p.Apply(e);
         p.Apply(e);
-        p.Apply(new BillSubmitted(A, "NH48", 1, 500_000m));
-        var t = p.Totals("NH48");
+        p.Apply(new ClaimSubmitted(A, "SALES", 1, 5_000m));
+        var t = p.Totals("SALES");
         Assert.Equal(1, t.PendingCount);
-        Assert.Equal(450_000m, t.CertifiedAmount);
+        Assert.Equal(4_500m, t.ApprovedAmount);
     }
 
     [Fact]
     public void Rejection_removes_from_pending()
     {
         var p = TwoSubmitted();
-        p.Apply(new BillCertified(A, "NH48", 2, 450_000m));
-        p.Apply(new BillRejected(B, "NH48", 2, "Measurement sheet missing"));
-        var t = p.Totals("NH48");
+        p.Apply(new ClaimApproved(A, "SALES", 2, 4_500m));
+        p.Apply(new ClaimRejected(B, "SALES", 2, "Receipt missing"));
+        var t = p.Totals("SALES");
         Assert.Equal(0, t.PendingCount);
         Assert.Equal(0m, t.PendingAmount);
-        Assert.Equal("Rejected", p.Bill(B)!.Status);
+        Assert.Equal("Rejected", p.Claim(B)!.Status);
     }
 }
 ```
 ::solution
-Check the sequence first, then update the bill row and the project totals together. A `switch` on the event type keeps each transition in one place.
+Check the sequence first, then update the claim row and the team totals together. A `switch` on the event type keeps each transition in one place.
 
-```csharp file=BillProjector.cs
+```csharp file=ClaimProjector.cs
 using System;
 using System.Collections.Generic;
 
-public abstract record BillEvent(Guid BillId, string ProjectCode, int Sequence);
-public sealed record BillSubmitted(Guid BillId, string ProjectCode, int Sequence, decimal Claimed) : BillEvent(BillId, ProjectCode, Sequence);
-public sealed record BillCertified(Guid BillId, string ProjectCode, int Sequence, decimal Certified) : BillEvent(BillId, ProjectCode, Sequence);
-public sealed record BillRejected(Guid BillId, string ProjectCode, int Sequence, string Reason) : BillEvent(BillId, ProjectCode, Sequence);
+public abstract record ClaimEvent(Guid ClaimId, string TeamCode, int Sequence);
+public sealed record ClaimSubmitted(Guid ClaimId, string TeamCode, int Sequence, decimal Claimed) : ClaimEvent(ClaimId, TeamCode, Sequence);
+public sealed record ClaimApproved(Guid ClaimId, string TeamCode, int Sequence, decimal Approved) : ClaimEvent(ClaimId, TeamCode, Sequence);
+public sealed record ClaimRejected(Guid ClaimId, string TeamCode, int Sequence, string Reason) : ClaimEvent(ClaimId, TeamCode, Sequence);
 
-public sealed record BillRow(Guid BillId, string ProjectCode, decimal Claimed, decimal? Certified, string Status, int LastSequence);
-public sealed record ProjectTotals(string ProjectCode, int PendingCount, decimal PendingAmount, decimal CertifiedAmount);
+public sealed record ClaimRow(Guid ClaimId, string TeamCode, decimal Claimed, decimal? Approved, string Status, int LastSequence);
+public sealed record TeamTotals(string TeamCode, int PendingCount, decimal PendingAmount, decimal ApprovedAmount);
 
-public sealed class BillProjector
+public sealed class ClaimProjector
 {
-    private readonly Dictionary<Guid, BillRow> _bills = new();
-    private readonly Dictionary<string, ProjectTotals> _totals = new();
+    private readonly Dictionary<Guid, ClaimRow> _claims = new();
+    private readonly Dictionary<string, TeamTotals> _totals = new();
 
-    public BillRow? Bill(Guid id) => _bills.TryGetValue(id, out var r) ? r : null;
-    public ProjectTotals Totals(string project) =>
-        _totals.TryGetValue(project, out var t) ? t : new ProjectTotals(project, 0, 0m, 0m);
+    public ClaimRow? Claim(Guid id) => _claims.TryGetValue(id, out var r) ? r : null;
+    public TeamTotals Totals(string team) =>
+        _totals.TryGetValue(team, out var t) ? t : new TeamTotals(team, 0, 0m, 0m);
 
-    public void Apply(BillEvent e)
+    public void Apply(ClaimEvent e)
     {
-        var existing = Bill(e.BillId);
+        var existing = Claim(e.ClaimId);
         if (existing is not null && e.Sequence <= existing.LastSequence) return;   // duplicate or stale
 
-        var totals = Totals(e.ProjectCode);
+        var totals = Totals(e.TeamCode);
         switch (e)
         {
-            case BillSubmitted s when existing is null:
-                _bills[s.BillId] = new BillRow(s.BillId, s.ProjectCode, s.Claimed, null, "Submitted", s.Sequence);
+            case ClaimSubmitted s when existing is null:
+                _claims[s.ClaimId] = new ClaimRow(s.ClaimId, s.TeamCode, s.Claimed, null, "Submitted", s.Sequence);
                 totals = totals with { PendingCount = totals.PendingCount + 1, PendingAmount = totals.PendingAmount + s.Claimed };
                 break;
-            case BillCertified c when existing is { Status: "Submitted" }:
-                _bills[c.BillId] = existing with { Certified = c.Certified, Status = "Certified", LastSequence = c.Sequence };
+            case ClaimApproved c when existing is { Status: "Submitted" }:
+                _claims[c.ClaimId] = existing with { Approved = c.Approved, Status = "Approved", LastSequence = c.Sequence };
                 totals = totals with
                 {
                     PendingCount = totals.PendingCount - 1,
                     PendingAmount = totals.PendingAmount - existing.Claimed,
-                    CertifiedAmount = totals.CertifiedAmount + c.Certified
+                    ApprovedAmount = totals.ApprovedAmount + c.Approved
                 };
                 break;
-            case BillRejected r when existing is { Status: "Submitted" }:
-                _bills[r.BillId] = existing with { Status = "Rejected", LastSequence = r.Sequence };
+            case ClaimRejected r when existing is { Status: "Submitted" }:
+                _claims[r.ClaimId] = existing with { Status = "Rejected", LastSequence = r.Sequence };
                 totals = totals with { PendingCount = totals.PendingCount - 1, PendingAmount = totals.PendingAmount - existing.Claimed };
                 break;
             default:
-                return;   // event out of order (e.g. certify before submit): park it or log it
+                return;   // event out of order (e.g. approve before submit): park it or log it
         }
-        _totals[e.ProjectCode] = totals;
+        _totals[e.TeamCode] = totals;
     }
 }
 ```
 
-In PostgreSQL the same check is a guarded `UPDATE ... WHERE last_sequence < @seq`, and the bill row and totals row are updated in one transaction, so a crash between them cannot double-count.
+In PostgreSQL the same check is a guarded `UPDATE ... WHERE last_sequence < @seq`, and the claim row and totals row are updated in one transaction, so a crash between them cannot double-count.
 ::alternatives
-Instead of incremental totals, recompute the project row from the bill rows (`SUM ... GROUP BY`) after each event. It is slower but self-healing: a bug cannot accumulate drift.
+Instead of incremental totals, recompute the team row from the claim rows (`SUM ... GROUP BY`) after each event. It is slower but self-healing: a bug cannot accumulate drift.
 ::mistakes
 - Checking duplicates by event id only, which misses old events delivered after newer ones.
 - Updating totals before checking the sequence.
-- Forgetting that certification must subtract the *claimed* amount from pending, not the certified amount.
+- Forgetting that approval must subtract the *claimed* amount from pending, not the approved amount.
 :::
 
 :::exercise id=m08-cqrs-fundamentals-ex5 difficulty=advanced kind=code title="Read-your-own-writes with a projection checkpoint"
-With an asynchronous projection, an engineer certifies a bill, the page reloads, and the bill is still in the pending list for half a second. Build a `ProjectionCheckpoint` that lets a query wait (briefly) until the read model has caught up to the version the command returned.
+With an asynchronous projection, an approver approves a claim, the page reloads, and the claim is still in the pending list for half a second. Build a `ProjectionCheckpoint` that lets a query wait (briefly) until the read model has caught up to the version the command returned.
 ::requirements
 - `Advance(long position)` is called by the projector after it applies an event. Positions only move forward; a lower value is ignored.
 - `WaitForAsync(long position, TimeSpan timeout, CancellationToken ct)` returns `true` as soon as the checkpoint reaches `position`, or `false` if the timeout passes first.
@@ -1525,7 +1527,7 @@ public sealed class ProjectionCheckpoint
 }
 ```
 
-How to use it: the certify endpoint returns `version` (or a global event position). The client calls `GET /pending-bills?minPosition=1234`. The query handler awaits `checkpoint.WaitForAsync(1234, 500 ms)`. If it returns `false`, it still answers, but sets a response header such as `X-Read-Model-Stale: true` so the UI can show "updating...". Never block a query for seconds; cap the wait.
+How to use it: the approve endpoint returns `version` (or a global event position). The client calls `GET /pending-claims?minPosition=1234`. The query handler awaits `checkpoint.WaitForAsync(1234, 500 ms)`. If it returns `false`, it still answers, but sets a response header such as `X-Read-Model-Stale: true` so the UI can show "updating...". Never block a query for seconds; cap the wait.
 ::alternatives
 - Let the UI apply the change optimistically (remove the row locally) and refresh later.
 - Read from the write side for the one record the user just changed, and from the read model for the rest.
@@ -1569,26 +1571,26 @@ Options A and B from this lesson are usually enough for 3,000 users.
 
 CQRS makes tests smaller, because each handler has a narrow job.
 
-**1. Domain tests on the write model.** `RaBill.Certify` is tested with plain objects: certified ≤ claimed, only submitted bills, engineer required. No handlers, no stores.
+**1. Domain tests on the write model.** `ExpenseClaim.Approve` is tested with plain objects: approved ≤ claimed, only submitted claims, approver required. No handlers, no stores.
 
 **2. Command handler tests with in-memory fakes.** Check the orchestration: the right method is called, the save happens with the right expected version, the projector runs only after a successful save, and failures leave the read model unchanged.
 
 ```csharp
 [Fact]
-public async Task Certify_updates_read_model_after_save()
+public async Task Approve_updates_read_model_after_save()
 {
     var clock = new FixedClock(new DateTimeOffset(2026, 10, 20, 10, 0, 0, TimeSpan.Zero));
-    var repo = new InMemoryRaBillRepository();
-    var store = new InMemoryBillReadStore();
-    var projector = new BillSummaryProjector(store);
-    var id = await new SubmitBillHandler(repo, projector, clock)
-        .HandleAsync(new SubmitBillCommand("NH48-P3", "Shree Infra", 17, 980_000m), default);
+    var repo = new InMemoryExpenseClaimRepository();
+    var store = new InMemoryClaimReadStore();
+    var projector = new ClaimSummaryProjector(store);
+    var id = await new SubmitClaimHandler(repo, projector, clock)
+        .HandleAsync(new SubmitClaimCommand("SALES-BLR", "Arjun Rao", 17, 9_800m), default);
 
-    var version = await new CertifyBillHandler(repo, projector, clock)
-        .HandleAsync(new CertifyBillCommand(id, 940_000m, "Er. Meena", ExpectedVersion: 1), default);
+    var version = await new ApproveClaimHandler(repo, projector, clock)
+        .HandleAsync(new ApproveClaimCommand(id, 9_400m, "Meena Iyer", ExpectedVersion: 1), default);
 
     Assert.Equal(2, version);
-    Assert.Equal("Certified", store.ForProject("NH48-P3").Single().Status);
+    Assert.Equal("Approved", store.ForProject("SALES-BLR").Single().Status);
 }
 
 sealed class FixedClock(DateTimeOffset now) : TimeProvider { public override DateTimeOffset GetUtcNow() => now; }
@@ -1604,11 +1606,11 @@ sealed class FixedClock(DateTimeOffset now) : TimeProvider { public override Dat
 
 ## Real-world application
 
-- **Dashboards in infrastructure project platforms.** Progress, billing and quality dashboards read from summary tables or materialized views refreshed on a schedule, while the transactional screens use the full domain model. This is CQRS option A or B, often without anyone calling it CQRS.
+- **Expense, HR and payroll SaaS tools.** "Pending approvals", "spend by team this quarter" and audit dashboards read from summary tables or materialized views refreshed on a schedule, while the submit and approve screens use the full domain model. This is CQRS option A or B, often without anyone calling it CQRS.
 - **E-commerce product pages.** The catalogue write side (pricing rules, stock reservations) is very different from the product page read side (denormalised JSON with images, ratings and delivery estimates), which is often served from a search index or cache.
 - **Banking and wallets.** Postings to a ledger are commands with strict rules. "Last 10 transactions" and monthly statements are read models.
 - **ASP.NET Core ecosystem.** Libraries such as MediatR and Wolverine popularised the "one handler per request" style. They are conveniences, not requirements; the two interfaces in this lesson do the same job.
-- **Microsoft's eShop reference application** uses simplified CQRS in its ordering service: commands through the domain model, queries with lightweight SQL.
+- **Microsoft's eShopOnContainers reference application** (and its successor, eShop) uses simplified CQRS in its ordering service: commands go through the domain model, queries use a separate lightweight query class that returns view models directly.
 
 ## Interview questions
 
@@ -1616,7 +1618,7 @@ sealed class FixedClock(DateTimeOffset now) : TimeProvider { public override Dat
 ::q beginner
 What is the difference between a command and a query?
 ::a
-A command asks the system to change state ("certify bill 17") and may be rejected by business rules. It returns nothing, or just an id or version. A query asks a question and returns data without changing anything, so it is safe to repeat. CQS applies this to methods. CQRS applies it to whole models and code paths.
+A command asks the system to change state ("approve claim 17") and may be rejected by business rules. It returns nothing, or just an id or version. A query asks a question and returns data without changing anything, so it is safe to repeat. CQS applies this to methods. CQRS applies it to whole models and code paths.
 ::q beginner
 Does CQRS require two databases?
 ::a
@@ -1636,7 +1638,7 @@ When reads and writes have the same shape (CRUD), when the domain is simple, whe
 ::q advanced
 How do you rebuild a read model that has a bug, without downtime?
 ::a
-Build a new version of the read table alongside the old one (`bill_summaries_v2`), run the projector from position zero (or rescan the write tables) into it while the old one keeps serving, let it catch up to the live position, then switch queries to the new table with a configuration flag and drop the old one later. This requires the projector to be deterministic and the event history (or write tables) to be the source of truth. Monitor the lag between write position and projector position throughout.
+Build a new version of the read table alongside the old one (`claim_summaries_v2`), run the projector from position zero (or rescan the write tables) into it while the old one keeps serving, let it catch up to the live position, then switch queries to the new table with a configuration flag and drop the old one later. This requires the projector to be deterministic and the event history (or write tables) to be the source of truth. Monitor the lag between write position and projector position throughout.
 :::
 
 ## Summary and revision
@@ -1675,14 +1677,14 @@ A: Simple CRUD screens, small domains, or when stale reads are unacceptable and 
 
 :::quiz pass=70
 ::q single
-Your `CertifyBill` endpoint returns the full pending-bills page so the UI doesn't need a second call. What is the main problem?
+Your `ApproveClaim` endpoint returns the full pending-claims page so the UI doesn't need a second call. What is the main problem?
 - [ ] It is slower to serialise.
 - [x] The command path is now coupled to a read shape, so every dashboard change touches the write code.
 - [ ] Commands cannot return anything at all.
 - [ ] It breaks optimistic concurrency.
 > Returning an id or version is fine. Returning a screen-shaped DTO brings read concerns back into the write path.
 ::q single
-A team wants CQRS for a material-type master screen with 5 fields and no rules. Best advice?
+A team wants CQRS for an expense-category master screen with 5 fields and no rules. Best advice?
 - [ ] Use full CQRS with an asynchronous projection.
 - [x] Keep it as simple CRUD. Apply CQRS where reads and writes differ.
 - [ ] Use event sourcing for auditability.
@@ -1696,7 +1698,7 @@ Which are true of a well-designed asynchronous projector? (Select all that apply
 - [x] It records its position so it can resume after a restart.
 > Projectors translate facts into rows. They don't enforce business rules; the write side already did that.
 ::q single
-After certifying a bill, the engineer's pending list still shows it for about a second. The read model is updated by a background worker. Which fix keeps the asynchronous design?
+After approving a claim, the approver's pending list still shows it for about a second. The read model is updated by a background worker. Which fix keeps the asynchronous design?
 - [ ] Remove the background worker and query the aggregate.
 - [x] Return a version from the command and let the query wait briefly until the projection reaches it.
 - [ ] Increase the database connection pool.
@@ -1717,8 +1719,8 @@ The finance dashboard query takes 8 seconds. What should you do first?
 - [ ] Move the query into the aggregate.
 > Measure first. Many "we need CQRS" problems are missing indexes.
 ::q single
-Where should the rule "certified amount cannot exceed claimed amount" live?
-- [x] In the `RaBill` aggregate's `Certify` method.
+Where should the rule "approved amount cannot exceed claimed amount" live?
+- [x] In the `ExpenseClaim` aggregate's `Approve` method.
 - [ ] In the query handler.
 - [ ] In the projector.
 - [ ] In the read model table as a check constraint only.

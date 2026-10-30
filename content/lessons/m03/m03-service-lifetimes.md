@@ -140,7 +140,7 @@ Combined with `ValidateOnBuild`, the first error appears during `Build()`, so th
 - Dependencies obtained manually through `IServiceProvider.GetService` inside a factory or method, after startup.
 - Your own static fields and caches holding references to scoped objects.
 
-Because validation is on by default only in Development, a team that never runs Development locally (or tests only in Release containers) may never see the error. Enabling it explicitly in every environment is cheap, a few milliseconds of startup for a typical app (estimate), and catches the problem in CI.
+Because validation is on by default only in Development, a team that never runs Development locally (or tests only in Release containers) may never see the error. Enabling it explicitly is cheap: `ValidateOnBuild` walks every registration once at startup (a few milliseconds for a typical app, an estimate), and `ValidateScopes` adds a small check to each resolution. Many teams turn both on everywhere; at the very least, add a CI test that builds the real service collection with both options on (see Automated testing).
 
 ### Choosing a lifetime
 
@@ -162,6 +162,7 @@ Typical choices in a web app:
 | Current user, tenant, correlation id holders | Scoped | Per-request state |
 | Typed `HttpClient` clients | Transient (set by `AddHttpClient`) | Factory rotates handlers |
 | `IOptionsSnapshot<T>` | Scoped | Re-reads configuration once per request |
+| `IOptionsMonitor<T>` | Singleton | Always returns the latest value; safe to inject into singletons |
 
 ### `DbContext` and its lifetime
 
@@ -213,7 +214,7 @@ A singleton is used by every concurrent request. In a kitchen API taking 300 ord
 
 - Prefer **immutable** state: build a new dictionary and swap the reference (`Volatile.Write` or a simple reference assignment, which is atomic).
 - Use **concurrent collections** (`ConcurrentDictionary`) and `Interlocked` for counters.
-- Use `lock` only around short, non-`await` sections. Never `await` inside a `lock` (the compiler forbids it); use `SemaphoreSlim` if you must serialise async work.
+- Use `lock` only around short, non-`await` sections (on .NET 9 and later, lock on a dedicated `System.Threading.Lock` field rather than on `this` or a plain `object`). Never `await` inside a `lock` (the compiler forbids it); use `SemaphoreSlim` if you must serialise async work.
 - Never store per-request data (user id, order id) in a singleton field.
 
 Scoped services do not need this care in normal request code: one request's scope is used by one logical flow at a time. The exception is code that starts parallel tasks inside one request and shares scoped services between them.
@@ -420,6 +421,8 @@ using Microsoft.AspNetCore.Http;
 namespace Kitchen.Requests;
 
 /// <summary>Per-request state. Scoped: one per request, never shared.</summary>
+/// <remarks>Demo only: the customer is read from a header to keep the example small. In production it comes
+/// from the authenticated user (HttpContext.User claims), never from a header the client can forge.</remarks>
 public sealed class RequestContext
 {
     public string CorrelationId { get; set; } = "";
@@ -649,6 +652,7 @@ Things to notice:
 - `OrderService` (scoped) depends on singletons (`MenuCache`, `OrderMetrics`) and scoped services (`KitchenDb`, `RequestContext`): both directions allowed by the lifetime rule.
 - `KitchenDb` throws if two operations overlap, the same safety check EF Core performs. A captive `KitchenDb` in a singleton would hit it under load.
 - The startup warm-up resolves `MenuCache` from `app.Services` (the root). That is fine for a singleton; resolving `KitchenDb` there would throw with scope validation on.
+- Lifetimes fix sharing, not delivery guarantees. The worker dispatches riders *before* `SaveChangesAsync`, so if the save fails the same orders are dispatched again next tick. A real system claims the batch first (for example `UPDATE orders SET status = 'dispatching' ... WHERE id IN (SELECT id ... FOR UPDATE SKIP LOCKED) RETURNING id` in PostgreSQL) or makes the dispatch call idempotent by order id. And with two app instances, two workers would race for the same rows without that claim step.
 
 ## Bad design vs good design
 

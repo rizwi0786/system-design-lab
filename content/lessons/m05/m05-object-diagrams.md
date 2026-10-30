@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 70
 prerequisites: [m05-uml-fundamentals, m05-class-diagrams, m01-value-reference-memory]
-related: [m05-class-diagrams, m05-sequence-diagrams, m07-equality-identity, m07-immutability, m06-memento]
+related: [m05-class-diagrams, m05-sequence-diagrams, m07-equality-identity, m07-immutability]
 tags: [uml, diagrams, mermaid, lld, objects, debugging]
 patterns: []
 summary: Draw snapshots of real objects and the links between them at one moment in time. Use them to explain tricky structures, find aliasing bugs, check examples against a class diagram, and see exactly what a C# object graph looks like in memory.
@@ -119,7 +119,7 @@ If the class diagram says `Booking "1" *-- "1..6" Reservation` and your object d
 
 ### When object diagrams are worth drawing
 
-- **To explain a class diagram with an example.** Especially for recursive or self-referencing structures (an org chart, a folder tree, a bill of materials) where the class diagram is one box with a loop and nobody understands it until they see three levels of real objects.
+- **To explain a class diagram with an example.** Especially for recursive or self-referencing structures (an org chart, a folder tree, a comment thread with replies) where the class diagram is one box with a loop and nobody understands it until they see three levels of real objects.
 - **To check a design.** Draw two or three realistic snapshots, including awkward ones (a booking where one passenger is confirmed and another waitlisted). If you can't draw a real case, the class diagram is missing something.
 - **To debug.** Draw what is actually in memory at the moment of the bug. Aliasing (two references to one object), unexpected cycles, and stale copies become visible.
 - **To document test fixtures.** A complex arrange step in a test is easier to review with a small picture of the objects it builds.
@@ -1167,14 +1167,14 @@ Draw the three object diagrams in Mermaid, and add a fourth method that deep-cop
 :::
 
 :::exercise id=m05-object-diagrams-ex4 difficulty=intermediate kind=written title="Snapshot a folder tree with a shortcut"
-A document management system for an infrastructure project has a self-referencing class diagram: `Folder "0..1" o-- "0..*" Folder : children` and `Folder "1" *-- "0..*" Document`. A new feature adds **shortcuts**: a folder can contain a link to another folder elsewhere in the tree (`Folder "0..*" --> "0..*" Folder : shortcuts`).
+A cloud-drive app (think Google Drive or OneDrive for a small marketing team) has a self-referencing class diagram: `Folder "0..1" o-- "0..*" Folder : children` and `Folder "1" *-- "0..*" Document`. A new feature adds **shortcuts**: a folder can contain a link to another folder elsewhere in the tree (`Folder "0..*" --> "0..*" Folder : shortcuts`).
 
-1. Draw (in Mermaid) an object diagram with a root folder `Contracts`, two child folders `Package-1` and `Package-2`, one document in `Package-1` (`LoA.pdf`), and a shortcut from `Package-2` back to `Contracts`.
+1. Draw (in Mermaid) an object diagram with a root folder `Marketing`, two child folders `Diwali-Sale` and `New-Year`, one document in `Diwali-Sale` (`Banner.pdf`), and a shortcut from `New-Year` back to `Marketing`.
 2. Point out the cycle in your diagram.
 3. Explain two things that will break in naive code because of that cycle, and how to fix each.
 ::acceptance
 - A valid Mermaid object diagram with unique ids, instance labels, and labelled links for children, documents and the shortcut.
-- The cycle (`Contracts` to `Package-2` and back via the shortcut) is identified.
+- The cycle (`Marketing` to `New-Year` and back via the shortcut) is identified.
 - At least two concrete failures are named, for example recursive size calculation never ending and JSON serialisation failing, each with a fix.
 ::hint
 Use `class root["root : Folder"]` style labels and `-->` links with `: Children[0]` labels.
@@ -1189,16 +1189,16 @@ Fixes usually involve a visited set (identity-based), treating shortcuts differe
 classDiagram
     direction LR
     class root["root : Folder"] {
-        Name = "Contracts"
+        Name = "Marketing"
     }
     class p1["p1 : Folder"] {
-        Name = "Package-1"
+        Name = "Diwali-Sale"
     }
     class p2["p2 : Folder"] {
-        Name = "Package-2"
+        Name = "New-Year"
     }
     class d1["d1 : Document"] {
-        Name = "LoA.pdf"
+        Name = "Banner.pdf"
         SizeKb = 840
     }
     root --> p1 : Children[0]
@@ -1213,8 +1213,8 @@ The cycle is `root --> p2 --> root`. Following children and shortcuts from the r
 Things that break:
 
 1. **Recursive walks never end.** `TotalSize()` that sums documents of the folder plus `TotalSize()` of every child *and shortcut* recurses forever and ends in a `StackOverflowException`, which cannot be caught and crashes the process. Fix: walk only `Children` for ownership-based operations (size, delete, permissions), because children form a tree; treat shortcuts as references to be displayed, not followed. If you must follow both, keep a `HashSet<Folder>` with `ReferenceEqualityComparer` of visited folders.
-2. **JSON serialisation fails.** `System.Text.Json` throws a `JsonException` when it detects a cycle (by default it stops at a maximum depth of 64). Fix: return DTOs where shortcuts are represented by the target folder's id and path, not the object. `ReferenceHandler.Preserve` also works but produces `$id`/`$ref` JSON that most API clients don't expect.
-3. (Also acceptable) **Deleting** `Package-2` with cascade-through-references could delete the whole tree. Shortcuts must never be followed by delete.
+2. **JSON serialisation fails.** `System.Text.Json` throws a `JsonException` ("a possible object cycle was detected") once nesting passes its maximum depth, 64 by default. Fix: return DTOs where shortcuts are represented by the target folder's id and path, not the object. `ReferenceHandler.IgnoreCycles` writes `null` for the repeated reference (quiet, but the client loses the shortcut), and `ReferenceHandler.Preserve` produces `$id`/`$ref` JSON that most API clients don't expect; a DTO is clearer than either.
+3. (Also acceptable) **Deleting** `New-Year` with cascade-through-references could delete the whole tree. Shortcuts must never be followed by delete.
 ::mistakes
 - Drawing the shortcut as a child link, which hides the difference between owning and referring.
 - Fixing the infinite loop by limiting depth to some number, which silently gives wrong totals.
@@ -1461,9 +1461,9 @@ public void Tickets_copy_passengers()
 
 ## Real-world application
 
-- **Explaining recursive models.** Organisation hierarchies, bills of quantities with nested items, work-breakdown structures in project management, and category trees are almost always explained with a three-level object diagram.
+- **Explaining recursive models.** Organisation hierarchies, product category trees in an online store, nested comment replies on a social app, and task/sub-task trees in a Jira-style tool are almost always explained with a three-level object diagram.
 - **Bug reports.** "Here is what memory looked like" with a small object diagram makes aliasing and stale-copy bugs obvious to reviewers. Debuggers show the same thing interactively.
-- **Domain modelling workshops.** Before agreeing a class diagram, teams draw example snapshots with business experts: "show me a contract with two amendments and a cancelled work order". Experts understand examples far better than abstract rules.
+- **Domain modelling workshops.** Before agreeing a class diagram, teams draw example snapshots with business experts: "show me an order where one item was returned and another was replaced". Experts understand examples far better than abstract rules.
 - **Test fixtures.** Large integration tests often document their seed data as a small object diagram.
 - **Memory leak analysis.** Memory-profiler tools show "retention paths": chains of references from a GC root (such as a static event) to a leaked object. That chain is an object diagram, and drawing it shows which reference to remove.
 
@@ -1485,7 +1485,7 @@ Draw the objects involved at the moment the wrong behaviour happens, giving each
 ::q intermediate
 Why are object diagrams useful when designing a class model with business experts?
 ::a
-Experts think in examples, not in multiplicities. Drawing realistic and awkward snapshots ("a booking with one confirmed and one waitlisted passenger", "a contract with two amendments") tests the class diagram: if you cannot draw a real case, the model is missing something; if you can draw an impossible case, a rule is missing. Each snapshot becomes a test fixture later, so design, tests and code share the same examples.
+Experts think in examples, not in multiplicities. Drawing realistic and awkward snapshots ("a booking with one confirmed and one waitlisted passenger", "an order with one item returned and one replaced") tests the class diagram: if you cannot draw a real case, the model is missing something; if you can draw an impossible case, a rule is missing. Each snapshot becomes a test fixture later, so design, tests and code share the same examples.
 ::q advanced
 How does identity versus equality affect object diagrams in C#?
 ::a

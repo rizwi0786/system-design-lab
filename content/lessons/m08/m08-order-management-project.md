@@ -24,7 +24,7 @@ references:
 
 Module 8 gave you the tools one at a time: [entities and value objects](#/lesson/m08-entities-value-objects), [aggregates](#/lesson/m08-aggregates), [domain events](#/lesson/m08-domain-events), [application services](#/lesson/m08-application-services) and [transaction boundaries](#/lesson/m08-transaction-boundaries). This project makes you use all of them on one domain that every developer meets sooner or later: **taking an order and getting paid for it without selling stock you do not have**.
 
-The scenario is a mid-sized Indian B2B supplier of construction consumables (cement bags, TMT bars, safety helmets, PVC pipes) that sells to site engineers through a web portal. On a normal day it takes about 3,000 orders; on the first working day after a monsoon break it can take 12,000, mostly in the first two hours. Every order is paid by UPI or card through a payment gateway, and stock is shared between the portal and a call centre. Overselling is expensive here: a truck that leaves Gurugram with 40 bags short of what the site expected costs a second trip.
+The scenario is a mid-sized Indian B2B wholesale app that supplies kirana (neighbourhood grocery) shops with atta bags, cooking-oil tins, biscuit cartons and detergent through a web portal and a mobile app. On a normal day it takes about 3,000 orders; on the morning a Diwali restocking offer opens it can take 12,000, mostly in the first two hours. Every order is paid by UPI or card through a payment gateway, and stock is shared between the portal and a call centre. Overselling is expensive here: a delivery van that leaves the Gurugram warehouse 40 cartons short of what the shopkeeper expected costs a second trip and, often, the customer.
 
 ## Learning objectives
 
@@ -57,7 +57,7 @@ Think of a small shop counter with a notebook. A customer says what they want. T
 ### Functional requirements
 
 1. **Products**: a catalogue of products with SKU, name, unit price (in ₹, excluding GST), GST rate and an active flag. Inactive products cannot be added to new orders.
-2. **Customers**: registered businesses with a GSTIN. A blocked customer cannot place orders.
+2. **Customers**: registered shops with a GSTIN. A blocked customer cannot place orders.
 3. **Orders**:
    - A customer builds a **draft** with up to 50 lines, each with quantity 1–100. Adding a SKU that is already on the order increases that line's quantity.
    - Prices are **snapshotted** when the line is added. A later catalogue price change does not change a draft's lines (the customer saw that price).
@@ -307,7 +307,7 @@ sequenceDiagram
     end
 ```
 
-Read it top to bottom. The handler loads the draft, then loads each inventory row **with a row lock** (`SELECT … FOR UPDATE` in PostgreSQL), in SKU order. Sorting matters: if order A locks cement then steel while order B locks steel then cement, they can deadlock. Sorting by SKU makes every transaction take locks in the same order, so a deadlock cannot form. The handler checks *every* line before reserving *any*. If one is short, it returns without saving, and the transaction rollback releases the locks. If all fit, the reservations, the order's new status and the `OrderPlaced` event (as an outbox row) are saved in **one transaction**.
+Read it top to bottom. The handler loads the draft, then loads each inventory row **with a row lock** (`SELECT … FOR UPDATE` in PostgreSQL), in SKU order. Sorting matters: if order A locks atta then oil while order B locks oil then atta, they can deadlock. Sorting by SKU makes every transaction take locks in the same order, so a deadlock cannot form. The handler checks *every* line before reserving *any*. If one is short, it returns without saving, and the transaction rollback releases the locks. If all fit, the reservations, the order's new status and the `OrderPlaced` event (as an outbox row) are saved in **one transaction**.
 
 ### Payment webhook
 
@@ -866,8 +866,8 @@ using OrderMgmt.Infrastructure;
 var builder = WebApplication.CreateBuilder(args);
 
 var store = new InMemoryStore();
-store.AddItem(new InventoryItem("CEM-OPC53-50KG", 400));
-store.AddItem(new InventoryItem("TMT-FE550-12MM", 120));
+store.AddItem(new InventoryItem("ATTA-10KG", 400));
+store.AddItem(new InventoryItem("OIL-SUN-15L", 120));
 builder.Services.AddSingleton(store);
 builder.Services.AddSingleton<IOrderRepository>(store);
 builder.Services.AddSingleton<IInventoryRepository>(store);
@@ -902,6 +902,8 @@ app.Run();
 ```
 
 `DomainException` thrown from a handler should map to HTTP 422 through an exception handler (`app.UseExceptionHandler` with `IExceptionHandler`); the minimal API above leaves it out to stay short.
+
+The webhook needs one more production rule: any non-2xx answer makes the gateway retry, often for hours. A `DomainException` from `MarkPaid` (for example, the captured amount does not match the grand total) will fail the same way on every retry, so catching it, marking the payment for manual review, committing, and answering 200 is better than returning an error the gateway will keep resending. Log it with the order id and provider reference so finance can reconcile it the same day.
 
 ### PostgreSQL schema: the invariants, a second time
 
@@ -1125,7 +1127,7 @@ public class OrderPricingTests
     [Fact]
     public void Single_line_with_gst()
     {
-        var s = OrderPricing.Calculate(new[] { new PricedLine("HELMET", 499.00m, 2, 0m, 18m) });
+        var s = OrderPricing.Calculate(new[] { new PricedLine("DETERGENT-5KG", 499.00m, 2, 0m, 18m) });
         Assert.Equal(998.00m, s.Net);
         Assert.Equal(179.64m, s.Tax);
         Assert.Equal(1177.64m, s.Gross);
@@ -1136,8 +1138,8 @@ public class OrderPricingTests
     {
         var s = OrderPricing.Calculate(new[]
         {
-            new PricedLine("HELMET", 499.00m, 2, 0m, 18m),
-            new PricedLine("GLOVES", 33.33m, 3, 0m, 5m),
+            new PricedLine("DETERGENT-5KG", 499.00m, 2, 0m, 18m),
+            new PricedLine("RICE-1KG", 33.33m, 3, 0m, 5m),
         });
         Assert.Equal(1097.99m, s.Net);
         Assert.Equal(184.64m, s.Tax);
@@ -1147,7 +1149,7 @@ public class OrderPricingTests
     [Fact]
     public void Discount_before_tax()
     {
-        var s = OrderPricing.Calculate(new[] { new PricedLine("PIPE", 1000m, 1, 10m, 18m) });
+        var s = OrderPricing.Calculate(new[] { new PricedLine("SHAMPOO-CTN", 1000m, 1, 10m, 18m) });
         Assert.Equal(900.00m, s.Net);
         Assert.Equal(162.00m, s.Tax);
     }
@@ -1253,7 +1255,7 @@ public class InventoryItemTests
     [Fact]
     public void Insufficient_stock_returns_false_and_changes_nothing()
     {
-        var item = new InventoryItem("CEM", 10);
+        var item = new InventoryItem("ATTA", 10);
         Assert.True(item.TryReserve(A, 7, T0.AddMinutes(15)));
         Assert.False(item.TryReserve(B, 4, T0.AddMinutes(15)));
         Assert.Equal(3, item.Available);
@@ -1262,7 +1264,7 @@ public class InventoryItemTests
     [Fact]
     public void Same_reservation_twice_is_idempotent()
     {
-        var item = new InventoryItem("CEM", 10);
+        var item = new InventoryItem("ATTA", 10);
         item.TryReserve(A, 7, T0.AddMinutes(15));
         Assert.True(item.TryReserve(A, 7, T0.AddMinutes(15)));
         Assert.Equal(3, item.Available);
@@ -1271,7 +1273,7 @@ public class InventoryItemTests
     [Fact]
     public void Same_order_different_quantity_throws()
     {
-        var item = new InventoryItem("CEM", 10);
+        var item = new InventoryItem("ATTA", 10);
         item.TryReserve(A, 7, T0.AddMinutes(15));
         Assert.Throws<InvalidOperationException>(() => item.TryReserve(A, 2, T0.AddMinutes(15)));
     }
@@ -1279,7 +1281,7 @@ public class InventoryItemTests
     [Fact]
     public void Commit_deducts_on_hand()
     {
-        var item = new InventoryItem("CEM", 10);
+        var item = new InventoryItem("ATTA", 10);
         item.TryReserve(A, 7, T0.AddMinutes(15));
         item.Commit(A);
         Assert.Equal(3, item.OnHand);
@@ -1290,7 +1292,7 @@ public class InventoryItemTests
     [Fact]
     public void Release_returns_stock()
     {
-        var item = new InventoryItem("CEM", 10);
+        var item = new InventoryItem("ATTA", 10);
         item.TryReserve(A, 7, T0.AddMinutes(15));
         Assert.True(item.Release(A));
         Assert.False(item.Release(A));
@@ -1300,7 +1302,7 @@ public class InventoryItemTests
     [Fact]
     public void Expired_reservations_are_released()
     {
-        var item = new InventoryItem("CEM", 10);
+        var item = new InventoryItem("ATTA", 10);
         item.TryReserve(A, 3, T0.AddMinutes(15));
         item.TryReserve(B, 4, T0.AddMinutes(30));
         var expired = item.ReleaseExpired(T0.AddMinutes(15));
@@ -1311,8 +1313,8 @@ public class InventoryItemTests
     [Fact]
     public void Bad_inputs_throw()
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => new InventoryItem("CEM", -1));
-        Assert.Throws<ArgumentOutOfRangeException>(() => new InventoryItem("CEM", 5).TryReserve(A, 0, T0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new InventoryItem("ATTA", -1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new InventoryItem("ATTA", 5).TryReserve(A, 0, T0));
     }
 }
 ```
@@ -1397,17 +1399,17 @@ CREATE TABLE reservation (
   PRIMARY KEY (order_id, sku)
 );
 INSERT INTO inventory_item VALUES
-  ('CEM-OPC53-50KG', 400),
-  ('HELMET-YLW', 60),
-  ('PVC-110MM-6M', 25),
-  ('TMT-FE550-12MM', 120);
+  ('ATTA-10KG', 400),
+  ('BISCUIT-CTN', 60),
+  ('DETERGENT-1KG', 25),
+  ('OIL-SUN-15L', 120);
 INSERT INTO reservation VALUES
-  (101, 'CEM-OPC53-50KG', 50, '2026-11-02 10:05:00+05:30'),
-  (102, 'CEM-OPC53-50KG', 30, '2026-11-02 09:59:00+05:30'),
-  (103, 'CEM-OPC53-50KG', 20, '2026-11-02 10:00:00+05:30'),
-  (101, 'TMT-FE550-12MM', 40, '2026-11-02 10:05:00+05:30'),
-  (104, 'TMT-FE550-12MM', 15, '2026-11-02 10:14:00+05:30'),
-  (105, 'HELMET-YLW', 10, '2026-11-02 08:00:00+05:30');
+  (101, 'ATTA-10KG', 50, '2026-11-02 10:05:00+05:30'),
+  (102, 'ATTA-10KG', 30, '2026-11-02 09:59:00+05:30'),
+  (103, 'ATTA-10KG', 20, '2026-11-02 10:00:00+05:30'),
+  (101, 'OIL-SUN-15L', 40, '2026-11-02 10:05:00+05:30'),
+  (104, 'OIL-SUN-15L', 15, '2026-11-02 10:14:00+05:30'),
+  (105, 'BISCUIT-CTN', 10, '2026-11-02 08:00:00+05:30');
 ```
 ::check
 ```sql
@@ -1423,10 +1425,10 @@ GROUP BY i.sku, i.on_hand
 ORDER BY i.sku;
 ```
 ::acceptance
-- CEM-OPC53-50KG: reserved 50, available 350 (order 102 expired, order 103 expires exactly at 10:00 so it is no longer active).
-- HELMET-YLW: reserved 0, available 60.
-- PVC-110MM-6M appears with reserved 0.
-- TMT-FE550-12MM: reserved 55, available 65.
+- ATTA-10KG: reserved 50, available 350 (order 102 expired, order 103 expires exactly at 10:00 so it is no longer active).
+- BISCUIT-CTN: reserved 0, available 60.
+- DETERGENT-1KG appears with reserved 0.
+- OIL-SUN-15L: reserved 55, available 65.
 ::hint
 Start from `inventory_item`, not `reservation`, so SKUs without reservations still appear.
 ::hint
@@ -1451,13 +1453,13 @@ ORDER BY i.sku;
 
 The SQL and the C# must agree on the boundary (`<=` means expired). If they disagree, the expiry job and the availability page will show different numbers for one minute in every fifteen, a bug that is very hard to reproduce. In production you would also index `reservation (sku, expires_at)` so this query stays fast as the table grows.
 ::mistakes
-- Filtering expiry in `WHERE`, which drops PVC and HELMET from the result.
+- Filtering expiry in `WHERE`, which drops DETERGENT-1KG and BISCUIT-CTN from the result.
 - Using `>=`, which counts order 103 as still active.
 - Forgetting `COALESCE`, so `available` is `NULL` for SKUs without reservations.
 :::
 
 :::exercise id=m08-order-management-project-ex5 difficulty=intermediate kind=design title="Extend the model: returns and partial refunds"
-The business adds returns: within 7 days of delivery a customer can return some units of some lines (for example 10 of 40 cement bags arrived torn). Returned units go back to stock after inspection, and the customer is refunded for the accepted units only, including their GST.
+The business adds returns: within 7 days of delivery a customer can return some units of some lines (for example 10 of 40 atta bags arrived torn). Returned units go back to stock after inspection, and the customer is refunded for the accepted units only, including their GST.
 
 Design the change. Produce a class diagram and a state diagram for the new concept, and decide where it lives.
 ::acceptance
@@ -1737,7 +1739,7 @@ A: The key, and a fingerprint of the normalised payload, so a reused key with a 
 
 :::quiz pass=70
 ::q single
-Two site engineers place orders at the same moment for the last 40 bags of cement. Each order's handler reads `available = 40`, then reserves. What prevents both from succeeding?
+Two shopkeepers place orders at the same moment for the last 40 bags of atta. Each order's handler reads `available = 40`, then reserves. What prevents both from succeeding?
 - [ ] Domain events.
 - [x] Locking the inventory row (or a conditional update) inside the transaction, so the second placement sees 0 after the first commits.
 - [ ] Caching availability in Redis.

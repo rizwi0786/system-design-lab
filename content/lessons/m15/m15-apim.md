@@ -154,6 +154,8 @@ Two cautions. First, rate-limit counters in a distributed gateway are **approxim
 </validate-jwt>
 ```
 
+One Entra ID detail trips many teams: tokens issued **on behalf of a user** (the mobile app) carry delegated permissions in `scp`, while tokens a partner's server obtains for itself with the client-credentials flow carry **app roles in `roles`** and have no `scp` at all. A policy that only checks `scp` rejects every machine-to-machine partner call; check `roles` on the partner operations (or both, in separate policies per product).
+
 Validating at the gateway rejects garbage early and keeps a consistent rule for all APIs. The backend should **still** authorise: the gateway answers "is this a valid token for this API?", the backend answers "may this user see *this* permit?". If the backend can be reached without the gateway, it must also validate the token itself.
 
 ### Transformation
@@ -209,7 +211,14 @@ A gateway only helps if callers cannot go around it. Options, from strongest to 
 
 ### Tiers, cost and latency
 
-APIM has several tiers (Consumption, Developer, Basic, Standard, Premium, and the newer v2 tiers). Roughly: **Consumption** is serverless and billed per call, good for low or spiky traffic; **Developer** is for non-production and has no SLA; the classic and v2 Basic and Standard tiers suit most single-region production use; **Premium** adds multi-region deployment, availability zones and full VNet isolation, at a much higher fixed monthly cost. Prices and features change, so check the current pricing page; for planning, compare "fixed monthly unit price × units" against "price per million calls × expected calls".
+APIM has two families of tiers. The **classic** tiers are Consumption, Developer, Basic, Standard and Premium; the newer **v2** tiers are Basic v2, Standard v2 and Premium v2, which provision in minutes instead of the classic tiers' much longer deployments and are where new networking features land. Roughly:
+
+- **Consumption** is serverless and billed per call, good for low or spiky traffic. It has no developer portal of its own and some policies are not available on it (check each policy's "supported tiers" table; historically the `*-by-key` rate-limit and quota policies were not).
+- **Developer** (classic) is for non-production only and has **no SLA**.
+- **Basic v2 / Standard v2** (or classic Basic / Standard) suit most single-region production use. Standard v2 can reach a backend inside a VNet through outbound VNet integration.
+- **Premium / Premium v2** add full VNet injection (a gateway with no public endpoint), availability zones, workspaces and (on classic Premium at the time of writing) multi-region gateways, at a much higher fixed monthly cost.
+
+Tier features and prices change often, so read the current feature-comparison and pricing pages before you decide; the descriptions above are a planning guide, not a contract. For cost planning, compare "fixed monthly unit price × units" against "price per million calls × expected calls".
 
 A back-of-the-envelope for PermitLink: 40 partners averaging 20,000 calls a day plus the mobile app at 300,000 calls a day is 40 × 20,000 + 300,000 = 1.1 million calls a day, about 33 million a month, an average of 1.1 million ÷ 86,400 ≈ 13 RPS with peaks perhaps 5 times higher (about 65 RPS, an estimate). That volume is small for any gateway; the decision is driven by features (VNet, multi-region, SLA) and fixed cost, not throughput.
 
@@ -341,17 +350,17 @@ The gateway configuration is infrastructure (shown as XML and Bicep text); the C
 ### APIM resources as Bicep (excerpt)
 
 ```bicep
-resource apim 'Microsoft.ApiManagement/service@2023-05-01-preview' existing = {
+resource apim 'Microsoft.ApiManagement/service@2024-05-01' existing = {
   name: 'apim-permitlink-prod'
 }
 
-resource versionSet 'Microsoft.ApiManagement/service/apiVersionSets@2023-05-01-preview' = {
+resource versionSet 'Microsoft.ApiManagement/service/apiVersionSets@2024-05-01' = {
   parent: apim
   name: 'permitlink'
   properties: { displayName: 'PermitLink', versioningScheme: 'Segment' }
 }
 
-resource apiV2 'Microsoft.ApiManagement/service/apis@2023-05-01-preview' = {
+resource apiV2 'Microsoft.ApiManagement/service/apis@2024-05-01' = {
   parent: apim
   name: 'permitlink-v2'
   properties: {
@@ -367,20 +376,20 @@ resource apiV2 'Microsoft.ApiManagement/service/apis@2023-05-01-preview' = {
   }
 }
 
-resource fleetGold 'Microsoft.ApiManagement/service/products@2023-05-01-preview' = {
+resource fleetGold 'Microsoft.ApiManagement/service/products@2024-05-01' = {
   parent: apim
   name: 'fleet-gold'
   properties: { displayName: 'Fleet Gold', subscriptionRequired: true, approvalRequired: true, state: 'published' }
 }
 
-resource fleetGoldPolicy 'Microsoft.ApiManagement/service/products/policies@2023-05-01-preview' = {
+resource fleetGoldPolicy 'Microsoft.ApiManagement/service/products/policies@2024-05-01' = {
   parent: fleetGold
   name: 'policy'
   properties: { format: 'rawxml', value: loadTextContent('policies/fleet-gold.xml') }
 }
 ```
 
-Keeping policies in files (`policies/fleet-gold.xml`) under version control means every change is reviewed and deployed through the pipeline, never typed into the portal. API versions in resource types change over time; use the current stable one.
+Keeping policies in files (`policies/fleet-gold.xml`) under version control means every change is reviewed and deployed through the pipeline, never typed into the portal. API versions in resource types change over time; use the current stable one (the excerpt uses `2024-05-01`) rather than a `-preview` version in production templates.
 
 ### Backend: trust only the gateway
 
@@ -423,12 +432,15 @@ public sealed class GatewayTrustMiddleware(RequestDelegate next, IOptions<Gatewa
     public static bool IsTrusted(string presented, IReadOnlyList<string> secrets)
     {
         if (string.IsNullOrEmpty(presented)) return false;
-        var presentedBytes = Encoding.UTF8.GetBytes(presented);
+        // Hash first so both sides are always 32 bytes: FixedTimeEquals returns early on a length
+        // mismatch, which would otherwise leak the secret's length through timing.
+        var presentedHash = SHA256.HashData(Encoding.UTF8.GetBytes(presented));
         var match = false;
         foreach (var s in secrets)
         {
-            // Constant-time comparison: timing must not reveal how many characters matched.
-            match |= CryptographicOperations.FixedTimeEquals(presentedBytes, Encoding.UTF8.GetBytes(s));
+            if (string.IsNullOrEmpty(s)) continue;
+            // Constant-time comparison: timing must not reveal how many bytes matched.
+            match |= CryptographicOperations.FixedTimeEquals(presentedHash, SHA256.HashData(Encoding.UTF8.GetBytes(s)));
         }
         return match;
     }

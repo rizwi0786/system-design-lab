@@ -344,7 +344,7 @@ public sealed class InMemoryInventoryClient : IInventoryClient
 }
 ```
 
-The reservation is keyed by `orderId` (a `PUT`-like idempotent call), so a client retry cannot reserve the stock twice.
+The reservation is keyed by `orderId` (a `PUT`-like idempotent call), so a client retry cannot reserve the stock twice. In production you would register this client with `AddHttpClient` and usually express the timeout through `AddStandardResilienceHandler` (see [timeouts and retries](#/lesson/m10-timeouts-retries)); either way the per-call timeout must fit inside the deadline of the checkout request that is waiting on it.
 
 ```csharp file=Checkout/OrderStore.cs
 using System.Collections.Concurrent;
@@ -929,30 +929,30 @@ Add `Expire(TimeSpan maxAge)` that marks jobs stuck in `Running` for more than t
 :::
 
 :::exercise id=m10-sync-async-ex4 difficulty=intermediate kind=hld title="Untangle a synchronous chain"
-A contractor-billing platform processes "submit running bill". Today the bill API synchronously calls: measurement validation (in-house, 99.9 %), GST e-invoice registration (government portal, about 99 % and slow at month-end), PDF generation (in-house, 400 ms), email to the client engineer (external, 99.5 %), and an audit log service (in-house, 99.9 %). Month-end peak is 50 bills a second for two hours. Redesign the interactions.
+KiranaMart, a fictional wholesale app, lets shop owners place bulk restocking orders with GST invoices. Today `POST /b2b-orders` synchronously calls: order validation (GSTIN and credit-limit check, in-house, 99.9 %), GST e-invoice registration (government portal, about 99 % and slow at month-end), invoice PDF generation (in-house, 400 ms), email to the shop's accounts contact (external provider, 99.5 %), and an audit log service (in-house, 99.9 %). On the last day of the month the peak is 50 orders a second for two hours. Redesign the interactions.
 ::acceptance
 - Each arrow is labelled sync or async with a reason.
-- E-invoice registration uses a sync-with-async-fallback or a fully async approach, and the bill's status model reflects it.
+- E-invoice registration uses a sync-with-async-fallback or a fully async approach, and the order's status model reflects it.
 - The design prevents losing events between the database and the broker.
 - Shows the availability of the synchronous critical path before and after.
 - Mentions how the month-end spike is absorbed.
 ::hint
-Which steps decide whether the bill is *accepted*? Everything else can follow.
+Which steps decide whether the order is *accepted*? Everything else can follow.
 ::hint
-The government portal is both slow and less available. What status can the bill have while registration is pending?
+The government portal is both slow and less available. What status can the order have while registration is pending?
 ::hint
-Audit logs feel like they must be synchronous. Do they, if the audit record is written in the same database transaction as the bill?
+Audit logs feel like they must be synchronous. Do they, if the audit record is written in the same database transaction as the order?
 ::hint
 Before: 0.999 × 0.99 × 0.999 × 0.995 × 0.999 (plus the API itself). After: only the API and validation.
 ::starter
 ```json
 {
   "nodes": [
-    { "id": "eng", "type": "client", "label": "Contractor portal", "props": { "rps": 50 } },
+    { "id": "eng", "type": "client", "label": "Shop owner app", "props": { "rps": 50 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
-    { "id": "api", "type": "app-server", "label": "Bill API", "props": { "instances": 3 } },
+    { "id": "api", "type": "app-server", "label": "B2B Order API", "props": { "instances": 3 } },
     { "id": "db", "type": "database", "label": "PostgreSQL" },
-    { "id": "val", "type": "app-server", "label": "Measurement validation" },
+    { "id": "val", "type": "app-server", "label": "Order validation (GSTIN, credit limit)" },
     { "id": "gst", "type": "external", "label": "GST e-invoice portal" },
     { "id": "pdf", "type": "app-server", "label": "PDF service" },
     { "id": "mail", "type": "external", "label": "Email provider" },
@@ -974,26 +974,26 @@ Before: 0.999 × 0.99 × 0.999 × 0.995 × 0.999 (plus the API itself). After: o
 ```json
 {
   "nodes": [
-    { "id": "eng", "type": "client", "label": "Contractor portal", "props": { "rps": 50 } },
+    { "id": "eng", "type": "client", "label": "Shop owner app", "props": { "rps": 50 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
-    { "id": "api", "type": "app-server", "label": "Bill API", "props": { "instances": 3 } },
-    { "id": "val", "type": "app-server", "label": "Measurement validation (sync, 500 ms timeout)" },
-    { "id": "db", "type": "database", "label": "PostgreSQL: bills + audit rows + outbox", "props": { "replicas": 1, "multiAz": true } },
+    { "id": "api", "type": "app-server", "label": "B2B Order API", "props": { "instances": 3 } },
+    { "id": "val", "type": "app-server", "label": "Order validation (sync, 500 ms timeout)" },
+    { "id": "db", "type": "database", "label": "PostgreSQL: orders + audit rows + outbox", "props": { "replicas": 1, "multiAz": true } },
     { "id": "relay", "type": "worker", "label": "Outbox relay" },
-    { "id": "bus", "type": "queue", "label": "BillSubmitted topic" },
+    { "id": "bus", "type": "queue", "label": "B2BOrderPlaced topic" },
     { "id": "gstw", "type": "worker", "label": "E-invoice worker (rate-limited, retries)", "props": { "instances": 2 } },
     { "id": "gst", "type": "external", "label": "GST e-invoice portal" },
     { "id": "pdfw", "type": "worker", "label": "PDF workers", "props": { "instances": 4 } },
-    { "id": "blob", "type": "object-storage", "label": "Bill PDFs" },
+    { "id": "blob", "type": "object-storage", "label": "Invoice PDFs" },
     { "id": "mailw", "type": "worker", "label": "Email worker" },
     { "id": "mail", "type": "external", "label": "Email provider" },
-    { "id": "push", "type": "websocket-gateway", "label": "Status updates to portal" }
+    { "id": "push", "type": "websocket-gateway", "label": "Status updates to app" }
   ],
   "edges": [
     { "from": "eng", "to": "lb", "kind": "sync" },
     { "from": "lb", "to": "api", "kind": "sync" },
     { "from": "api", "to": "val", "kind": "sync", "label": "must pass to accept" },
-    { "from": "api", "to": "db", "kind": "sync", "label": "bill + audit + outbox, one transaction" },
+    { "from": "api", "to": "db", "kind": "sync", "label": "order + audit + outbox, one transaction" },
     { "from": "db", "to": "relay", "kind": "async" },
     { "from": "relay", "to": "bus", "kind": "async" },
     { "from": "bus", "to": "gstw", "kind": "async" },
@@ -1009,18 +1009,18 @@ Before: 0.999 × 0.99 × 0.999 × 0.995 × 0.999 (plus the API itself). After: o
 
 **Per-arrow reasoning.**
 
-- **Validation: sync.** It decides whether the bill can be accepted at all; it is in-house and fast. 500 ms timeout; on timeout, return 503 so the user can retry.
-- **Audit: no network call at all.** Write the audit row in the same PostgreSQL transaction as the bill. That is *more* reliable than a synchronous call to a separate service, and removes a dependency.
-- **E-invoice registration: async** with a status model: `Submitted → EInvoicePending → EInvoiced` (or `EInvoiceFailed` needing attention). The worker rate-limits itself to what the portal tolerates and retries with backoff. Optionally try once synchronously with a 2 s timeout for an instant reference number on quiet days.
+- **Validation: sync.** It decides whether the order can be accepted at all; it is in-house and fast. 500 ms timeout; on timeout, return 503 so the user can retry.
+- **Audit: no network call at all.** Write the audit row in the same PostgreSQL transaction as the order. That is *more* reliable than a synchronous call to a separate service, and removes a dependency.
+- **E-invoice registration: async** with a status model: `Placed → EInvoicePending → EInvoiced` (or `EInvoiceFailed` needing attention). The worker rate-limits itself to what the portal tolerates and retries with backoff. Optionally try once synchronously with a 2 s timeout for an instant reference number on quiet days.
 - **PDF and email: async events.** PDF is CPU-heavy; email depends on an external provider.
-- **Outbox** ensures `BillSubmitted` is published if and only if the bill committed.
+- **Outbox** ensures `B2BOrderPlaced` is published if and only if the order committed.
 
-**Availability of the critical path.** Before: API 0.9995 × validation 0.999 × GST 0.99 × PDF 0.999 × email 0.995 × audit 0.999 ≈ **0.9820** (about 13 hours down a month). After: API 0.9995 × validation 0.999 × DB 0.9995 ≈ **0.9980** (about 1.4 hours). These component figures are illustrative.
+**Availability of the critical path.** Before: API 0.9995 × validation 0.999 × GST 0.99 × PDF 0.999 × email 0.995 × audit 0.999 ≈ **0.9816** (about 13 hours down a month). After: API 0.9995 × validation 0.999 × DB 0.9995 ≈ **0.9980** (about 1.4 hours). These component figures are illustrative.
 
-**Spike.** 50 bills/s × 7,200 s = 360,000 bills in two hours. If the portal accepts only 30 registrations a second, the backlog grows by 20/s to 144,000 and drains after the peak. The business must agree that e-invoice references may lag by a few hours on the last day of the month, and the status model makes that visible.
+**Spike.** 50 orders/s × 7,200 s = 360,000 orders in two hours. If the portal accepts only 30 registrations a second, the backlog grows by 20/s to 144,000 and drains after the peak. The business must agree that e-invoice references may lag by a few hours on the last day of the month, and the status model makes that visible.
 ::mistakes
 - Keeping the audit service as a synchronous call "because audit is important". Importance argues for transactional writes, not for an extra network dependency.
-- Making e-invoicing async without a visible status, so users cannot tell whether a bill is registered.
+- Making e-invoicing async without a visible status, so shop owners cannot tell whether an invoice is registered (they need the IRN to claim input tax credit).
 - Calling the broker directly after the database commit without an outbox.
 :::
 
@@ -1241,7 +1241,7 @@ public async Task Slow_inventory_is_reported_unavailable_within_the_timeout()
 - **Banking and UPI** flows are synchronous for the debit decision, with asynchronous reconciliation, notifications and settlement afterwards.
 - **Government portals** (tax filing, grievance systems) accept a submission with an acknowledgement number and process it asynchronously; status is checked later. This is asynchronous request-reply at national scale.
 - **Cloud APIs** use asynchronous request-reply for long operations: creating a database or a VM returns `202` and an operation URL to poll. Azure's long-running operation pattern is a documented example.
-- **Construction and infrastructure platforms**: uploading a 2 GB drone survey returns immediately, and processing into an orthomosaic runs as a background job with a progress status.
+- **Video and photo platforms**: uploading a 2 GB video returns as soon as the bytes are stored, and transcoding into several resolutions runs as a background job with a progress status.
 
 ## Interview questions
 

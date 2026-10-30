@@ -508,6 +508,9 @@ public sealed record StockCheck(string Sku, bool CanReserve, string? Reason);
 
 The `catch ... when (attempt < MaxConflictRetries)` filter is the key line. On the third conflict the filter is false, the exception is *not* caught, and it reaches the edge as a 409 with its original stack trace intact. No `catch`/`throw;` dance is needed.
 
+One caveat about the demo repository: it hands the *same* `StockItem` object to every caller, so it only illustrates the version check. A real repository (EF Core with a concurrency token, for example PostgreSQL's `xmin` system column) loads a fresh copy per request, so a reservation added before a failed save is simply thrown away with that copy, and the retry starts clean.
+
+
 ```csharp file=Web/DomainExceptionHandler.cs
 using Inventory.Domain;
 using Microsoft.AspNetCore.Diagnostics;
@@ -753,20 +756,20 @@ public class BinTests
     [Fact]
     public void Insufficient_stock_carries_data()
     {
-        var bin = new Bin("CEM-OPC53-50KG", 5);
+        var bin = new Bin("TEA-ASSAM-1KG", 5);
         var ex = Assert.Throws<InsufficientStockException>(() => bin.Pick(7));
-        Assert.Equal("CEM-OPC53-50KG", ex.Sku);
+        Assert.Equal("TEA-ASSAM-1KG", ex.Sku);
         Assert.Equal(7, ex.Requested);
         Assert.Equal(5, ex.Available);
         Assert.Equal("stock.insufficient", ex.Code);
-        Assert.Contains("CEM-OPC53-50KG", ex.Message);
+        Assert.Contains("TEA-ASSAM-1KG", ex.Message);
         Assert.Contains("5", ex.Message);
     }
 
     [Fact]
     public void Catchable_as_domain_exception_and_state_unchanged()
     {
-        var bin = new Bin("TMT-12MM", 5);
+        var bin = new Bin("OIL-SUNFLOWER-1L", 5);
         DomainException? caught = null;
         try { bin.Pick(6); } catch (DomainException e) { caught = e; }
         Assert.NotNull(caught);
@@ -776,7 +779,7 @@ public class BinTests
     [Fact]
     public void Successful_pick_reduces_stock()
     {
-        var bin = new Bin("TMT-12MM", 5);
+        var bin = new Bin("OIL-SUNFLOWER-1L", 5);
         bin.Pick(5);
         Assert.Equal(0, bin.OnHand);
     }

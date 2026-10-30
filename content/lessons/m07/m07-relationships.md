@@ -24,7 +24,7 @@ references:
 
 Classes on their own do nothing interesting. The behaviour of a system comes from how objects *use* each other. This lesson is about drawing and coding those connections well: which kinds of relationship exist, how many objects sit on each end, and which direction you can travel.
 
-The running example is a purchasing module for a building-materials distributor. Exercises use a library, a company org chart, a supplier catalogue and a parking lot.
+The running example is the purchasing module of a pharmacy chain that buys medicines from several distributors. Exercises use a library, a company org chart, a supplier catalogue and a parking lot.
 
 ## Learning objectives
 
@@ -70,7 +70,7 @@ Designing object relationships means answering the same three questions for ever
 |---|---|---|---|---|
 | **Dependency** | "uses, briefly" | dashed arrow `..>` | method parameter, local variable, return type, static call | `Tariff.FeeFor(Ticket t)` uses a ticket for one call |
 | **Association** | "knows about, lastingly" | solid line or arrow `-->` | field holding a reference or an id | `PurchaseOrder` knows its `SupplierId` |
-| **Aggregation** | "has, but does not own" | hollow diamond `o--` | collection of references to objects with their own life | a `Project` lists `Engineer`s assigned to it |
+| **Aggregation** | "has, but does not own" | hollow diamond `o--` | collection of references to objects with their own life | a `Team` lists the `Employee`s assigned to it |
 | **Composition** | "owns; parts die with the whole" | filled diamond `*--` | private collection the owner creates and controls | `PurchaseOrder` owns its `PurchaseOrderLine`s |
 | **Generalisation** | "is a kind of" | solid line, hollow triangle `<\|--` | `class Truck : Vehicle` | inheritance |
 | **Realisation** | "implements a contract" | dashed line, hollow triangle `<\|..` | `class SmsNotifier : INotifier` | interface implementation |
@@ -134,11 +134,11 @@ A supplier sells many products, and a product is sold by many suppliers. In a da
 
 If yes, and here it does (each supplier quotes its own price and lead time per product), the link becomes a class of its own, called an **association class**: `SupplierOffer(SupplierId, Sku, UnitPrice, LeadTimeDays)`. Beginners often put `Price` on `Product`, which cannot represent two suppliers' prices, or a `List<Product>` on `Supplier`, which has nowhere to store the price.
 
-Other everyday association classes: `Enrollment` (student–course, with grade), `Assignment` (engineer–project, with role and dates), `Membership` (user–group, with joined date), `Loan` (member–copy, with due date).
+Other everyday association classes: `Enrollment` (student–course, with grade), `Assignment` (employee–project, with role and dates), `Membership` (user–group, with joined date), `Loan` (member–copy, with due date).
 
 ### Qualified associations: keyed links
 
-Sometimes you navigate a relationship by a key: "the line for SKU `CEM-00053` on this order", "the offer from supplier S for product P". UML calls this a **qualified association**. In C# it is a `Dictionary<TKey, T>`. The qualifier changes the multiplicity: an order has many lines, but *at most one line per SKU*. Using a dictionary makes that rule structural. You cannot accidentally add two lines for the same cement.
+Sometimes you navigate a relationship by a key: "the line for SKU `AMX-00500` on this order", "the offer from supplier S for product P". UML calls this a **qualified association**. In C# it is a `Dictionary<TKey, T>`. The qualifier changes the multiplicity: an order has many lines, but *at most one line per SKU*. Using a dictionary makes that rule structural. You cannot accidentally add two lines for the same medicine.
 
 ### Self-associations and cycles
 
@@ -231,8 +231,8 @@ sequenceDiagram
     participant Cat as ISupplierCatalog
     participant PO as PurchaseOrder
     participant Repo as IPurchaseOrderRepository
-    API->>P: Raise(CEM-00053, 400 bags, within 5 days)
-    P->>Cat: OffersFor(CEM-00053)
+    API->>P: Raise(AMX-00500, 400 boxes, within 5 days)
+    P->>Cat: OffersFor(AMX-00500)
     Cat-->>P: 3 offers
     loop each offer
         P->>Cat: FindSupplier(offer.SupplierId)
@@ -240,7 +240,7 @@ sequenceDiagram
     end
     P->>P: choose cheapest eligible offer
     P->>PO: new PurchaseOrder(supplierId, gstin, today)
-    P->>PO: AddLine(CEM-00053, 400, 372.00)
+    P->>PO: AddLine(AMX-00500, 400, 372.00)
     P->>Repo: Save(order)
     P-->>API: 201 Created (PO id, total)
 ```
@@ -292,7 +292,7 @@ using System.Text.RegularExpressions;
 
 namespace Purchasing;
 
-/// <summary>Value object: a stock-keeping unit code such as CEM-00053.</summary>
+/// <summary>Value object: a stock-keeping unit code such as AMX-00500 (amoxicillin 500 mg, box of 10 strips).</summary>
 public sealed partial record Sku
 {
     public string Value { get; }
@@ -493,12 +493,12 @@ using Purchasing;
 var builder = WebApplication.CreateBuilder(args);
 
 var catalog = new InMemorySupplierCatalog();
-var western = new Supplier(Guid.NewGuid(), "Western Cement Traders", "27AAAPL1234C1ZV");
-var deccan = new Supplier(Guid.NewGuid(), "Deccan Build Supplies", "29AABCU9603R1ZM");
+var western = new Supplier(Guid.NewGuid(), "Western Pharma Distributors", "27AAAPL1234C1ZV");
+var deccan = new Supplier(Guid.NewGuid(), "Deccan Medical Agencies", "29AABCU9603R1ZM");
 catalog.AddSupplier(western);
 catalog.AddSupplier(deccan);
-catalog.Upsert(new SupplierOffer(western.Id, new Sku("CEM-00053"), 372.00m, 3));
-catalog.Upsert(new SupplierOffer(deccan.Id, new Sku("CEM-00053"), 365.00m, 7));
+catalog.Upsert(new SupplierOffer(western.Id, new Sku("AMX-00500"), 372.00m, 3));
+catalog.Upsert(new SupplierOffer(deccan.Id, new Sku("AMX-00500"), 365.00m, 7));
 
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<ISupplierCatalog>(catalog);
@@ -507,11 +507,11 @@ builder.Services.AddScoped<ProcurementService>();
 
 var app = builder.Build();
 
-app.MapPost("/purchase-orders", (string sku, int quantity, int neededWithinDays, ProcurementService procurement) =>
+app.MapPost("/purchase-orders", (RaisePurchaseOrder req, ProcurementService procurement) =>
 {
     try
     {
-        var po = procurement.Raise(new Sku(sku), quantity, neededWithinDays);
+        var po = procurement.Raise(new Sku(req.Sku), req.Quantity, req.NeededWithinDays);
         return Results.Created($"/purchase-orders/{po.Id}", new { po.Id, po.SupplierId, po.Total });
     }
     catch (ArgumentException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status400BadRequest); }
@@ -522,6 +522,9 @@ app.MapGet("/suppliers/{id:guid}/purchase-orders", (Guid id, IPurchaseOrderRepos
     Results.Ok(orders.FindBySupplier(id).Select(o => new { o.Id, o.RaisedOn, o.Total })));
 
 app.Run();
+
+/// <summary>Request body for raising an order. A DTO, so the API contract is separate from the domain types.</summary>
+public sealed record RaisePurchaseOrder(string Sku, int Quantity, int NeededWithinDays);
 ```
 
 Design notes:
@@ -605,17 +608,17 @@ public static class Program
 {
     public static void Main()
     {
-        var bridges = new Team("Bridges");
-        var tunnels = new Team("Tunnels");
+        var payments = new Team("Payments");
+        var search = new Team("Search");
         var asha = new Employee("Asha");
 
-        bridges.Add(asha);
-        Console.WriteLine($"Asha's team: {asha.Team?.Name}; Bridges members: {bridges.Members.Count}");
+        payments.Add(asha);
+        Console.WriteLine($"Asha's team: {asha.Team?.Name}; Payments members: {payments.Members.Count}");
 
-        tunnels.Add(asha);                                  // moving teams
-        Console.WriteLine($"Asha's team: {asha.Team?.Name}; Bridges: {bridges.Members.Count}; Tunnels: {tunnels.Members.Count}");
+        search.Add(asha);                                   // moving teams
+        Console.WriteLine($"Asha's team: {asha.Team?.Name}; Payments: {payments.Members.Count}; Search: {search.Members.Count}");
 
-        var consistent = new[] { bridges, tunnels }.All(t => t.Members.All(m => m.Team == t));
+        var consistent = new[] { payments, search }.All(t => t.Members.All(m => m.Team == t));
         Console.WriteLine($"Both sides agree: {consistent}");
     }
 }
@@ -699,14 +702,14 @@ If the order of authors on the cover matters (first author, second author), Titl
 :::
 
 :::exercise id=m07-relationships-ex2 difficulty=beginner kind=code title="Enforce multiplicity with a qualified association"
-A `DeliveryChallan` (a goods dispatch note) must have between 1 and 10 lines, and at most one line per SKU. Adding the same SKU again should increase its quantity. Enforce these rules in code.
+A `DeliveryChallan` (the dispatch note that travels with a carton of medicines from the warehouse to a pharmacy store) must have between 1 and 10 lines, and at most one line per SKU. Adding the same SKU again should increase its quantity. Enforce these rules in code.
 ::requirements
 - `AddLine(string sku, int quantity)` merges into an existing line for the same SKU (case-insensitive).
 - An 11th distinct SKU is refused with `InvalidOperationException`.
 - `RemoveLine(string sku)` removes a line, but removing the last line is refused.
 - `Lines` is read-only from outside.
 ::acceptance
-- Adding `cem-00053 × 10` then `CEM-00053 × 5` gives one line with quantity 15.
+- Adding `amx-00500 × 10` then `AMX-00500 × 5` gives one line with quantity 15.
 - 10 distinct SKUs are accepted; the 11th throws `InvalidOperationException`.
 - Removing the only line throws `InvalidOperationException`.
 - A non-positive quantity throws `ArgumentOutOfRangeException`.
@@ -714,7 +717,7 @@ A `DeliveryChallan` (a goods dispatch note) must have between 1 and 10 lines, an
 ::hint
 "At most one per key" is exactly what a dictionary gives you. What should the key be?
 ::hint
-Use `Dictionary<string, int>` with `StringComparer.OrdinalIgnoreCase` so `cem-00053` and `CEM-00053` are the same key.
+Use `Dictionary<string, int>` with `StringComparer.OrdinalIgnoreCase` so `amx-00500` and `AMX-00500` are the same key.
 ::hint
 To guarantee `1..*`, require the first line in the constructor and refuse to remove the last one.
 ::hint
@@ -749,10 +752,10 @@ public class DeliveryChallanTests
     [Fact]
     public void Same_sku_merges_case_insensitively()
     {
-        var c = new DeliveryChallan("cem-00053", 10);
-        c.AddLine("CEM-00053", 5);
+        var c = new DeliveryChallan("amx-00500", 10);
+        c.AddLine("AMX-00500", 5);
         Assert.Single(c.Lines);
-        Assert.Equal(15, c.Lines["CEM-00053"]);
+        Assert.Equal(15, c.Lines["AMX-00500"]);
     }
 
     [Fact]
@@ -830,9 +833,9 @@ public sealed class DeliveryChallan
 
 The multiplicity `1..10, unique by SKU` now lives in three places that the compiler and tests protect: the dictionary key, the constructor, and two guards. The diagram and the code say the same thing.
 ::mistakes
-- Checking the 10-line limit *before* the merge check, which wrongly refuses adding more cement to a full challan.
+- Checking the 10-line limit *before* the merge check, which wrongly refuses adding more of a medicine that is already on a full challan.
 - Exposing `Dictionary<string, int>` as the property type, which lets callers call `Add` directly and skip every guard. `IReadOnlyDictionary` prevents that.
-- Using an ordinal (case-sensitive) comparer, so `cem-00053` and `CEM-00053` become two lines.
+- Using an ordinal (case-sensitive) comparer, so `amx-00500` and `AMX-00500` become two lines.
 :::
 
 :::exercise id=m07-relationships-ex3 difficulty=intermediate kind=code title="A self-association without cycles: the reporting line"
@@ -1001,7 +1004,7 @@ Implement the many-to-many link between suppliers and products as an association
 - Prices must be positive and lead time non-negative (`ArgumentOutOfRangeException`).
 ::acceptance
 - Two quotes from the same supplier for the same SKU keep only the latest.
-- For `CEM-00053` with offers ₹372 (3 days) and ₹365 (7 days), best within 5 days is ₹372; within 10 days is ₹365.
+- For `AMX-00500` with offers ₹372 (3 days) and ₹365 (7 days), best within 5 days is ₹372; within 10 days is ₹365.
 - Two offers at the same price pick the shorter lead time.
 - A SKU with no offers returns `null`.
 - After `Withdraw`, the supplier no longer lists that SKU.
@@ -1050,9 +1053,9 @@ public class SupplierCatalogTests
     public void Requote_replaces()
     {
         var c = new SupplierCatalog();
-        c.Quote(A, "CEM-00053", 380m, 3);
-        c.Quote(A, "CEM-00053", 372m, 3);
-        Assert.Equal(372m, c.BestOffer("CEM-00053", 10)!.UnitPrice);
+        c.Quote(A, "AMX-00500", 380m, 3);
+        c.Quote(A, "AMX-00500", 372m, 3);
+        Assert.Equal(372m, c.BestOffer("AMX-00500", 10)!.UnitPrice);
         Assert.Single(c.SkusOfferedBy(A));
     }
 
@@ -1060,19 +1063,19 @@ public class SupplierCatalogTests
     public void Best_respects_lead_time()
     {
         var c = new SupplierCatalog();
-        c.Quote(A, "CEM-00053", 372m, 3);
-        c.Quote(B, "CEM-00053", 365m, 7);
-        Assert.Equal(A, c.BestOffer("CEM-00053", 5)!.SupplierId);
-        Assert.Equal(B, c.BestOffer("CEM-00053", 10)!.SupplierId);
+        c.Quote(A, "AMX-00500", 372m, 3);
+        c.Quote(B, "AMX-00500", 365m, 7);
+        Assert.Equal(A, c.BestOffer("AMX-00500", 5)!.SupplierId);
+        Assert.Equal(B, c.BestOffer("AMX-00500", 10)!.SupplierId);
     }
 
     [Fact]
     public void Tie_breaks_on_lead_time()
     {
         var c = new SupplierCatalog();
-        c.Quote(A, "STL-00012", 61m, 6);
-        c.Quote(B, "STL-00012", 61m, 2);
-        Assert.Equal(B, c.BestOffer("STL-00012", 10)!.SupplierId);
+        c.Quote(A, "PCM-00650", 61m, 6);
+        c.Quote(B, "PCM-00650", 61m, 2);
+        Assert.Equal(B, c.BestOffer("PCM-00650", 10)!.SupplierId);
     }
 
     [Fact] public void No_offer_is_null() => Assert.Null(new SupplierCatalog().BestOffer("XYZ-00001", 10));
@@ -1081,15 +1084,15 @@ public class SupplierCatalogTests
     public void Skus_sorted_and_withdraw_works()
     {
         var c = new SupplierCatalog();
-        c.Quote(A, "STL-00012", 61m, 2);
-        c.Quote(A, "CEM-00053", 372m, 3);
-        Assert.Equal(new[] { "CEM-00053", "STL-00012" }, c.SkusOfferedBy(A));
-        c.Withdraw(A, "CEM-00053");
-        Assert.Equal(new[] { "STL-00012" }, c.SkusOfferedBy(A));
+        c.Quote(A, "PCM-00650", 61m, 2);
+        c.Quote(A, "AMX-00500", 372m, 3);
+        Assert.Equal(new[] { "AMX-00500", "PCM-00650" }, c.SkusOfferedBy(A));
+        c.Withdraw(A, "AMX-00500");
+        Assert.Equal(new[] { "PCM-00650" }, c.SkusOfferedBy(A));
     }
 
     [Fact] public void Invalid_price_refused() =>
-        Assert.Throws<ArgumentOutOfRangeException>(() => new SupplierCatalog().Quote(A, "CEM-00053", 0m, 3));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new SupplierCatalog().Quote(A, "AMX-00500", 0m, 3));
 }
 ```
 ::solution
@@ -1269,8 +1272,8 @@ public class PurchaseOrderMultiplicityTests
     public void Same_sku_merges_instead_of_adding_a_line()
     {
         var po = NewOrder();
-        po.AddLine(new Sku("CEM-00053"), 100, 372m);
-        po.AddLine(new Sku("cem-00053"), 50, 372m);
+        po.AddLine(new Sku("AMX-00500"), 100, 372m);
+        po.AddLine(new Sku("amx-00500"), 50, 372m);
         Assert.Single(po.Lines);
         Assert.Equal(150 * 372m, po.Total);
     }
@@ -1288,7 +1291,7 @@ public class PurchaseOrderMultiplicityTests
 - **EF Core** turns these decisions into mapping: a navigation property is an association with navigability; a foreign-key property without a navigation is "reference by id"; owned types are composition; skip navigations or an explicit join entity are many-to-many (use the explicit join entity, an association class, when the link has data).
 - **APIs.** Returning entity graphs from endpoints causes cycles and over-fetching. Teams project to DTOs or enable `ReferenceHandler.IgnoreCycles` as a stopgap; the DTO approach is the durable fix.
 - **Microservices.** Across service boundaries, every association is by id, because the other object lives in another database. Practising "id across boundaries" inside a monolith makes later splits easier.
-- **Infrastructure projects.** A road project has packages, packages have chainage segments, and segments have measurement entries. Contractors and consultants are associated by id, because they appear on many projects and change independently.
+- **Hospital systems.** A hospital owns its departments, and departments own their consultation slots (composition). Appointments reference the patient and the doctor by id, because both appear across many departments and visits and change independently, and an appointment snapshots the consultation fee charged at booking time.
 
 ## Interview questions
 
@@ -1308,15 +1311,15 @@ Each extra direction adds consistency work, memory and loading cost, possible se
 ::q intermediate
 When does a many-to-many relationship need its own class?
 ::a
-When the link itself has data or behaviour: a supplier's price and lead time per product, a student's grade per course, an engineer's role and dates on a project. That class is an association class. Without it, the data ends up on the wrong side (one price per product) or nowhere. If the link has no data, a list of ids on one side, or a simple join table, is enough.
+When the link itself has data or behaviour: a supplier's price and lead time per product, a student's grade per course, an employee's role and dates on a project. That class is an association class. Without it, the data ends up on the wrong side (one price per product) or nowhere. If the link has no data, a list of ids on one side, or a simple join table, is enough.
 ::q advanced
 Should an `Order` hold a `Customer` object or a `CustomerId`?
 ::a
 Usually the id. The order and the customer change independently, are saved in separate transactions, and may live in different modules or services. Holding the object drags the customer (and potentially its graph) into every order load, tempts code to modify the customer through the order, and couples their lifecycles. Copy onto the order any customer data that must be frozen at ordering time, such as the billing address and GSTIN. Hold object references only inside a cluster that changes together, such as an order and its lines.
 ::q advanced
-Your domain model has a cycle: `Project → Contract → Contractor → Project`. What problems does it cause and how would you break it?
+Your domain model has a cycle: `Course → Enrollment → Student → Course` (each student holds `List<Course> Courses`). What problems does it cause and how would you break it?
 ::a
-Cycles mean none of the classes can be understood, loaded, serialised or tested alone; ORMs may load huge graphs; JSON serialisation fails; and changes ripple around the loop. Break it by asking which direction each use case needs. Typically `Contractor` does not need `Projects`: "projects for a contractor" is a query. Replace the back-reference with nothing (use a repository query) or with an id. If the cycle spans modules, introduce an interface in the lower module or an event so the dependency points one way.
+Cycles mean none of the classes can be understood, loaded, serialised or tested alone; ORMs may load huge graphs; JSON serialisation fails; and changes ripple around the loop. Break it by asking which direction each use case needs. Typically `Student` does not need `Courses`: "courses for a student" is a query over enrollments. Replace the back-reference with nothing (use a repository query) or with an id. If the cycle spans modules, introduce an interface in the lower module or an event so the dependency points one way.
 :::
 
 ## Summary and revision

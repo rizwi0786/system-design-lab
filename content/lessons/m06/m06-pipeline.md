@@ -43,14 +43,14 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-**A ready-mix concrete plant.** Aggregate goes in, a loaded transit mixer comes out. In between, stations **weigh**, **wash**, **mix**, **test slump** and **load**, each taking material from the belt before it and putting it on the belt after. You can add a station without rebuilding the others, and a failed slump test **rejects the batch** before loading.
+**A cloud-kitchen order line.** Raw orders go in, sealed delivery bags come out. In between, stations **accept**, **cook**, **quality-check**, **pack** and **hand over**, each taking work from the counter before it and putting it on the counter after. You can add a station (say, "add cutlery") without rebuilding the others, and a failed quality check **rejects the dish** before it is packed.
 
 - Each station is a **filter** (a stage).
-- Each belt is a **pipe** (in .NET, a **channel**).
-- Rejecting a batch early is **short-circuiting**.
-- If loading is slow, the belts fill up and earlier stations must wait. That's **backpressure**, and it stops the plant from piling aggregate on the floor.
+- Each counter between stations is a **pipe** (in .NET, a **channel**).
+- Rejecting a dish early is **short-circuiting**.
+- If riders are slow to collect, the hand-over shelf fills and the kitchen must pause. That's **backpressure**, and it stops cooked food piling up and going cold.
 
-**A security gate with layers (middleware).** A site visitor passes the main gate (log the visit), the safety desk (helmet?) and the permit desk (zone B allowed?) to reach the engineer, then the same desks in reverse on the way out. Any desk can turn the visitor back, and each works **before and after** the inner desks. That shape is ASP.NET Core middleware.
+**An office visitor with layers of desks (middleware).** A visitor to a tech park passes reception (log the visit), the security desk (bag check) and the floor desk (is there a booked meeting?) to reach the person they came to see, then passes the same desks in reverse on the way out (floor desk signs them out, security returns the bag, reception logs the exit time). Any desk can turn the visitor back, and each works **before and after** the inner desks. That shape is ASP.NET Core middleware.
 
 ## First-principles explanation
 
@@ -64,7 +64,7 @@ By the end of this lesson you will be able to:
 Without a pipeline, cross-cutting concerns pile into every handler:
 
 ```csharp
-app.MapPost("/bills", async (HttpContext ctx) =>
+app.MapPost("/orders", async (HttpContext ctx) =>
 {
     var sw = Stopwatch.StartNew();
     try
@@ -184,7 +184,7 @@ classDiagram
         -RequestDelegate next
         +InvokeAsync(HttpContext ctx) Task
     }
-    class ReadingPipeline {
+    class PingPipeline {
         +Writer ChannelWriter
         +RunAsync(CancellationToken ct) Task
         -ParseStage()
@@ -195,17 +195,17 @@ classDiagram
         +Writer
         +Reader
     }
-    class IReadingSink {
+    class IPingSink {
         <<interface>>
         +WriteBatchAsync(List batch) Task
     }
     PipelineBuilder ..> RequestDelegate : composes
     RequestTimingMiddleware --> RequestDelegate : next
-    ReadingPipeline *-- Channel : raw lines and readings
-    ReadingPipeline --> IReadingSink : last stage writes to
+    PingPipeline *-- Channel : raw lines and pings
+    PingPipeline --> IPingSink : last stage writes to
 ```
 
-How to read it: the top half is the **request pipeline**. `PipelineBuilder` stores middleware as functions and composes them into one `RequestDelegate`. `RequestTimingMiddleware` holds a reference to `next`, the rest of the pipeline. The bottom half is the **data pipeline**. `ReadingPipeline` owns two channels (the pipes) and runs two stages (the filters). Its last stage hands batches to an `IReadingSink`, which is PostgreSQL in production and in-memory here.
+How to read it: the top half is the **request pipeline**. `PipelineBuilder` stores middleware as functions and composes them into one `RequestDelegate`. `RequestTimingMiddleware` holds a reference to `next`, the rest of the pipeline. The bottom half is the **data pipeline**. `PingPipeline` owns two channels (the pipes) and runs two stages (the filters). Its last stage hands batches to an `IPingSink`, which is PostgreSQL in production and in-memory here.
 
 ### Sequence diagram: one request through the onion
 
@@ -242,15 +242,15 @@ The request travels **in** through each layer and the response travels **out** i
 
 ```mermaid
 flowchart LR
-    S["Bridge sensors (HTTP POST lines)"] --> I["Bounded channel: raw lines (cap 10,000)"]
+    S["Rider apps (HTTP POST, one ping per line)"] --> I["Bounded channel: raw lines (cap 10,000)"]
     I --> P["Parse + validate stage"]
     P -->|"rejects counted"| X["Rejected counter"]
-    P --> R["Bounded channel: readings (cap 10,000)"]
+    P --> R["Bounded channel: parsed pings (cap 10,000)"]
     R --> B["Batch stage (100 per batch)"]
     B --> D["Sink: PostgreSQL COPY / in-memory"]
 ```
 
-Each box is an independent task. If the database slows, the readings channel fills, the parser waits, the raw channel fills, and the endpoint's `TryWrite` fails, so it returns **503**. Sensors back off instead of memory growing without limit: backpressure travelling upstream.
+Each box is an independent task. If the database slows, the parsed-pings channel fills, the parser waits, the raw channel fills, and the endpoint's `TryWrite` fails, so it returns **503**. Rider apps back off and resend later instead of memory growing without limit: backpressure travelling upstream. Because a resend can repeat pings that were already accepted, make the sink idempotent (for example a unique key on `(rider_id, at)` with `ON CONFLICT DO NOTHING`).
 
 ## Step-by-step example
 
@@ -284,7 +284,7 @@ Pipelines.Api/
   Program.cs
   Mini/PipelineBuilder.cs, MiniMiddlewares.cs
   Web/RequestTimingMiddleware.cs
-  Telemetry/Readings.cs, ReadingPipeline.cs, TelemetryPipelineHost.cs
+  Telemetry/RiderPing.cs, PingPipeline.cs, TelemetryPipelineHost.cs
 ```
 
 ### A middleware pipeline from scratch
@@ -413,41 +413,41 @@ public sealed class RequestTimingMiddleware(RequestDelegate next, ILogger<Reques
 
 ### A data pipeline with channels
 
-```csharp file=Telemetry/Readings.cs
+```csharp file=Telemetry/RiderPing.cs
 using System.Globalization;
 
 namespace Pipelines.Telemetry;
 
-/// <summary>One strain-gauge reading from a bridge health monitoring sensor.</summary>
-public sealed record StrainReading(string SensorId, DateTimeOffset At, double MicroStrain)
+/// <summary>One GPS location ping from a delivery rider's phone.</summary>
+public sealed record RiderPing(string RiderId, DateTimeOffset At, double Latitude, double Longitude)
 {
-    /// <summary>Format: "SENSOR-ID,2026-10-18T06:00:00Z,412.5". Plausible range is +/-3000 microstrain.</summary>
-    public static bool TryParse(string? line, out StrainReading reading)
+    /// <summary>Format: "RIDER-ID,2026-10-18T06:00:00Z,12.9716,77.5946" (rider, UTC time, latitude, longitude).</summary>
+    public static bool TryParse(string? line, out RiderPing ping)
     {
-        reading = null!;
+        ping = null!;
         if (string.IsNullOrWhiteSpace(line)) return false;
         var parts = line.Split(',');
-        if (parts.Length != 3 || parts[0].Length is 0 or > 32) return false;
+        if (parts.Length != 4 || parts[0].Length is 0 or > 32) return false;
         if (!DateTimeOffset.TryParse(parts[1], CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var at)) return false;
-        if (!double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var value)) return false;
-        if (double.IsNaN(value) || value is < -3000 or > 3000) return false;
-        reading = new StrainReading(parts[0], at, value);
+        if (!double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var lat) || lat is < -90 or > 90) return false;
+        if (!double.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out var lon) || lon is < -180 or > 180) return false;
+        ping = new RiderPing(parts[0], at, lat, lon);
         return true;
     }
 }
 
-public interface IReadingSink
+public interface IPingSink
 {
-    Task WriteBatchAsync(IReadOnlyList<StrainReading> batch, CancellationToken ct);
+    Task WriteBatchAsync(IReadOnlyList<RiderPing> batch, CancellationToken ct);
 }
 
 /// <summary>Stand-in for a PostgreSQL sink (Npgsql binary COPY in production).</summary>
-public sealed class InMemoryReadingSink : IReadingSink
+public sealed class InMemoryPingSink : IPingSink
 {
-    private readonly List<IReadOnlyList<StrainReading>> _batches = new();
-    public IReadOnlyList<IReadOnlyList<StrainReading>> Batches { get { lock (_batches) return _batches.ToList(); } }
+    private readonly List<IReadOnlyList<RiderPing>> _batches = new();
+    public IReadOnlyList<IReadOnlyList<RiderPing>> Batches { get { lock (_batches) return _batches.ToList(); } }
 
-    public Task WriteBatchAsync(IReadOnlyList<StrainReading> batch, CancellationToken ct)
+    public Task WriteBatchAsync(IReadOnlyList<RiderPing> batch, CancellationToken ct)
     {
         lock (_batches) _batches.Add(batch);
         return Task.CompletedTask;
@@ -455,34 +455,34 @@ public sealed class InMemoryReadingSink : IReadingSink
 }
 ```
 
-```csharp file=Telemetry/ReadingPipeline.cs
+```csharp file=Telemetry/PingPipeline.cs
 using System.Threading.Channels;
 
 namespace Pipelines.Telemetry;
 
-public sealed class ReadingPipelineOptions
+public sealed class PingPipelineOptions
 {
     public int Capacity { get; set; } = 10_000;
     public int BatchSize { get; set; } = 100;
 }
 
 /// <summary>Two filters (parse, batch) joined by bounded channels (pipes). Singleton: one pipeline per process.</summary>
-public sealed class ReadingPipeline
+public sealed class PingPipeline
 {
     private readonly Channel<string> _raw;
-    private readonly Channel<StrainReading> _parsed;
-    private readonly IReadingSink _sink;
+    private readonly Channel<RiderPing> _parsed;
+    private readonly IPingSink _sink;
     private readonly int _batchSize;
     private long _accepted, _rejected;
 
-    public ReadingPipeline(IReadingSink sink, Microsoft.Extensions.Options.IOptions<ReadingPipelineOptions> options)
+    public PingPipeline(IPingSink sink, Microsoft.Extensions.Options.IOptions<PingPipelineOptions> options)
     {
         var o = options.Value;
         _sink = sink;
         _batchSize = o.BatchSize;
         var bounded = new BoundedChannelOptions(o.Capacity) { FullMode = BoundedChannelFullMode.Wait, SingleReader = true };
         _raw = Channel.CreateBounded<string>(bounded);
-        _parsed = Channel.CreateBounded<StrainReading>(bounded);
+        _parsed = Channel.CreateBounded<RiderPing>(bounded);
     }
 
     /// <summary>Producers (the HTTP endpoint) write here. TryWrite returns false when full: backpressure.</summary>
@@ -512,9 +512,9 @@ public sealed class ReadingPipeline
         {
             await foreach (var line in _raw.Reader.ReadAllAsync(ct))
             {
-                if (StrainReading.TryParse(line, out var reading))
+                if (RiderPing.TryParse(line, out var ping))
                 {
-                    await _parsed.Writer.WriteAsync(reading, ct);     // waits when the next stage is behind
+                    await _parsed.Writer.WriteAsync(ping, ct);     // waits when the next stage is behind
                     Interlocked.Increment(ref _accepted);
                 }
                 else Interlocked.Increment(ref _rejected);
@@ -530,14 +530,14 @@ public sealed class ReadingPipeline
 
     private async Task BatchStageAsync(CancellationToken ct)
     {
-        var batch = new List<StrainReading>(_batchSize);
-        await foreach (var reading in _parsed.Reader.ReadAllAsync(ct))
+        var batch = new List<RiderPing>(_batchSize);
+        await foreach (var ping in _parsed.Reader.ReadAllAsync(ct))
         {
-            batch.Add(reading);
+            batch.Add(ping);
             if (batch.Count == _batchSize)
             {
                 await _sink.WriteBatchAsync(batch, ct);
-                batch = new List<StrainReading>(_batchSize);
+                batch = new List<RiderPing>(_batchSize);
             }
         }
         if (batch.Count > 0) await _sink.WriteBatchAsync(batch, ct);  // flush the tail on completion
@@ -548,8 +548,8 @@ public sealed class ReadingPipeline
 ```csharp file=Telemetry/TelemetryPipelineHost.cs
 namespace Pipelines.Telemetry;
 
-/// <summary>Runs the pipeline for the app's lifetime. On shutdown, completes the input so buffered readings drain.</summary>
-public sealed class TelemetryPipelineHost(ReadingPipeline pipeline, ILogger<TelemetryPipelineHost> logger) : BackgroundService
+/// <summary>Runs the pipeline for the app's lifetime. On shutdown, completes the input so buffered pings drain.</summary>
+public sealed class TelemetryPipelineHost(PingPipeline pipeline, ILogger<TelemetryPipelineHost> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -587,9 +587,9 @@ builder.Services.AddRateLimiter(o =>
     o.AddFixedWindowLimiter("ingest", w => { w.PermitLimit = 200; w.Window = TimeSpan.FromSeconds(1); w.QueueLimit = 0; });
 });
 
-builder.Services.Configure<ReadingPipelineOptions>(builder.Configuration.GetSection("Telemetry"));
-builder.Services.AddSingleton<IReadingSink, InMemoryReadingSink>();
-builder.Services.AddSingleton<ReadingPipeline>();
+builder.Services.Configure<PingPipelineOptions>(builder.Configuration.GetSection("Telemetry"));
+builder.Services.AddSingleton<IPingSink, InMemoryPingSink>();
+builder.Services.AddSingleton<PingPipeline>();
 builder.Services.AddHostedService<TelemetryPipelineHost>();
 
 var app = builder.Build();
@@ -615,7 +615,7 @@ app.UseAuthorization();
 app.UseRateLimiter();
 
 // Endpoint with backpressure: never buffer more than the pipeline can hold.
-app.MapPost("/telemetry", async (HttpRequest request, ReadingPipeline pipeline, CancellationToken ct) =>
+app.MapPost("/telemetry", async (HttpRequest request, PingPipeline pipeline, CancellationToken ct) =>
 {
     using var reader = new StreamReader(request.Body);
     var queued = 0;
@@ -639,7 +639,7 @@ var mini = new PipelineBuilder()
     .Build();
 app.MapGet("/mini", (HttpContext ctx) => mini(ctx));
 
-app.MapGet("/telemetry/stats", (ReadingPipeline p) => Results.Ok(new { p.Accepted, p.Rejected }));
+app.MapGet("/telemetry/stats", (PingPipeline p) => Results.Ok(new { p.Accepted, p.Rejected }));
 
 app.Run();
 ```
@@ -696,7 +696,7 @@ public static class Program
             next => async ctx => { log.Add("logger in"); await next(ctx); log.Add($"logger out {ctx.Response.StatusCode}"); },
             next => ctx =>
             {
-                if (ctx.Request.Headers["X-Api-Key"] != "site-42") { ctx.Response.StatusCode = 401; log.Add("api key: rejected"); return Task.CompletedTask; }
+                if (ctx.Request.Headers["X-Api-Key"] != "rider-app-42") { ctx.Response.StatusCode = 401; log.Add("api key: rejected"); return Task.CompletedTask; }
                 log.Add("api key: ok");
                 return next(ctx);
             },
@@ -705,7 +705,7 @@ public static class Program
         RequestDelegate app = ctx => { log.Add("endpoint"); ctx.Response.StatusCode = 200; return Task.CompletedTask; };
         for (var i = components.Count - 1; i >= 0; i--) app = components[i](app);
 
-        var good = new DefaultHttpContext(); good.Request.Headers["X-Api-Key"] = "site-42";
+        var good = new DefaultHttpContext(); good.Request.Headers["X-Api-Key"] = "rider-app-42";
         await app(good);
         await app(new DefaultHttpContext());
         Console.WriteLine(string.Join(" | ", log));
@@ -714,15 +714,15 @@ public static class Program
         var pipe = Channel.CreateBounded<double>(4);
         var producer = Task.Run(async () =>
         {
-            foreach (var raw in new[] { "412.5", "oops", "398.0", "9999", "405.1" })
-                if (double.TryParse(raw, System.Globalization.CultureInfo.InvariantCulture, out var v) && Math.Abs(v) <= 3000)
+            foreach (var raw in new[] { "32.5", "oops", "28.0", "999", "30.1" })   // rider speeds in km/h
+                if (double.TryParse(raw, System.Globalization.CultureInfo.InvariantCulture, out var v) && v is >= 0 and <= 150)
                     await pipe.Writer.WriteAsync(v);
             pipe.Writer.Complete();
         });
-        var readings = new List<double>();
-        await foreach (var v in pipe.Reader.ReadAllAsync()) readings.Add(v);
+        var speeds = new List<double>();
+        await foreach (var v in pipe.Reader.ReadAllAsync()) speeds.Add(v);
         await producer;
-        Console.WriteLine($"Accepted {readings.Count} readings, average {readings.Average():F1} microstrain");
+        Console.WriteLine($"Accepted {speeds.Count} speed samples, average {speeds.Average():F1} km/h");
     }
 }
 ```
@@ -874,77 +874,77 @@ This is essentially what `Microsoft.AspNetCore.Builder.ApplicationBuilder.Build(
 - Sharing mutable per-request state in the builder's fields. Middleware is shared across all concurrent requests.
 :::
 
-:::exercise id=m06-pipeline-ex2 difficulty=beginner kind=code title="A short-circuiting site-access middleware"
-Field devices on construction sites call the API with an `X-Site-Code` header. Write `SiteAccessMiddleware.Create(allowedSites)`. It returns a middleware that rejects requests from unknown sites with **403** and never calls `next`. For allowed sites, it stores the site code in `HttpContext.Items["site"]` and calls `next`.
+:::exercise id=m06-pipeline-ex2 difficulty=beginner kind=code title="A short-circuiting store-access middleware"
+Order tablets in partner restaurants call a food-delivery API with an `X-Store-Code` header. Write `StoreAccessMiddleware.Create(allowedStores)`. It returns a middleware that rejects requests from unknown stores with **403** and never calls `next`. For allowed stores, it stores the store code in `HttpContext.Items["store"]` and calls `next`.
 ::requirements
 - Missing header: **400**, with `next` not called.
-- Unknown site: **403**, with `next` not called.
-- Site codes are matched case-insensitively (`ggn-07` equals `GGN-07`). Store the code **uppercased**.
+- Unknown store: **403**, with `next` not called.
+- Store codes are matched case-insensitively (`blr-017` equals `BLR-017`). Save the code **uppercased**.
 ::acceptance
-- Allowed site: next called once, and `Items["site"]` is `"GGN-07"`.
-- Unknown site: status 403, and next not called.
+- Allowed store: next called once, and `Items["store"]` is `"BLR-017"`.
+- Unknown store: status 403, and next not called.
 - Missing header: status 400, and next not called.
 ::hint
-The method returns `Func<RequestDelegate, RequestDelegate>`. Build the set of allowed sites *once*, outside the per-request lambda.
+The method returns `Func<RequestDelegate, RequestDelegate>`. Build the set of allowed stores *once*, outside the per-request lambda.
 ::hint
-`new HashSet<string>(allowedSites, StringComparer.OrdinalIgnoreCase)`.
+`new HashSet<string>(allowedStores, StringComparer.OrdinalIgnoreCase)`.
 ::hint
 Short-circuit by setting `ctx.Response.StatusCode` and returning `Task.CompletedTask` without calling `next`.
 ::hint
 ```csharp
 return next => ctx => {
-    var code = ctx.Request.Headers["X-Site-Code"].FirstOrDefault();
+    var code = ctx.Request.Headers["X-Store-Code"].FirstOrDefault();
     if (string.IsNullOrWhiteSpace(code)) { ctx.Response.StatusCode = 400; return Task.CompletedTask; }
     ...
 };
 ```
 ::starter
-```csharp file=SiteAccessMiddleware.cs
+```csharp file=StoreAccessMiddleware.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 
-public static class SiteAccessMiddleware
+public static class StoreAccessMiddleware
 {
-    public static Func<RequestDelegate, RequestDelegate> Create(IEnumerable<string> allowedSites) =>
+    public static Func<RequestDelegate, RequestDelegate> Create(IEnumerable<string> allowedStores) =>
         throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=SiteAccessMiddlewareTests.cs
+```csharp file=StoreAccessMiddlewareTests.cs
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Xunit;
 
-public class SiteAccessMiddlewareTests
+public class StoreAccessMiddlewareTests
 {
     private static (RequestDelegate App, Counter Calls) Build()
     {
         var calls = new Counter();
         RequestDelegate terminal = _ => { calls.Value++; return Task.CompletedTask; };
-        return (SiteAccessMiddleware.Create(new[] { "GGN-07", "PAT-02" })(terminal), calls);
+        return (StoreAccessMiddleware.Create(new[] { "BLR-017", "MUM-204" })(terminal), calls);
     }
     public sealed class Counter { public int Value; }
 
     [Fact]
-    public async Task Allowed_site_passes_through()
+    public async Task Allowed_store_passes_through()
     {
         var (app, calls) = Build();
         var ctx = new DefaultHttpContext();
-        ctx.Request.Headers["X-Site-Code"] = "ggn-07";
+        ctx.Request.Headers["X-Store-Code"] = "blr-017";
         await app(ctx);
         Assert.Equal(1, calls.Value);
-        Assert.Equal("GGN-07", ctx.Items["site"]);
+        Assert.Equal("BLR-017", ctx.Items["store"]);
     }
 
     [Fact]
-    public async Task Unknown_site_is_forbidden()
+    public async Task Unknown_store_is_forbidden()
     {
         var (app, calls) = Build();
         var ctx = new DefaultHttpContext();
-        ctx.Request.Headers["X-Site-Code"] = "BLR-99";
+        ctx.Request.Headers["X-Store-Code"] = "DEL-999";
         await app(ctx);
         Assert.Equal(403, ctx.Response.StatusCode);
         Assert.Equal(0, calls.Value);
@@ -962,21 +962,21 @@ public class SiteAccessMiddlewareTests
 }
 ```
 ::solution
-```csharp file=SiteAccessMiddleware.cs
+```csharp file=StoreAccessMiddleware.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 
-public static class SiteAccessMiddleware
+public static class StoreAccessMiddleware
 {
-    public static Func<RequestDelegate, RequestDelegate> Create(IEnumerable<string> allowedSites)
+    public static Func<RequestDelegate, RequestDelegate> Create(IEnumerable<string> allowedStores)
     {
-        var allowed = new HashSet<string>(allowedSites, StringComparer.OrdinalIgnoreCase);   // built once
+        var allowed = new HashSet<string>(allowedStores, StringComparer.OrdinalIgnoreCase);   // built once
         return next => ctx =>
         {
-            var code = ctx.Request.Headers["X-Site-Code"].FirstOrDefault()?.Trim();
+            var code = ctx.Request.Headers["X-Store-Code"].FirstOrDefault()?.Trim();
             if (string.IsNullOrEmpty(code))
             {
                 ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
@@ -987,22 +987,22 @@ public static class SiteAccessMiddleware
                 ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
                 return Task.CompletedTask;
             }
-            ctx.Items["site"] = code.ToUpperInvariant();
+            ctx.Items["store"] = code.ToUpperInvariant();
             return next(ctx);
         };
     }
 }
 ```
 
-Register it with `app.Use(SiteAccessMiddleware.Create(sites))`. `IApplicationBuilder.Use` takes exactly this `Func<RequestDelegate, RequestDelegate>`. Note that a header like this identifies a site but doesn't **authenticate** it. Anyone can send a header. In production, combine it with real authentication (client certificates or tokens), and treat the site code as a claim.
+Register it with `app.Use(StoreAccessMiddleware.Create(stores))`. `IApplicationBuilder.Use` takes exactly this `Func<RequestDelegate, RequestDelegate>`. Note that a header like this identifies a store but doesn't **authenticate** it. Anyone can send a header. In production, combine it with real authentication (a per-device token or client certificate), and treat the store code as a claim inside that token.
 ::mistakes
 - Building the `HashSet` per request.
 - Writing a response body *and* calling `next`, so two components write to the same response.
-- Using 401 for "known caller, wrong site". 401 means "who are you?" and 403 means "you can't do this".
+- Using 401 for "known caller, wrong store". 401 means "who are you?" and 403 means "you can't do this".
 :::
 
 :::exercise id=m06-pipeline-ex3 difficulty=intermediate kind=code title="A handler pipeline with behaviours"
-Application commands (such as `ApproveBill`) should get validation and audit logging whether they come from HTTP, a queue or a test. Implement a MediatR-style **behaviour pipeline**.
+Application commands (such as `ApproveRefund`) should get validation and audit logging whether they come from HTTP, a queue or a test. Implement a MediatR-style **behaviour pipeline**.
 ::requirements
 - `IPipelineBehavior<TRequest, TResponse>` has `Task<TResponse> Handle(TRequest request, Func<Task<TResponse>> next)`.
 - `RequestPipeline.Execute(request, handler, behaviors)` runs behaviours in list order around the handler.
@@ -1031,7 +1031,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
-public sealed record ApproveBill(Guid BillId, string ApprovedBy, decimal AmountInr);
+public sealed record ApproveRefund(Guid OrderId, string ApprovedBy, decimal AmountInr);
 
 public sealed record Response(bool Ok, IReadOnlyList<string> Errors)
 {
@@ -1050,14 +1050,14 @@ public static class RequestPipeline
         IReadOnlyList<IPipelineBehavior<TRequest, TResponse>> behaviors) => throw new NotImplementedException();
 }
 
-public sealed class ValidationBehavior(Func<ApproveBill, IReadOnlyList<string>> validate) : IPipelineBehavior<ApproveBill, Response>
+public sealed class ValidationBehavior(Func<ApproveRefund, IReadOnlyList<string>> validate) : IPipelineBehavior<ApproveRefund, Response>
 {
-    public Task<Response> Handle(ApproveBill request, Func<Task<Response>> next) => throw new NotImplementedException();
+    public Task<Response> Handle(ApproveRefund request, Func<Task<Response>> next) => throw new NotImplementedException();
 }
 
-public sealed class AuditBehavior(List<string> log) : IPipelineBehavior<ApproveBill, Response>
+public sealed class AuditBehavior(List<string> log) : IPipelineBehavior<ApproveRefund, Response>
 {
-    public Task<Response> Handle(ApproveBill request, Func<Task<Response>> next) => throw new NotImplementedException();
+    public Task<Response> Handle(ApproveRefund request, Func<Task<Response>> next) => throw new NotImplementedException();
 }
 ```
 ::tests
@@ -1069,7 +1069,7 @@ using Xunit;
 
 public class RequestPipelineTests
 {
-    private static IReadOnlyList<string> Validate(ApproveBill c)
+    private static IReadOnlyList<string> Validate(ApproveRefund c)
     {
         var errors = new List<string>();
         if (string.IsNullOrWhiteSpace(c.ApprovedBy)) errors.Add("ApprovedBy is required.");
@@ -1081,31 +1081,31 @@ public class RequestPipelineTests
     public async Task Valid_request_runs_handler_inside_behaviours()
     {
         var log = new List<string>();
-        var behaviors = new IPipelineBehavior<ApproveBill, Response>[] { new AuditBehavior(log), new ValidationBehavior(Validate) };
-        var r = await RequestPipeline.Execute(new ApproveBill(Guid.NewGuid(), "EE Patna", 1_850_000m),
+        var behaviors = new IPipelineBehavior<ApproveRefund, Response>[] { new AuditBehavior(log), new ValidationBehavior(Validate) };
+        var r = await RequestPipeline.Execute(new ApproveRefund(Guid.NewGuid(), "support.agent.17", 450m),
             _ => { log.Add("handler"); return Task.FromResult(Response.Success()); }, behaviors);
         Assert.True(r.Ok);
-        Assert.Equal(new[] { "start ApproveBill", "handler", "end ApproveBill ok" }, log.ToArray());
+        Assert.Equal(new[] { "start ApproveRefund", "handler", "end ApproveRefund ok" }, log.ToArray());
     }
 
     [Fact]
     public async Task Invalid_request_short_circuits()
     {
         var log = new List<string>();
-        var behaviors = new IPipelineBehavior<ApproveBill, Response>[] { new AuditBehavior(log), new ValidationBehavior(Validate) };
-        var r = await RequestPipeline.Execute(new ApproveBill(Guid.NewGuid(), "", 0m),
+        var behaviors = new IPipelineBehavior<ApproveRefund, Response>[] { new AuditBehavior(log), new ValidationBehavior(Validate) };
+        var r = await RequestPipeline.Execute(new ApproveRefund(Guid.NewGuid(), "", 0m),
             _ => { log.Add("handler"); return Task.FromResult(Response.Success()); }, behaviors);
         Assert.False(r.Ok);
         Assert.Equal(2, r.Errors.Count);
-        Assert.Equal(new[] { "start ApproveBill", "end ApproveBill invalid" }, log.ToArray());
+        Assert.Equal(new[] { "start ApproveRefund", "end ApproveRefund invalid" }, log.ToArray());
     }
 
     [Fact]
     public async Task No_behaviours_calls_handler()
     {
         var called = false;
-        var r = await RequestPipeline.Execute(new ApproveBill(Guid.NewGuid(), "x", 1m),
-            _ => { called = true; return Task.FromResult(Response.Success()); }, Array.Empty<IPipelineBehavior<ApproveBill, Response>>());
+        var r = await RequestPipeline.Execute(new ApproveRefund(Guid.NewGuid(), "x", 1m),
+            _ => { called = true; return Task.FromResult(Response.Success()); }, Array.Empty<IPipelineBehavior<ApproveRefund, Response>>());
         Assert.True(called);
         Assert.True(r.Ok);
     }
@@ -1118,7 +1118,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
-public sealed record ApproveBill(Guid BillId, string ApprovedBy, decimal AmountInr);
+public sealed record ApproveRefund(Guid OrderId, string ApprovedBy, decimal AmountInr);
 
 public sealed record Response(bool Ok, IReadOnlyList<string> Errors)
 {
@@ -1147,18 +1147,18 @@ public static class RequestPipeline
     }
 }
 
-public sealed class ValidationBehavior(Func<ApproveBill, IReadOnlyList<string>> validate) : IPipelineBehavior<ApproveBill, Response>
+public sealed class ValidationBehavior(Func<ApproveRefund, IReadOnlyList<string>> validate) : IPipelineBehavior<ApproveRefund, Response>
 {
-    public Task<Response> Handle(ApproveBill request, Func<Task<Response>> next)
+    public Task<Response> Handle(ApproveRefund request, Func<Task<Response>> next)
     {
         var errors = validate(request);
         return errors.Count > 0 ? Task.FromResult(Response.Invalid(errors)) : next();
     }
 }
 
-public sealed class AuditBehavior(List<string> log) : IPipelineBehavior<ApproveBill, Response>
+public sealed class AuditBehavior(List<string> log) : IPipelineBehavior<ApproveRefund, Response>
 {
-    public async Task<Response> Handle(ApproveBill request, Func<Task<Response>> next)
+    public async Task<Response> Handle(ApproveRefund request, Func<Task<Response>> next)
     {
         var name = request.GetType().Name;
         log.Add($"start {name}");
@@ -1177,7 +1177,7 @@ The closure bug in hint 3 is worth seeing once. Without `var inner = next;`, eve
 :::
 
 :::exercise id=m06-pipeline-ex4 difficulty=intermediate kind=written title="Refactor: fix the pipeline and extract the cross-cutting code"
-A project-monitoring API has this `Program.cs` and a typical endpoint:
+A restaurant-partner API (partners update menus and prices) has this `Program.cs` and a typical endpoint:
 
 ```csharp
 app.UseAuthorization();
@@ -1187,8 +1187,8 @@ app.UseExceptionHandler("/error");
 app.UseCors("dashboard");
 app.UseHttpsRedirection();
 
-[HttpPost("progress")]
-public async Task<IActionResult> Post(ProgressDto dto)
+[HttpPost("menu")]
+public async Task<IActionResult> Post(MenuUpdateDto dto)
 {
     var sw = Stopwatch.StartNew();
     var tenant = Request.Headers["X-Tenant"].FirstOrDefault();
@@ -1200,14 +1200,14 @@ public async Task<IActionResult> Post(ProgressDto dto)
         return Ok();
     }
     catch (Exception ex) { _log.LogError(ex, "failed"); return StatusCode(500, ex.Message); }
-    finally { _log.LogInformation("progress took {Ms}", sw.ElapsedMilliseconds); }
+    finally { _log.LogInformation("menu update took {Ms}", sw.ElapsedMilliseconds); }
 }
 ```
 
 The same try/catch, timing and tenant code appears in 40 actions. Users report that `[Authorize]` endpoints always return 401 and that the React dashboard gets CORS errors. Write the corrected `Program.cs` order, say where each piece of the action's cross-cutting code should move, and explain each bug.
 ::acceptance
 - A correct order, with exception handler first, authentication before authorization, and CORS before auth and endpoints.
-- `MapControllers` placed after the middleware, with an explanation of what happens to middleware registered after endpoints in this layout.
+- `MapControllers` placed after the middleware, with an explanation that in `WebApplication` endpoints run at the end of the pipeline anyway (`Map*` only registers routes), so the move is about readability.
 - Timing, tenant resolution and exception handling each moved to a named middleware or filter, with a reason.
 - Mention that returning `ex.Message` to clients leaks internals.
 ::hint
@@ -1236,9 +1236,9 @@ app.MapControllers();
 **Bugs explained:**
 
 - `UseAuthorization` ran before `UseAuthentication`, so `User` was anonymous during authorization and every `[Authorize]` returned 401.
-- `UseExceptionHandler` came *after* `MapControllers`. It was too far inside, or never reached for endpoint execution, so controller exceptions weren't handled by it, and the action's own catch leaked `ex.Message`. That can expose SQL text, file paths or connection details.
+- `UseExceptionHandler` was registered *after* the auth middleware, so anything those components throw escaped it. (It still wrapped controller execution, because `WebApplication` runs the endpoint middleware at the very end of the pipeline, but the action's own catch got there first and leaked `ex.Message`, which can expose SQL text, file paths or connection details.)
 - CORS came after auth and endpoints, so preflight `OPTIONS` requests were rejected or answered without CORS headers, and the browser blocked the calls.
-- In this hosting model, middleware registered after the endpoints doesn't wrap them as intended. Ordering bugs like this pass compilation and only show up at runtime.
+- `MapControllers` in the middle is misleading rather than broken: in `WebApplication`, `Map*` only adds routes, and the endpoint middleware is appended at the end of the pipeline, so middleware registered after it still runs first. Put it last so the file reads in execution order. Ordering bugs like these pass compilation and only show up at runtime.
 
 **Where the action's code goes:**
 
@@ -1283,19 +1283,19 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 
-public sealed record Reading(string SensorId, double MicroStrain);
+public sealed record Reading(string RiderId, double SpeedKmh);
 public sealed record PipelineStats(int Accepted, int Rejected, int Batches);
 public interface ISink { Task WriteAsync(IReadOnlyList<Reading> batch, CancellationToken ct); }
 
 public static class TelemetryPipeline
 {
-    /// <summary>Line format "SENSOR,value"; valid when value parses and |value| <= 3000.</summary>
+    /// <summary>Line format "RIDER,speedKmh"; valid when the speed parses and is between 0 and 150 km/h.</summary>
     public static bool TryParse(string line, out Reading reading)
     {
         reading = null!;
         var parts = line.Split(',');
         if (parts.Length != 2 || parts[0].Length == 0) return false;
-        if (!double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var v) || Math.Abs(v) > 3000) return false;
+        if (!double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var v) || v is < 0 or > 150) return false;
         reading = new Reading(parts[0], v);
         return true;
     }
@@ -1331,7 +1331,7 @@ public class TelemetryPipelineTests
         }
     }
 
-    private static IEnumerable<string> Valid(int n) => Enumerable.Range(0, n).Select(i => $"BR-{i % 7},{i % 500}.5");
+    private static IEnumerable<string> Valid(int n) => Enumerable.Range(0, n).Select(i => $"RD-{i % 7},{i % 120}.5");
 
     [Fact]
     public async Task Batches_and_flushes_tail()
@@ -1346,7 +1346,7 @@ public class TelemetryPipelineTests
     public async Task Invalid_lines_are_rejected()
     {
         var sink = new RecordingSink();
-        var lines = new[] { "BR-1,412.5", "garbage", "BR-2,9999", ",10", "BR-3,-120" };
+        var lines = new[] { "RD-1,32.5", "garbage", "RD-2,999", ",10", "RD-3,18" };
         var stats = await TelemetryPipeline.RunAsync(lines, sink, capacity: 2, batchSize: 10, CancellationToken.None);
         Assert.Equal(2, stats.Accepted);
         Assert.Equal(3, stats.Rejected);
@@ -1373,19 +1373,19 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 
-public sealed record Reading(string SensorId, double MicroStrain);
+public sealed record Reading(string RiderId, double SpeedKmh);
 public sealed record PipelineStats(int Accepted, int Rejected, int Batches);
 public interface ISink { Task WriteAsync(IReadOnlyList<Reading> batch, CancellationToken ct); }
 
 public static class TelemetryPipeline
 {
-    /// <summary>Line format "SENSOR,value"; valid when value parses and |value| <= 3000.</summary>
+    /// <summary>Line format "RIDER,speedKmh"; valid when the speed parses and is between 0 and 150 km/h.</summary>
     public static bool TryParse(string line, out Reading reading)
     {
         reading = null!;
         var parts = line.Split(',');
         if (parts.Length != 2 || parts[0].Length == 0) return false;
-        if (!double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var v) || Math.Abs(v) > 3000) return false;
+        if (!double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var v) || v is < 0 or > 150) return false;
         reading = new Reading(parts[0], v);
         return true;
     }
@@ -1461,9 +1461,9 @@ public static class TelemetryPipeline
 
 The counters can be plain `int`s because each is written by one stage and read only after `WhenAll`, which provides the memory barrier.
 
-Real telemetry also needs **time-based flushing** ("100 readings *or* 2 seconds"): race `reader.WaitToReadAsync` against a timer, or use a `PeriodicTimer`, without losing readings when both fire together.
+Real telemetry also needs **time-based flushing** ("100 pings *or* 2 seconds"): race `reader.WaitToReadAsync` against a timer, or use a `PeriodicTimer`, without losing pings when both fire together.
 ::alternatives
-TPL Dataflow (`TransformBlock`, `BatchBlock`, `ActionBlock` with `BoundedCapacity` and `PropagateCompletion`) has batching and parallelism built in, but is a separate NuGet package. Channels are lower-level and part of the BCL.
+TPL Dataflow (`System.Threading.Tasks.Dataflow`: `TransformBlock`, `BatchBlock`, `ActionBlock` with `BoundedCapacity` and `PropagateCompletion`) has batching and parallelism built in and ships with modern .NET. It is heavier and more opinionated; channels are lower-level, faster and simpler to reason about, which is why most new code (including ASP.NET Core internals) uses them.
 ::mistakes
 - Forgetting `Complete()`, so the next stage's `await foreach` waits forever and `RunAsync` never returns.
 - Using unbounded channels "to be safe". That just moves the failure to an out-of-memory crash.
@@ -1499,7 +1499,7 @@ public async Task Correlation_id_is_echoed()
 
 - **ASP.NET Core** is the reference implementation: `UseExceptionHandler`, `UseHttpsRedirection`, `UseAuthentication`, `UseRateLimiter`, `UseOutputCache` and `UseResponseCompression` are all middleware composed with exactly the `Func<RequestDelegate, RequestDelegate>` shape you built.
 - **`HttpClient` handlers** are the outbound mirror image: `DelegatingHandler`s registered with `IHttpClientFactory` (`AddHttpMessageHandler`) form a pipeline for retries, auth tokens and logging around every outgoing request.
-- **IoT and telemetry ingestion** (bridge health monitoring, vehicle GPS, smart meters) and **bulk imports** use bounded parse → validate → batch-insert stages, often ending in PostgreSQL COPY.
+- **IoT and telemetry ingestion** (delivery-rider and cab GPS pings, smart meters, fitness trackers) and **bulk imports** use bounded parse → validate → batch-insert stages, often ending in PostgreSQL COPY.
 - **Message consumers** (RabbitMQ, Kafka) wrap handlers in behaviour pipelines for idempotency checks, tracing and retries, the same idea as exercise 3.
 
 ## Interview questions
@@ -1522,9 +1522,9 @@ How do you use a scoped service such as `DbContext` in convention-based middlewa
 ::a
 Not through the constructor. Convention middleware is created once, so a scoped constructor dependency would be captured for the app's lifetime. Add it as a parameter of `InvokeAsync(HttpContext ctx, AppDbContext db)`, which the framework resolves per request. Alternatively, implement `IMiddleware` and register the class in DI with a scoped lifetime.
 ::q advanced
-Design an ingestion path for 5,000 sensor readings per second that must survive a slow database without running out of memory.
+Design an ingestion path for 5,000 rider GPS pings per second (about 25,000 active riders, one ping every 5 s) that must survive a slow database without running out of memory.
 ::a
-The endpoint writes into a **bounded** channel with `TryWrite` and returns 503/429 with `Retry-After` when full, so devices back off. A background service runs bounded stages: parse/validate (parallel if CPU-bound), batch (500 readings or 1 s, whichever first), bulk insert (PostgreSQL COPY). Size capacities from a memory budget (10,000 small records is a few MB, an estimate). Link cancellation, propagate errors with `Complete(ex)`, alert on them, and drain on shutdown. In-memory channels lose buffered data on a crash, so put a broker (Kafka, RabbitMQ) in front if durability matters. Expose queue depth, rejections and batch latency as metrics.
+The endpoint writes into a **bounded** channel with `TryWrite` and returns 503/429 with `Retry-After` when full, so rider apps back off. A background service runs bounded stages: parse/validate (parallel if CPU-bound), batch (500 pings or 1 s, whichever first), bulk insert (PostgreSQL COPY). Size capacities from a memory budget (10,000 small records is a few MB, an estimate). Link cancellation, propagate errors with `Complete(ex)`, alert on them, and drain on shutdown. In-memory channels lose buffered data on a crash, so put a broker (Kafka, RabbitMQ) in front if durability matters. Expose queue depth, rejections and batch latency as metrics.
 ::q advanced
 Middleware, endpoint filter or MediatR-style behaviour: how do you choose?
 ::a
@@ -1591,12 +1591,12 @@ A convention-based middleware takes `AppDbContext` in its constructor. What goes
 Which belong in global middleware rather than an endpoint filter? (Select all that apply.)
 - [x] Converting unhandled exceptions to ProblemDetails.
 - [x] Adding a correlation ID to every request and response.
-- [ ] Validating the `ApproveBillDto` of one endpoint.
+- [ ] Validating the `ApproveRefundDto` of one endpoint.
 - [x] HTTPS redirection.
-- [ ] Checking that the current user owns the bill in the route.
+- [ ] Checking that the current user owns the order in the route.
 > Global, raw-HTTP concerns are middleware. Endpoint-specific checks that need bound arguments or route data fit endpoint filters or the handler.
 ::q single
-A telemetry endpoint writes into an **unbounded** channel. The database slows down during a backup window. What happens?
+A rider-ping endpoint writes into an **unbounded** channel. The database slows down during a backup window. What happens?
 - [ ] Requests start failing with 503 automatically.
 - [x] The channel grows without limit, memory climbs, and the process may be killed, losing everything buffered.
 - [ ] The channel drops old items.

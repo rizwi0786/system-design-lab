@@ -65,7 +65,7 @@ A migration is a versioned, ordered, immutable change script. Four properties ma
 3. **Immutable once applied.** If you edit `0041` after it ran in staging, staging and a fresh developer database now differ silently. Good runners store a checksum of each script and refuse to continue if an applied script changed. Fix mistakes with a new migration, `0042_fix_...`.
 4. **Forward-only in production.** "Down" migrations are useful in development, but in production a down migration that drops a column also drops data written since the up migration. Rolling back means deploying the previous *code*, which must still work with the *new* schema. That is the whole point of expand/contract.
 
-Where migrations run matters too. Calling `Database.Migrate()` at application startup is convenient on one instance and dangerous on six: they race, and a slow migration delays every pod's readiness. Run migrations as **one separate step** in the pipeline (an EF Core migration bundle, `dotnet ef migrations script --idempotent` reviewed and applied by a job, or a dedicated runner) and guard it with a database **advisory lock** so two runs cannot overlap.
+Where migrations run matters too. Calling `Database.Migrate()` at application startup is convenient on one instance and risky on six. Since EF Core 9 the call takes a database lock, so pods no longer apply the same migration twice, but a slow migration still delays every pod's readiness, a failed one crash-loops the whole fleet, and the app's runtime database user then needs DDL rights it should not have. Run migrations as **one separate step** in the pipeline (an EF Core migration bundle, `dotnet ef migrations script --idempotent` reviewed and applied by a job, or a dedicated runner) and guard it with a database **advisory lock** so two runs cannot overlap.
 
 ### What ALTER TABLE really does
 
@@ -197,7 +197,7 @@ The pipeline runs migrations once, before the rolling deploy, through a single j
 
 ## Step-by-step example
 
-A building-materials distributor runs an invoicing API: 40 million invoices, 1,500 requests per second at peak, six API instances behind a load balancer. Two changes are requested: store amounts as integer paise, and replace the free-text `mobile` column on `customers` with a normalised `phone_e164` (`+919810012345`).
+A wholesale grocery app that supplies restaurants, cafés and caterers runs an invoicing API: 40 million invoices, 1,500 requests per second at peak, six API instances behind a load balancer. Two changes are requested: store amounts as integer paise, and replace the free-text `mobile` column on `customers` with a normalised `phone_e164` (`+919810012345`).
 
 ### Step 1 — expand
 
@@ -665,7 +665,7 @@ app.Run();
 - The backfill saves a checkpoint after every batch and checks replica lag before each one. It runs on one instance only (a config flag here; a leader lease or a dedicated job in a bigger system).
 
 :::callout type=warning title="Never run Migrate() on every pod at startup"
-Six pods starting together race to apply the same migration. Some fail, some wait on locks, and readiness probes time out while a long migration runs. Apply migrations once per release, from the pipeline, guarded by an advisory lock.
+Six pods starting together all try to apply the same migration. With EF Core 9 or later one wins the migration lock and the others wait on it; with older versions or hand-rolled runners they race. Either way readiness probes time out while a long migration runs, and a failing migration crash-loops every pod. Apply migrations once per release, from the pipeline, guarded by an advisory lock.
 :::
 
 ## Bad design vs good design
@@ -703,14 +703,14 @@ CREATE TABLE customers (
   city    text   NOT NULL
 );
 INSERT INTO customers VALUES
-  (1, 'Shree Ganesh Builders',  '98100 12345',     'Gurugram'),
-  (2, 'Patel Infra LLP',        '+91-98250-44321', 'Ahmedabad'),
-  (3, 'Kaveri Constructions',   '09845012345',     'Bengaluru'),
-  (4, 'Lakshmi Steel Traders',  '+91 99400 55667', 'Chennai'),
-  (5, 'Northline Roadways',     '70421 88990',     'Mumbai'),
-  (6, 'Brahmaputra Bridges',    '7002 123 456',    'Guwahati'),
-  (7, 'Deccan Aggregates',      NULL,              'Hyderabad'),
-  (8, 'Malwa Cement Agency',    '+919826012345',   'Indore');
+  (1, 'Shree Ganesh Sweets',    '98100 12345',     'Gurugram'),
+  (2, 'Patel Snacks LLP',       '+91-98250-44321', 'Ahmedabad'),
+  (3, 'Kaveri Caterers',        '09845012345',     'Bengaluru'),
+  (4, 'Lakshmi Tiffin Centre',  '+91 99400 55667', 'Chennai'),
+  (5, 'Northline Cafe',         '70421 88990',     'Mumbai'),
+  (6, 'Brahmaputra Tea House',  '7002 123 456',    'Guwahati'),
+  (7, 'Deccan Biryani House',   NULL,              'Hyderabad'),
+  (8, 'Malwa Bakery',           '+919826012345',   'Indore');
 
 CREATE TABLE invoices (
   id           bigint        PRIMARY KEY,
@@ -928,14 +928,14 @@ The expand step already added `customers.phone_e164`, and a previous batch fille
 ```sql
 CREATE TABLE customers (id bigint PRIMARY KEY, name text NOT NULL, mobile text, city text NOT NULL, phone_e164 text);
 INSERT INTO customers (id, name, mobile, city) VALUES
-  (1, 'Shree Ganesh Builders',  '98100 12345',     'Gurugram'),
-  (2, 'Patel Infra LLP',        '+91-98250-44321', 'Ahmedabad'),
-  (3, 'Kaveri Constructions',   '09845012345',     'Bengaluru'),
-  (4, 'Deccan Aggregates',      NULL,              'Hyderabad'),
-  (5, 'Lakshmi Steel Traders',  '+91 99400 55667', 'Chennai'),
-  (6, 'Northline Roadways',     '70421 88990',     'Mumbai'),
-  (7, 'Brahmaputra Bridges',    '7002 123 456',    'Guwahati'),
-  (8, 'Malwa Cement Agency',    '+919826012345',   'Indore');
+  (1, 'Shree Ganesh Sweets',    '98100 12345',     'Gurugram'),
+  (2, 'Patel Snacks LLP',       '+91-98250-44321', 'Ahmedabad'),
+  (3, 'Kaveri Caterers',        '09845012345',     'Bengaluru'),
+  (4, 'Deccan Biryani House',   NULL,              'Hyderabad'),
+  (5, 'Lakshmi Tiffin Centre',  '+91 99400 55667', 'Chennai'),
+  (6, 'Northline Cafe',         '70421 88990',     'Mumbai'),
+  (7, 'Brahmaputra Tea House',  '7002 123 456',    'Guwahati'),
+  (8, 'Malwa Bakery',           '+919826012345',   'Indore');
 UPDATE customers SET phone_e164 = '+91' || right(regexp_replace(mobile, '\D', '', 'g'), 10) WHERE id IN (1, 2);
 ```
 ::check
@@ -1209,7 +1209,7 @@ public static class BackfillRunner
 :::
 
 :::exercise id=m09-migrations-evolution-ex6 difficulty=advanced kind=written title="Plan the int to bigint change on a 900-million-row table"
-`site_readings.id` is an `integer` primary key fed by a sequence, currently at 1.9 billion. The maximum `integer` is 2,147,483,647, and the table gains about 3 million rows a day. Three services and a nightly export read the table; two other tables have foreign keys to `site_readings.id`. Write a migration plan that changes the key to `bigint` with no downtime. Include the timeline (how many days you have), each migration and deploy, how you keep the new column in sync, how you swap the primary key, how foreign keys move, and the rollback point at each step.
+`meter_readings.id` (one row per smart electricity-meter reading) is an `integer` primary key fed by a sequence, currently at 1.9 billion. The maximum `integer` is 2,147,483,647, and the table gains about 3 million rows a day. Three services and a nightly export read the table; two other tables have foreign keys to `meter_readings.id`. Write a migration plan that changes the key to `bigint` with no downtime. Include the timeline (how many days you have), each migration and deploy, how you keep the new column in sync, how you swap the primary key, how foreign keys move, and the rollback point at each step.
 ::acceptance
 - Computes the remaining runway: (2,147,483,647 − 1,900,000,000) ÷ 3,000,000 ≈ 82 days.
 - Uses a new `bigint` column kept in sync by a trigger (or dual writes) plus a batched backfill, not `ALTER COLUMN TYPE`.
@@ -1231,10 +1231,10 @@ Foreign keys in child tables also hold `integer` values. They need the same expa
 
 **Plan**
 
-1. *Migration A (expand)*: `ALTER TABLE site_readings ADD COLUMN id_new bigint` (catalog-only). Add a `BEFORE INSERT OR UPDATE` trigger: `NEW.id_new := NEW.id`. Every writer, in every service, now fills it. Same for child tables: `readings_photos.reading_id_new`, `readings_alerts.reading_id_new`, each with a trigger. *Rollback*: drop triggers and columns.
+1. *Migration A (expand)*: `ALTER TABLE meter_readings ADD COLUMN id_new bigint` (catalog-only). Add a `BEFORE INSERT OR UPDATE` trigger: `NEW.id_new := NEW.id`. Every writer, in every service, now fills it. Same for child tables: `reading_corrections.reading_id_new`, `reading_alerts.reading_id_new`, each with a trigger. *Rollback*: drop triggers and columns.
 2. *Backfill*: batched by id range (`WHERE id > $last AND id <= $last + 20000 AND id_new IS NULL`), 20,000 rows per batch. 900 M ÷ 20,000 = 45,000 batches; at ~0.2 s per batch including a pause, about 2.5 hours (estimate); throttle on replica lag. Children likewise.
-3. *Migration B*: `CREATE UNIQUE INDEX CONCURRENTLY site_readings_id_new_uq ON site_readings (id_new)`. Add `CHECK (id_new IS NOT NULL) NOT VALID`, `VALIDATE`, `SET NOT NULL`. Check for an `INVALID` index after the concurrent build.
-4. *Migration C (swap, one transaction, `lock_timeout = '3s'`, retried)*: drop the child foreign keys; `ALTER TABLE site_readings DROP CONSTRAINT site_readings_pkey`; `ADD CONSTRAINT site_readings_pkey PRIMARY KEY USING INDEX site_readings_id_new_uq`; rename `id` → `id_old`, `id_new` → `id`; `ALTER SEQUENCE site_readings_id_seq AS bigint OWNED BY site_readings.id`; set the column default to the sequence; change the trigger to copy in the other direction (`NEW.id_old := NEW.id`) so old code paths that still read `id_old` keep working. Do the same rename in child tables. Re-add child foreign keys `NOT VALID`. The transaction is catalog-only and takes milliseconds.
+3. *Migration B*: `CREATE UNIQUE INDEX CONCURRENTLY meter_readings_id_new_uq ON meter_readings (id_new)`. Add `CHECK (id_new IS NOT NULL) NOT VALID`, `VALIDATE`, `SET NOT NULL`. Check for an `INVALID` index after the concurrent build.
+4. *Migration C (swap, one transaction, `lock_timeout = '3s'`, retried)*: drop the child foreign keys; `ALTER TABLE meter_readings DROP CONSTRAINT meter_readings_pkey`; `ADD CONSTRAINT meter_readings_pkey PRIMARY KEY USING INDEX meter_readings_id_new_uq`; rename `id` → `id_old`, `id_new` → `id`; `ALTER SEQUENCE meter_readings_id_seq AS bigint OWNED BY meter_readings.id`; set the column default to the sequence; change the trigger to copy in the other direction (`NEW.id_old := NEW.id`) so old code paths that still read `id_old` keep working. Do the same rename in child tables. Re-add child foreign keys `NOT VALID`. The transaction is catalog-only and takes milliseconds.
 5. *Migration D*: `VALIDATE CONSTRAINT` on each child foreign key (scans under a weak lock).
 6. *Deploy*: services move to `long` ids in their models and DTOs (and JSON consumers are checked: JavaScript loses precision above 2⁵³, which is far away but worth noting). *Rollback*: the reverse trigger keeps `id_old` correct, so the previous code still works until the next step.
 7. *Contract, after two weeks*: drop the triggers and `id_old` columns. Irreversible, so it is last.
@@ -1273,7 +1273,7 @@ public async Task Previous_release_queries_work_after_migration()
 
 - **Large SaaS platforms** publish engineering posts describing online schema-change tools for MySQL (gh-ost, pt-online-schema-change) that copy a table in the background and swap it in; PostgreSQL's catalog-only operations and `CONCURRENTLY` cover most of the same needs natively, and tools such as pgroll automate expand/contract for PostgreSQL.
 - **Payments and banking**: integer-overflow migrations from `int` to `bigint` keys are a well-known class of incident across the industry; the trigger-plus-backfill-plus-swap plan in exercise 6 is the standard remedy.
-- **Government and infrastructure portals** (grievance systems, project-monitoring dashboards) often have many integrators reading the same tables through reports and APIs. Renames there must be expand/contract with views: keep a view with the old column names for the old consumers until each one has migrated.
+- **Government and public-service portals** (grievance systems, tax and benefits dashboards) often have many integrators reading the same tables through reports and APIs. Renames there must be expand/contract with views: keep a view with the old column names for the old consumers until each one has migrated.
 - **Mobile apps** cannot be force-upgraded. An API field backed by a column must survive for months after the app stops using it, which is an extreme form of the "contract later" step.
 - **EF Core teams** typically generate migrations, review the SQL with `dotnet ef migrations script`, hand-edit for `lock_timeout` and `CONCURRENTLY`, and apply bundles from the pipeline.
 

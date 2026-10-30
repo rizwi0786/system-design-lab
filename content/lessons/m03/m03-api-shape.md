@@ -24,7 +24,7 @@ references:
     url: https://www.rfc-editor.org/rfc/rfc8288
 ---
 
-The employee API from [REST API design and HTTP status codes](#/lesson/m03-rest-status-codes) has a list endpoint that works beautifully with 40 employees on a developer laptop. Put it in front of an infrastructure firm with 18,000 staff across 60 project sites, and three things happen within a month: someone asks for "all employees" and the server serialises 7 MB of JSON, a mobile app scrolls to page 400 and the database spends a second skipping rows, and the HR team asks to change the salary field, which would break the payroll vendor's integration. This lesson fixes all three by designing the *shape* of the API: how lists are paged, filtered and sorted, and how the contract changes over time without breaking the people who depend on it.
+The employee API from [REST API design and HTTP status codes](#/lesson/m03-rest-status-codes) has a list endpoint that works beautifully with 40 employees on a developer laptop. Put it in front of a hospital chain with 18,000 doctors, nurses and staff across 60 hospitals and clinics, and three things happen within a month: someone asks for "all employees" and the server serialises 7 MB of JSON, a mobile app scrolls to page 400 and the database spends a second skipping rows, and the HR team asks to change the salary field, which would break the payroll vendor's integration. This lesson fixes all three by designing the *shape* of the API: how lists are paged, filtered and sorted, and how the contract changes over time without breaking the people who depend on it.
 
 ## Learning objectives
 
@@ -182,7 +182,7 @@ When you must break, you publish a new version and run both. The three common st
 |---|---|---|---|
 | URL segment | `/api/v2/employees` | Visible in logs, easy to route, cache-friendly, trivially testable with curl | "Not pure REST" (the resource has two URLs) |
 | Query string | `/api/employees?api-version=2.0` | Optional default version, one path | Easy to forget; some caches ignore query order |
-| Header | `api-version: 2.0` or `Accept: application/vnd.rodic.v2+json` | Clean URLs | Invisible in browser address bar and many logs; harder to test |
+| Header | `api-version: 2.0` or `Accept: application/vnd.example.v2+json` | Clean URLs | Invisible in browser address bar and many logs; harder to test |
 
 URL segments are the most common choice for public and cross-team APIs because they are obvious. The `Asp.Versioning.Http` package supports all three in ASP.NET Core, reports supported versions in an `api-supported-versions` header and can mark versions deprecated. In this lesson we version by URL with plain route groups, which needs no package and makes the mechanism visible. (In the REST lesson the minimal-API front door sat at `/api/v2` only to keep two programming styles apart; here, v2 is a genuinely different contract.)
 
@@ -883,7 +883,8 @@ public sealed class PostgresEmployeeQueryRepository(NpgsqlDataSource db) : IEmpl
         if (c.Statuses.Count > 0)     { where.Add($"status = ANY(${Add(cmd, c.Statuses.Select(s => (short)s).ToArray())})"); }
         if (c.JoinedFrom is { } f)    { where.Add($"joined_on >= ${Add(cmd, f)}"); }
         if (c.JoinedTo is { } t)      { where.Add($"joined_on <= ${Add(cmd, t)}"); }
-        if (c.Search is not null)     { where.Add($"(full_name ILIKE ${Add(cmd, "%" + c.Search + "%")} OR email ILIKE ${cmd.Parameters.Count})"); }
+        // Escape LIKE wildcards so q=% or q=_ is a literal search, not "match everything".
+        if (c.Search is not null)     { where.Add($"(full_name ILIKE ${Add(cmd, "%" + EscapeLike(c.Search) + "%")} OR email ILIKE ${cmd.Parameters.Count})"); }
 
         var cols = c.Sort.Select(s => Columns[s.Field]).Append("id").ToArray();
         var desc = c.Sort[^1].Descending;                       // single-direction case
@@ -905,6 +906,7 @@ public sealed class PostgresEmployeeQueryRepository(NpgsqlDataSource db) : IEmpl
     }
 
     private static int Add(NpgsqlCommand cmd, object value) { cmd.Parameters.Add(new NpgsqlParameter { Value = value }); return cmd.Parameters.Count; }
+    private static string EscapeLike(string s) => s.Replace(@"\", @"\\").Replace("%", @"\%").Replace("_", @"\_");
 }
 ```
 
@@ -914,9 +916,10 @@ CREATE INDEX employees_dept_name_idx   ON employees (lower(department), full_nam
 CREATE INDEX employees_dept_joined_idx ON employees (lower(department), joined_on DESC, id DESC);
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX employees_name_trgm_idx   ON employees USING gin (full_name gin_trgm_ops);
+CREATE INDEX employees_email_trgm_idx  ON employees USING gin (email gin_trgm_ops);
 ```
 
-With EF Core, the same keyset filter is a LINQ `Where` with explicit comparisons, for example `.Where(e => e.JoinedOn < lastDate || (e.JoinedOn == lastDate && e.Id.CompareTo(lastId) < 0))`, followed by `.OrderByDescending(e => e.JoinedOn).ThenByDescending(e => e.Id).Take(limit + 1)`. The Npgsql EF provider translates that to SQL; check the generated SQL with `ToQueryString()`.
+With EF Core, the same keyset filter is a LINQ `Where` with explicit comparisons, for example `.Where(e => e.JoinedOn < lastDate || (e.JoinedOn == lastDate && e.Id.CompareTo(lastId) < 0))`, followed by `.OrderByDescending(e => e.JoinedOn).ThenByDescending(e => e.Id).Take(limit + 1)`. The Npgsql EF provider translates that to SQL, and for the single-direction case it can also emit a true row comparison from `EF.Functions.LessThan(ValueTuple.Create(e.JoinedOn, e.Id), ValueTuple.Create(lastDate, lastId))`. Either way, check the generated SQL with `ToQueryString()`.
 
 ### Versioning with the Asp.Versioning package
 
@@ -967,7 +970,7 @@ What is wrong with it:
 
 **Good**: the implementation above. Raw strings are parsed once into typed criteria; filters and sorts go through allow-lists that map to indexed columns; the page size is bounded; keyset cursors are signed and bound to their filters; every list returns the same object envelope; and each version has its own DTO.
 
-**When the simple version is fine**: an internal admin screen over a table that will never exceed a few thousand rows (say, 60 project sites or 25 departments). Offset paging with `page`/`pageSize`, a maximum of 100 and an allow-listed sort is perfectly adequate. Do not build signed cursors for a dropdown.
+**When the simple version is fine**: an internal admin screen over a table that will never exceed a few thousand rows (say, 60 hospital branches or 25 departments). Offset paging with `page`/`pageSize`, a maximum of 100 and an allow-listed sort is perfectly adequate. Do not build signed cursors for a dropdown.
 
 :::callout type=tradeoff title="Offset or keyset? Decide per endpoint"
 Offset gives numbered pages and exact totals, at a cost that grows with depth and with drift under writes. Keyset gives constant cost and stable pages, but no random access. Many APIs offer offset for small admin grids and keyset for feeds, exports and mobile lists. What matters is that each endpoint documents which one it uses, and that the envelope looks the same.
@@ -1221,14 +1224,14 @@ A regular expression such as `^-?(fullName|joinedOn|monthlySalary)$` per entry a
 :::
 
 :::exercise id=m03-api-shape-ex2 difficulty=beginner kind=written title="Breaking or not?"
-The employee API v2 has many consumers: the HR web app, a payroll vendor, and a site-attendance system at 60 project locations. For each proposed change, say whether it is **breaking** for an existing, correct client, and what you would do (ship in v2, ship behind an opt-in, or wait for v3).
+The employee API v2 has many consumers: the HR web app, a payroll vendor, and the nurse shift-rostering system used at 60 hospitals. For each proposed change, say whether it is **breaking** for an existing, correct client, and what you would do (ship in v2, ship behind an opt-in, or wait for v3).
 
 1. Add an optional `employeeCode` field to the response.
 2. Rename `fullName` to `name` in the response.
 3. Add a new status value `Probation` to `EmploymentStatus`.
 4. Change the default page size from 20 to 50.
 5. Make `department` required on `POST /api/v2/employees` (it was optional).
-6. Add a new optional filter `site=Pune-Metro-L3`.
+6. Add a new optional filter `branch=Pune-Kothrud`.
 7. Change `monthlyPay.amount` from monthly to annual, keeping the name.
 8. Return `422` instead of `400` for business-rule failures.
 ::acceptance
@@ -1500,7 +1503,7 @@ The full Finance order is 3, 9, 7, 4, 12, 2, 10. The previous page ended at 7, s
 The expanded form `joined_on < '2026-03-01' OR (joined_on = '2026-03-01' AND id < 7)` returns the same rows and is what you need when sort directions are mixed. Some planners use the index less effectively with `OR`; check with `EXPLAIN`.
 ::mistakes
 - `WHERE joined_on < '2026-03-01'`: skips employee 4, who joined the same day.
-- `WHERE joined_on <= '2026-03-01' AND id < 7`: wrongly excludes later-id rows from earlier dates (12 would be lost on a different dataset).
+- `WHERE joined_on <= '2026-03-01' AND id < 7`: wrongly excludes earlier-dated rows that have a higher id. Here it loses employee 12 (2026-02-14, id 12), who belongs on this page.
 - Using `>` because "next page" sounds like "greater": in a descending order, next means smaller.
 :::
 
@@ -1764,7 +1767,7 @@ public class EmployeeListServiceTests
     {
         var repo = new InMemoryEmployeeQueryRepository();
         for (var i = 0; i < 45; i++)
-            repo.Add(new Employee { FullName = $"Emp {i % 7}", Email = $"e{i}@rodic.example", Department = "Finance", JoinedOn = new DateOnly(2026, 1, 1) });
+            repo.Add(new Employee { FullName = $"Emp {i % 7}", Email = $"e{i}@example.com", Department = "Finance", JoinedOn = new DateOnly(2026, 1, 1) });
         var codec = new CursorCodec(Options.Create(new CursorOptions { SigningKey = new string('k', 40) }));
         var parser = new EmployeeQueryParser(codec);
         var service = new EmployeeListService(repo, codec);
@@ -1815,7 +1818,7 @@ public class EmployeeListApiTests(WebApplicationFactory<Program> factory) : ICla
         // seed through the singleton repository, then call the endpoint
         var app = factory.WithWebHostBuilder(b => b.UseSetting("Cursors:SigningKey", new string('t', 40)));
         app.Services.GetRequiredService<InMemoryEmployeeQueryRepository>()
-           .Add(new Employee { FullName = "Kavya Iyer", Email = "kavya@rodic.example", Department = "Finance", MonthlySalary = 91_000m });
+           .Add(new Employee { FullName = "Kavya Iyer", Email = "kavya@example.com", Department = "Finance", MonthlySalary = 91_000m });
         var json = await app.CreateClient().GetStringAsync("/api/v2/employees");
         Assert.Contains("\"monthlyPay\":{\"amount\":91000", json);
     }
@@ -1827,8 +1830,8 @@ What to cover: every validation rule has a unit test (they are cheap); the pagin
 ## Real-world application
 
 - **Public APIs from large platforms** almost universally use opaque cursors for lists (often named `cursor`, `starting_after`, `page_token` or `continuation`) and cap the page size at around 100. The specific names differ; the mechanism is this lesson's.
-- **Government open-data portals** that publish tender notices, land records or GST statistics often expose offset paging with a hard maximum, because consumers want "page 12 of 40". Under heavy write load the same portals switch feeds to "changes since timestamp X", which is keyset pagination on `updated_at, id`.
-- **Infrastructure project dashboards** (daily progress reports from dozens of sites) are a good keyset case: reports arrive all day, and a supervisor scrolling the feed must not see yesterday's report twice because a new one landed.
+- **Government open-data portals** that publish company filings, land records or GST statistics often expose offset paging with a hard maximum, because consumers want "page 12 of 40". Under heavy write load the same portals switch feeds to "changes since timestamp X", which is keyset pagination on `updated_at, id`.
+- **Hospital shift-handover feeds** (handover notes from dozens of wards) are a good keyset case: notes arrive all day, and a nursing supervisor scrolling the feed must not see the same note twice because a new one landed.
 - **Payroll and HR integrations** are where versioning discipline pays off. A vendor integration may be updated once a year; a breaking change without a sunset period means salaries go out wrong. Running v1 and v2 side by side for six months, with `Sunset` headers and per-client traffic logs, is cheap insurance.
 - **Sync clients** (mobile apps with offline mode) page through "everything changed since my last sync" using a keyset on `(updated_at, id)`; the final cursor is stored on the device as the next sync's starting point.
 

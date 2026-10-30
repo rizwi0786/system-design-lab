@@ -9,7 +9,7 @@ minutes: 100
 prerequisites: [m14-multi-tenant-security, m09-partitioning-sharding, m10-rate-limiting, m11-stateless]
 related: [m16-multi-region, m13-sharding, m14-rbac-pbac, m10-bulkhead, m15-db-migrations-deploy, m16-cloud-design-patterns]
 tags: [multi-tenancy, saas, row-level-security, noisy-neighbour, tenant-isolation, postgresql]
-patterns: [Silo, Pool, Bridge, Tenant Context, Deployment Stamps, Row-Level Security]
+patterns: [Silo, Pool, Bridge (tenancy model), Tenant Context, Deployment Stamps, Row-Level Security]
 summary: Serve many customer organisations from one platform by choosing silo, pool or bridge isolation per tier, resolving the tenant on every request, enforcing isolation in PostgreSQL with row-level security, and keeping one noisy tenant from hurting the rest.
 references:
   - title: "Microsoft Learn — Architect multitenant solutions on Azure"
@@ -22,7 +22,7 @@ references:
     url: https://learn.microsoft.com/aspnet/core/performance/rate-limit
 ---
 
-A software-as-a-service (SaaS) product sells the same application to many organisations, each of which must feel that the system is theirs alone: their data invisible to others, their performance unaffected by others, their settings their own. Each such organisation is a **tenant**. Multi-tenancy is the set of decisions about what tenants share (servers, databases, tables) and how you keep them apart anyway. Get it right and one platform serves 1,200 customers at a fraction of the cost of 1,200 deployments; get it wrong and one missing `WHERE tenant_id = @t` shows one contractor's bids to its competitor.
+A software-as-a-service (SaaS) product sells the same application to many organisations, each of which must feel that the system is theirs alone: their data invisible to others, their performance unaffected by others, their settings their own. Each such organisation is a **tenant**. Multi-tenancy is the set of decisions about what tenants share (servers, databases, tables) and how you keep them apart anyway. Get it right and one platform serves 1,200 customers at a fraction of the cost of 1,200 deployments; get it wrong and one missing `WHERE tenant_id = @t` shows one clinic's patient list to the clinic across the road.
 
 ## Learning objectives
 
@@ -58,17 +58,17 @@ The building manager also needs to know, for every visitor, **which flat they ar
 
 ### What is a tenant?
 
-A tenant is a customer organisation with its own users, data and settings: a contractor company, a hospital, a school. One tenant has many users; usually a user belongs to one tenant, sometimes several (a consultant who works for three contractors). The tenant is the unit of **isolation, billing, configuration and lifecycle**.
+A tenant is a customer organisation with its own users, data and settings: a clinic, a hospital, a diagnostic lab. One tenant has many users; usually a user belongs to one tenant, sometimes several (a visiting doctor who consults at three clinics). The tenant is the unit of **isolation, billing, configuration and lifecycle**.
 
 ### The running example
 
-SiteLedger is a SaaS platform for construction contractors: projects, daily progress reports, labour attendance, material receipts, subcontractor bills. Customers:
+ClinicDesk is a SaaS platform for clinics and hospitals: patient records, appointments, prescriptions, lab reports and invoices. Customers:
 
-- **1,000 small contractors** (about 10 users each, a few projects, free or "Basic" plan).
-- **190 mid-sized firms** (about 50 users, "Pro" plan).
-- **10 enterprises** (about 2,000 users each), including a state infrastructure corporation whose contract requires its data in a dedicated database, in India, with its own encryption key.
+- **1,000 small clinics** (about 10 users each: doctors, nurses and the reception desk; free or "Basic" plan).
+- **190 mid-sized hospitals** (about 50 users, "Pro" plan).
+- **10 enterprises** (about 2,000 users each: hospital chains and diagnostic-lab networks), including a state health mission whose contract requires its data in a dedicated database, in India, with its own encryption key.
 
-Traffic estimate: 10,000 + 9,500 + 20,000 ≈ 40,000 users × 150 requests a day ≈ 6 million requests a day ÷ 86,400 ≈ 70 requests per second on average, perhaps 280 at the 10 a.m. peak when site engineers submit daily reports. One enterprise alone is about 12 % of all traffic. Storage: about 2 TB in total, half of it from the 10 enterprises (estimates).
+Traffic estimate: 10,000 + 9,500 + 20,000 ≈ 40,000 users × 150 requests a day ≈ 6 million requests a day ÷ 86,400 ≈ 70 requests per second on average, perhaps 280 at the 10 a.m. peak when outpatient (OPD) queues are longest and reception desks book and check in patients. One enterprise alone is about 12 % of all traffic. Storage: about 2 TB in total, half of it from the 10 enterprises (estimates).
 
 ### Silo, pool and bridge
 
@@ -86,7 +86,7 @@ Traffic estimate: 10,000 + 9,500 + 20,000 ≈ 40,000 users × 150 requests a day
 
 A cost sketch, with stated assumptions: if the smallest suitable managed PostgreSQL instance costs about ₹8,000 a month (an assumption; check your provider's price list), 1,200 silo databases cost about ₹96 lakh a month before any real load. Pooling the 1,190 small and mid-sized tenants onto a handful of larger instances, and siloing only the enterprises that need it, typically costs a small fraction of that. **The bridge model is what most SaaS platforms end up with:** pool by default, silo where contracts, data size or noise demand it.
 
-SiteLedger's design:
+ClinicDesk's design:
 
 - **Shared app tier** (stateless ASP.NET Core) for everyone.
 - **Pooled databases** for Basic and Pro tenants: several PostgreSQL clusters ("pools"), each holding hundreds of tenants, with RLS.
@@ -99,15 +99,15 @@ Every request must answer "which tenant?" before doing anything else. Common sou
 
 | Source | Example | Notes |
 |---|---|---|
-| Subdomain | `kaveri-infra.siteledger.in` | Clear for users; needs wildcard DNS and TLS certificate |
+| Subdomain | `kaveri-care.clinicdesk.example` | Clear for users; needs wildcard DNS and TLS certificate |
 | Token claim | `tid` claim in the access token | Most trustworthy: issued by your identity provider |
-| Path | `/t/kaveri-infra/projects` | Simple; easy to forget in links |
+| Path | `/t/kaveri-care/patients` | Simple; easy to forget in links |
 | Header | `X-Tenant-Id` | Only for trusted internal service-to-service calls |
-| Custom domain | `projects.kaveri-infra.com` | Lookup table from host to tenant |
+| Custom domain | `portal.kaveri-care.example.com` | Lookup table from host to tenant |
 
 Rules:
 
-- **Never trust a tenant id the client can freely choose.** The tenant from the URL or header must match the tenant in the authenticated token (or a membership list for users with several tenants). Otherwise any user can change `kaveri-infra` to `godavari-builders` in the address bar.
+- **Never trust a tenant id the client can freely choose.** The tenant from the URL or header must match the tenant in the authenticated token (or a membership list for users with several tenants). Otherwise any user can change `kaveri-care` to `godavari-clinic` in the address bar.
 - **Resolve once, at the edge of the app**, into a scoped **tenant context** that all later code reads. No code should parse the host again.
 - **Fail closed.** Unknown tenant: 404. Suspended tenant: 403 with a clear message. No tenant at all on a tenant-scoped endpoint: reject, never "default tenant".
 - **Carry the context everywhere:** into log scopes and trace attributes, into cache keys, into message headers for background jobs, and into the database session.
@@ -117,25 +117,25 @@ Rules:
 In a pooled database, every tenant-owned table has a `tenant_id` column, and every query must filter on it. Relying on every developer remembering the filter in every query is how leaks happen. PostgreSQL's **row-level security (RLS)** adds a safety net inside the database:
 
 ```sql
-CREATE TABLE projects (
+CREATE TABLE patients (
     tenant_id  int    NOT NULL,
     id         bigint NOT NULL,
     name       text   NOT NULL,
-    budget_inr numeric(14,2) NOT NULL,
+    balance_inr numeric(12,2) NOT NULL,           -- amount the patient owes
     PRIMARY KEY (tenant_id, id)                     -- tenant first: every index starts with tenant_id
 );
 
-ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
-ALTER TABLE projects FORCE ROW LEVEL SECURITY;     -- applies even to the table owner
+ALTER TABLE patients ENABLE ROW LEVEL SECURITY;
+ALTER TABLE patients FORCE ROW LEVEL SECURITY;     -- applies even to the table owner
 
-CREATE POLICY tenant_isolation ON projects
+CREATE POLICY tenant_isolation ON patients
     USING      (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int)
     WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int);
 
 -- The application connects as a role that is not a superuser, does not own the tables,
 -- and does not have BYPASSRLS.
-CREATE ROLE siteledger_app LOGIN PASSWORD '...' NOSUPERUSER NOBYPASSRLS;
-GRANT SELECT, INSERT, UPDATE, DELETE ON projects TO siteledger_app;
+CREATE ROLE clinicdesk_app LOGIN PASSWORD '...' NOSUPERUSER NOBYPASSRLS;
+GRANT SELECT, INSERT, UPDATE, DELETE ON patients TO clinicdesk_app;
 ```
 
 How it works and the traps:
@@ -145,24 +145,25 @@ How it works and the traps:
 - **Fail closed when unset.** `current_setting('app.tenant_id', true)` returns null if the setting was never defined, so the policy matches no rows. But once a session has used the setting, it can come back as an **empty string**, and `''::int` raises an error. `NULLIF(..., '')` turns that into null, so the result is "no rows", not an error.
 - **Use transaction-local settings with connection pools.** `SET app.tenant_id = 42` lasts for the whole session, and a pooled connection is reused by the next request, possibly for another tenant. Use `SELECT set_config('app.tenant_id', '42', true)` (or `SET LOCAL`) inside a transaction so the setting ends with the transaction. With PgBouncer in transaction mode, session settings are not even guaranteed to stay on the same server connection.
 - **Indexes still matter.** RLS adds a predicate; queries remain fast only if indexes start with `tenant_id`.
-- **RLS is a safety net, not the only check.** Keep explicit `tenant_id` filters in queries too (they help the planner and make intent visible), and keep authorisation checks in the app (a user may see only some of their own tenant's projects).
+- **Constraints are not filtered by RLS.** A `UNIQUE (email)` constraint checks every tenant's rows, so a failed insert tells tenant A that tenant B already has that patient's email (an existence leak), and it blocks two clinics from registering the same person. Put `tenant_id` first in every unique constraint and foreign key: `UNIQUE (tenant_id, email)`, `FOREIGN KEY (tenant_id, patient_id) REFERENCES patients (tenant_id, id)`. The composite foreign key also stops an appointment of tenant 42 from pointing at a patient of tenant 43.
+- **RLS is a safety net, not the only check.** Keep explicit `tenant_id` filters in queries too (they help the planner and make intent visible), and keep authorisation checks in the app (a receptionist may see appointments but not clinical notes, even inside their own tenant).
 
 Alternatives for logical isolation: **schema per tenant** (one schema per tenant in a shared database) gives easier per-tenant restore but strains catalogue size and migrations beyond a few thousand schemas; **database per tenant** on a shared server is the bridge model at the database layer.
 
 ### Noisy neighbours
 
-In a pool, one tenant's behaviour affects others. SiteLedger's examples:
+In a pool, one tenant's behaviour affects others. ClinicDesk's examples:
 
-- An enterprise runs a year-end export of 2 million attendance rows at 10 a.m.
+- An enterprise runs a year-end audit export of 2 million appointment records at 10 a.m.
 - A small tenant's integration script calls the API 50 times a second in a loop.
-- A tenant uploads 40,000 site photos in an hour, saturating the thumbnail workers.
+- A diagnostic-lab tenant uploads 40,000 scanned reports and X-ray images in an hour, saturating the preview workers.
 
 Defences, from the edge inwards:
 
 1. **Per-tenant rate limits** by plan: for example Basic 60 requests a minute per tenant, Pro 600, Enterprise 6,000. ASP.NET Core's rate limiter supports partitioning by any key, so the tenant id is the partition.
 2. **Per-tenant concurrency limits** for expensive operations (at most 2 concurrent exports per tenant).
 3. **Query budgets:** `statement_timeout` for interactive requests (for example 5 seconds); long reports go to a background job against a read replica.
-4. **Fair background processing:** one shared queue is first-come-first-served, so 40,000 photo jobs from one tenant delay everyone. Use per-tenant queues (or partitions) and a fair scheduler (round robin, weighted by plan).
+4. **Fair background processing:** one shared queue is first-come-first-served, so 40,000 scan-preview jobs from one tenant delay everyone. Use per-tenant queues (or partitions) and a fair scheduler (round robin, weighted by plan).
 5. **Per-tenant metrics:** requests, errors, latency, database time and storage tagged with tenant id (watch metric cardinality: tag top tenants individually, aggregate the long tail).
 6. **Tenant placement:** when a tenant grows, move it to a less busy pool or to its own database. This requires a tenant-to-database map and a tested move procedure (copy, sync, switch, verify).
 
@@ -172,14 +173,16 @@ Tenants differ in plan, limits and preferences. Model configuration as **plan de
 
 | Setting | Basic default | Pro default | Example override |
 |---|---|---|---|
-| Max active projects | 5 | 100 | Kaveri Infra: 250 |
+| Max practitioner seats | 5 | 100 | Kaveri Care: 250 |
 | API rate per minute | 60 | 600 | Pilot customer: 1,200 |
-| Features | progress, attendance | + bills, integrations | + beta "drone survey import" |
+| Features | appointments, prescriptions | + billing, lab integrations | + beta "video tele-consult" |
 | Max upload size | 25 MB | 100 MB | 500 MB |
 | Data region | India (shared pool) | India (shared pool) | India, dedicated database |
 | Branding | default | logo, colours | custom domain |
 
 Keep the configuration in the tenant catalogue, cache it with a short expiry (or invalidate on change), and keep secrets (per-tenant API keys, encryption keys) in a vault, referenced by id.
+
+Feature switches per tenant ("turn on video tele-consult for these 20 pilot clinics") are a feature-flag problem; do not hand-roll them in `if (tenant.Id == 42)` checks. `Microsoft.FeatureManagement` evaluates flags with a targeting filter, where the tenant can be a targeting group, and OpenFeature (a CNCF standard API) lets you pass the tenant id in the evaluation context and swap the flag provider later. Plan entitlements (what a customer paid for) still belong in the catalogue; flags are for rollout and experiments and should be deleted when the rollout ends.
 
 ### Tenant lifecycle
 
@@ -196,7 +199,7 @@ Keep the configuration in the tenant catalogue, cache it with a short expiry (or
 | Cross-tenant write | Insert with another tenant's id | `WITH CHECK` policies; tenant id taken from context, never from request body |
 | Tenant spoofing | User edits subdomain or header | Match URL tenant to token claim or membership |
 | Leaky connection setting | Session-level `SET` reused by next request | Transaction-local `set_config(..., true)` |
-| Cache bleed | Cache key `project:42` shared by tenants with project 42 | Tenant id in every cache key |
+| Cache bleed | Cache key `patient:42` shared by tenants that both have a patient 42 | Tenant id in every cache key |
 | Background job without context | Nightly job processes all tenants as superuser | Job carries tenant id; runs one tenant per transaction with RLS |
 | Noisy neighbour | One export slows everyone | Rate limits, concurrency limits, fair queues, placement |
 | Partial migration | 3 of 300 silo databases failed | Expand and contract; per-database version tracking; retries |
@@ -226,13 +229,13 @@ Keep the configuration in the tenant catalogue, cache it with a short expiry (or
 
 ```mermaid
 flowchart LR
-    U["Users (any tenant)"] --> DNS["Wildcard DNS and TLS (*.siteledger.in)"]
+    U["Users (any tenant)"] --> DNS["Wildcard DNS and TLS (*.clinicdesk.example)"]
     DNS --> GW["Gateway: per-tenant rate limits"]
     GW --> APP["App tier (shared, stateless)"]
     APP -->|"resolve tenant, tier, placement"| CAT[("Tenant catalogue")]
     APP -->|"Basic and Pro: RLS, tenant_id"| POOL1[("Pool A (PostgreSQL)")]
     APP -->|"Basic and Pro: RLS, tenant_id"| POOL2[("Pool B (PostgreSQL)")]
-    APP -->|"Enterprise silo, own key"| SILO[("Kaveri Infra DB")]
+    APP -->|"Enterprise silo, own key"| SILO[("State Health Mission DB")]
     APP -->|"jobs tagged with tenant"| Q["Per-tenant job queues"]
     Q --> W["Workers with fair scheduler"]
     W --> POOL1
@@ -250,20 +253,20 @@ sequenceDiagram
     participant B as Browser
     participant M as Tenant middleware
     participant Cat as Catalogue cache
-    participant API as Projects endpoint
+    participant API as Patients endpoint
     participant DB as Pool A (PostgreSQL)
-    B->>M: GET kaveri-infra.siteledger.in/projects, token tid=kaveri-infra
-    M->>Cat: lookup slug kaveri-infra
+    B->>M: GET kaveri-care.clinicdesk.example/patients, token tid=kaveri-care
+    M->>Cat: lookup slug kaveri-care
     Cat-->>M: tenant 42, tier Pro, placement pool-a
     Note over M: subdomain matches token claim, set tenant context
     M->>API: request with tenant context 42
     API->>DB: BEGIN
     API->>DB: SELECT set_config('app.tenant_id', '42', true)
-    API->>DB: SELECT ... FROM projects WHERE tenant_id = 42
+    API->>DB: SELECT ... FROM patients WHERE tenant_id = 42
     Note over DB: RLS policy also filters tenant_id = 42
     DB-->>API: rows for tenant 42 only
     API->>DB: COMMIT, setting ends with the transaction
-    API-->>B: 200 projects
+    API-->>B: 200 patients
 ```
 
 The middleware resolves the subdomain to tenant 42 and checks that the token's `tid` claim is the same tenant, then stores the context. The endpoint opens a transaction on the tenant's pool, sets `app.tenant_id` with transaction scope, and queries with an explicit filter. The RLS policy applies the same filter inside the database, so even a query that forgot it would return only tenant 42's rows. At `COMMIT` the setting disappears, so the pooled connection is clean for the next request.
@@ -289,7 +292,7 @@ Placement is a decision recorded in the catalogue, not something hard-coded. New
 
 ### Step 1: a single-tenant app
 
-SiteLedger began as one installation per customer. At 40 customers, every release meant 40 deployments, and onboarding took a week.
+ClinicDesk began as one installation per customer. At 40 customers, every release meant 40 deployments, and onboarding took a week.
 
 ### Step 2: add `tenant_id` and resolve the tenant
 
@@ -305,7 +308,7 @@ Add per-tenant rate limits by plan, a concurrency limit for exports, `statement_
 
 ### Step 5: tiers and placement
 
-Introduce a catalogue with placement. Move the three largest enterprises to their own databases; provision the state corporation's silo in its required region with its own key. Automate onboarding and per-database migrations.
+Introduce a catalogue with placement. Move the three largest enterprises to their own databases; provision the state health mission's silo in its required region with its own key. Automate onboarding and per-database migrations.
 
 ## Production-style C# implementation
 
@@ -316,7 +319,7 @@ The code shows tenant resolution and context, plan-based configuration, a tenant
 ```csharp file=Tenancy/Tenants.cs
 using System.Collections.Concurrent;
 
-namespace SiteLedger.Tenancy;
+namespace ClinicDesk.Tenancy;
 
 public enum PlanTier { Basic, Pro, Enterprise }
 
@@ -331,9 +334,9 @@ public sealed class InMemoryTenantCatalog : ITenantCatalog
 {
     private readonly ConcurrentDictionary<string, TenantInfo> _bySlug = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["kaveri-infra"] = new(42, "kaveri-infra", "Kaveri Infra Projects", PlanTier.Pro, "pool-a", "in-south"),
-        ["godavari-builders"] = new(43, "godavari-builders", "Godavari Builders", PlanTier.Basic, "pool-a", "in-south"),
-        ["state-roads-corp"] = new(7, "state-roads-corp", "State Roads Corporation", PlanTier.Enterprise, "silo-state-roads", "in-west")
+        ["kaveri-care"] = new(42, "kaveri-care", "Kaveri Care Hospital", PlanTier.Pro, "pool-a", "in-south"),
+        ["godavari-clinic"] = new(43, "godavari-clinic", "Godavari Family Clinic", PlanTier.Basic, "pool-a", "in-south"),
+        ["state-health-mission"] = new(7, "state-health-mission", "State Health Mission", PlanTier.Enterprise, "silo-state-health", "in-west")
     };
 
     public ValueTask<TenantInfo?> FindBySlugAsync(string slug, CancellationToken ct) => ValueTask.FromResult(_bySlug.GetValueOrDefault(slug));
@@ -354,7 +357,7 @@ public sealed class TenantContext
     }
 }
 
-/// <summary>Every cache key carries the tenant, so tenants with the same project id never share an entry.</summary>
+/// <summary>Every cache key carries the tenant, so tenants with the same patient id never share an entry.</summary>
 public static class TenantKeys
 {
     public static string For(TenantInfo tenant, string key) => $"t{tenant.Id}:{key}";
@@ -366,11 +369,11 @@ public static class TenantKeys
 ```csharp file=Tenancy/TenantResolutionMiddleware.cs
 using System.Diagnostics;
 
-namespace SiteLedger.Tenancy;
+namespace ClinicDesk.Tenancy;
 
 public sealed class TenantResolutionOptions
 {
-    public string RootDomain { get; set; } = "siteledger.in";
+    public string RootDomain { get; set; } = "clinicdesk.example";
     public HashSet<string> ReservedSubdomains { get; set; } = new(StringComparer.OrdinalIgnoreCase) { "www", "api", "admin", "status" };
 }
 
@@ -392,12 +395,16 @@ public sealed class TenantResolutionMiddleware(
         if (tenant.Suspended) { http.Response.StatusCode = StatusCodes.Status403Forbidden; return; }
 
         // The subdomain is user-controlled; the token claim is not. They must agree.
-        if (http.User.Identity?.IsAuthenticated == true && http.User.FindFirst("tid")?.Value is { } claimed
-            && !string.Equals(claimed, tenant.Slug, StringComparison.OrdinalIgnoreCase))
+        // Fail closed: an authenticated token with no tid claim is a mismatch, not a pass.
+        if (http.User.Identity?.IsAuthenticated == true)
         {
-            logger.LogWarning("Tenant mismatch: host {Host} vs token tenant {Claimed}", slug, claimed);
-            http.Response.StatusCode = StatusCodes.Status403Forbidden;
-            return;
+            var claimed = http.User.FindFirst("tid")?.Value;
+            if (!string.Equals(claimed, tenant.Slug, StringComparison.OrdinalIgnoreCase))
+            {
+                logger.LogWarning("Tenant mismatch: host {Host} vs token tenant {Claimed}", slug, claimed ?? "(none)");
+                http.Response.StatusCode = StatusCodes.Status403Forbidden;
+                return;
+            }
         }
 
         tenantContext.Set(tenant);
@@ -423,14 +430,14 @@ public sealed class TenantResolutionMiddleware(
 ```csharp file=Tenancy/TenantSettings.cs
 using Microsoft.Extensions.Caching.Memory;
 
-namespace SiteLedger.Tenancy;
+namespace ClinicDesk.Tenancy;
 
-public sealed record TenantSettings(int MaxActiveProjects, int RequestsPerMinute, int MaxConcurrentExports, int MaxUploadMb, IReadOnlySet<string> Features)
+public sealed record TenantSettings(int MaxPractitioners, int RequestsPerMinute, int MaxConcurrentExports, int MaxUploadMb, IReadOnlySet<string> Features)
 {
     public bool Has(string feature) => Features.Contains(feature);
 }
 
-public sealed record TenantOverrides(int? MaxActiveProjects = null, int? RequestsPerMinute = null, int? MaxUploadMb = null, IReadOnlyList<string>? ExtraFeatures = null);
+public sealed record TenantOverrides(int? MaxPractitioners = null, int? RequestsPerMinute = null, int? MaxUploadMb = null, IReadOnlyList<string>? ExtraFeatures = null);
 
 public interface ITenantSettingsProvider
 {
@@ -441,15 +448,15 @@ public sealed class TenantSettingsProvider(IMemoryCache cache) : ITenantSettings
 {
     private static readonly Dictionary<PlanTier, TenantSettings> Plans = new()
     {
-        [PlanTier.Basic] = new(5, 60, 1, 25, new HashSet<string> { "progress", "attendance" }),
-        [PlanTier.Pro] = new(100, 600, 2, 100, new HashSet<string> { "progress", "attendance", "bills", "integrations" }),
-        [PlanTier.Enterprise] = new(10_000, 6_000, 4, 500, new HashSet<string> { "progress", "attendance", "bills", "integrations", "sso", "audit-export" })
+        [PlanTier.Basic] = new(5, 60, 1, 25, new HashSet<string> { "appointments", "prescriptions" }),
+        [PlanTier.Pro] = new(100, 600, 2, 100, new HashSet<string> { "appointments", "prescriptions", "billing", "lab-integrations" }),
+        [PlanTier.Enterprise] = new(10_000, 6_000, 4, 500, new HashSet<string> { "appointments", "prescriptions", "billing", "lab-integrations", "sso", "audit-export" })
     };
 
     // In production these come from the tenant catalogue; here a fixed example.
     private static readonly Dictionary<int, TenantOverrides> Overrides = new()
     {
-        [42] = new(MaxActiveProjects: 250, ExtraFeatures: new[] { "drone-survey-import" })
+        [42] = new(MaxPractitioners: 250, ExtraFeatures: new[] { "video-teleconsult" })
     };
 
     public TenantSettings For(TenantInfo tenant) =>
@@ -462,7 +469,7 @@ public sealed class TenantSettingsProvider(IMemoryCache cache) : ITenantSettings
             foreach (var f in o.ExtraFeatures ?? Array.Empty<string>()) features.Add(f);
             return plan with
             {
-                MaxActiveProjects = o.MaxActiveProjects ?? plan.MaxActiveProjects,
+                MaxPractitioners = o.MaxPractitioners ?? plan.MaxPractitioners,
                 RequestsPerMinute = o.RequestsPerMinute ?? plan.RequestsPerMinute,
                 MaxUploadMb = o.MaxUploadMb ?? plan.MaxUploadMb,
                 Features = features
@@ -474,9 +481,9 @@ public sealed class TenantSettingsProvider(IMemoryCache cache) : ITenantSettings
 ### A tenant-scoped database session
 
 ```csharp file=Data/TenantDb.cs
-using SiteLedger.Tenancy;
+using ClinicDesk.Tenancy;
 
-namespace SiteLedger.Data;
+namespace ClinicDesk.Data;
 
 public sealed record SqlStatement(string Sql, IReadOnlyDictionary<string, object?> Parameters);
 
@@ -507,15 +514,15 @@ public sealed class TenantDb(TenantContext tenantContext, ISqlExecutor executor)
     }
 }
 
-/// <summary>Records what would be sent, and simulates RLS on a tiny in-memory projects table.</summary>
+/// <summary>Records what would be sent, and simulates RLS on a tiny in-memory patients table.</summary>
 public sealed class InMemorySqlExecutor : ISqlExecutor
 {
-    private readonly List<(string Placement, int TenantId, long Id, string Name)> _projects =
+    private readonly List<(string Placement, int TenantId, long Id, string Name)> _patients =
     [
-        ("pool-a", 42, 1, "NH-48 widening, package 3"),
-        ("pool-a", 42, 2, "Hosur flyover"),
-        ("pool-a", 43, 1, "Warangal school building"),
-        ("silo-state-roads", 7, 1, "SH-60 resurfacing")
+        ("pool-a", 42, 1, "Asha Menon"),
+        ("pool-a", 42, 2, "Ravi Kumar"),
+        ("pool-a", 43, 1, "Sneha Reddy"),
+        ("silo-state-health", 7, 1, "Meena Patil")
     ];
 
     public List<(string Placement, IReadOnlyList<SqlStatement> Batch)> Log { get; } = new();
@@ -526,7 +533,7 @@ public sealed class InMemorySqlExecutor : ISqlExecutor
         Log.Add((placement, batch));
         var setting = batch[0].Parameters["tenant_text"] as string;
         var tenantId = int.TryParse(setting, out var t) ? t : (int?)null;          // RLS: unset means no rows
-        IReadOnlyList<IReadOnlyDictionary<string, object?>> rows = _projects
+        IReadOnlyList<IReadOnlyDictionary<string, object?>> rows = _patients
             .Where(p => p.Placement == placement && p.TenantId == tenantId)
             .Select(p => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?> { ["id"] = p.Id, ["name"] = p.Name })
             .ToList();
@@ -552,12 +559,12 @@ await tx.CommitAsync(ct);   // the setting ends here; the pooled connection carr
 ### Fair background scheduling
 
 ```csharp file=Jobs/FairTenantScheduler.cs
-namespace SiteLedger.Jobs;
+namespace ClinicDesk.Jobs;
 
 public sealed record TenantJob(int TenantId, string Kind, string Payload);
 
 /// <summary>
-/// Weighted round robin over tenants that have work. A tenant with 40,000 queued thumbnails gets
+/// Weighted round robin over tenants that have work. A tenant with 40,000 queued scan previews gets
 /// its weight's worth of jobs per round, then everyone else gets a turn.
 /// </summary>
 public sealed class FairTenantScheduler(Func<int, int> weightOf)
@@ -614,13 +621,16 @@ public sealed class FairTenantScheduler(Func<int, int> weightOf)
 
 ```csharp file=Program.cs
 using System.Threading.RateLimiting;
-using SiteLedger.Data;
-using SiteLedger.Jobs;
-using SiteLedger.Tenancy;
+using ClinicDesk.Data;
+using ClinicDesk.Jobs;
+using ClinicDesk.Tenancy;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddMemoryCache();
+// Production: AddAuthentication().AddJwtBearer(...) from Microsoft.AspNetCore.Authentication.JwtBearer.
+builder.Services.AddAuthentication();
+builder.Services.AddAuthorization();
 builder.Services.Configure<TenantResolutionOptions>(builder.Configuration.GetSection("Tenancy"));
 builder.Services.AddSingleton<ITenantCatalog, InMemoryTenantCatalog>();
 builder.Services.AddSingleton<ITenantSettingsProvider, TenantSettingsProvider>();
@@ -649,33 +659,34 @@ builder.Services.AddRateLimiter(o =>
 
 var app = builder.Build();
 
+app.UseAuthentication();                           // first, so the resolver can compare host and token
 app.UseMiddleware<TenantResolutionMiddleware>();   // before the limiter, so the partition knows the tenant
 app.UseRateLimiter();
 
-app.MapGet("/projects", async (TenantDb db, CancellationToken ct) =>
-    Results.Ok(await db.QueryAsync("SELECT id, name FROM projects WHERE tenant_id = @tenant_id ORDER BY id",
+app.MapGet("/patients", async (TenantDb db, CancellationToken ct) =>
+    Results.Ok(await db.QueryAsync("SELECT id, name FROM patients WHERE tenant_id = @tenant_id ORDER BY id",
         new Dictionary<string, object?>(), ct)));
 
 app.MapGet("/features", (TenantContext tc, ITenantSettingsProvider settings) =>
     Results.Ok(settings.For(tc.Current).Features));
 
-app.MapPost("/photos/{name}/thumbnail", (string name, TenantContext tc, FairTenantScheduler scheduler) =>
+app.MapPost("/scans/{name}/preview", (string name, TenantContext tc, FairTenantScheduler scheduler) =>
 {
-    scheduler.Enqueue(new TenantJob(tc.Current.Id, "thumbnail", name));      // the job carries its tenant
+    scheduler.Enqueue(new TenantJob(tc.Current.Id, "preview", name));      // the job carries its tenant
     return Results.Accepted();
 });
 
 app.Run();
 ```
 
-Notice that no endpoint takes a tenant id as a parameter. Tenant identity comes only from the resolved context, which came from the host and was checked against the token.
+Notice that no endpoint takes a tenant id as a parameter. Tenant identity comes only from the resolved context, which came from the host and was checked against the token. Order matters: authentication runs before tenant resolution (otherwise `http.User` is always anonymous and the host-versus-token check silently never happens), and resolution runs before the rate limiter so the limiter can partition by tenant. A real deployment also adds `RequireAuthorization()` to every tenant endpoint.
 
 ## Bad design vs good design
 
 **Bad: tenant id from the request body.**
 
 ```csharp
-app.MapPost("/projects", (CreateProject cmd, Db db) => db.Insert(cmd.TenantId, cmd.Name));   // anyone can write anywhere
+app.MapPost("/patients", (CreatePatient cmd, Db db) => db.Insert(cmd.TenantId, cmd.Name));   // anyone can write anywhere
 ```
 
 **Good:** the tenant comes from the resolved context; RLS `WITH CHECK` rejects rows for any other tenant.
@@ -684,9 +695,9 @@ app.MapPost("/projects", (CreateProject cmd, Db db) => db.Insert(cmd.TenantId, c
 
 **Bad: the app connects as the table owner or a superuser.** RLS silently does nothing. **Good:** a dedicated application role without ownership, superuser or `BYPASSRLS`, and `FORCE ROW LEVEL SECURITY` as a second guard.
 
-**Bad: cache keys without the tenant.** `project:1` is cached for Kaveri Infra and served to Godavari Builders, whose project 1 is different. **Good:** `t42:project:1`.
+**Bad: cache keys without the tenant.** `patient:1` is cached for Kaveri Care and served to Godavari Family Clinic, whose patient 1 is a different person. **Good:** `t42:patient:1`.
 
-**Bad: one FIFO queue for all tenants.** One tenant's 40,000 photos delay everyone's daily-report PDFs by an hour. **Good:** per-tenant queues with a fair scheduler, weighted by plan.
+**Bad: one FIFO queue for all tenants.** One lab's 40,000 scan previews delay every clinic's prescription PDFs by an hour. **Good:** per-tenant queues with a fair scheduler, weighted by plan.
 
 **Bad: silo for everyone "for safety".** Twelve hundred databases to patch, migrate and back up, most of them nearly idle. **Good:** pool by default with RLS; silo for tenants whose contracts, size or regulation require it.
 
@@ -696,35 +707,35 @@ Write automated tests that log in as tenant A and try to read, update and delete
 
 ## Practical playground
 
-The playground database has a pooled `projects` table with RLS **forced** and a policy using `app.tenant_id`, and an application role `app_user`. You are connected as a superuser, which bypasses RLS, so to see the policy work, switch role first. Try:
+The playground database has a pooled `patients` table with RLS **forced** and a policy using `app.tenant_id`, and an application role `app_user`. You are connected as a superuser, which bypasses RLS, so to see the policy work, switch role first. Try:
 
-1. `SELECT * FROM projects;` as yourself (all rows: superusers bypass RLS).
-2. `SET ROLE app_user; SELECT * FROM projects;` (no rows: tenant not set, fail closed).
-3. `SELECT set_config('app.tenant_id', '42', false); SELECT * FROM projects;` (only tenant 42).
-4. `INSERT INTO projects VALUES (43, 99, 'Sneaky', 1);` (rejected by `WITH CHECK`).
-5. `RESET ROLE;` then compare `EXPLAIN SELECT * FROM projects` as `app_user` and as yourself to see the policy predicate.
+1. `SELECT * FROM patients;` as yourself (all rows: superusers bypass RLS).
+2. `SET ROLE app_user; SELECT * FROM patients;` (no rows: tenant not set, fail closed).
+3. `SELECT set_config('app.tenant_id', '42', false); SELECT * FROM patients;` (only tenant 42).
+4. `INSERT INTO patients VALUES (43, 99, 'Sneaky', 1);` (rejected by `WITH CHECK`).
+5. `RESET ROLE;` then compare `EXPLAIN SELECT * FROM patients` as `app_user` and as yourself to see the policy predicate.
 
 :::playground type=sql title="Row-level security in a pooled table"
 ```sql
-CREATE TABLE projects (
+CREATE TABLE patients (
   tenant_id  int    NOT NULL,
   id         int    NOT NULL,
   name       text   NOT NULL,
-  budget_inr bigint NOT NULL,
+  balance_inr int    NOT NULL,
   PRIMARY KEY (tenant_id, id)
 );
-INSERT INTO projects VALUES
-  (42, 1, 'NH-48 widening, package 3', 1850000000),
-  (42, 2, 'Hosur flyover',              640000000),
-  (43, 1, 'Warangal school building',    95000000),
-  (44, 1, 'Coastal road drainage',      210000000);
+INSERT INTO patients VALUES
+  (42, 1, 'Asha Menon',    1200),
+  (42, 2, 'Ravi Kumar',        0),
+  (43, 1, 'Sneha Reddy',    450),
+  (44, 1, 'Arjun Nair',    2300);
 
 CREATE ROLE app_user NOLOGIN;
-GRANT SELECT, INSERT, UPDATE, DELETE ON projects TO app_user;
+GRANT SELECT, INSERT, UPDATE, DELETE ON patients TO app_user;
 
-ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
-ALTER TABLE projects FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON projects
+ALTER TABLE patients ENABLE ROW LEVEL SECURITY;
+ALTER TABLE patients FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON patients
   USING      (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int)
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int);
 ```
@@ -733,11 +744,11 @@ CREATE POLICY tenant_isolation ON projects
 ## Exercises
 
 :::exercise id=m16-multi-tenancy-ex1 difficulty=beginner kind=written title="Silo, pool or bridge for three customers"
-SiteLedger signs three new customers. For each, choose where its data lives (shared pool with RLS, a dedicated database, or a dedicated full stack) and justify it with isolation, cost and operations. Then say which model the platform as a whole is using.
+ClinicDesk signs three new customers. For each, choose where its data lives (shared pool with RLS, a dedicated database, or a dedicated full stack) and justify it with isolation, cost and operations. Then say which model the platform as a whole is using.
 
-1. A two-person interior contractor on the free plan.
-2. A national EPC (engineering, procurement and construction) company with 3,000 users and 400 GB of photos and documents, worried about performance during their month-end billing.
-3. A state government corporation whose contract requires a dedicated database in an Indian region, its own encryption key, and the ability to restore only its own data to any point in the last 30 days.
+1. A two-doctor dental clinic on the free plan.
+2. A national diagnostic-lab chain with 3,000 users and 400 GB of scanned reports and images, worried about performance during the morning sample-collection rush and month-end insurance billing.
+3. A state government health mission whose contract requires a dedicated database in an Indian region, its own encryption key, and the ability to restore only its own data to any point in the last 30 days.
 ::acceptance
 - Customer 1 is pooled, with the cost and onboarding reasons.
 - Customer 2 is either pooled with placement on a dedicated or less-loaded pool, or given its own database, with noisy-neighbour reasoning.
@@ -751,7 +762,7 @@ For customer 2, is the problem isolation or noise? Which mechanism addresses noi
 What does it cost (money and operations) to give a free-plan customer their own database?
 ::solution
 1. **Pool.** A free-plan tenant must be nearly free to serve and ready in seconds. A row in the catalogue, `tenant_id` on its rows, and RLS isolate it. A dedicated database would cost more per month than the customer pays (nothing) and add one more database to patch and migrate.
-2. **Own database (bridge), or a dedicated pool.** Isolation is not the issue; noise is. 3,000 users and heavy month-end billing would affect hundreds of small tenants sharing a pool, and their 400 GB would dominate that pool's backups and vacuum work. Placing them on their own database (shared app tier) removes them as a noisy neighbour and lets them be scaled independently. Rate limits and fair job queues still apply.
+2. **Own database (bridge), or a dedicated pool.** Isolation is not the issue; noise is. 3,000 users, a daily morning rush and heavy month-end billing would affect hundreds of small tenants sharing a pool, and their 400 GB would dominate that pool's backups and vacuum work. Placing them on their own database (shared app tier) removes them as a noisy neighbour and lets them be scaled independently. Rate limits and fair job queues still apply.
 3. **Dedicated database (silo at the data layer), possibly a dedicated app deployment if required.** Dedicated database in an Indian region: provision in that region and record it in the catalogue. Own encryption key: storage encryption with a customer-managed key for that database. Restore only their own data to a point in time: native point-in-time recovery of their database; in a shared pool this would mean restoring a whole cluster elsewhere and extracting one tenant's rows.
 
 **The platform is a bridge model:** a shared app tier, pooled databases for most tenants, and dedicated databases where size or contracts demand it.
@@ -764,18 +775,18 @@ What does it cost (money and operations) to give a free-plan customer their own 
 :::exercise id=m16-multi-tenancy-ex2 difficulty=beginner kind=code title="Resolve the tenant safely"
 Implement `TenantResolver.Resolve(host, claimedTenant, internalHeaderTenant, isInternalCall)`, which returns a `Resolution` with an outcome and, on success, the tenant slug.
 ::requirements
-- Tenant hosts look like `<slug>.siteledger.in` (case-insensitive). `www`, `api` and `admin` are reserved and are not tenants. Nested subdomains (`a.b.siteledger.in`) are invalid.
+- Tenant hosts look like `<slug>.clinicdesk.example` (case-insensitive). `www`, `api` and `admin` are reserved and are not tenants. Nested subdomains (`a.b.clinicdesk.example`) are invalid.
 - If the host is not a tenant host: for internal calls (`isInternalCall` true), use `internalHeaderTenant` if present; otherwise return `NoTenant`.
 - The header is **ignored** for non-internal calls.
 - If a slug was found and `claimedTenant` (from the token) is present and differs (case-insensitively), return `Mismatch`.
 - Slugs are returned lower-case. Outcomes: `Resolved`, `NoTenant`, `Mismatch`.
 ::acceptance
-- `kaveri-infra.siteledger.in` resolves to `kaveri-infra`.
+- `kaveri-care.clinicdesk.example` resolves to `kaveri-care`.
 - Reserved and nested subdomains do not resolve.
 - An external caller cannot pick a tenant with the header.
 - A host that disagrees with the token claim is a mismatch.
 ::hint
-Check the suffix `.siteledger.in` with `EndsWith(..., StringComparison.OrdinalIgnoreCase)`, then take the part before it.
+Check the suffix `.clinicdesk.example` with `EndsWith(..., StringComparison.OrdinalIgnoreCase)`, then take the part before it.
 ::hint
 Reject an empty part, a part containing `.`, or a reserved name.
 ::hint
@@ -793,7 +804,7 @@ public sealed record Resolution(ResolutionOutcome Outcome, string? Slug = null);
 
 public static class TenantResolver
 {
-    public const string RootDomain = "siteledger.in";
+    public const string RootDomain = "clinicdesk.example";
 
     public static Resolution Resolve(string host, string? claimedTenant, string? internalHeaderTenant, bool isInternalCall) =>
         throw new NotImplementedException();
@@ -808,37 +819,37 @@ public class TenantResolverTests
     [Fact]
     public void Resolves_subdomain()
     {
-        var r = TenantResolver.Resolve("Kaveri-Infra.SiteLedger.in", null, null, false);
+        var r = TenantResolver.Resolve("Kaveri-Care.ClinicDesk.example", null, null, false);
         Assert.Equal(ResolutionOutcome.Resolved, r.Outcome);
-        Assert.Equal("kaveri-infra", r.Slug);
+        Assert.Equal("kaveri-care", r.Slug);
     }
 
     [Theory]
-    [InlineData("www.siteledger.in")]
-    [InlineData("api.siteledger.in")]
-    [InlineData("a.b.siteledger.in")]
-    [InlineData("siteledger.in")]
-    [InlineData("kaveri-infra.example.com")]
+    [InlineData("www.clinicdesk.example")]
+    [InlineData("api.clinicdesk.example")]
+    [InlineData("a.b.clinicdesk.example")]
+    [InlineData("clinicdesk.example")]
+    [InlineData("kaveri-care.example.org")]
     public void Non_tenant_hosts_do_not_resolve(string host) =>
         Assert.Equal(ResolutionOutcome.NoTenant, TenantResolver.Resolve(host, null, null, false).Outcome);
 
     [Fact]
     public void External_callers_cannot_use_the_header() =>
-        Assert.Equal(ResolutionOutcome.NoTenant, TenantResolver.Resolve("api.siteledger.in", null, "godavari-builders", false).Outcome);
+        Assert.Equal(ResolutionOutcome.NoTenant, TenantResolver.Resolve("api.clinicdesk.example", null, "godavari-clinic", false).Outcome);
 
     [Fact]
     public void Internal_callers_can_use_the_header()
     {
-        var r = TenantResolver.Resolve("api.siteledger.in", null, "Godavari-Builders", true);
+        var r = TenantResolver.Resolve("api.clinicdesk.example", null, "Godavari-Clinic", true);
         Assert.Equal(ResolutionOutcome.Resolved, r.Outcome);
-        Assert.Equal("godavari-builders", r.Slug);
+        Assert.Equal("godavari-clinic", r.Slug);
     }
 
     [Fact]
     public void Host_must_match_token_claim()
     {
-        Assert.Equal(ResolutionOutcome.Mismatch, TenantResolver.Resolve("godavari-builders.siteledger.in", "kaveri-infra", null, false).Outcome);
-        Assert.Equal(ResolutionOutcome.Resolved, TenantResolver.Resolve("kaveri-infra.siteledger.in", "KAVERI-INFRA", null, false).Outcome);
+        Assert.Equal(ResolutionOutcome.Mismatch, TenantResolver.Resolve("godavari-clinic.clinicdesk.example", "kaveri-care", null, false).Outcome);
+        Assert.Equal(ResolutionOutcome.Resolved, TenantResolver.Resolve("kaveri-care.clinicdesk.example", "KAVERI-CARE", null, false).Outcome);
     }
 }
 ```
@@ -853,7 +864,7 @@ public sealed record Resolution(ResolutionOutcome Outcome, string? Slug = null);
 
 public static class TenantResolver
 {
-    public const string RootDomain = "siteledger.in";
+    public const string RootDomain = "clinicdesk.example";
     private static readonly HashSet<string> Reserved = new(StringComparer.OrdinalIgnoreCase) { "www", "api", "admin" };
 
     public static Resolution Resolve(string host, string? claimedTenant, string? internalHeaderTenant, bool isInternalCall)
@@ -883,12 +894,12 @@ public static class TenantResolver
 In ASP.NET Core, "internal call" must itself be established securely: for example, only requests arriving on an internal listener, or authenticated with a service identity (client credentials token with a specific scope), may set `X-Tenant-Id`. Strip the header at the public edge so it can never arrive from outside.
 ::mistakes
 - Accepting the header from anyone, which lets a user pick any tenant.
-- Using `Contains("siteledger.in")`, so `siteledger.in.evil.com` matches.
-- Comparing case-sensitively, so `Kaveri-Infra` and `kaveri-infra` are treated as different tenants.
+- Using `Contains("clinicdesk.example")`, so `clinicdesk.example.evil.com` matches.
+- Comparing case-sensitively, so `Kaveri-Care` and `kaveri-care` are treated as different tenants.
 :::
 
 :::exercise id=m16-multi-tenancy-ex3 difficulty=intermediate kind=code title="A fair scheduler for tenant jobs"
-One tenant has queued 40,000 thumbnail jobs; another has 2 urgent PDF jobs. A FIFO queue would make the second tenant wait for all 40,000. Implement `FairScheduler`: weighted round robin across tenants that have pending jobs. A tenant gets up to `weight` jobs per turn, then moves to the back of the rotation. Tenants enter the rotation in the order of their first pending job.
+One lab has queued 40,000 scan-preview jobs; a clinic has 2 urgent prescription PDFs. A FIFO queue would make the second tenant wait for all 40,000. Implement `FairScheduler`: weighted round robin across tenants that have pending jobs. A tenant gets up to `weight` jobs per turn, then moves to the back of the rotation. Tenants enter the rotation in the order of their first pending job.
 ::requirements
 - `FairScheduler(Func<string, int> weightOf)`; weights below 1 are treated as 1.
 - `Enqueue(tenant, job)` adds to that tenant's FIFO queue.
@@ -968,9 +979,9 @@ public class FairSchedulerTests
     public void Small_tenant_is_not_starved()
     {
         var s = new FairScheduler(_ => 1);
-        for (var i = 0; i < 40_000; i++) s.Enqueue("photos-tenant", "thumb" + i);
-        s.Enqueue("pdf-tenant", "daily-report-1");
-        s.Enqueue("pdf-tenant", "daily-report-2");
+        for (var i = 0; i < 40_000; i++) s.Enqueue("scans-tenant", "scan" + i);
+        s.Enqueue("pdf-tenant", "prescription-1");
+        s.Enqueue("pdf-tenant", "prescription-2");
         var first = Enumerable.Range(0, 4).Select(_ => s.Dequeue()!.Value.Tenant).ToList();
         Assert.Equal(2, first.Count(t => t == "pdf-tenant"));
         Assert.Equal(39_998, s.Pending);
@@ -1051,7 +1062,7 @@ public sealed class FairScheduler
 
 The lesson's `FairTenantScheduler` is the same algorithm with a lock for concurrent workers. In a distributed setup the same idea appears as per-tenant queues or partitions with consumers that rotate between them, or as a "tenant id" partition key plus per-tenant concurrency limits in the worker.
 ::alternatives
-Deficit round robin weights by job cost (for example bytes of photo) rather than job count, which is fairer when job sizes vary a lot. Priority classes (interactive versus bulk) can sit on top: always serve interactive jobs first, then bulk jobs fairly.
+Deficit round robin weights by job cost (for example megabytes of scan) rather than job count, which is fairer when job sizes vary a lot. Priority classes (interactive versus bulk) can sit on top: always serve interactive jobs first, then bulk jobs fairly.
 ::mistakes
 - Re-adding a tenant to the rotation on every enqueue, so a busy tenant appears many times.
 - Forgetting to reset the per-turn counter when the tenant changes.
@@ -1059,45 +1070,45 @@ Deficit round robin weights by job cost (for example bytes of photo) rather than
 :::
 
 :::exercise id=m16-multi-tenancy-ex4 difficulty=intermediate kind=sql ordered=true title="Write the row-level security policy"
-The `projects` table is pooled across tenants. RLS is **enabled and forced**, but there is no policy yet, so `app_user` sees nothing. Write a script that:
+The `patients` table is pooled across tenants. RLS is **enabled and forced**, but there is no policy yet, so `app_user` sees nothing. Write a script that:
 
-1. Creates a policy `tenant_isolation` on `projects` that allows only rows whose `tenant_id` equals the transaction setting `app.tenant_id`, for both reading and writing, and that returns no rows (rather than an error) when the setting is missing or empty.
+1. Creates a policy `tenant_isolation` on `patients` that allows only rows whose `tenant_id` equals the transaction setting `app.tenant_id`, for both reading and writing, and that returns no rows (rather than an error) when the setting is missing or empty.
 2. Switches to `app_user`, sets `app.tenant_id` to `42` **for the current transaction only**.
-3. Returns `id` and `name` of the visible projects, ordered by `id`, with no `WHERE` clause on `tenant_id` (the policy must do the filtering).
+3. Returns `id` and `name` of the visible patients, ordered by `id`, with no `WHERE` clause on `tenant_id` (the policy must do the filtering).
 ::setup
 ```sql
-CREATE TABLE projects (
+CREATE TABLE patients (
   tenant_id  int    NOT NULL,
   id         int    NOT NULL,
   name       text   NOT NULL,
-  budget_inr bigint NOT NULL,
+  balance_inr int    NOT NULL,
   PRIMARY KEY (tenant_id, id)
 );
-INSERT INTO projects VALUES
-  (42, 1, 'NH-48 widening, package 3', 1850000000),
-  (42, 2, 'Hosur flyover',              640000000),
-  (43, 1, 'Warangal school building',    95000000),
-  (44, 1, 'Coastal road drainage',      210000000),
-  (42, 3, 'Krishnagiri bypass culverts', 87000000);
+INSERT INTO patients VALUES
+  (42, 1, 'Asha Menon',    1200),
+  (42, 2, 'Ravi Kumar',        0),
+  (43, 1, 'Sneha Reddy',    450),
+  (44, 1, 'Arjun Nair',    2300),
+  (42, 3, 'Fatima Sheikh',  800);
 CREATE ROLE app_user NOLOGIN;
-GRANT SELECT, INSERT, UPDATE, DELETE ON projects TO app_user;
-ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
-ALTER TABLE projects FORCE ROW LEVEL SECURITY;
+GRANT SELECT, INSERT, UPDATE, DELETE ON patients TO app_user;
+ALTER TABLE patients ENABLE ROW LEVEL SECURITY;
+ALTER TABLE patients FORCE ROW LEVEL SECURITY;
 ```
 ::check
 ```sql
-CREATE POLICY tenant_isolation ON projects
+CREATE POLICY tenant_isolation ON patients
   USING      (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int)
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int);
 SET ROLE app_user;
 SELECT set_config('app.tenant_id', '42', true);
-SELECT id, name FROM projects ORDER BY id;
+SELECT id, name FROM patients ORDER BY id;
 ```
 ::acceptance
 - The policy has both `USING` and `WITH CHECK` clauses.
 - It uses `current_setting('app.tenant_id', true)` with `NULLIF(..., '')` so an empty setting means no rows, not an error.
 - The setting is transaction-local (`set_config(..., true)` or `SET LOCAL`).
-- The final query has no tenant filter; the result is tenant 42's three projects.
+- The final query has no tenant filter; the result is tenant 42's three patients.
 ::hint
 `CREATE POLICY name ON table USING (...) WITH CHECK (...);`
 ::hint
@@ -1108,15 +1119,15 @@ The second argument of `current_setting(name, missing_ok)` avoids an error when 
 `SET ROLE app_user;` then `SELECT set_config('app.tenant_id', '42', true);` (the `true` means "local to this transaction").
 ::solution
 ```sql
-CREATE POLICY tenant_isolation ON projects
+CREATE POLICY tenant_isolation ON patients
   USING      (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int)
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::int);
 SET ROLE app_user;
 SELECT set_config('app.tenant_id', '42', true);
-SELECT id, name FROM projects ORDER BY id;
+SELECT id, name FROM patients ORDER BY id;
 ```
 
-Result: projects 1, 2 and 3 of tenant 42. Things to try afterwards in the playground: as `app_user` with tenant 42, `INSERT INTO projects VALUES (43, 9, 'x', 1)` fails with "new row violates row-level security policy" (the `WITH CHECK` clause); without setting `app.tenant_id` at all the query returns no rows; and as the superuser everything is visible, which is why the application must never connect as one.
+Result: patients 1, 2 and 3 of tenant 42. Things to try afterwards in the playground: as `app_user` with tenant 42, `INSERT INTO patients VALUES (43, 9, 'x', 1)` fails with "new row violates row-level security policy" (the `WITH CHECK` clause); without setting `app.tenant_id` at all the query returns no rows; and as the superuser everything is visible, which is why the application must never connect as one.
 ::alternatives
 Instead of a custom setting, some teams map each tenant to a database role and use `current_user` in the policy. That gives very strong isolation but needs one role per tenant and per-tenant connection pools, which does not scale to thousands of tenants. A `SECURITY DEFINER` function such as `app.current_tenant()` that validates and returns the setting keeps the policy text short and in one place.
 ::mistakes
@@ -1127,7 +1138,7 @@ Instead of a custom setting, some teams map each tenant to a database role and u
 :::
 
 :::exercise id=m16-multi-tenancy-ex5 difficulty=advanced kind=hld title="Tiered SaaS architecture with tenant placement"
-SiteLedger expects to grow to 20,000 tenants in two years: 19,000 Basic, 950 Pro and 50 Enterprise, of which 15 need dedicated databases (some in a specific Indian region, two in the Middle East for a Gulf contractor). Design the platform: tiers and placement, tenant catalogue, routing, isolation per tier, noisy-neighbour controls, migrations across all databases, tenant moves, per-tenant cost visibility and offboarding. Extend the starter graph and give your capacity reasoning. Say what breaks first.
+ClinicDesk expects to grow to 20,000 tenants in two years: 19,000 Basic, 950 Pro and 50 Enterprise, of which 15 need dedicated databases (some in a specific Indian region, two in the Middle East for a Gulf hospital group whose health-data rules require in-country storage). Design the platform: tiers and placement, tenant catalogue, routing, isolation per tier, noisy-neighbour controls, migrations across all databases, tenant moves, per-tenant cost visibility and offboarding. Extend the starter graph and give your capacity reasoning. Say what breaks first.
 ::acceptance
 - A bridge design with explicit tiers and a catalogue that maps tenants to placements and regions.
 - Isolation per tier: RLS in pools, dedicated databases (and keys) for silos, residency honoured.
@@ -1147,9 +1158,9 @@ Per-tenant cost: tag storage by tenant prefix and sample database time per tenan
 {
   "nodes": [
     { "id": "users", "type": "client", "label": "Users of 20,000 tenants" },
-    { "id": "app", "type": "app-server", "label": "SiteLedger app", "props": { "instances": 4 } },
+    { "id": "app", "type": "app-server", "label": "ClinicDesk app", "props": { "instances": 4 } },
     { "id": "db", "type": "database", "label": "PostgreSQL" },
-    { "id": "files", "type": "object-storage", "label": "Photos and documents" }
+    { "id": "files", "type": "object-storage", "label": "Scans and documents" }
   ],
   "edges": [
     { "from": "users", "to": "app", "kind": "sync" },
@@ -1225,7 +1236,7 @@ Per-tenant cost: tag storage by tenant prefix and sample database time per tenan
 
 **What breaks first.** Operational processes rather than raw throughput: migrations and tenant moves across an ever-growing number of databases, and metrics cardinality if every metric carries a tenant label for 20,000 tenants. Automating the control plane and limiting per-tenant metrics to the top N avoid both.
 ::mistakes
-- Putting the Gulf tenants' data in India because "the catalogue is global".
+- Putting the Gulf hospitals' data in India because "the catalogue is global".
 - One giant pool for 19,000 tenants with no placement or move capability.
 - Running migrations on all databases at once with no version tracking.
 - Per-tenant metric labels on every series for 20,000 tenants.
@@ -1233,20 +1244,20 @@ Per-tenant cost: tag storage by tenant prefix and sample database time per tenan
 
 ## Automated testing
 
-**Cross-tenant tests in CI.** Seed two tenants with overlapping ids (both have project 1). For every endpoint, call it as tenant A with tenant B's ids and assert 404 or 403, never B's data. Run against a real PostgreSQL with RLS enabled and the app connecting as the application role.
+**Cross-tenant tests in CI.** Seed two tenants with overlapping ids (both have patient 1). For every endpoint, call it as tenant A with tenant B's ids and assert 404 or 403, never B's data. Run against a real PostgreSQL with RLS enabled and the app connecting as the application role.
 
 ```csharp
 [Theory]
-[InlineData("/projects/1")]
-[InlineData("/projects/1/reports")]
-[InlineData("/bills/1")]
+[InlineData("/patients/1")]
+[InlineData("/patients/1/prescriptions")]
+[InlineData("/invoices/1")]
 public async Task Tenant_A_cannot_see_tenant_B(string path)
 {
-    var client = _factory.CreateClientFor(host: "kaveri-infra.siteledger.in", tid: "kaveri-infra");
-    await SeedAsync(tenantB: 43, projectId: 1);                      // B's project 1
+    var client = _factory.CreateClientFor(host: "kaveri-care.clinicdesk.example", tid: "kaveri-care");
+    await SeedAsync(tenantB: 43, patientId: 1);                      // B's patient 1
     var response = await client.GetAsync(path);
     var body = await response.Content.ReadAsStringAsync();
-    Assert.DoesNotContain("Warangal", body);                         // a name that only B has
+    Assert.DoesNotContain("Sneha Reddy", body);                         // a name that only B has
 }
 ```
 
@@ -1336,7 +1347,7 @@ A: It validates new and updated rows, so code cannot write a row for another ten
 Q: Three noisy-neighbour defences?
 A: Per-tenant rate and concurrency limits, fair per-tenant job scheduling, and moving large tenants to other placements (plus query timeouts).
 Q: Why must cache keys include the tenant id?
-A: Different tenants have the same ids (project 1), so a shared key serves one tenant's data to another.
+A: Different tenants have the same ids (patient 1), so a shared key serves one tenant's data to another.
 Q: What makes migrations across many tenant databases safe?
 A: Expand and contract migrations, per-database version tracking, and rollout in waves.
 :::
@@ -1345,35 +1356,35 @@ A: Expand and contract migrations, per-database version tracking, and rollout in
 
 :::quiz pass=70
 ::q single
-A user on `godavari-builders.siteledger.in` changes the address to `kaveri-infra.siteledger.in` while logged in. What should happen?
-- [ ] They see Kaveri Infra's data, since the subdomain identifies the tenant.
+A user on `godavari-clinic.clinicdesk.example` changes the address to `kaveri-care.clinicdesk.example` while logged in. What should happen?
+- [ ] They see Kaveri Care's data, since the subdomain identifies the tenant.
 - [x] The request is rejected, because the host's tenant does not match the token's tenant claim.
 - [ ] They are silently redirected back.
 - [ ] RLS will handle it, so the app need not check.
 > The URL is user-controlled. Resolution must verify it against an authenticated source; RLS only filters by whatever tenant the app sets.
 ::q single
-RLS is enabled on `projects`, yet the application can read every tenant's rows. What is the most likely cause?
+RLS is enabled on `patients`, yet the application can read every tenant's rows. What is the most likely cause?
 - [ ] The policy uses `current_setting`.
 - [x] The application connects as the table owner or a superuser, and the table does not force RLS.
 - [ ] The primary key starts with tenant_id.
 - [ ] The application uses transactions.
 > Owners (without FORCE), superusers and BYPASSRLS roles skip policies. Use a dedicated application role.
 ::q single
-After a deploy, tenant 43 occasionally sees tenant 42's projects. The code runs `SET app.tenant_id = ...` at the start of each request. Why?
+After a deploy, tenant 43 occasionally sees tenant 42's patients. The code runs `SET app.tenant_id = ...` at the start of each request. Why?
 - [ ] RLS has a bug.
 - [x] The session-level setting stays on the pooled connection; a request that skips or fails before its own SET runs with the previous tenant.
 - [ ] Cache keys include the tenant.
 - [ ] The policy lacks WITH CHECK.
 > Use transaction-local `set_config(..., true)` so the setting ends with each transaction.
 ::q single
-A state corporation requires its data in a dedicated database with its own key and point-in-time restore of only its data. Which placement fits?
+A state health mission requires its data in a dedicated database with its own key and point-in-time restore of only its data. Which placement fits?
 - [ ] The shared pool, with RLS.
 - [ ] A separate schema in the shared pool.
 - [x] A dedicated (silo) database for that tenant, inside a bridge model.
 - [ ] A separate table with a different name.
 > Per-tenant keys and restores are natural with a dedicated database and very hard in a shared one.
 ::q single
-One tenant enqueued 40,000 thumbnail jobs, and other tenants' daily-report PDFs are now an hour late. What fixes this most directly?
+One tenant enqueued 40,000 scan-preview jobs, and other tenants' prescription PDFs are now an hour late. What fixes this most directly?
 - [ ] More workers.
 - [x] Per-tenant queues drained by a fair (weighted round-robin) scheduler.
 - [ ] A larger single queue.
@@ -1387,7 +1398,7 @@ Which belong in a per-tenant isolation test suite? (Select all that apply.)
 - [ ] Run all tests as the superuser to simplify setup.
 > Superuser tests bypass RLS and prove nothing about isolation.
 ::q single
-SiteLedger has 6 customers, each wanting custom features and on-premises installation. What is likely simplest?
+ClinicDesk has 6 customers, each wanting custom features and on-premises installation. What is likely simplest?
 - [ ] A pooled multi-tenant platform with RLS.
 - [x] Separate single-tenant deployments automated with infrastructure as code.
 - [ ] A bridge model with 6 silos and a control plane.

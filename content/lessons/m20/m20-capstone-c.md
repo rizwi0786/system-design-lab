@@ -7,7 +7,7 @@ status: reviewed
 template: capstone
 minutes: 3000
 prerequisites: [m10-realtime, m17-chat, m17-lms, m16-search-architecture, m12-cache-patterns, m14-observability, m14-sli-slo-sla, m15-docker, m15-ci-cd]
-related: [m10-rate-limiting, m11-background-processing, m12-redis, m12-message-queues, m13-backpressure, m14-alerting-incidents, m15-deployment-strategies, m15-kubernetes, m16-multi-level-caching, m17-notification-platform, m20-capstone-a, m20-capstone-b]
+related: [m10-rate-limiting, m11-background-processing, m12-redis, m12-message-queues, m13-backpressure, m14-alerting-incidents, m15-deployment-strategies, m15-kubernetes, m16-multi-level-caching, m17-notification-platform, m17-unique-id-generator, m17-job-scheduler, m18-lru-cache, m20-capstone-a, m20-capstone-b]
 tags: [capstone, real-time, signalr, websockets, search, caching, observability, opentelemetry, docker, deployment, slo]
 patterns: [Pub/Sub Backplane, Cache-aside, Single-flight, Competing Consumers, Bounded Queue Backpressure, Keyset Pagination, Multiwindow Burn-rate Alerting]
 summary: Build and operate a learning and communication platform with real-time course chat, asynchronous assignment workflows, search, multi-level caching, end-to-end observability with SLOs, Docker images and deployment documentation, and show that you can run it, not just write it.
@@ -138,7 +138,7 @@ About 8 weeks at 10–12 hours per week.
 | 1 | **M1 — Requirements, SLOs, HLD** | Deliverables 1–2, SLI definitions, capacity table, first ADRs | Every SLO has an SLI with a data source |
 | 2 | **M2 — Containers and observability first** | Repository layout, Dockerfiles, Compose with PostgreSQL, Redis, broker, OTel collector, Grafana; health checks; CI building images | `docker compose up` gives a running skeleton with a trace visible from API to DB |
 | 3 | **M3 — Channels and history** | Message model with sequences, REST history with keyset pagination, read state | Exercises 1 and 2 pass; 10 M seeded messages page in < 50 ms per page (measured) |
-| 4 | **M4 — Real-time** | SignalR hub, authorization per method, Redis backplane, presence, reconnect with catch-up, slow consumers | Two-node test passes; killing one node reconnects clients with no gaps |
+| 4 | **M4 — Real-time** | SignalR hub, authorization per method, Redis backplane, presence, reconnect with catch-up, slow consumers | Two-node test passes; killing one node reconnects clients with no gaps; exercise 6 passes |
 | 5 | **M5 — Async workflows** | Submission pipeline with queue and workers, notification fan-out, outbox | 8,000 submissions in an hour complete within SLO in a load test |
 | 6 | **M6 — Search and caching** | PostgreSQL FTS for materials and announcements, indexing via events, two-level cache with single-flight | Exercise 3 passes; search p99 < 1 s at 30 QPS; cache hit ratio reported |
 | 7 | **M7 — SLOs, alerts, load tests** | Burn-rate alerts, dashboards, k6 scenarios, first bottleneck fixed | Exercise 4 passes; alerts fire in a drill and link to runbook entries |
@@ -147,6 +147,23 @@ About 8 weeks at 10–12 hours per week.
 :::callout type=tip title="Observability in week 2, not week 8"
 If tracing and metrics exist from the start, every later milestone can be measured as it is built. Teams that add observability at the end discover their worst performance problems the week they hand over.
 :::
+
+**Keeping the scope realistic.** This is the largest capstone, and eight weeks of evenings is tight. The external parts are stubs: the malware scanner can be ClamAV in a container, the similarity check a simple shingle-hash comparison, the auto-grader one language with a fixed test runner. If you fall behind, cut polls, reactions, typing indicators, email digests and mobile push, in that order. Do not cut sequence numbers and catch-up, per-method authorization, the two-node test, burn-rate alerts or the load test: those are what this capstone grades.
+
+### Where each piece is taught
+
+| Piece | Lessons to revisit |
+|---|---|
+| WebSockets, SignalR, presence, chat delivery | [Real-time communication](#/lesson/m10-realtime), [Chat application](#/lesson/m17-chat) |
+| Message and submission ids that sort by time | [Distributed unique ID generator](#/lesson/m17-unique-id-generator) |
+| Announcement fan-out, push, email, preferences | [Notification platform](#/lesson/m17-notification-platform) |
+| Submission pipeline, queues, competing consumers | [Background processing](#/lesson/m11-background-processing), [message queues](#/lesson/m12-message-queues), [backpressure](#/lesson/m13-backpressure) |
+| Retention, digests, scheduled announcements, nightly index rebuilds | [Distributed job scheduler](#/lesson/m17-job-scheduler) |
+| Search with ranking and authorization | [Search architecture](#/lesson/m16-search-architecture), [Search autocomplete](#/lesson/m17-autocomplete) |
+| L1 + L2 caching, stampede protection, bounded in-process cache | [Cache patterns](#/lesson/m12-cache-patterns), [multi-level caching](#/lesson/m16-multi-level-caching), [LRU cache](#/lesson/m18-lru-cache) |
+| Slow mode, per-user limits | [Rate limiting](#/lesson/m10-rate-limiting), [Distributed rate limiter](#/lesson/m17-rate-limiter) |
+| SLIs, SLOs, burn-rate alerts, dashboards | [Observability](#/lesson/m14-observability), [SLIs, SLOs and SLAs](#/lesson/m14-sli-slo-sla), [alerting and incidents](#/lesson/m14-alerting-incidents) |
+| Images, pipelines, drain-aware rollouts | [Docker](#/lesson/m15-docker), [CI/CD](#/lesson/m15-ci-cd), [deployment strategies](#/lesson/m15-deployment-strategies) |
 
 ## Reference architecture
 
@@ -329,7 +346,7 @@ CREATE TABLE material (
 CREATE INDEX ix_material_search ON material USING gin (search);
 ```
 
-The per-channel counter row serialises writers **within one channel** but not across channels, which matches the requirement: order matters inside a channel, not globally. At 210 messages/s spread over thousands of channels, the counter row is not a hotspot; a single 2,000-learner live class sending 50 messages/s into one channel is the case to load-test. Messages are partitioned by month (`PARTITION BY RANGE (created_at)` on a table whose key includes `created_at`, or by `channel_id` hash), which keeps indexes small and makes retention a cheap `DROP PARTITION`. Materials use a **generated `tsvector` column** with a GIN index: title words weigh more than body words, and the column can never fall out of sync with the text.
+The per-channel counter row serialises writers **within one channel** but not across channels, which matches the requirement: order matters inside a channel, not globally. At 210 messages/s spread over thousands of channels, the counter row is not a hotspot; a single 2,000-learner live class sending 50 messages/s into one channel is the case to load-test. Messages are partitioned by month (`PARTITION BY RANGE (created_at)`), which keeps indexes small and makes retention a cheap `DETACH` and `DROP` of an old partition. One catch a reviewer will spot: in PostgreSQL every primary key and unique constraint on a partitioned table must include the partition key, so `(channel_id, seq)` becomes `(channel_id, seq, created_at)` and the idempotency guarantee on `client_msg_id` holds only *within* a month's partition. That is acceptable because client resends arrive within seconds, but write it down; hash partitioning by `channel_id` keeps both constraints exact, at the price of losing cheap time-based retention. Materials use a **generated `tsvector` column** with a GIN index: title words weigh more than body words, and the column can never fall out of sync with the text.
 
 ### Search: start with PostgreSQL, plan the move
 
@@ -345,7 +362,7 @@ For materials and announcements (a few million rows), PostgreSQL full-text searc
 | Search results | Not cached (personalised, filters vary) | | |
 | Static assets, public materials | CDN, long TTL with content-hashed URLs | 1 year | New hash on change |
 
-All cache reads go through a **single-flight** wrapper: when 2,000 learners join the same live class and the channel metadata has just expired, one request loads it and the other 1,999 wait for that result instead of hitting PostgreSQL 2,000 times (a cache stampede). .NET's `HybridCache` provides L1 + L2 with stampede protection built in; exercise 3 builds the core idea by hand so you understand what it does.
+The in-process L1 must be **bounded** (a size limit with least-recently-used eviction, as built in the [LRU cache](#/lesson/m18-lru-cache) lesson); an unbounded `Dictionary` used as a cache is a memory leak with a delay. All cache reads go through a **single-flight** wrapper: when 2,000 learners join the same live class and the channel metadata has just expired, one request loads it and the other 1,999 wait for that result instead of hitting PostgreSQL 2,000 times (a cache stampede). .NET's `HybridCache` provides L1 + L2 with stampede protection built in; exercise 3 builds the core idea by hand so you understand what it does.
 
 ### Observability: what to measure
 
@@ -535,7 +552,8 @@ RUN dotnet publish src/Sabha.Realtime/Sabha.Realtime.csproj -c Release -o /app
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app
 COPY --from=build /app .
-USER $APP_UID                       # non-root user provided by the .NET images
+# Run as the non-root user provided by the .NET images (Dockerfile has no end-of-line comments).
+USER $APP_UID
 ENV ASPNETCORE_HTTP_PORTS=8080
 EXPOSE 8080
 ENTRYPOINT ["dotnet", "Sabha.Realtime.dll"]
@@ -1399,7 +1417,7 @@ public sealed class FanOutHub
 }
 ```
 
-Why disconnect instead of dropping single messages? Because a client that silently misses message 18,206 shows a wrong conversation until it notices the gap. Disconnecting is an explicit signal: the client reconnects (with jitter) and resumes from its last sequence through history, which is the reliable path. SignalR itself has similar protection: each connection's outgoing data goes through a pipe with a limit (`TransportMaxBufferSize`, default 64 KB in recent versions), and when a client cannot keep up, sends wait on that connection rather than buffering without bound. The exercise makes that policy explicit and observable: export a `sabha.connections.dropped_slow` counter and alert if it rises sharply, which usually means a network problem on the client side of the country rather than a server bug.
+Why disconnect instead of dropping single messages? Because a client that silently misses message 18,206 shows a wrong conversation until it notices the gap. Disconnecting is an explicit signal: the client reconnects (with jitter) and resumes from its last sequence through history, which is the reliable path. SignalR itself has similar protection: each connection's outgoing data goes through a pipe with a limit (`TransportMaxBufferSize`, default 64 KB in recent versions), and when a client cannot keep up, sends wait on that connection rather than buffering without bound. The exercise makes that policy explicit and observable: export a `sabha.connections.dropped_slow` counter and alert if it rises sharply, which usually means a regional mobile-network problem rather than a server bug.
 ::alternatives
 **Drop oldest** (`BoundedChannelFullMode.DropOldest`) suits telemetry-like streams (typing indicators, presence, live poll counts) where only the latest value matters. Use it for those event types and disconnect-on-full for chat messages; many real systems use two queues per connection, one per class of event.
 ::mistakes

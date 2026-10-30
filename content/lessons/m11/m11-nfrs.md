@@ -51,7 +51,7 @@ Imagine ordering a pizza. The functional requirement is "deliver a pizza to my a
 - **What if the oven breaks?** How much of tonight's order queue can the shop lose (that is RPO: how much recent work you may lose) and how long until it is cooking again (that is RTO: how long recovery may take)?
 - **How many orders at once?** On a cricket final night, can it handle 500 orders an hour, or only 50? That is throughput.
 
-Each of these is a *quality* of the service rather than the service itself. Software teams call them non-functional requirements, and the rule is simple: **if you cannot measure it, you cannot design for it.** "Fast" becomes "99 out of 100 bill lookups finish within 300 ms".
+Each of these is a *quality* of the service rather than the service itself. Software teams call them non-functional requirements, and the rule is simple: **if you cannot measure it, you cannot design for it.** "Fast" becomes "99 out of 100 bill lookups finish within 400 ms".
 
 ## First-principles explanation
 
@@ -78,19 +78,19 @@ You will rarely need all of them. In an interview, pick the **3–5 that matter 
 A measurable NFR has four parts: **metric, target, scope, and measurement window.**
 
 ```text
-"p99 latency" (metric) "below 300 ms" (target) "for GET /properties/{id}/bill,
-measured at the load balancer" (scope) "over each 5-minute window at up to 2,000 RPS" (window and load)
+"p99 latency" (metric) "below 400 ms" (target) "for GET /bills/{propertyId},
+measured at the load balancer" (scope) "over each 5-minute window at up to 100 RPS" (window and load)
 ```
 
 Rewriting the usual suspects for a municipal property-tax portal:
 
 | Vague | Measurable |
 |---|---|
-| "The site must be fast." | Bill lookup p99 < 300 ms and p50 < 80 ms at up to 2,000 RPS; payment confirmation p99 < 2 s excluding the time spent in the UPI app. |
+| "The site must be fast." | Bill lookup p99 < 400 ms and p50 < 100 ms at up to 100 RPS; payment confirmation p99 < 2 s excluding the time spent in the UPI app. |
 | "It must always be up." | 99.9 % of valid requests succeed per 30 days (about 43 minutes of failure budget); 99.95 % during the rebate deadline week. |
 | "We can never lose data." | Committed payments: RPO 0 (no loss). Draft applications: RPO 15 minutes. Uploaded documents: 11 nines durability. |
 | "Must recover quickly." | RTO 30 minutes for a zone failure, 4 hours for a region failure. |
-| "Must be scalable." | Handle the last-day peak of 6,000 RPS (estimated at 3× normal peak) with the same p99; scale out without code changes. |
+| "Must be scalable." | Handle the last-day peak (estimated below at about 34 lookups/s and 7 payments/s) with about 3× headroom, 100 lookups/s, at the same p99; scale out without code changes. |
 | "Must be secure." | Citizen login by OTP; staff by SSO with MFA; every refund and waiver audited with who, what, when; PII encrypted at rest. |
 
 Notice that many rewrites split one adjective into *several* targets per data type or per flow. "Never lose data" means something different for a payment and for a half-filled form, and treating them the same either wastes money or loses payments.
@@ -228,7 +228,7 @@ flowchart LR
     API --> OBJ["Object storage: receipts (11-nines tier, versioning)"]
 ```
 
-Each arrow carries an NFR. The **load balancer** is where latency percentiles and error rates are measured, because that is closest to what users experience while still under our control. The **cache** exists only because of the bill-lookup latency target at 2,000 RPS. The **synchronous standby** in another zone delivers RPO 0 for committed payments and a few minutes of RTO for a zone failure. **WAL archiving** to separate backup storage gives point-in-time recovery for mistakes that replication would copy, such as an accidental `DELETE`. The **dotted asynchronous replica in a second region** covers the rare region-wide disaster with an RPO of seconds, a weaker promise we accept to avoid adding cross-region latency to every commit. **Receipts** sit in a highly durable object-storage tier with versioning, so an overwrite can be undone.
+Each arrow carries an NFR. The **load balancer** is where latency percentiles and error rates are measured, because that is closest to what users experience while still under our control. The **cache** is a small optimisation for the deadline-day spike: at the estimated 34 lookups per second, indexed PostgreSQL reads alone would meet the 400 ms p99, so the cache is optional and must never be the only copy of anything. The **synchronous standby** in another zone delivers RPO 0 for committed payments and a few minutes of RTO for a zone failure. **WAL archiving** to separate backup storage gives point-in-time recovery for mistakes that replication would copy, such as an accidental `DELETE`. The **dotted asynchronous replica in a second region** covers the rare region-wide disaster with an RPO of seconds, a weaker promise we accept to avoid adding cross-region latency to every commit. **Receipts** sit in a highly durable object-storage tier with versioning, so an overwrite can be undone.
 
 ### A payment commit under RPO 0
 
@@ -248,7 +248,7 @@ sequenceDiagram
     Note over P,S: If the primary dies now, the standby already has the payment
 ```
 
-When the UPI gateway calls back, the API verifies the signature and checks the idempotency key so a repeated webhook does not record the payment twice. The transaction inserts the payment and marks the bill paid together. With `synchronous_commit = on` and a synchronous standby configured, PostgreSQL does not acknowledge the commit until the standby has flushed the change to disk. Only then does the API return 200 to the gateway. If the primary fails one millisecond later, the standby already holds the payment, so promoting it loses nothing: that is RPO 0. The price is the extra round trip to the other zone on every commit, typically a millisecond or two within a region (an estimate; measure yours).
+When the UPI gateway calls back, the API verifies the signature and checks the idempotency key so a repeated webhook does not record the payment twice. The transaction inserts the payment and marks the bill paid together. With `synchronous_commit = on` and a synchronous standby configured, PostgreSQL does not acknowledge the commit until the standby has flushed the change to disk. Only then does the API return 200 to the gateway. If the primary fails one millisecond later, the standby already holds the payment, so promoting it loses nothing: that is RPO 0. The price is the extra round trip to the other zone on every commit, typically a millisecond or two within a region (an estimate; measure yours). There is a second price a reviewer will ask about: if the only synchronous standby is down, commits **wait** instead of failing over to asynchronous mode. Plan for it: run two standbys with `synchronous_standby_names = 'ANY 1 (s1, s2)'` so either can acknowledge, or use a managed service whose HA mode handles this, and alert when the standby count drops.
 
 ## Step-by-step example
 
@@ -504,7 +504,7 @@ Decisions worth defending:
 
 ## Bad design vs good design
 
-**Bad: adjectives in the contract.** The tender document says "the system shall be fast, secure, scalable and highly available". The vendor delivers a portal that takes 4 seconds per page at 50 users and fails at 200. Everyone argues about whether 4 seconds is "fast". Nothing in the contract settles it.
+**Bad: adjectives in the contract.** The request for proposal (RFP) says "the system shall be fast, secure, scalable and highly available". The vendor delivers a portal that takes 4 seconds per page at 50 users and fails at 200. Everyone argues about whether 4 seconds is "fast". Nothing in the contract settles it.
 
 **Bad: one number for everything.** "RPO 0 and 99.99 % for the whole system." The team pays for synchronous replication and multi-zone everything, including the nightly analytics export and the PDF generator, and still misses the deadline-week target because the UPI dependency was never considered.
 
@@ -678,8 +678,8 @@ The lookarounds `(?<![\w-])` and `(?![\w-])` are word boundaries that also treat
 Suggest a template for each vague word, for example "fast" → "p99 < ___ ms for ___ at ___ RPS".
 :::
 
-:::exercise id=m11-nfrs-ex2 difficulty=beginner kind=written title="Rewrite the tender's NFRs"
-A state transport department's tender for an online driving-licence appointment system contains these NFRs. Rewrite each as one or more measurable targets, and add the assumption or constraint you relied on.
+:::exercise id=m11-nfrs-ex2 difficulty=beginner kind=written title="Rewrite the RFP's NFRs"
+A state transport department's request for proposal (RFP) for an online driving-licence appointment system contains these NFRs. Rewrite each as one or more measurable targets, and add the assumption or constraint you relied on.
 
 1. "The system shall be fast."
 2. "The system shall be available 24×7."
@@ -704,11 +704,11 @@ Booking records, uploaded documents and search caches have very different loss c
 1. **Fast:** slot search p50 < 150 ms and p99 < 600 ms at the load balancer at up to 300 RPS; booking confirmation p99 < 1.5 s.
 2. **Available 24×7:** 99.9 % of valid requests succeed per 30 days for search and booking (about 43 min of failure budget); planned maintenance only between 01:00 and 04:00 with a banner, and not counted against the target if announced 48 hours ahead.
 3. **No data lost:** confirmed bookings and test results: RPO 0 (synchronous standby). Uploaded documents: highly durable object storage with versioning, RPO 0 once the upload is acknowledged. Search caches and session data: may be lost, rebuilt on demand.
-4. **Large number of users:** assumption: about 1.5 million licence applications a year in the state, 3 bookings or reschedules each, slot release at 10:00 daily causing a 5× spike. Target: 4.5 M bookings a year ≈ 12,300/day; spike capacity of 200 bookings/s for 10 minutes with p99 < 1.5 s.
+4. **Large number of users:** assumption: about 1.5 million licence applications a year in the state, 3 bookings or reschedules each: 4.5 M bookings a year ÷ 365 ≈ 12,300/day. Slots are released at 10:00 daily, and we assume 30 % of the day's bookings (≈ 3,700) happen in the first 10 minutes: 3,700 ÷ 600 s ≈ 6 bookings/s on average, with a 5× burst in the first minute ≈ 30 bookings/s, and about 10 slot searches per booking ≈ 300 searches/s. Target: 50 bookings/s and 300 search RPS during the release window with p99 < 1.5 s for booking (all estimates; check against last year's logs).
 5. **Recover quickly:** RTO 15 minutes for a zone failure (automatic failover); RTO 4 hours for a region failure (restore into the second region); restore drill every quarter.
-6. **Secure:** applicants log in with OTP; examiners and RTO staff use SSO with MFA; every test result entry and booking override is audited (who, what, when, from where); Aadhaar or licence numbers are masked in logs and encrypted at rest.
+6. **Secure:** applicants log in with OTP; examiners and transport-office staff use SSO with MFA; every test result entry and booking override is audited (who, what, when, from where); Aadhaar or licence numbers are masked in logs and encrypted at rest.
 
-**Assumptions:** 1.5 M applications a year; 5× spike at slot release. **Constraint:** data must stay in India in the state's empanelled data centre.
+**Assumptions:** 1.5 M applications a year; 30 % of daily bookings in the first 10 minutes after release, with a 5× burst in the first minute. **Constraint:** data must stay in India in the state's empanelled data centre.
 ::mistakes
 - "p99 < 1 s" with no load, so any idle system passes.
 - One RPO for everything, which either overspends on caches or under-protects bookings.
@@ -1033,7 +1033,7 @@ NFRs are the part of a design most often left untested. Each family has a practi
 [Fact]
 public void Bill_lookup_p99_within_target_at_load()
 {
-    var samples = LoadTestResults.Read("bill-lookup-2000rps.csv");   // produced by the load tool
+    var samples = LoadTestResults.Read("bill-lookup-100rps.csv");   // produced by the load tool
     Assert.True(Percentiles.NearestRank(samples, 99) <= 400, "p99 above 400 ms");
 }
 ```
@@ -1050,10 +1050,10 @@ public void Bill_lookup_p99_within_target_at_load()
 
 ## Real-world application
 
-- **Government tenders** in India and elsewhere increasingly specify measurable service levels (uptime percentages, response-time percentiles, RPO/RTO) instead of adjectives, because the vague versions were impossible to enforce.
+- **Government and enterprise RFPs** in India and elsewhere increasingly specify measurable service levels (uptime percentages, response-time percentiles, RPO/RTO) instead of adjectives, because the vague versions were impossible to enforce.
 - **Cloud providers** publish SLAs per service configuration and document RPO/RTO characteristics of their database high-availability and geo-replication features. Your NFRs decide which configuration to buy.
 - **Payment systems** typically pair RPO 0 within a region with reconciliation against the payment network's settlement records, because the database alone cannot prove that every external payment was recorded.
-- **Infrastructure project-monitoring platforms** usually need modest latency and availability (office users, daily updates) but strong durability for contract documents and measurement records that may be needed years later in arbitration.
+- **Hospital and clinic record systems** often need only modest latency and office-hours availability for back-office screens, but very strong durability for patient records and prescriptions that must be kept for years for legal and medical reasons.
 - **SRE practice** (Google's SRE book and many teams since) turns these NFRs into SLIs and SLOs with error budgets, so availability becomes a managed budget rather than an argument.
 
 ## Interview questions
@@ -1128,7 +1128,7 @@ A: About 2.3 hours of copying (2,097,152 MB ÷ 250 MB/s ≈ 8,400 s), before rep
 A requirement says "the site must be fast". Which rewrite is best?
 - [ ] "Average response time under 200 ms."
 - [ ] "The site must be very fast."
-- [x] "Bill lookup p99 under 400 ms, measured at the load balancer, at up to 2,000 RPS."
+- [x] "Bill lookup p99 under 400 ms, measured at the load balancer, at up to 100 RPS."
 - [ ] "Use a CDN and Redis."
 > A good NFR names the metric (percentile), target, scope and load. An average hides the tail, and a technology is a solution, not a requirement.
 ::q single

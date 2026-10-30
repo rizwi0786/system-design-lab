@@ -9,7 +9,7 @@ minutes: 75
 prerequisites: [m09-transactions-acid, m09-query-planning]
 related: [m09-locking, m09-replicas, m10-timeouts-retries, m10-bulkhead]
 tags: [postgresql, npgsql, pgbouncer, connection-pool, capacity-planning, performance]
-patterns: [Object Pool]
+patterns: [Connection Pool]
 summary: Opening a PostgreSQL connection is expensive and each one costs the server a process. Learn how Npgsql's pool works, size pools with Little's Law, fit many app instances under max_connections, choose PgBouncer session or transaction mode, and recognise and fix pool exhaustion.
 references:
   - title: "Npgsql documentation — Connection string parameters (pooling)"
@@ -105,9 +105,9 @@ The same arithmetic shows what kills you. If one code path keeps the connection 
 
 Every instance has its own pool, and the server's limit is shared:
 
-> instances × Maximum Pool Size ≤ max_connections − superuser_reserved_connections − connections for replication, migrations, monitoring and humans
+> instances × Maximum Pool Size ≤ max_connections − superuser_reserved_connections − connections for migrations, jobs, monitoring and humans
 
-With `max_connections = 200`, 3 reserved for superusers, about 2 for replication slots and 15 kept for admin, jobs and monitoring, the application budget is about **180**. With 40 pods at the default `Maximum Pool Size = 100`, the fleet could try to open 4,000. The first 180 succeed, and every further attempt fails with `FATAL: sorry, too many clients already` (SQLSTATE `53300`).
+With `max_connections = 200`, 3 reserved for superusers and about 17 kept for admin, jobs, migrations and monitoring, the application budget is about **180**. Replication does not need a share: since PostgreSQL 12, WAL sender connections are limited by `max_wal_senders` and no longer count against `max_connections`. (Since PostgreSQL 16, `reserved_connections` can also hold slots for roles granted `pg_use_reserved_connections`, which is a neat way to keep the monitoring and migration roles able to log in when the app has used everything else.) With 40 pods at the default `Maximum Pool Size = 100`, the fleet could try to open 4,000. The first 180 succeed, and every further attempt fails with `FATAL: sorry, too many clients already` (SQLSTATE `53300`).
 
 Divide the budget: 180 ÷ 40 pods ≈ **4 connections per pod**. That sounds tiny, but recall the busy-connection estimate: 80 at peak across the fleet is 2 per pod. A small pool with short hold times beats a big pool with long ones.
 
@@ -1235,7 +1235,7 @@ Without PgBouncer, 120 pods × even 5 connections = 600 plus 1,500 functions wou
 **6. Metrics and alerts.** PgBouncer `cl_waiting > 0` for more than 10 s (clients queueing for a server connection); `maxwait > 1 s`. Application `db.pool.wait` p99 > 100 ms and `db.pool.exhausted` > 0 per minute. PostgreSQL: count of `idle in transaction` sessions older than 5 s (should be ~0), total backends > 80 % of `max_connections`, and CPU > 75 % sustained (in which case more connections will not help). Track the hold-time histogram per endpoint; a jump there is the early warning before exhaustion.
 ::mistakes
 - Putting `LISTEN/NOTIFY` workers behind transaction-mode PgBouncer, where notifications are delivered to whichever session happens to be attached, or lost.
-- Sizing PgBouncer's server pool to `max_connections`, leaving no room for migrations, replication and admin.
+- Sizing PgBouncer's server pool to `max_connections`, leaving no room for migrations, monitoring and admin.
 - Leaving Npgsql's `Maximum Pool Size` at 100 on functions, so a scale-out to 1,500 instances means 150,000 potential client connections.
 - Assuming more server connections increase throughput on a 16-core machine.
 :::
@@ -1279,7 +1279,7 @@ public class PoolOptionsTests
 - **Exam results, ticket launches, sale days**: spikes 20 to 50× normal. Caching absorbs reads, short hold times and small pools keep the database reachable, and pool-exhaustion errors map to `503 Retry-After` instead of hangs.
 - **Kubernetes microservices**: dozens of services × replicas × default pool size routinely exceed `max_connections`; a per-service connection budget and PgBouncer are standard practice.
 - **Serverless and edge functions**: cannot keep pools across invocations, so they always need a server-side pooler or a managed proxy.
-- **Government and infrastructure portals** with heavy month-end reporting: separate data sources (bulkheads) keep reports from starving citizen-facing endpoints.
+- **Banking, payroll and tax portals** with heavy month-end reporting: separate data sources (bulkheads) keep statement and report jobs from starving customer-facing endpoints.
 - **Multi-region deployments**: pools per region pointing at local replicas for reads (see [Read replicas and replication lag](#/lesson/m09-replicas)), and `Connection Lifetime` set so pools rebalance after failover.
 
 ## Interview questions

@@ -110,7 +110,7 @@ A hash maps field names to values under one key: `HSET session:ab12 userId 42 ci
 - Update one field without rewriting the object: `HINCRBY session:ab12 cartCount 1`.
 - Read one field (`HGET`), several (`HMGET`) or all (`HGETALL` — fine for small hashes).
 - Small hashes are stored in a compact encoding, so many small objects as hashes often use less memory than the same data as separate string keys.
-- TTL applies to the **whole key**. (Redis 7.4 added per-field expiry with `HEXPIRE`; check your Redis version and managed service before relying on it.)
+- TTL applies to the **whole key**. (Redis 7.4 and Valkey 9.0 added per-field expiry with `HEXPIRE`; check your server version and managed service before relying on it.)
 
 Use for sessions, user profiles, per-entity counters ("views", "likes", "shares" as fields of one hash).
 
@@ -174,7 +174,7 @@ Good for: cache-invalidation broadcasts to L1 caches (with TTLs as the safety ne
 
 - **Geospatial** (`GEOADD`, `GEOSEARCH`): store longitude/latitude and query "within 2 km". Built on sorted sets. Good for "nearby drivers".
 - **Bitmaps** (`SETBIT`, `BITCOUNT`): one bit per user id for daily-active flags; 10 million users ≈ 1.25 MB per day.
-- **Bloom filters** are available through Redis Stack / modules; [cache failures](#/lesson/m12-cache-failures) builds one by hand.
+- **Bloom filters** (`BF.ADD`, `BF.EXISTS`) are built into Redis 8 (earlier versions needed Redis Stack); Valkey offers them through the `valkey-bloom` module. [Cache failures](#/lesson/m12-cache-failures) builds one by hand.
 
 ### TTLs in Redis
 
@@ -222,7 +222,7 @@ Each primary owns a range of slots (with three primaries, roughly 0–5460, 5461
 - **For large values.** Values over ~100 KB (estimate) make every read and replication slow; store blobs in object storage and cache the URL.
 - **For queries.** Redis has no joins or ad-hoc filtering. If you are maintaining six sorted sets to emulate an index, you want a database.
 
-A note on licensing and forks: Redis's licence changed in 2024, and the Linux Foundation's **Valkey** fork is wire-compatible and offered by several cloud providers. The commands and concepts in this lesson apply to both; check which licence and service fit your organisation.
+A note on licensing and forks: in 2024 Redis moved from the BSD licence to source-available licences, and the Linux Foundation started **Valkey**, a BSD-licensed fork of Redis 7.2 that is wire-compatible and offered by the major cloud providers. In 2025 Redis 8 added the open-source AGPLv3 as a licence option and folded the former Redis Stack features (JSON, search, Bloom filters) into the core. The data structures, commands, persistence and cluster concepts in this lesson apply to both; StackExchange.Redis talks to either. Check which licence and managed service fit your organisation, and test newer commands against the exact server you run.
 
 ## Visual explanation
 
@@ -1756,7 +1756,7 @@ public async Task Sliding_window_allows_limit_then_recovers()
 - **Rate limiting** at API gateways: fixed-window counters (`INCR` + `EXPIRE`) or sliding windows (sorted sets or Lua), shared across all gateway instances.
 - **Nearby search** for ride-hailing and delivery with geospatial commands.
 - **Lightweight job queues and event streams** with lists or streams when a full broker is not justified.
-- **Real-time dashboards.** A site-progress dashboard for a highway project can keep "today's completed chainage by contractor" in a sorted set, updated as site engineers submit entries, while the daily report is generated from PostgreSQL.
+- **Real-time dashboards.** A quick-commerce operations dashboard can keep "orders delivered today per dark store" in a sorted set, updated with `ZINCRBY` as riders complete deliveries, while the end-of-day report is generated from PostgreSQL.
 
 ## Interview questions
 

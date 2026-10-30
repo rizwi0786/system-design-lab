@@ -97,7 +97,7 @@ Traffic is not flat. Office tools peak in working hours. Food delivery peaks at 
 
 - general consumer apps: 2–3x,
 - strongly time-of-day products (food, commute, streaming in the evening): 3–5x,
-- event-driven spikes (exam results, ticket sales, flash sales): 10–100x, and this case needs its own design (queues, pre-rendering, waiting rooms).
+- event-driven spikes (exam results, ticket sales, flash sales): 10–100x, and this case needs its own design (queues, pre-rendering, waiting rooms; see the [flash sale case study](#/lesson/m17-flash-sale)).
 
 Say which one you are using and why. The interviewer may correct you, which is good: it is information.
 
@@ -188,7 +188,7 @@ Here are fourteen drills. For each, cover the solution, set a timer for the targ
 
 *Arithmetic:* writes: 10^8 ÷ 2.5 × 10^6 seconds per month = 40 per second (exact 38.6). Reads: × 100 = 4,000 per second. Peak reads: × 3 = 12,000 per second.
 
-*So what:* writes are trivial; reads dominate. That points at a cache in front of the database and maybe a CDN for redirects, not at sharding.
+*So what:* writes are trivial; reads dominate. That points at a cache in front of the database and maybe a CDN for redirects, not at sharding. Forty new ids per second is also nothing for an id scheme; even a single database sequence copes, and the [unique ID generator](#/lesson/m17-unique-id-generator) case study shows when that stops being true.
 
 ### Drill 4 — URL shortener storage over 5 years (target 45 s)
 
@@ -246,13 +246,13 @@ Here are fourteen drills. For each, cover the solution, set a timer for the targ
 
 *So what:* 60 MB/s of continuous ingestion needs a buffer (a log or stream) between producers and the indexer, and the 30-day figure decides your search-cluster disk. Dropping debug logs or sampling them is often the cheapest optimisation; ask whether all 100 lines per second are needed.
 
-### Drill 11 — Toll-plaza event feed (target 90 s)
+### Drill 11 — Mall parking event feed (target 90 s)
 
-*Givens:* 1,200 toll plazas, average 8 lanes each, at peak one vehicle per lane every 10 seconds, 1 KB event plus a 50 KB number-plate image, daily average is one third of peak.
+*Givens:* a parking-payments company runs 1,200 shopping-mall car parks, average 8 entry and exit lanes each; at peak one vehicle passes each lane every 10 seconds; each pass is a 1 KB event plus a 50 KB number-plate image; the daily average is one third of peak.
 
 *Arithmetic:* lanes: 1,200 × 8 = 9,600. Peak events: 9,600 ÷ 10 = 960 per second. Peak image throughput: 960 × 50 KB = 48 MB/s. Daily average events: 320 per second × 86,400 ≈ 2.8 × 10^7 events per day. Images per day: 2.8 × 10^7 × 50 KB ≈ 1.4 TB.
 
-*So what:* about 1,000 events per second is comfortable for one well-tuned PostgreSQL primary with batch inserts, but the images must go to object storage with only a key in the row. Plaza connectivity is unreliable, so gateways need local buffering. The estimate says "not a big-data problem for events, a storage-cost problem for images".
+*So what:* about 1,000 events per second is comfortable for one well-tuned PostgreSQL primary with batch inserts, but the images must go to object storage with only a key in the row. Car-park network links drop from time to time, so lane gateways need local buffering. The estimate says "not a big-data problem for events, a storage-cost problem for images".
 
 ### Drill 12 — Notification blast (target 45 s)
 
@@ -397,7 +397,7 @@ internal static class Pick
 
 public sealed class QpsDrillTemplate : IDrillTemplate
 {
-    private static readonly string[] Products = { "a food-delivery app", "a chat app", "a ride-hailing app", "a site-inspection app" };
+    private static readonly string[] Products = { "a food-delivery app", "a chat app", "a ride-hailing app", "a hotel-booking app" };
     public string Category => "qps";
 
     public Drill Create(Random rng, string id)
@@ -702,7 +702,7 @@ public static class Program
 :::exercise id=m19-estimation-practice-ex1 difficulty=beginner kind=written title="Three drills in four and a half minutes"
 Set a timer for 4 minutes 30 seconds and solve all three on paper. Show the powers-of-ten arithmetic and finish each with one design consequence.
 
-1. A site-inspection app for highway projects: 200,000 daily users, each uploads 15 photos per working day at 1.5 MB. Storage per year (250 working days), single copy.
+1. A school homework app: 200,000 daily student users, each uploads 15 photos of handwritten homework pages per school day at 1.5 MB. Storage per year (250 school days), single copy.
 2. A ride-hailing app: 3 million DAU, each phone sends a location update every 4 seconds while a trip is active, and the average user is on a trip 20 minutes a day. Average and peak (3x) location updates per second.
 3. An exam-results website: 1.5 million students check their result within the first hour after release, each loads 3 pages. Peak requests per second, assuming the first 10 minutes take half of the hour's traffic.
 ::acceptance
@@ -719,13 +719,13 @@ Drill 3: half of 4.5 million page loads arrive in 600 seconds.
 ::hint
 Reference shapes: (1) users × photos × bytes × days. (2) DAU × (1,200 s ÷ 4) ÷ 86,400 × 3. (3) 1.5 × 10^6 × 3 × 0.5 ÷ 600.
 ::solution
-**1. Photos.** 2 × 10^5 × 15 = 3 × 10^6 photos per day. × 1.5 MB = 4.5 × 10^6 MB = 4.5 TB per working day. × 250 = 1,125 TB ≈ 1.1 PB per year. *Consequence:* object storage with lifecycle tiering, client-side compression (a 1.5 MB phone photo often compresses to 300–500 KB with little visible loss, an estimate worth testing), and never storing images in the database.
+**1. Photos.** 2 × 10^5 × 15 = 3 × 10^6 photos per day. × 1.5 MB = 4.5 × 10^6 MB = 4.5 TB per school day. × 250 = 1,125 TB ≈ 1.1 PB per year. *Consequence:* object storage with lifecycle tiering, client-side compression (a 1.5 MB phone photo often compresses to 300–500 KB with little visible loss, an estimate worth testing), and never storing images in the database.
 
 **2. Location updates.** 1,200 s ÷ 4 = 300 updates per user per day. 3 × 10^6 × 300 = 9 × 10^8 per day. ÷ 86,400 ≈ 10,400 per second average. × 3 ≈ 31,000 per second at peak. *Consequence:* these are high-rate, short-lived writes; keep the latest position in memory (an in-memory geo index or cache) and only sample a fraction into durable storage for trip history.
 
-**3. Exam results.** 1.5 × 10^6 × 3 = 4.5 × 10^6 page loads in the hour. Half in 600 s: 2.25 × 10^6 ÷ 600 ≈ 3,750 per second for 10 minutes, roughly 30x the hour's later average. *Consequence:* pre-render result pages or serve results from a CDN-cached static store keyed by roll number, and add a waiting room. Do not let 3,750 per second hit the database with a query per page.
+**3. Exam results.** 1.5 × 10^6 × 3 = 4.5 × 10^6 page loads in the hour. Half in 600 s: 2.25 × 10^6 ÷ 600 ≈ 3,750 per second for 10 minutes, five times the rate of the remaining 50 minutes (2.25 × 10^6 ÷ 3,000 s = 750 per second) and three times the hour's average of 1,250 per second. *Consequence:* pre-render result pages or serve results from a CDN-cached static store keyed by roll number, and add a waiting room. Do not let 3,750 per second hit the database with a query per page.
 ::mistakes
-- Using 365 days for a working-day product.
+- Using 365 days for a school-day product.
 - Forgetting that location updates only happen during trips.
 - Averaging the exam traffic over 24 hours, which hides a spike that is the whole point of the question.
 :::
@@ -991,32 +991,32 @@ Two details worth noticing. "2.5 Tbps": `ps` is stripped, leaving `2.5Tb`; the t
 - Grading by difference (`|e - r|`) instead of ratio, which makes every large-number estimate look terrible.
 :::
 
-:::exercise id=m19-estimation-practice-ex4 difficulty=intermediate kind=hld title="Size the toll-event platform from your estimate"
-Use drill 11's numbers (960 events per second at peak, 48 MB/s of images at peak, about 1.4 TB of images per day, unreliable plaza connectivity) to turn the naive starter design into one whose every component is justified by a number. Put the number in each node's label.
+:::exercise id=m19-estimation-practice-ex4 difficulty=intermediate kind=hld title="Size the parking-event platform from your estimate"
+Use drill 11's numbers (960 events per second at peak, 48 MB/s of images at peak, about 1.4 TB of images per day, unreliable car-park connectivity) to turn the naive starter design into one whose every component is justified by a number. Put the number in each node's label.
 ::acceptance
 - Images go to object storage, and only keys go into the database.
-- A durable buffer absorbs plaza reconnect bursts.
+- A durable buffer absorbs car-park reconnect bursts.
 - Instance counts are derived from a stated per-instance capacity and utilisation.
 - The database stays a single primary, with the estimate quoted to justify it.
 - Nothing is added that no number justifies (no stream platform, no sharded database).
 ::hint
 Which of the two flows (1 KB events or 50 KB images) is the storage problem, and which is the throughput problem?
 ::hint
-When 200 plazas reconnect after an outage, they upload a backlog at once. What absorbs that?
+When 200 car parks reconnect after an outage, they upload a backlog at once. What absorbs that?
 ::hint
 Assume an ingest instance handles 400 events per second at 60 % utilisation: 960 ÷ 240 = 4, plus 1 spare.
 ::hint
-Shape: plazas → load balancer → ingest API → queue → workers → PostgreSQL. Plazas → object storage with pre-signed upload URLs issued by the API.
+Shape: lane gateways → load balancer → ingest API → queue → workers → PostgreSQL. Gateways → object storage with pre-signed upload URLs issued by the API.
 ::starter
 ```json
 {
   "nodes": [
-    { "id": "plaza", "type": "client", "label": "Toll plaza gateways", "props": { "rps": 960 } },
-    { "id": "api", "type": "app-server", "label": "Toll API", "props": { "instances": 1 } },
+    { "id": "gw", "type": "client", "label": "Car-park lane gateways", "props": { "rps": 960 } },
+    { "id": "api", "type": "app-server", "label": "Parking API", "props": { "instances": 1 } },
     { "id": "db", "type": "database", "label": "PostgreSQL (events and images)" }
   ],
   "edges": [
-    { "from": "plaza", "to": "api", "kind": "sync" },
+    { "from": "gw", "to": "api", "kind": "sync" },
     { "from": "api", "to": "db", "kind": "sync" }
   ]
 }
@@ -1025,7 +1025,7 @@ Shape: plazas → load balancer → ingest API → queue → workers → Postgre
 ```json
 {
   "nodes": [
-    { "id": "plaza", "type": "client", "label": "1,200 plazas, 960 events/s peak, local buffer for outages", "props": { "rps": 960 } },
+    { "id": "gw", "type": "client", "label": "1,200 car parks, 960 events/s peak, local buffer for outages", "props": { "rps": 960 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
     { "id": "api", "type": "app-server", "label": "Ingest API: 960/s / (400 x 0.6) = 4 + 1 spare", "props": { "instances": 5 } },
     { "id": "obj", "type": "object-storage", "label": "Plate images: 48 MB/s peak, 1.4 TB/day, 90-day lifecycle" },
@@ -1035,12 +1035,12 @@ Shape: plazas → load balancer → ingest API → queue → workers → Postgre
     { "id": "mon", "type": "monitoring", "label": "Alerts: queue depth, insert lag, upload errors" }
   ],
   "edges": [
-    { "from": "plaza", "to": "lb", "kind": "sync", "label": "1 KB event" },
+    { "from": "gw", "to": "lb", "kind": "sync", "label": "1 KB event" },
     { "from": "lb", "to": "api", "kind": "sync" },
-    { "from": "api", "to": "q", "kind": "async", "label": "enqueue, ack plaza" },
+    { "from": "api", "to": "q", "kind": "async", "label": "enqueue, ack gateway" },
     { "from": "q", "to": "w", "kind": "async" },
     { "from": "w", "to": "db", "kind": "sync", "label": "multi-row insert" },
-    { "from": "plaza", "to": "obj", "kind": "sync", "label": "pre-signed PUT, 50 KB image" },
+    { "from": "gw", "to": "obj", "kind": "sync", "label": "pre-signed PUT, 50 KB image" },
     { "from": "api", "to": "obj", "kind": "sync", "label": "issue pre-signed URL" },
     { "from": "mon", "to": "q", "kind": "async" },
     { "from": "mon", "to": "db", "kind": "async" }
@@ -1048,7 +1048,7 @@ Shape: plazas → load balancer → ingest API → queue → workers → Postgre
 }
 ```
 
-Reasoning: the 48 MB/s image flow would dominate the API's network and the database's disk, so plazas upload images directly to object storage with short-lived pre-signed URLs and the event row stores only the object key. Events are small and modest in rate: about 1,000 per second, batched 500 at a time, is roughly 2 insert statements per second, well within one PostgreSQL primary. About 28 million rows per day make daily partitions convenient for retention. The queue exists because of the outage pattern, not because of average load. A stream platform or a sharded database would add cost and operations that no number here requires.
+Reasoning: the 48 MB/s image flow would dominate the API's network and the database's disk, so gateways upload images directly to object storage with short-lived pre-signed URLs and the event row stores only the object key. Events are small and modest in rate: about 1,000 per second, batched 500 at a time, is roughly 2 insert statements per second, well within one PostgreSQL primary. About 28 million rows per day make daily partitions convenient for retention. The queue exists because of the outage pattern, not because of average load. A stream platform or a sharded database would add cost and operations that no number here requires.
 ::mistakes
 - Storing images as `bytea` in PostgreSQL "to keep things in one place".
 - Sizing for the average and forgetting the reconnect burst after a regional outage.
@@ -1321,7 +1321,7 @@ Also test the reference answers of each template against a hand calculation for 
 ## Real-world application
 
 - **Capacity planning reviews.** Before a launch, teams write the same chain you practised: expected users, actions, peak factor, per-instance capacity from a load test, headroom. The difference from an interview is that the per-instance number comes from a measured load test, not an assumption.
-- **Cost forecasts.** Finance asks, "what will storage cost next year?" Drill 5's arithmetic, combined with the provider's price sheet, is the answer. Infrastructure-project platforms that store drone survey imagery or site photos meet this question early, because media grows faster than anything else.
+- **Cost forecasts.** Finance asks, "what will storage cost next year?" Drill 5's arithmetic, combined with the provider's price sheet, is the answer. Classifieds, social and food-delivery apps (with menu and dish photos) meet this question early, because media grows faster than anything else.
 - **Incident analysis.** "Why did the database fall over at 10:02?" is often drill 9: a deployment doubled the instance count, every instance opened its full connection pool, and the database ran out of connection slots.
 - **Vendor evaluation.** When a streaming or SMS vendor quotes a rate limit or a bandwidth tier, drills 6 and 12 tell you whether the tier is enough before you sign.
 - **Government and public-sector systems.** Results days, tax filing deadlines and scheme registrations produce the 10–100x spikes from the first-principles section. Teams that estimate the spike build waiting rooms and static result pages; teams that estimate only the daily average build outages.
@@ -1352,7 +1352,7 @@ Thank them, adopt the new number, and propagate it through the chain out loud: "
 ::q advanced
 How would you estimate when you have no idea of a key number, for example bytes per document in a new domain?
 ::a
-Bound it from both sides and pick a geometric middle. A site inspection report is more than 1 KB (a few fields) and less than 10 MB (a long PDF with photos). The geometric mean of 1 KB and 10 MB is about 100 KB. Then say which side you lean to and why, and run a quick sensitivity check: if the design does not change anywhere between 10 KB and 1 MB, the exact number does not matter and you move on. If it does, say so and propose measuring it from real samples early in the project.
+Bound it from both sides and pick a geometric middle. A health-insurance claim document is more than 1 KB (a few fields) and less than 10 MB (a long PDF with scanned bills). The geometric mean of 1 KB and 10 MB is about 100 KB. Then say which side you lean to and why, and run a quick sensitivity check: if the design does not change anywhere between 10 KB and 1 MB, the exact number does not matter and you move on. If it does, say so and propose measuring it from real samples early in the project.
 :::
 
 ## Summary and revision

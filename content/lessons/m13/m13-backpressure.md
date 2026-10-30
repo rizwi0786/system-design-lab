@@ -62,7 +62,7 @@ The common mistake in software is the opposite of all three: accept every reques
 
 A system has an **arrival rate** λ (requests per second coming in) and a **service rate** μ (requests per second it can finish). While λ < μ, any waiting line stays short. The moment λ > μ, the line grows by (λ − μ) every second, without limit. No amount of clever code fixes that; something must give.
 
-Our running example is a toll-plaza event platform. **1,200 toll plazas** send FASTag-style RFID read events to an ingestion API. On a normal day the average is about **3,000 events per second**. On a festival long weekend it peaks at about **3×**, so **9,000 events per second**. The PostgreSQL writer tier can insert about **5,000 rows per second** in batches (an estimate from load testing in this scenario; your number will differ).
+Our running example is a supermarket chain's sales-event platform. The billing counters in **1,200 stores** send point-of-sale (POS) scan events, one per item billed, through each store's POS server to a central ingestion API. On a normal day the average is about **3,000 events per second**. On a festival long weekend it peaks at about **3×**, so **9,000 events per second**. The PostgreSQL writer tier can insert about **5,000 rows per second** in batches (an estimate from load testing in this scenario; your number will differ).
 
 At peak, the backlog grows by 9,000 − 5,000 = **4,000 events per second**.
 
@@ -74,7 +74,7 @@ At peak, the backlog grows by 9,000 − 5,000 = **4,000 events per second**.
 
 Little's law says: **L = λ × W**. The average number of items in a system (L) equals the arrival rate (λ) times the average time each item spends there (W). Rearranged: **W = L ÷ λ**, or for a queue drained at rate μ, the wait for a new arrival is roughly **queue length ÷ μ**.
 
-With 2.4 million events queued and a drain rate of 5,000 per second, a new event waits 2,400,000 ÷ 5,000 = **480 seconds**, eight minutes, before it is even looked at. For a toll event that drives "low balance" SMS alerts, that is useless.
+With 2.4 million events queued and a drain rate of 5,000 per second, a new event waits 2,400,000 ÷ 5,000 = **480 seconds**, eight minutes, before it is even looked at. For a sale event that drives low-stock alerts and shelf refills, that is useless.
 
 This is the key insight: **a queue does not add capacity, it only converts overload into latency.** Queues are excellent for absorbing *short* bursts. They are terrible for *sustained* overload, because they hide the problem until the latency or the memory blows up.
 
@@ -98,7 +98,7 @@ You already rely on backpressure every day:
 
 Backpressure is ideal *inside* a system, between components you control, where the producer can afford to wait. A worker reading files from blob storage and pushing them into a bounded channel can simply pause.
 
-It is harder at the edge. A toll plaza cannot be told to "wait" forever on an open HTTP connection; that just moves the unbounded queue into thousands of open sockets. At the edge, backpressure becomes an explicit message: **`503 Service Unavailable`** (or `429 Too Many Requests` for per-client limits) with a **`Retry-After`** header. The plaza keeps the events in its local buffer and resends later. The buffer now lives at 1,200 plazas, each holding a few minutes of its own data, instead of in one server's RAM.
+It is harder at the edge. A store's POS server cannot be told to "wait" forever on an open HTTP connection; that just moves the unbounded queue into thousands of open sockets. At the edge, backpressure becomes an explicit message: **`503 Service Unavailable`** (or `429 Too Many Requests` for per-client limits) with a **`Retry-After`** header. The store keeps the events in its local buffer and resends later. The buffer now lives at 1,200 stores, each holding a few minutes of its own data, instead of in one server's RAM.
 
 ### Tool 2: load shedding and admission control
 
@@ -117,8 +117,8 @@ Principles:
 
 | Priority | Examples | Admitted while in-flight is below |
 |---|---|---|
-| Critical | toll payment confirmation, balance check | 400 (100 %) |
-| Normal | plaza event uploads, dashboard API | 340 (85 %) |
+| Critical | UPI/card payment confirmation, loyalty-points balance check | 400 (100 %) |
+| Normal | store event uploads, dashboard API | 340 (85 %) |
 | Sheddable | analytics, report exports, prefetch | 240 (60 %) |
 
 As load rises, sheddable requests are refused first (at 240 in flight), then normal (at 340), leaving 60 slots that only critical work can use. Payments keep working even when the system is drowning.
@@ -132,7 +132,7 @@ Graceful degradation means **doing less work per request** rather than doing no 
 Examples:
 
 - A product page drops "customers also bought" recommendations and shows the product, price and buy button.
-- A toll operator's dashboard stops rendering the live traffic heat map and shows only the totals.
+- A store-operations dashboard stops rendering the live sales heat map and shows only the totals.
 - A search page returns results from a cache that is 5 minutes stale instead of querying fresh.
 - A video service serves lower resolution.
 - A news feed shows the cached top 20 instead of personalised ranking.
@@ -175,7 +175,7 @@ They work at different points of the same pipeline:
 
 ```mermaid
 flowchart LR
-    P["1,200 toll plazas (local buffers)"] -->|"POST /events"| LB["Load balancer"]
+    P["1,200 stores (POS servers with local buffers)"] -->|"POST /events"| LB["Load balancer"]
     LB --> GATE["Admission gate: priority + concurrency limit"]
     GATE -->|"admitted"| API["Ingestion API"]
     GATE -.->|"503 + Retry-After"| P
@@ -188,19 +188,19 @@ flowchart LR
     DASH["Operator dashboard"] --> API
 ```
 
-Read it left to right. Plazas send events through the load balancer to an admission gate that counts in-flight requests and admits by priority; when it says no, the dotted arrow carries a `503` with `Retry-After` back to the plaza, whose local buffer holds the events until then. Admitted events go into a **bounded** channel with room for 50,000 events. If the channel is full, `TryWrite` fails, and that failure also turns into a `503`, so pressure from the database propagates all the way back to the plazas. Four writer loops drain the channel in 500-row batches into PostgreSQL. The brownout controller watches the channel fill level and the in-flight count and tells the dashboard endpoints which optional features to skip. At a drain rate of 5,000 per second, a full channel means a worst-case queue wait of 50,000 ÷ 5,000 = 10 seconds, which is the latency budget we chose.
+Read it left to right. Stores send events through the load balancer to an admission gate that counts in-flight requests and admits by priority; when it says no, the dotted arrow carries a `503` with `Retry-After` back to the store, whose local buffer holds the events until then. Admitted events go into a **bounded** channel with room for 50,000 events. If the channel is full, `TryWrite` fails, and that failure also turns into a `503`, so pressure from the database propagates all the way back to the stores. Four writer loops drain the channel in 500-row batches into PostgreSQL. The brownout controller watches the channel fill level and the in-flight count and tells the dashboard endpoints which optional features to skip. At a drain rate of 5,000 per second, a full channel means a worst-case queue wait of 50,000 ÷ 5,000 = 10 seconds, which is the latency budget we chose.
 
 ### An overload episode
 
 ```mermaid
 sequenceDiagram
-    participant PZ as Toll plaza
+    participant PZ as Store POS server
     participant G as Admission gate
     participant A as Ingestion API
     participant C as Bounded channel
     participant W as Batch writer
     participant DB as PostgreSQL
-    PZ->>G: POST /events (200 reads)
+    PZ->>G: POST /events (200 scans)
     G->>A: admitted (in-flight 180 of 400)
     A->>C: TryWrite x 200
     C-->>A: ok
@@ -208,21 +208,21 @@ sequenceDiagram
     Note over DB: Autovacuum + festival peak, inserts slow to 2,000 rows/s
     W->>DB: insert batch (slow)
     Note over C: Fill climbs 20% to 100%
-    PZ->>G: POST /events (200 reads)
+    PZ->>G: POST /events (200 scans)
     G->>A: admitted
     A->>C: TryWrite
     C-->>A: full
     A-->>PZ: 503, Retry-After 5
-    Note over PZ: keeps reads in local buffer, waits 5 s plus jitter
+    Note over PZ: keeps scans in local buffer, waits 5 s plus jitter
     PZ->>G: POST /events (analytics ping, sheddable)
     G-->>PZ: 503 (sheddable over 60%)
     W->>DB: batches drain, fill drops below 50%
-    PZ->>G: POST /events (400 buffered reads)
+    PZ->>G: POST /events (400 buffered scans)
     G->>A: admitted
     A-->>PZ: 202 Accepted
 ```
 
-This shows backpressure travelling upstream. First, a normal upload is admitted, written to the channel and acknowledged with `202 Accepted` (accepted for processing, not yet stored). Then the database slows down. The writers drain more slowly, the channel fills, and the next `TryWrite` fails. Instead of waiting or growing memory, the API returns `503` with `Retry-After: 5`. The plaza keeps its reads locally and backs off with some random jitter, so 1,200 plazas don't all retry in the same second. Meanwhile a sheddable analytics ping is refused at the gate before it costs anything. Once the database recovers, the plaza sends its buffered reads in one larger batch. No event was lost, memory stayed bounded, and the most important traffic kept flowing.
+This shows backpressure travelling upstream. First, a normal upload is admitted, written to the channel and acknowledged with `202 Accepted` (accepted for processing, not yet stored). Then the database slows down. The writers drain more slowly, the channel fills, and the next `TryWrite` fails. Instead of waiting or growing memory, the API returns `503` with `Retry-After: 5`. The store keeps its scans locally and backs off with some random jitter, so 1,200 stores don't all retry in the same second. Meanwhile a sheddable analytics ping is refused at the gate before it costs anything. Once the database recovers, the store sends its buffered scans in one larger batch. No event was lost, memory stayed bounded, and the most important traffic kept flowing.
 
 ## Step-by-step example
 
@@ -230,9 +230,9 @@ This shows backpressure travelling upstream. First, a normal upload is admitted,
 
 ```csharp
 // Unbounded: accepts everything, forever.
-private static readonly ConcurrentQueue<TollEvent> Pending = new();
+private static readonly ConcurrentQueue<SaleEvent> Pending = new();
 
-app.MapPost("/events", (TollEvent[] events) =>
+app.MapPost("/events", (SaleEvent[] events) =>
 {
     foreach (var e in events) Pending.Enqueue(e);
     return Results.Accepted();
@@ -243,7 +243,7 @@ At 9,000 events per second in and 5,000 out, memory grows by about 0.8 MB per se
 
 ### Step 2 — bound the buffer
 
-Replace the unbounded queue with `Channel.CreateBounded<TollEvent>(50_000)`. How big? Work backwards from latency: the events must reach the database within 10 seconds, the drain rate is 5,000 per second, so the queue may hold at most 5,000 × 10 = **50,000** events. A bigger buffer would only produce older events, not more throughput.
+Replace the unbounded queue with `Channel.CreateBounded<SaleEvent>(50_000)`. How big? Work backwards from latency: the events must reach the database within 10 seconds, the drain rate is 5,000 per second, so the queue may hold at most 5,000 × 10 = **50,000** events. A bigger buffer would only produce older events, not more throughput.
 
 ### Step 3 — decide what happens when it is full
 
@@ -258,35 +258,35 @@ The channel's full mode matters:
 | `DropNewest` | Removes the newest item already in the channel, accepts the new one | Rarely the right choice; keeps old data at the expense of recent |
 | `DropWrite` | Silently ignores the new item | Best-effort telemetry where a gap is fine |
 
-Toll reads are money, so we use `Wait` with `TryWrite` and an explicit `503`. A live "vehicles per minute" counter feed could use `DropOldest`.
+Sale events are money (and stock), so we use `Wait` with `TryWrite` and an explicit `503`. A live "shoppers in store" counter feed from door sensors could use `DropOldest`.
 
 ### Step 4 — admission before work
 
-Add a concurrency limiter at the front: at most 200 ingest requests in progress, a small queue of 100, newest first, and `503` with `Retry-After` beyond that. Add priority admission so balance-check calls from payment kiosks are never starved by bulk uploads.
+Add a concurrency limiter at the front: at most 200 ingest requests in progress, a small queue of 100, newest first, and `503` with `Retry-After` beyond that. Add priority admission so payment confirmations and loyalty-balance checks from the billing counters are never starved by bulk uploads.
 
 ### Step 5 — degrade the extras
 
-The operator dashboard shows totals, a live heat map and "nearby plazas with spare lanes". Under Elevated load, turn off the suggestions; under Severe, also skip the heat map and return the cached totals. Each feature checks the brownout controller first.
+The store-operations dashboard shows totals, a live sales heat map and "restock suggestions". Under Elevated load, turn off the suggestions; under Severe, also skip the heat map and return the cached totals. Each feature checks the brownout controller first.
 
 ## Production-style C# implementation
 
 ```text
-Toll.Ingestion.Api/
+Retail.Ingestion.Api/
   Program.cs
-  Ingestion/TollEvent.cs
-  Ingestion/TollEventQueue.cs
-  Ingestion/TollEventWriter.cs
-  Ingestion/InMemoryTollEventSink.cs
+  Ingestion/SaleEvent.cs
+  Ingestion/SaleEventQueue.cs
+  Ingestion/SaleEventWriter.cs
+  Ingestion/InMemorySaleEventSink.cs
   Admission/PriorityAdmissionController.cs
   Admission/PriorityAdmissionMiddleware.cs
   Degradation/BrownoutController.cs
 ```
 
-```csharp file=Ingestion/TollEvent.cs
-namespace Toll.Ingestion;
+```csharp file=Ingestion/SaleEvent.cs
+namespace Retail.Ingestion;
 
-/// <summary>One RFID read at a toll lane. (PlazaId, TagId, ReadAt) is unique, so resends are idempotent.</summary>
-public sealed record TollEvent(string PlazaId, string TagId, string VehicleClass, DateTimeOffset ReadAt, long AmountPaise);
+/// <summary>One item scanned at a store's billing counter. (StoreId, CounterId, ScannedAt) is unique, so resends are idempotent.</summary>
+public sealed record SaleEvent(string StoreId, string CounterId, string Sku, DateTimeOffset ScannedAt, long AmountPaise);
 
 public enum RequestPriority { Critical = 0, Normal = 1, Sheddable = 2 }
 
@@ -302,27 +302,27 @@ public sealed class IngestionOptions
     public int RetryAfterSeconds { get; set; } = 5;
 }
 
-public interface ITollEventSink
+public interface ISaleEventSink
 {
-    Task WriteBatchAsync(IReadOnlyList<TollEvent> batch, CancellationToken ct);
+    Task WriteBatchAsync(IReadOnlyList<SaleEvent> batch, CancellationToken ct);
 }
 ```
 
-```csharp file=Ingestion/TollEventQueue.cs
+```csharp file=Ingestion/SaleEventQueue.cs
 using System.Threading.Channels;
 using Microsoft.Extensions.Options;
 
-namespace Toll.Ingestion;
+namespace Retail.Ingestion;
 
 /// <summary>The bounded buffer between the HTTP edge and the database writers.</summary>
-public sealed class TollEventQueue
+public sealed class SaleEventQueue
 {
-    private readonly Channel<TollEvent> _channel;
+    private readonly Channel<SaleEvent> _channel;
 
-    public TollEventQueue(IOptions<IngestionOptions> options)
+    public SaleEventQueue(IOptions<IngestionOptions> options)
     {
         Capacity = options.Value.QueueCapacity;
-        _channel = Channel.CreateBounded<TollEvent>(new BoundedChannelOptions(Capacity)
+        _channel = Channel.CreateBounded<SaleEvent>(new BoundedChannelOptions(Capacity)
         {
             FullMode = BoundedChannelFullMode.Wait,   // never drop money; callers decide whether to wait
             SingleReader = false,
@@ -333,32 +333,32 @@ public sealed class TollEventQueue
     public int Capacity { get; }
     public int Count => _channel.Reader.Count;
     public double Fill => (double)Count / Capacity;
-    public ChannelReader<TollEvent> Reader => _channel.Reader;
+    public ChannelReader<SaleEvent> Reader => _channel.Reader;
 
     /// <summary>Edge producers: never wait. False means "shed this, tell the client to retry later".</summary>
-    public bool TryEnqueue(TollEvent e) => _channel.Writer.TryWrite(e);
+    public bool TryEnqueue(SaleEvent e) => _channel.Writer.TryWrite(e);
 
     /// <summary>Internal producers (replay jobs): wait for space. This is backpressure.</summary>
-    public ValueTask EnqueueAsync(TollEvent e, CancellationToken ct) => _channel.Writer.WriteAsync(e, ct);
+    public ValueTask EnqueueAsync(SaleEvent e, CancellationToken ct) => _channel.Writer.WriteAsync(e, ct);
 
     public void Complete() => _channel.Writer.TryComplete();
 }
 ```
 
-```csharp file=Ingestion/TollEventWriter.cs
+```csharp file=Ingestion/SaleEventWriter.cs
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace Toll.Ingestion;
+namespace Retail.Ingestion;
 
 /// <summary>N competing consumers that drain the channel in batches. While a batch is failing,
 /// the writer stops reading, the channel fills, and the edge starts returning 503: pressure flows upstream.</summary>
-public sealed class TollEventWriter(
-    TollEventQueue queue,
-    ITollEventSink sink,
+public sealed class SaleEventWriter(
+    SaleEventQueue queue,
+    ISaleEventSink sink,
     IOptions<IngestionOptions> options,
-    ILogger<TollEventWriter> logger) : BackgroundService
+    ILogger<SaleEventWriter> logger) : BackgroundService
 {
     private readonly IngestionOptions _o = options.Value;
 
@@ -367,7 +367,7 @@ public sealed class TollEventWriter(
 
     private async Task RunWriterAsync(int writerId, CancellationToken ct)
     {
-        var batch = new List<TollEvent>(_o.BatchSize);
+        var batch = new List<SaleEvent>(_o.BatchSize);
         while (await queue.Reader.WaitToReadAsync(ct))
         {
             while (batch.Count < _o.BatchSize && queue.Reader.TryRead(out var e)) batch.Add(e);
@@ -394,30 +394,30 @@ public sealed class TollEventWriter(
 }
 ```
 
-```csharp file=Ingestion/InMemoryTollEventSink.cs
+```csharp file=Ingestion/InMemorySaleEventSink.cs
 using System.Collections.Concurrent;
 
-namespace Toll.Ingestion;
+namespace Retail.Ingestion;
 
-/// <summary>Stand-in for a PostgreSQL COPY/batch insert with ON CONFLICT DO NOTHING on (plaza_id, tag_id, read_at).</summary>
-public sealed class InMemoryTollEventSink : ITollEventSink
+/// <summary>Stand-in for a PostgreSQL COPY/batch insert with ON CONFLICT DO NOTHING on (store_id, counter_id, scanned_at).</summary>
+public sealed class InMemorySaleEventSink : ISaleEventSink
 {
-    private readonly ConcurrentDictionary<(string, string, DateTimeOffset), TollEvent> _rows = new();
+    private readonly ConcurrentDictionary<(string, string, DateTimeOffset), SaleEvent> _rows = new();
     public int Count => _rows.Count;
 
-    public async Task WriteBatchAsync(IReadOnlyList<TollEvent> batch, CancellationToken ct)
+    public async Task WriteBatchAsync(IReadOnlyList<SaleEvent> batch, CancellationToken ct)
     {
         await Task.Delay(TimeSpan.FromMilliseconds(5), ct);   // simulated insert latency
-        foreach (var e in batch) _rows.TryAdd((e.PlazaId, e.TagId, e.ReadAt), e);
+        foreach (var e in batch) _rows.TryAdd((e.StoreId, e.CounterId, e.ScannedAt), e);
     }
 }
 ```
 
 ```csharp file=Admission/PriorityAdmissionController.cs
 using Microsoft.Extensions.Options;
-using Toll.Ingestion;
+using Retail.Ingestion;
 
-namespace Toll.Admission;
+namespace Retail.Admission;
 
 /// <summary>Counts in-flight requests and admits by priority, keeping headroom for critical work.</summary>
 public sealed class PriorityAdmissionController(IOptions<IngestionOptions> options)
@@ -469,9 +469,9 @@ public sealed class AdmissionLease : IDisposable
 
 ```csharp file=Admission/PriorityAdmissionMiddleware.cs
 using Microsoft.Extensions.Options;
-using Toll.Ingestion;
+using Retail.Ingestion;
 
-namespace Toll.Admission;
+namespace Retail.Admission;
 
 public sealed class PriorityAdmissionMiddleware(
     RequestDelegate next,
@@ -509,17 +509,17 @@ public sealed class PriorityAdmissionMiddleware(
 ```
 
 ```csharp file=Degradation/BrownoutController.cs
-using Toll.Admission;
-using Toll.Ingestion;
+using Retail.Admission;
+using Retail.Ingestion;
 
-namespace Toll.Degradation;
+namespace Retail.Degradation;
 
 public enum LoadLevel { Normal, Elevated, Severe }
 
-public enum OptionalFeature { NearbyPlazaSuggestions, LiveHeatMap }
+public enum OptionalFeature { RestockSuggestions, LiveHeatMap }
 
 /// <summary>Turns optional features off as load rises, with hysteresis so it does not flap.</summary>
-public sealed class BrownoutController(TollEventQueue queue, PriorityAdmissionController admission)
+public sealed class BrownoutController(SaleEventQueue queue, PriorityAdmissionController admission)
 {
     private readonly object _gate = new();
     private LoadLevel _level = LoadLevel.Normal;
@@ -546,8 +546,8 @@ public sealed class BrownoutController(TollEventQueue queue, PriorityAdmissionCo
 
     public bool IsEnabled(OptionalFeature feature) => (feature, Current) switch
     {
-        (OptionalFeature.NearbyPlazaSuggestions, LoadLevel.Normal) => true,
-        (OptionalFeature.NearbyPlazaSuggestions, _) => false,
+        (OptionalFeature.RestockSuggestions, LoadLevel.Normal) => true,
+        (OptionalFeature.RestockSuggestions, _) => false,
         (OptionalFeature.LiveHeatMap, LoadLevel.Severe) => false,
         _ => true,
     };
@@ -557,16 +557,16 @@ public sealed class BrownoutController(TollEventQueue queue, PriorityAdmissionCo
 ```csharp file=Program.cs
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.RateLimiting;
-using Toll.Admission;
-using Toll.Degradation;
-using Toll.Ingestion;
+using Retail.Admission;
+using Retail.Degradation;
+using Retail.Ingestion;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.Configure<IngestionOptions>(builder.Configuration.GetSection("Ingestion"));
-builder.Services.AddSingleton<TollEventQueue>();
-builder.Services.AddSingleton<ITollEventSink, InMemoryTollEventSink>();
-builder.Services.AddHostedService<TollEventWriter>();
+builder.Services.AddSingleton<SaleEventQueue>();
+builder.Services.AddSingleton<ISaleEventSink, InMemorySaleEventSink>();
+builder.Services.AddHostedService<SaleEventWriter>();
 builder.Services.AddSingleton<PriorityAdmissionController>();
 builder.Services.AddSingleton<BrownoutController>();
 
@@ -594,7 +594,7 @@ app.UseRateLimiter();
 
 app.MapGet("/health", () => Results.Ok("ok"));
 
-app.MapPost("/events", (TollEvent[] events, TollEventQueue queue, HttpResponse response) =>
+app.MapPost("/events", (SaleEvent[] events, SaleEventQueue queue, HttpResponse response) =>
 {
     // Cheap early check: if this batch clearly will not fit, refuse it before touching the channel.
     if (queue.Count + events.Length > queue.Capacity)
@@ -606,7 +606,7 @@ app.MapPost("/events", (TollEvent[] events, TollEventQueue queue, HttpResponse r
     var accepted = 0;
     foreach (var e in events)
     {
-        if (!queue.TryEnqueue(e)) break;   // raced to full: the plaza resends the rest (idempotent)
+        if (!queue.TryEnqueue(e)) break;   // raced to full: the store resends the rest (idempotent)
         accepted++;
     }
     if (accepted == events.Length) return Results.Accepted(value: new { accepted });
@@ -614,16 +614,16 @@ app.MapPost("/events", (TollEvent[] events, TollEventQueue queue, HttpResponse r
     return Results.Json(new { accepted, rejected = events.Length - accepted }, statusCode: StatusCodes.Status503ServiceUnavailable);
 }).RequireRateLimiting("ingest");
 
-app.MapGet("/plazas/{id}/dashboard", (string id, BrownoutController brownout) =>
+app.MapGet("/stores/{id}/dashboard", (string id, BrownoutController brownout) =>
 {
     var level = brownout.Current;
     return Results.Ok(new
     {
-        plaza = id,
+        store = id,
         loadLevel = level.ToString(),
-        totals = new { vehiclesLastHour = 1_840, revenuePaise = 23_450_000 },   // core: always served
+        totals = new { billsLastHour = 1_840, revenuePaise = 23_450_000 },   // core: always served
         heatMap = brownout.IsEnabled(OptionalFeature.LiveHeatMap) ? "rendered" : null,
-        suggestions = brownout.IsEnabled(OptionalFeature.NearbyPlazaSuggestions) ? new[] { "PLZ-118 lane 4" } : null,
+        suggestions = brownout.IsEnabled(OptionalFeature.RestockSuggestions) ? new[] { "Restock atta 5 kg, aisle 4" } : null,
     });
 });
 
@@ -635,19 +635,19 @@ app.Run();
 - `PriorityAdmissionMiddleware` runs before `UseRateLimiter`, so sheddable traffic is refused before it can take a concurrency permit.
 - Every `503` carries `Retry-After`: from the priority middleware, from the limiter (`OnRejected`), and from the endpoint itself when the channel is full.
 - Older ASP.NET Core versions had a separate `Microsoft.AspNetCore.ConcurrencyLimiter` middleware. It is obsolete; use the rate limiting middleware's concurrency limiter shown here.
-- Events are idempotent by `(PlazaId, TagId, ReadAt)`, so a plaza resending a partially accepted batch creates no duplicates. Shedding is only safe when retries are safe; see [Idempotency keys](#/lesson/m10-idempotency).
+- Events are idempotent by `(StoreId, CounterId, ScannedAt)`, so a store resending a partially accepted batch creates no duplicates. Shedding is only safe when retries are safe; see [Idempotency keys](#/lesson/m10-idempotency).
 
 ## Bad design vs good design
 
-**Bad: "just add a bigger queue".** The team sees memory alarms and raises the in-memory queue from 1 million to 10 million items and the pod memory to 8 GB. During the next festival peak, the queue fills in 40 minutes instead of 4, every event in it is 40 minutes old, the "low balance" SMS alerts arrive after vehicles have left the plaza, and when the pod is finally killed, 10 million events are lost instead of 1 million. A bigger buffer delayed the failure and made it larger.
+**Bad: "just add a bigger queue".** The team sees memory alarms and raises the in-memory queue from 1 million to 10 million items and the pod memory to 8 GB. During the next festival peak, the queue fills in 40 minutes instead of 4, every event in it is 40 minutes old, low-stock alerts arrive after the shelf has already been empty for half an hour, and when the pod is finally killed, 10 million events are lost instead of 1 million. A bigger buffer delayed the failure and made it larger.
 
 **Also bad: shed after the expensive part.**
 
 ```csharp
-app.MapPost("/events", async (TollEvent[] events, AppDb db, ...) =>
+app.MapPost("/events", async (SaleEvent[] events, AppDb db, ...) =>
 {
-    var plaza = await db.Plazas.FindAsync(events[0].PlazaId);   // DB call
-    await ValidateTagsAsync(events);                            // more DB calls
+    var store = await db.Stores.FindAsync(events[0].StoreId);   // DB call
+    await ValidateSkusAsync(events);                            // more DB calls
     if (queue.IsFull) return Results.StatusCode(503);           // too late
     ...
 });
@@ -1352,7 +1352,7 @@ public void Brownout_has_hysteresis()
 }
 ```
 
-**Integration tests** with `WebApplicationFactory`: replace `ITollEventSink` with a fake that blocks until released. Send enough events to fill the channel, and assert the next request returns `503` with a `Retry-After` header. Release the sink, wait for the channel to drain, and assert requests succeed again.
+**Integration tests** with `WebApplicationFactory`: replace `ISaleEventSink` with a fake that blocks until released. Send enough events to fill the channel, and assert the next request returns `503` with a `Retry-After` header. Release the sink, wait for the channel to drain, and assert requests succeed again.
 
 **Load tests** (k6, JMeter, NBomber, Azure Load Testing) in a staging environment: ramp to 2× expected peak and check (1) memory stays flat, (2) accepted requests stay within the latency budget, (3) critical endpoints keep their success rate while sheddable ones are refused, and (4) the system recovers within a few minutes once load drops. Record the knee of the curve: the load at which goodput stops rising. Your limits should sit just below it.
 

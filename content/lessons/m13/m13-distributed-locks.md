@@ -69,9 +69,9 @@ That one design choice, which every lock service makes, creates the core problem
 
 Here is the sequence that breaks "lock, then write" with any lease-based lock:
 
-1. Worker A acquires the lock on `project-17-monthly-bill` with a 30-second lease.
+1. Worker A acquires the lock on `workspace-17-monthly-bill` with a 30-second lease.
 2. A starts generating the bill. Midway, A's process stops for 40 seconds. Causes include a full garbage collection, the VM being live-migrated, the container being CPU-throttled, the disk stalling on a page fault, or someone pressing `Ctrl+Z` on a debug session.
-3. At 30 seconds the lease expires. Worker B acquires the lock and generates the bill, writing invoice `INV-2026-10-117` for ₹18,40,000.
+3. At 30 seconds the lease expires. Worker B acquires the lock and generates the bill, writing invoice `INV-2026-10-117` for ₹18,40,000 (1,000 seats at ₹1,840).
 4. A resumes. From A's point of view no time passed. It writes its version of the bill, overwriting B's or creating a duplicate invoice.
 
 "Check the lock before writing" does not help: A can pause *between* the check and the write. Any finite gap between checking and acting is a window for a pause. Pauses are not rare in practice: tens of milliseconds are common, multi-second garbage-collection or VM pauses happen in large fleets, and network packets can be delayed for longer than any TTL.
@@ -103,7 +103,7 @@ Martin Kleppmann's distinction is the most useful question to ask before choosin
 The standard single-instance Redis lock:
 
 ```text
-SET lock:bill:P-17 <random-owner-token> NX PX 30000
+SET lock:bill:ws-17 <random-owner-token> NX PX 30000
 ```
 
 - `NX`: only set if the key does not exist (acquire).
@@ -151,12 +151,12 @@ If the work and the data are in PostgreSQL, you often do not need any other lock
 
 ```sql
 -- Session-level: held until explicitly unlocked or the session ends
-SELECT pg_try_advisory_lock(hashtextextended('bill:P-17', 0));   -- true or false, never waits
-SELECT pg_advisory_unlock(hashtextextended('bill:P-17', 0));
+SELECT pg_try_advisory_lock(hashtextextended('bill:ws-17', 0));   -- true or false, never waits
+SELECT pg_advisory_unlock(hashtextextended('bill:ws-17', 0));
 
 -- Transaction-level: released automatically at COMMIT or ROLLBACK
 BEGIN;
-SELECT pg_advisory_xact_lock(hashtextextended('bill:P-17', 0)); -- waits if held
+SELECT pg_advisory_xact_lock(hashtextextended('bill:ws-17', 0)); -- waits if held
 -- ... do the work in this same transaction ...
 COMMIT;
 ```
@@ -173,7 +173,7 @@ Properties and pitfalls:
 
 Many "we need a distributed lock" requests are better served by something the data store already does:
 
-- **Unique constraint:** "only one invoice per project per month" is `UNIQUE (project_id, billing_month)`. Two workers race; one insert fails. No lock.
+- **Unique constraint:** "only one invoice per workspace per month" is `UNIQUE (workspace_id, billing_month)`. Two workers race; one insert fails. No lock.
 - **Compare-and-set / optimistic concurrency:** `UPDATE ... SET ..., version = version + 1 WHERE id = @id AND version = @expected`. Zero rows updated means someone else won.
 - **Idempotency keys:** if duplicate work is harmless when de-duplicated, make it idempotent ([idempotency keys](#/lesson/m10-idempotency), [idempotent consumers](#/lesson/m12-idempotent-consumers)).
 - **Job queues with `SKIP LOCKED`:** `SELECT ... FOR UPDATE SKIP LOCKED LIMIT 10` lets many workers claim different jobs without a global lock.
@@ -212,11 +212,11 @@ sequenceDiagram
     participant L as Lock service
     participant B as Worker B
     participant S as Invoice store
-    A->>L: acquire bill:P-17 (ttl 30 s)
+    A->>L: acquire bill:ws-17 (ttl 30 s)
     L-->>A: granted
     Note over A: GC / VM pause for 40 s
     Note over L: 30 s pass, lease expires
-    B->>L: acquire bill:P-17
+    B->>L: acquire bill:ws-17
     L-->>B: granted
     B->>S: write invoice v2
     S-->>B: ok
@@ -235,10 +235,10 @@ sequenceDiagram
     participant L as Lock service
     participant B as Worker B
     participant S as Invoice store
-    A->>L: acquire bill:P-17
+    A->>L: acquire bill:ws-17
     L-->>A: granted, token 33
     Note over A: pause for 40 s
-    B->>L: acquire bill:P-17
+    B->>L: acquire bill:ws-17
     L-->>B: granted, token 34
     B->>S: write invoice v2 (token 34)
     S-->>B: ok, highest = 34
@@ -251,19 +251,19 @@ The timeline is identical, but every grant carries a larger token and every writ
 
 ## Step-by-step example
 
-**Scenario.** An infrastructure consultancy bills 300 highway and metro projects monthly. On the 1st of each month, a job computes each project's bill from progress records and writes an invoice. Eight worker pods run the job; each project must be billed exactly once.
+**Scenario.** A team-chat SaaS company (think of a Slack-style tool) bills 300 enterprise workspaces monthly. On the 1st of each month, a job computes each workspace's bill from usage records (active seats, extra storage, add-ons, GST) and writes an invoice. Eight worker pods run the job; each workspace must be billed exactly once.
 
 ### Step 1: classify the lock
 
-A duplicate bill to a government client is a correctness problem. So this is a **correctness** concern, not efficiency.
+A duplicate bill charges a customer's card twice and turns into a support escalation from their finance team. So this is a **correctness** concern, not efficiency.
 
 ### Step 2: ask whether a constraint is enough
 
-The invoice table gets `UNIQUE (project_id, billing_month)`. Two workers computing the same bill both try to insert; one fails. This alone prevents duplicate invoices. Is a lock still useful? Yes, for **efficiency**: computing a bill takes about 40 seconds of heavy queries (an estimate), and we would rather not compute it twice.
+The invoice table gets `UNIQUE (workspace_id, billing_month)`. Two workers computing the same bill both try to insert; one fails. This alone prevents duplicate invoices. Is a lock still useful? Yes, for **efficiency**: computing a bill takes about 40 seconds of heavy queries (an estimate), and we would rather not compute it twice.
 
 ### Step 3: choose the lock
 
-All data lives in PostgreSQL, so use a **transaction-level advisory lock** keyed by `hashtextextended('bill:' || project_id || ':' || month, 0)`, with `pg_try_advisory_xact_lock` so a busy project is skipped instead of waited for. The bill computation and the invoice insert run in the same transaction as the lock.
+All data lives in PostgreSQL, so use a **transaction-level advisory lock** keyed by `hashtextextended('bill:' || workspace_id || ':' || month, 0)`, with `pg_try_advisory_xact_lock` so a busy workspace is skipped instead of waited for. The bill computation and the invoice insert run in the same transaction as the lock.
 
 ### Step 4: check the side effects outside the database
 
@@ -272,7 +272,7 @@ After the invoice is committed, the job submits it to the e-invoicing portal. Th
 ### Step 5: estimate
 
 ```text
-300 projects × 40 s ≈ 12,000 s of work; ÷ 8 workers ≈ 1,500 s ≈ 25 minutes.
+300 workspaces × 40 s ≈ 12,000 s of work; ÷ 8 workers ≈ 1,500 s ≈ 25 minutes.
 Each worker holds one connection inside a transaction for ~40 s; 8 workers → 8 connections.
 ```
 
@@ -280,14 +280,14 @@ Long transactions hold back PostgreSQL's cleanup of old row versions (vacuum). F
 
 ### Step 6: test the failure
 
-Kill a worker's pod mid-transaction: the transaction rolls back, the lock is released, another worker picks up the project later. Pause a worker with `SIGSTOP` for two minutes: its transaction still holds the lock, so nobody else bills that project; when it resumes, it commits normally. With transaction-level locks, a pause delays work but cannot cause a double write.
+Kill a worker's pod mid-transaction: the transaction rolls back, the lock is released, another worker picks up the workspace later. Pause a worker with `SIGSTOP` for two minutes: its transaction still holds the lock, so nobody else bills that workspace; when it resumes, it commits normally. With transaction-level locks, a pause delays work but cannot cause a double write.
 
 ## Production-style C# implementation
 
 The code models a lock service that issues leases with fencing tokens, a fencing-aware store, and a runner that renews the lease and stops work when renewal fails. Real backends (etcd, ZooKeeper, PostgreSQL, Redis) sit behind the same interfaces; offline, in-memory fakes are used.
 
 ```text
-Projects.Billing/
+Workspaces.Billing/
   Program.cs
   Locking/LockLease.cs
   Locking/InMemoryLockService.cs
@@ -296,7 +296,7 @@ Projects.Billing/
 ```
 
 ```csharp file=Locking/LockLease.cs
-namespace Projects.Billing.Locking;
+namespace Workspaces.Billing.Locking;
 
 /// <summary>A time-limited grant. <see cref="FencingToken"/> strictly increases with every grant
 /// for the same resource; <see cref="OwnerId"/> is a random value that identifies this holder.</summary>
@@ -315,7 +315,7 @@ public interface ILockService
 ```
 
 ```csharp file=Locking/InMemoryLockService.cs
-namespace Projects.Billing.Locking;
+namespace Workspaces.Billing.Locking;
 
 /// <summary>In-memory lock server. A real one is etcd (lease + revision as token), ZooKeeper
 /// (ephemeral sequential node + zxid) or PostgreSQL (a lock row with a sequence-generated token).</summary>
@@ -376,7 +376,7 @@ public sealed class InMemoryLockService(TimeProvider time) : ILockService
 Two details carry the safety: the token per resource only ever increases (even after the lock is released or expires), and release compares both owner and token so an expired holder cannot remove its successor's lock.
 
 ```csharp file=Locking/FencedStore.cs
-namespace Projects.Billing.Locking;
+namespace Workspaces.Billing.Locking;
 
 public sealed class StaleFencingTokenException(string resource, long token, long highest)
     : Exception($"Write to {resource} with fencing token {token} rejected; highest seen is {highest}.")
@@ -423,7 +423,7 @@ public sealed class InMemoryFencedStore : IFencedStore
 ```csharp file=Locking/LockedJobRunner.cs
 using Microsoft.Extensions.Logging;
 
-namespace Projects.Billing.Locking;
+namespace Workspaces.Billing.Locking;
 
 public sealed class LockedJobRunner(ILockService locks, TimeProvider time, ILogger<LockedJobRunner> log)
 {
@@ -492,7 +492,7 @@ public sealed class LockedJobRunner(ILockService locks, TimeProvider time, ILogg
 The runner's comment is the lesson in one sentence. Renewal and cancellation make the common case tidy: a worker that loses its lease usually stops promptly. They cannot make the rare case safe, because a paused process does not run its cancellation checks. That is why `work` receives the `LockLease` and passes `FencingToken` to the store.
 
 ```csharp file=Program.cs
-using Projects.Billing.Locking;
+using Workspaces.Billing.Locking;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -503,19 +503,19 @@ builder.Services.AddSingleton<LockedJobRunner>();
 
 var app = builder.Build();
 
-app.MapPost("/projects/{projectId}/bills/{month}", async (string projectId, string month,
+app.MapPost("/workspaces/{workspaceId}/bills/{month}", async (string workspaceId, string month,
     LockedJobRunner runner, IFencedStore store, CancellationToken ct) =>
 {
-    string resource = $"bill:{projectId}:{month}";
+    string resource = $"bill:{workspaceId}:{month}";
     bool ran = await runner.RunExclusiveAsync(resource, TimeSpan.FromSeconds(30), async (lease, workCt) =>
     {
         await Task.Delay(TimeSpan.FromMilliseconds(200), workCt);   // compute the bill
-        string invoice = $"INV-{month}-{projectId} by token {lease.FencingToken}";
-        await store.WriteAsync(resource, $"invoice:{projectId}:{month}", invoice, lease.FencingToken, workCt);
+        string invoice = $"INV-{month}-{workspaceId} by token {lease.FencingToken}";
+        await store.WriteAsync(resource, $"invoice:{workspaceId}:{month}", invoice, lease.FencingToken, workCt);
     }, ct);
 
     return ran
-        ? Results.Ok(new { invoice = store.Read($"invoice:{projectId}:{month}") })
+        ? Results.Ok(new { invoice = store.Read($"invoice:{workspaceId}:{month}") })
         : Results.Conflict(new { message = "Another worker holds this bill, or lost it mid-way." });
 });
 
@@ -537,7 +537,7 @@ A PostgreSQL transaction-level advisory lock with Npgsql, with the work in the s
 ```csharp
 await using var tx = await conn.BeginTransactionAsync(ct);
 await using var cmd = new NpgsqlCommand("SELECT pg_try_advisory_xact_lock(hashtextextended(@k, 0))", conn, tx);
-cmd.Parameters.AddWithValue("k", $"bill:{projectId}:{month}");
+cmd.Parameters.AddWithValue("k", $"bill:{workspaceId}:{month}");
 if (!(bool)(await cmd.ExecuteScalarAsync(ct))!) return;   // someone else is billing it
 // ... compute and INSERT the invoice using conn and tx ...
 await tx.CommitAsync(ct);                                 // lock released here, together with the writes
@@ -580,8 +580,8 @@ The SQL playground below has a `fare_tables` table with a fencing column and a `
 ```sql
 CREATE TABLE fare_tables (route text PRIMARY KEY, fare_paise int NOT NULL, fencing_token bigint NOT NULL);
 INSERT INTO fare_tables VALUES ('BLUE-1', 3000, 42), ('BLUE-2', 4000, 40), ('RED-1', 2000, 50);
-CREATE TABLE jobs (id int PRIMARY KEY, project text NOT NULL, status text NOT NULL DEFAULT 'pending');
-INSERT INTO jobs VALUES (1, 'P-17', 'pending'), (2, 'P-18', 'pending'), (3, 'P-19', 'done'), (4, 'P-20', 'pending');
+CREATE TABLE jobs (id int PRIMARY KEY, workspace text NOT NULL, status text NOT NULL DEFAULT 'pending');
+INSERT INTO jobs VALUES (1, 'ws-17', 'pending'), (2, 'ws-18', 'pending'), (3, 'ws-19', 'done'), (4, 'ws-20', 'pending');
 ```
 :::
 
@@ -634,10 +634,10 @@ public class FencedLedgerTests
     public void Stale_token_is_rejected_after_newer_write()
     {
         var l = new FencedLedger();
-        Assert.True(l.TryWrite("bill:P-17", "v1", 33));
-        Assert.True(l.TryWrite("bill:P-17", "v2", 34));
-        Assert.False(l.TryWrite("bill:P-17", "v1-late", 33));
-        Assert.Equal("v2", l.Read("bill:P-17"));
+        Assert.True(l.TryWrite("bill:ws-17", "v1", 33));
+        Assert.True(l.TryWrite("bill:ws-17", "v2", 34));
+        Assert.False(l.TryWrite("bill:ws-17", "v1-late", 33));
+        Assert.Equal("v2", l.Read("bill:ws-17"));
         Assert.Equal(1, l.Rejected);
     }
 
@@ -1291,8 +1291,8 @@ Your app uses PgBouncer in transaction-pooling mode and takes `pg_advisory_lock`
 - [ ] The lock becomes transaction-level automatically.
 > Session state does not survive transaction pooling. Use `pg_advisory_xact_lock` inside the transaction that does the work.
 ::q multi
-"Only one invoice per project per month." Which mechanisms enforce this without a distributed lock? (Select all that apply.)
-- [x] `UNIQUE (project_id, billing_month)` on the invoices table.
+"Only one invoice per workspace per month." Which mechanisms enforce this without a distributed lock? (Select all that apply.)
+- [x] `UNIQUE (workspace_id, billing_month)` on the invoices table.
 - [x] `INSERT ... ON CONFLICT DO NOTHING` with that unique key.
 - [ ] A cron job that runs on only one server.
 - [x] A transaction-level advisory lock with the insert in the same transaction.

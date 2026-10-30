@@ -24,7 +24,7 @@ references:
     url: https://docs.pact.io/
 ---
 
-An infrastructure programme-management platform exposes an invoices API. Three consumers depend on it: the platform's own web front end (deployed with the API), a contractor mobile app (updated by users whenever they feel like it, sometimes never), and a partner ERP that files GST returns (updated twice a year by a vendor who bills per change). Finance now wants amounts in paise instead of rupees-with-decimals, GST shown separately, and the contractor as an object rather than a name string. Every one of those changes would break at least one consumer tonight. This lesson is about shipping them anyway, without a single consumer noticing until they choose to.
+StayEasy, a hotel-booking platform, exposes an invoices API: every stay produces an invoice, and the platform pays each hotel from those invoices. Three consumers depend on it: the platform's own web front end (deployed with the API), a mobile app that hotel owners use to track bookings and payouts (updated by users whenever they feel like it, sometimes never), and the ERP of a corporate-travel partner that books rooms for its employees and files GST returns from these invoices (updated twice a year by a vendor who bills per change). Finance now wants amounts in paise instead of rupees-with-decimals, GST shown separately, and the hotel as an object rather than a name string. Every one of those changes would break at least one consumer tonight. This lesson is about shipping them anyway, without a single consumer noticing until they choose to.
 
 ## Learning objectives
 
@@ -94,19 +94,19 @@ Two principles fall out of this. **Tolerant Reader** (Martin Fowler's term): con
 
 ### Most changes should not need a version
 
-With Tolerant Readers and expand-and-contract, the invoices example needs no new version for two of the three changes: add `amountPaise` and `gstPaise` next to `amount`, add `contractorRef` next to `contractor`. Old consumers keep reading `amount` and `contractor`; new consumers read the new fields. Months later, when telemetry shows nobody reads the old fields, remove them.
+With Tolerant Readers and expand-and-contract, the invoices example needs no new version for two of the three changes: add `amountPaise` and `gstPaise` next to `amount`, add `hotelRef` next to `hotel`. Old consumers keep reading `amount` and `hotel`; new consumers read the new fields. Months later, when telemetry shows nobody reads the old fields, remove them.
 
 Only when the *shape* must change incompatibly for everyone, or when the old fields cannot be kept correct (for example `amount` was defined as "including GST" and the business now insists it must mean "excluding"), do you need a new version. Versions are expensive: every version is a codebase to test, document and support. Reach for them last.
 
 ### The three versioning schemes
 
 **URL segment**: `GET /v1/invoices/42` versus `GET /v2/invoices/42`.
-Pros: visible in logs, browser-testable, cache-friendly (different URLs), trivially routable at a gateway, impossible to send by accident. Cons: strictly speaking the "same resource" now has two URLs, which purists dislike; a change to one endpoint forces a new version prefix for the whole API, or you end up with `/v2/invoices` and `/v1/contractors` side by side.
+Pros: visible in logs, browser-testable, cache-friendly (different URLs), trivially routable at a gateway, impossible to send by accident. Cons: strictly speaking the "same resource" now has two URLs, which purists dislike; a change to one endpoint forces a new version prefix for the whole API, or you end up with `/v2/invoices` and `/v1/hotels` side by side.
 
 **Custom header**: `GET /invoices/42` with `Api-Version: 2`.
 Pros: one URL per resource, versioning can be per endpoint, keeps URLs clean. Cons: invisible in browser address bars and most logs, harder to test by hand, caches must be told to vary on the header (`Vary: Api-Version`), easy to forget and silently get the default.
 
-**Media type (content negotiation)**: `Accept: application/vnd.rodic.v2+json`.
+**Media type (content negotiation)**: `Accept: application/vnd.stayeasy.v2+json`.
 Pros: uses HTTP's own mechanism for "which representation do you want", lets you version representations independently of resources. Cons: most developers find vendor media types unfamiliar, tooling support is patchy, and the same caching caveats as headers apply (`Vary: Accept`).
 
 **Query string**: `GET /invoices/42?api-version=2` is a fourth option that some gateways prefer. It behaves like the URL segment for caching and visibility, and like the header for "per endpoint" flexibility, at the cost of looking a bit untidy.
@@ -117,7 +117,7 @@ Honest guidance: for public and partner APIs, URL segment versioning wins on cla
 
 Integration tests written by the provider test what the provider *thinks* consumers need. Consumer-driven contract tests invert this:
 
-1. The **consumer** writes a test against a mock of the provider: "when I `GET /v2/invoices/42`, I expect a 200 with `id` (string), `contractor.name` (string) and `totalPaise` (number)". The mock records these interactions into a **contract file** (Pact calls it a pact).
+1. The **consumer** writes a test against a mock of the provider: "when I `GET /v2/invoices/42`, I expect a 200 with `id` (string), `hotel.name` (string) and `totalPaise` (number)". The mock records these interactions into a **contract file** (Pact calls it a pact).
 2. The contract file is shared (a Pact Broker, or simply a repository).
 3. The **provider** runs a verification: for each interaction in each consumer's contract, replay the request against the real provider and check the response satisfies the expectations. Only the fields the consumer listed are checked, so adding fields never fails a contract.
 4. CI asks "can I deploy this provider version given the consumers currently in production?" and blocks the deploy if any contract fails.
@@ -131,7 +131,7 @@ Pact is the most widely used tool; the lesson's compiled code shows the core ide
 Retiring a version is a process, not a commit. The pieces:
 
 - **Announce** in the documentation and changelog with a date, typically 6–12 months ahead for partner APIs.
-- **Signal in responses.** RFC 9745 defines `Deprecation: @1759276800` (a Unix timestamp in Structured Field date form) meaning "this is deprecated as of that moment". RFC 8594 defines `Sunset: Thu, 01 Apr 2027 00:00:00 GMT` meaning "this will stop working at that time". A `Link: </v2/invoices>; rel="successor-version"` header points at the replacement. Automated clients can log these; good SDKs surface them as warnings.
+- **Signal in responses.** RFC 9745 defines `Deprecation: @1759276800` (a Unix timestamp in Structured Field date form) meaning "this is deprecated as of that moment". RFC 8594 defines `Sunset: Thu, 01 Apr 2027 00:00:00 GMT` meaning "this will stop working at that time". A `Link: </v2/invoices>; rel="successor-version"` header points at the replacement, and RFC 9745 adds `rel="deprecation"` for a link to the human-readable deprecation notice (RFC 8594 likewise defines `rel="sunset"`). The `Deprecation` date may be in the future ("will be deprecated on"), and the `Sunset` date must not be earlier than it. Automated clients can log these; good SDKs surface them as warnings.
 - **Measure.** Log the version and the client identity (API key, OAuth client ID) on every request. A dashboard of "requests per day per client on v1" tells you exactly who has not moved and lets you contact them by name instead of blasting everyone.
 - **Nag with increasing force.** Email at announcement, at 90 days, at 30 days; add a brownout (deliberately return 410 for a few minutes a day in the last fortnight) so the laggards' monitoring finally fires.
 - **Retire.** Return `410 Gone` with a problem-details body pointing at the migration guide. Not 404; 404 says "never existed".
@@ -150,7 +150,7 @@ An OpenAPI document is the machine-readable form of the contract. ASP.NET Core 9
 Protobuf (used by [gRPC](#/lesson/m10-grpc)) is designed for this: fields are numbered, unknown fields are preserved, and the rules are simple (never reuse a field number, never change a field's type, add fields freely). Versioning happens by adding fields and occasionally by a new package version for incompatible redesigns. [GraphQL](#/lesson/m10-graphql) deliberately has no versions: the schema only grows, fields are marked `@deprecated(reason: ...)`, and because clients ask for exactly the fields they need, the server can see which deprecated fields are still queried. Both ecosystems reached the same conclusion as REST practitioners: evolve additively, measure usage, remove late.
 
 :::callout type=mistake title="The silent breaking change"
-The most dangerous change in the tables above is the one that changes *meaning* without changing *shape*. `amount` goes from excluding GST to including it, and every consumer keeps working and starts paying contractors 18 % too much. No contract test catches it unless a consumer asserted the value. Treat semantic changes as breaking, always introduce a new field (`amountIncludingGstPaise`) rather than redefining an old one, and write the meaning into the OpenAPI description.
+The most dangerous change in the tables above is the one that changes *meaning* without changing *shape*. `amount` goes from excluding GST to including it, and every consumer keeps working and starts paying hotels 18 % too much. No contract test catches it unless a consumer asserted the value. Treat semantic changes as breaking, always introduce a new field (`amountIncludingGstPaise`) rather than redefining an old one, and write the meaning into the OpenAPI description.
 :::
 
 ## Visual explanation
@@ -160,7 +160,7 @@ The most dangerous change in the tables above is the one that changes *meaning* 
 ```mermaid
 flowchart LR
     W["Web front end (ships with API)"] -->|"/v2"| GW["API gateway: routes by path, logs version + client id"]
-    M["Contractor mobile app (updates slowly)"] -->|"/v1"| GW
+    M["Hotel-owner mobile app (updates slowly)"] -->|"/v1"| GW
     E["Partner ERP (updates twice a year)"] -->|"/v1"| GW
     GW -->|"/v1/* with Deprecation, Sunset headers"| API["Invoices API (one deployment, two route groups)"]
     GW -->|"/v2/*"| API
@@ -181,7 +181,7 @@ sequenceDiagram
     participant Broker as Contract store
     participant PV as Provider verification (CI)
     participant API as Invoices API (candidate build)
-    CT->>Mock: GET /v2/invoices/42, expect id, contractor.name, totalPaise
+    CT->>Mock: GET /v2/invoices/42, expect id, hotel.name, totalPaise
     Mock-->>CT: canned 200 response
     CT->>Broker: publish contract "mobile-app -> invoices-api"
     Note over PV: on every provider pull request
@@ -215,14 +215,14 @@ We take the invoices API from a single unversioned endpoint to two supported ver
 
 ```csharp
 // Today: GET /invoices/{id}
-public sealed record InvoiceDto(string Id, string Contractor, decimal Amount, string Status);
+public sealed record InvoiceDto(string Id, string Hotel, decimal Amount, string Status);
 ```
 
-Finance wants `amountPaise` and `gstPaise` as integers, a contractor object with ID and name, and the issue date. Converting `Amount` from `decimal` rupees to `long` paise changes a type; replacing `Contractor` with an object changes a type. Both are breaking for a response.
+Finance wants `amountPaise` and `gstPaise` as integers, a hotel object with ID and name, and the issue date. Converting `Amount` from `decimal` rupees to `long` paise changes a type; replacing `Hotel` with an object changes a type. Both are breaking for a response.
 
 ### Step 2 — try expand first
 
-Add `AmountPaise`, `GstPaise`, `ContractorRef` and `IssuedOn` as *new* fields next to the old ones. This is non-breaking and would be the right move if the old fields could remain correct. Here the business also declares that `Amount` must stop including GST, which would silently change its meaning. So the old field cannot stay correct, and a version is justified.
+Add `AmountPaise`, `GstPaise`, `HotelRef` and `IssuedOn` as *new* fields next to the old ones. This is non-breaking and would be the right move if the old fields could remain correct. Here the business also declares that `Amount` must stop including GST, which would silently change its meaning. So the old field cannot stay correct, and a version is justified.
 
 ### Step 3 — two versions, one domain
 
@@ -230,7 +230,7 @@ Keep one domain `Invoice`. Create `InvoiceV1Dto` (unchanged shape) and `InvoiceV
 
 ### Step 4 — contracts and OpenAPI
 
-Each consumer publishes the fields it reads. Provider CI verifies both versions against those contracts and diffs the OpenAPI documents. The mobile app's contract turns out to list only `id`, `contractor` and `status`, so you learn that even on v1 nobody reads `amount` from the app; the ERP's contract lists everything.
+Each consumer publishes the fields it reads. Provider CI verifies both versions against those contracts and diffs the OpenAPI documents. The mobile app's contract turns out to list only `id`, `hotel` and `status`, so you learn that even on v1 nobody reads `amount` from the app (it shows payout totals from a separate payouts API); the ERP's contract lists everything.
 
 ## Production-style C# implementation
 
@@ -261,7 +261,7 @@ public sealed record VersionResolution(int Version, VersionSource Source);
 public sealed class ApiVersionConflictException(string message) : Exception(message);
 
 /// <summary>Reads the requested API version from, in order of precedence, the URL segment (/v2/...),
-/// the Api-Version header, or a vendor media type (application/vnd.rodic.v2+json). Falls back to a default.
+/// the Api-Version header, or a vendor media type (application/vnd.stayeasy.v2+json). Falls back to a default.
 /// If two sources name different versions, that is a client bug and we refuse rather than guess.</summary>
 public static partial class ApiVersionReader
 {
@@ -337,8 +337,8 @@ namespace Invoices.Api.Contracts;
 /// <summary>Internal domain shape. There is exactly one of these; versions are projections of it.</summary>
 public sealed record Invoice(
     string Id,
-    string ContractorId,
-    string ContractorName,
+    string HotelId,
+    string HotelName,
     long AmountExclGstPaise,
     long GstPaise,
     DateOnly IssuedOn,
@@ -348,14 +348,14 @@ public sealed record Invoice(
 }
 
 /// <summary>v1 contract, frozen. Amount is rupees including GST, as the original API promised.</summary>
-public sealed record InvoiceV1Dto(string Id, string Contractor, decimal Amount, string Status);
+public sealed record InvoiceV1Dto(string Id, string Hotel, decimal Amount, string Status);
 
-public sealed record ContractorRef(string Id, string Name);
+public sealed record HotelRef(string Id, string Name);
 
-/// <summary>v2 contract: integer paise, GST separated, contractor as an object, issue date added.</summary>
+/// <summary>v2 contract: integer paise, GST separated, hotel as an object, issue date added.</summary>
 public sealed record InvoiceV2Dto(
     string Id,
-    ContractorRef Contractor,
+    HotelRef Hotel,
     long AmountPaise,
     long GstPaise,
     long TotalPaise,
@@ -366,8 +366,8 @@ public sealed class InvoiceRepository
 {
     private readonly Dictionary<string, Invoice> _data = new()
     {
-        ["INV-1001"] = new Invoice("INV-1001", "C-07", "Shree Infra Works", 1_200_000_00, 216_000_00, new DateOnly(2026, 9, 30), "approved"),
-        ["INV-1002"] = new Invoice("INV-1002", "C-12", "Deccan Roads Pvt Ltd", 845_500_00, 152_190_00, new DateOnly(2026, 10, 3), "submitted"),
+        ["INV-1001"] = new Invoice("INV-1001", "H-07", "Hotel Sea Breeze, Goa", 1_200_000, 216_000, new DateOnly(2026, 9, 30), "approved"),
+        ["INV-1002"] = new Invoice("INV-1002", "H-12", "Lakeview Residency, Udaipur", 845_500, 152_190, new DateOnly(2026, 10, 3), "submitted"),
     };
 
     public Invoice? Find(string id) => _data.GetValueOrDefault(id);
@@ -382,10 +382,10 @@ namespace Invoices.Api.Contracts;
 public static class InvoiceMapper
 {
     public static InvoiceV1Dto ToV1(Invoice inv) =>
-        new(inv.Id, inv.ContractorName, inv.TotalPaise / 100m, inv.Status);   // v1 promised "amount including GST, in rupees"
+        new(inv.Id, inv.HotelName, inv.TotalPaise / 100m, inv.Status);   // v1 promised "amount including GST, in rupees"
 
     public static InvoiceV2Dto ToV2(Invoice inv) =>
-        new(inv.Id, new ContractorRef(inv.ContractorId, inv.ContractorName), inv.AmountExclGstPaise, inv.GstPaise, inv.TotalPaise, inv.IssuedOn, inv.Status);
+        new(inv.Id, new HotelRef(inv.HotelId, inv.HotelName), inv.AmountExclGstPaise, inv.GstPaise, inv.TotalPaise, inv.IssuedOn, inv.Status);
 }
 ```
 
@@ -555,7 +555,40 @@ app.MapGet("/v0/{**rest}", () => Results.Problem(
 app.Run();
 ```
 
-**Reading the implementation.** Both route groups map to the same repository and domain model; the only version-specific code is a DTO and a mapper, which is as cheap as a version can be. The deprecation filter is attached once to the `/v1` group, so every v1 endpoint signals and logs. The unversioned endpoint shows the header and media-type scheme and the two details people forget: echo the resolved version back, and set `Vary` so shared caches do not serve a v2 body to a v1 client.
+**Reading the implementation.** Both route groups map to the same repository and domain model; the only version-specific code is a DTO and a mapper, which is as cheap as a version can be. The deprecation filter is attached once to the `/v1` group, so every v1 endpoint signals and logs. The unversioned endpoint shows the header and media-type scheme and the two details people forget: echo the resolved version back, and set `Vary` so shared caches do not serve a v2 body to a v1 client. One production caveat: the filter logs a client ID taken from an `X-Client-Id` header when the caller is not authenticated. Any caller can type anything into that header, so for retirement decisions trust the authenticated identity (API key or OAuth client ID) that the gateway attaches, not a self-declared one.
+
+### The same thing with Asp.Versioning
+
+The hand-written reader and filter above exist so you can see the moving parts. In a real ASP.NET Core 10 service, use the `Asp.Versioning.Http` package (minimal APIs) or `Asp.Versioning.Mvc` (controllers), plus `Asp.Versioning.Mvc.ApiExplorer` for OpenAPI grouping. It is a NuGet package, so this is a snippet outside the compiled set:
+
+```csharp
+using Asp.Versioning;
+
+builder.Services.AddApiVersioning(o =>
+{
+    o.DefaultApiVersion = new ApiVersion(1);
+    o.AssumeDefaultVersionWhenUnspecified = true;     // unversioned calls get v1, never the newest
+    o.ReportApiVersions = true;                       // api-supported-versions / api-deprecated-versions headers
+    o.ApiVersionReader = ApiVersionReader.Combine(    // several sources; conflicting values are rejected with 400
+        new UrlSegmentApiVersionReader(),
+        new HeaderApiVersionReader("Api-Version"),
+        new MediaTypeApiVersionReaderBuilder()
+            .Template("application/vnd.stayeasy.v{version}+json")
+            .Build());
+    o.Policies.Sunset(1)                              // emits the RFC 8594 Sunset header and sunset Link
+        .Effective(new DateTimeOffset(2027, 4, 1, 0, 0, 0, TimeSpan.Zero))
+        .Link("https://docs.example.org/invoices/migrate-v2").Title("Migrating to v2");
+})
+.AddApiExplorer(o => o.GroupNameFormat = "'v'V");     // groups endpoints as "v1", "v2" for OpenAPI
+
+var invoices = app.NewVersionedApi("Invoices");
+var v1 = invoices.MapGroup("/v{version:apiVersion}/invoices").HasDeprecatedApiVersion(1);
+var v2 = invoices.MapGroup("/v{version:apiVersion}/invoices").HasApiVersion(2);
+v1.MapGet("/{id}", (string id, InvoiceRepository repo) => repo.Find(id) is { } inv ? Results.Ok(InvoiceMapper.ToV1(inv)) : Results.NotFound());
+v2.MapGet("/{id}", (string id, InvoiceRepository repo) => repo.Find(id) is { } inv ? Results.Ok(InvoiceMapper.ToV2(inv)) : Results.NotFound());
+```
+
+Two details catch people out. The plain `MediaTypeApiVersionReader` reads a media-type *parameter* (`Accept: application/json; v=2`); a vendor media type such as `application/vnd.stayeasy.v2+json` needs the template form shown above. And the library's error responses for an unsupported or ambiguous version are Problem Details (RFC 9457) bodies with status 400, which is the behaviour the hand-written reader imitates. Asp.Versioning also understands date versions (`2026-10-01`) if you prefer the "pin each client to a release date" style that some payment APIs use.
 
 ### OpenAPI per version
 
@@ -570,7 +603,7 @@ var v2 = app.MapGroup("/v2").WithGroupName("v2");
 app.MapOpenApi();   // serves /openapi/v1.json and /openapi/v2.json
 ```
 
-In CI, download both documents from the previous build and the candidate build and run a diff tool. A rule set like "fail on removed property, type change, new required request property or removed enum value for any version that is not brand new" turns the breaking-change tables into an automated gate. Mark v1 operations `deprecated: true` in the document (`.WithOpenApi(op => { op.Deprecated = true; return op; })`), which client generators turn into compiler warnings.
+In CI, download both documents from the previous build and the candidate build and run a diff tool. A rule set like "fail on removed property, type change, new required request property or removed enum value for any version that is not brand new" turns the breaking-change tables into an automated gate. Mark v1 operations `deprecated: true` in the document, which client generators turn into compiler warnings. In .NET 10 the old `.WithOpenApi(op => ...)` extension is obsolete; use an operation transformer instead, for example `v1.AddOpenApiOperationTransformer((op, ctx, ct) => { op.Deprecated = true; return Task.CompletedTask; })`, or let Asp.Versioning's API explorer mark operations of a deprecated version for you.
 
 ### Provider verification against a consumer contract
 
@@ -581,7 +614,7 @@ public class MobileAppContractTests(WebApplicationFactory<Program> factory) : IC
 {
     // What the mobile app actually reads. Note: no amount fields. Removing them would not break this consumer.
     private const string MobileExpectsV2 = """
-        { "id": "INV-1001", "contractor": { "name": "x" }, "status": "approved" }
+        { "id": "INV-1001", "hotel": { "name": "x" }, "status": "approved" }
         """;
 
     [Fact]
@@ -655,11 +688,11 @@ public static class Program
     {
         var v1 = new List<FieldSpec>
         {
-            new("id", "string", true), new("contractor", "string", true), new("amount", "number", true), new("status", "string", true),
+            new("id", "string", true), new("hotel", "string", true), new("amount", "number", true), new("status", "string", true),
         };
         var v2 = new List<FieldSpec>
         {
-            new("id", "string", true), new("contractor", "object", true), new("amountPaise", "integer", true),
+            new("id", "string", true), new("hotel", "object", true), new("amountPaise", "integer", true),
             new("gstPaise", "integer", true), new("totalPaise", "integer", true), new("issuedOn", "string", true), new("status", "string", true),
         };
 
@@ -678,7 +711,7 @@ Implement `ApiVersionReader.Resolve(path, versionHeader, accept, defaultVersion)
 ::requirements
 - `/v2/invoices/42` → version 2 from `Url`; `/invoices/42` → no URL version.
 - `Api-Version: 3` → 3 from `Header`; `Api-Version: abc` → ignored.
-- `Accept: application/vnd.rodic.v2+json` → 2 from `MediaType`; `Accept: application/json` → ignored.
+- `Accept: application/vnd.stayeasy.v2+json` → 2 from `MediaType`; `Accept: application/json` → ignored.
 - URL 2 and header 2 → 2 from `Url` (agreeing sources are fine).
 - URL 1 and header 2 → `ApiVersionConflictException`.
 ::acceptance
@@ -746,7 +779,7 @@ public class ApiVersionReaderTests
     [Fact]
     public void Media_type_is_used_when_nothing_else()
     {
-        var r = ApiVersionReader.Resolve("/invoices/42", null, "application/vnd.rodic.v2+json", 1);
+        var r = ApiVersionReader.Resolve("/invoices/42", null, "application/vnd.stayeasy.v2+json", 1);
         Assert.Equal(2, r.Version);
         Assert.Equal(VersionSource.MediaType, r.Source);
     }
@@ -769,7 +802,7 @@ public class ApiVersionReaderTests
     [Fact]
     public void Agreeing_sources_are_fine()
     {
-        var r = ApiVersionReader.Resolve("/v2/invoices", "2", "application/vnd.rodic.v2+json", 1);
+        var r = ApiVersionReader.Resolve("/v2/invoices", "2", "application/vnd.stayeasy.v2+json", 1);
         Assert.Equal(2, r.Version);
         Assert.Equal(VersionSource.Url, r.Source);
     }
@@ -834,7 +867,7 @@ public static class ApiVersionReader
 
 Refusing on conflict rather than picking a winner is a deliberate choice. A client that sends `/v1/...` with `Api-Version: 2` is confused, and guessing which one it meant produces the silent kind of bug.
 ::alternatives
-The `Asp.Versioning.Http` package (formerly Microsoft.AspNetCore.Mvc.Versioning) provides exactly these readers (`UrlSegmentApiVersionReader`, `HeaderApiVersionReader`, `MediaTypeApiVersionReader`) plus OpenAPI integration. In a real project use it; this exercise shows what it does.
+The `Asp.Versioning.Http` package (formerly Microsoft.AspNetCore.Mvc.Versioning) provides exactly these readers (`UrlSegmentApiVersionReader`, `HeaderApiVersionReader`, and `MediaTypeApiVersionReaderBuilder` with a template for vendor media types), combined with `ApiVersionReader.Combine`, plus OpenAPI integration. In a real project use it; this exercise shows what it does.
 ::mistakes
 - Matching `v2` anywhere in the path, so `/invoices/v2-report` resolves to version 2.
 - Defaulting to the newest version, which breaks clients that never sent a version.
@@ -845,7 +878,7 @@ The `Asp.Versioning.Http` package (formerly Microsoft.AspNetCore.Mvc.Versioning)
 For each proposed change to the invoices API, say whether it is breaking or non-breaking, which direction (request or response) it affects, and whether a new version is required or an expand-and-contract approach works.
 
 1. Add `issuedOn` (date) to the invoice response.
-2. Rename response field `contractor` to `contractorName`.
+2. Rename response field `hotel` to `hotelName`.
 3. Change response field `amount` from a decimal in rupees to an integer in paise.
 4. Add an optional `notes` field to the `POST /invoices` request body.
 5. Make the existing optional `purchaseOrderNumber` request field mandatory.
@@ -866,7 +899,7 @@ Renames and type changes can almost always be done as "add the new field, keep t
 Enum additions break any client with an exhaustive `switch`; semantic changes break nobody's code and everybody's data.
 ::solution
 1. **Non-breaking, response.** Adding a field is safe for Tolerant Readers. No version needed.
-2. **Breaking, response.** Readers of `contractor` get nothing. Expand-and-contract: add `contractorName`, keep `contractor` for one deprecation cycle, remove later. No version needed if you do that.
+2. **Breaking, response.** Readers of `hotel` get nothing. Expand-and-contract: add `hotelName`, keep `hotel` for one deprecation cycle, remove later. No version needed if you do that.
 3. **Breaking, response** (type change). Expand-and-contract: add `amountPaise` as a new field; keep `amount`. No version needed unless the old field cannot stay correct.
 4. **Non-breaking, request.** Old clients omit it and the server defaults it. No version needed.
 5. **Breaking, request.** Every client that omits it now gets 400. Alternatives: keep it optional and default it, or introduce the requirement only in a new version with a long overlap.
@@ -934,7 +967,7 @@ public class SchemaCompatibilityTests
 {
     private static readonly List<FieldSpec> V1Response =
     [
-        new("id", "string", true), new("contractor", "string", true), new("amount", "number", true), new("status", "string", true),
+        new("id", "string", true), new("hotel", "string", true), new("amount", "number", true), new("status", "string", true),
     ];
 
     [Fact]
@@ -956,9 +989,9 @@ public class SchemaCompatibilityTests
     [Fact]
     public void Changing_a_response_type_is_breaking()
     {
-        var v2 = V1Response.Select(f => f.Name == "contractor" ? f with { Type = "object" } : f).ToList();
+        var v2 = V1Response.Select(f => f.Name == "hotel" ? f with { Type = "object" } : f).ToList();
         var p = Assert.Single(SchemaCompatibility.CheckResponse(V1Response, v2));
-        Assert.Contains("contractor", p);
+        Assert.Contains("hotel", p);
     }
 
     [Fact]
@@ -972,14 +1005,14 @@ public class SchemaCompatibilityTests
     [Fact]
     public void Several_problems_are_all_reported()
     {
-        var v2 = new List<FieldSpec> { new("id", "string", true), new("contractor", "object", true), new("amountPaise", "integer", true), new("status", "string", true) };
+        var v2 = new List<FieldSpec> { new("id", "string", true), new("hotel", "object", true), new("amountPaise", "integer", true), new("status", "string", true) };
         var problems = SchemaCompatibility.CheckResponse(V1Response, v2);
         Assert.Equal(2, problems.Count);
     }
 
     private static readonly List<FieldSpec> V1Request =
     [
-        new("contractorId", "string", true), new("amountPaise", "integer", true), new("purchaseOrderNumber", "string", false),
+        new("hotelId", "string", true), new("amountPaise", "integer", true), new("purchaseOrderNumber", "string", false),
     ];
 
     [Fact]
@@ -992,9 +1025,9 @@ public class SchemaCompatibilityTests
     [Fact]
     public void New_required_request_field_is_breaking()
     {
-        var v2 = V1Request.Concat([new FieldSpec("projectCode", "string", true)]).ToList();
+        var v2 = V1Request.Concat([new FieldSpec("guestGstin", "string", true)]).ToList();
         var p = Assert.Single(SchemaCompatibility.CheckRequest(V1Request, v2));
-        Assert.Contains("projectCode", p);
+        Assert.Contains("guestGstin", p);
     }
 
     [Fact]
@@ -1212,7 +1245,7 @@ The ERP's contract (the fields it reads) tells you exactly what the adapter must
 }
 ```
 
-**Move v1 out of the core.** v1 is a pure projection of v2 (`amount = totalPaise / 100`, `contractor = contractor.name`), so a small adapter service can serve `/v1/*` by calling `/v2/*` and mapping. The core drops its v1 route group and its v1 tests; its OpenAPI document shrinks to one version. The adapter is about 2.8 RPS average (240,000 ÷ 86,400), perhaps 10 RPS at peak: two tiny instances. Added latency is one in-cluster hop, roughly a few milliseconds (estimate), acceptable for a nightly ERP batch.
+**Move v1 out of the core.** v1 is a pure projection of v2 (`amount = totalPaise / 100`, `hotel = hotel.name`), so a small adapter service can serve `/v1/*` by calling `/v2/*` and mapping. The core drops its v1 route group and its v1 tests; its OpenAPI document shrinks to one version. The adapter is about 2.8 RPS average (240,000 ÷ 86,400), perhaps 10 RPS at peak: two tiny instances. Added latency is one in-cluster hop, roughly a few milliseconds (estimate), acceptable for a nightly ERP batch.
 
 **Why not a gateway policy?** A gateway transformation (for example a response-mapping policy in Azure API Management) avoids a new deployable, and is a fine choice for field renames. Here the mapping includes arithmetic and object flattening, and it must be unit-tested against the ERP's contract, which is easier in C#. Either is defensible; the point is that the *core* no longer carries v1.
 
@@ -1235,7 +1268,7 @@ Four kinds of test keep contracts honest.
 
 **Version resolution** (exercise 1): pure unit tests of the reader, including conflict and malformed cases.
 
-**Mapper tests**: for each version, a domain `Invoice` goes in and a DTO comes out. These are the tests that pin the *meaning* of each field, so write them with values: `ToV1(inv).Amount == 1416000.00m` ("v1 amount includes GST, in rupees") and `ToV2(inv).AmountPaise == 120000000` ("v2 amount excludes GST, in paise"). If someone later changes what `Amount` means, this test is the alarm.
+**Mapper tests**: for each version, a domain `Invoice` goes in and a DTO comes out. These are the tests that pin the *meaning* of each field, so write them with values: `ToV1(inv).Amount == 14160.00m` ("v1 amount includes GST, in rupees") and `ToV2(inv).AmountPaise == 1200000` ("v2 amount excludes GST, in paise"). If someone later changes what `Amount` means, this test is the alarm.
 
 **Consumer contract verification**: one test per consumer per version using `JsonContractVerifier` (or Pact), replaying the consumer's recorded interactions against the real endpoints via `WebApplicationFactory`. Run on every provider pull request. Store each consumer's contract next to the consumer's own code and publish it on their deploy, so the provider always verifies against what is actually in production.
 
@@ -1249,7 +1282,7 @@ Four kinds of test keep contracts honest.
 - **Public sector integrations** (GST, e-invoicing, procurement portals) publish versioned specifications with long overlap periods because consumers are vendors on their own release cycles. The partner ERP in this lesson is the typical case.
 - **Internal microservices** often skip explicit versions entirely and rely on Tolerant Readers plus expand-and-contract, with consumer-driven contracts (Pact, Spring Cloud Contract) as the safety net. That is appropriate when you control deployment order and can see every consumer.
 - **gRPC** services evolve by protobuf field numbering rules; **GraphQL** schemas evolve by `@deprecated` plus field-level usage telemetry. Different mechanics, same philosophy.
-- **Infrastructure project platforms** that expose progress, billing and measurement data to contractors, auditors and government dashboards face exactly the invoices problem: many consumers, uneven update speeds, and numbers where a silent semantic change costs real money.
+- **Travel and hotel-booking platforms** that expose bookings, invoices and payouts to hotels, travel agents and corporate expense tools face exactly the invoices problem: many consumers, uneven update speeds, and numbers where a silent semantic change costs real money.
 
 ## Interview questions
 
@@ -1277,7 +1310,7 @@ Signals: on every response of the deprecated version, add `Deprecation: @<unix t
 ::q advanced
 A field's meaning must change (`amount` must stop including GST) but its name and type stay the same. How do you handle it, and why is this the most dangerous change?
 ::a
-It is dangerous because nothing fails: every client keeps deserialising successfully and starts computing wrong numbers, in this case paying or invoicing 18 % off. No type-based contract test, OpenAPI diff or deserialiser catches it. Handle it by never redefining an existing field: add new fields with explicit names (`amountExclGstPaise`, `gstPaise`, `totalPaise`), keep `amount` meaning what it always meant, deprecate it, measure who still reads it, and remove it on a schedule. If the business insists the old name must carry the new meaning for everyone, that is a new API version with a hard migration, and the mapper tests must assert concrete values ("v1 amount for this invoice is 1,416,000.00") so any accidental drift fails a test rather than a payment run.
+It is dangerous because nothing fails: every client keeps deserialising successfully and starts computing wrong numbers, in this case paying or invoicing 18 % off. No type-based contract test, OpenAPI diff or deserialiser catches it. Handle it by never redefining an existing field: add new fields with explicit names (`amountExclGstPaise`, `gstPaise`, `totalPaise`), keep `amount` meaning what it always meant, deprecate it, measure who still reads it, and remove it on a schedule. If the business insists the old name must carry the new meaning for everyone, that is a new API version with a hard migration, and the mapper tests must assert concrete values ("v1 amount for this invoice is 14,160.00") so any accidental drift fails a test rather than a payment run.
 :::
 
 ## Summary and revision
@@ -1335,7 +1368,7 @@ A request arrives at `/invoices/42` with no version header. The API supports v1 
 ::q multi
 Which of these are breaking changes to a JSON response? (Select all that apply.)
 - [x] Changing `amount` from a number to a string.
-- [x] Removing `contractor`.
+- [x] Removing `hotel`.
 - [ ] Adding `gstPaise`.
 - [x] Changing the meaning of `amount` from including GST to excluding GST.
 - [ ] Reordering the properties.

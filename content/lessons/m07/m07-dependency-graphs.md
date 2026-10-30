@@ -24,6 +24,8 @@ references:
 
 Every time one piece of code uses another, an arrow appears: `BillingService → ProjectService`. Draw all the arrows in a system and you get a **dependency graph**. Most of the time you never look at it. You only notice it when it has a loop in it: two modules that can't be built, tested, deployed or understood without each other. This lesson teaches you to see the graph, measure it, and keep loops out of it.
 
+The running example is **CloudDock**, a small cloud-hosting platform (think of the services where you deploy a website or API and get a monthly bill). Customers create **projects** (a deployed shop front, a booking API), the **Billing** module raises a monthly usage bill against each project, and a **Dashboard** shows a project's status next to what it has been billed so far.
+
 ## Learning objectives
 
 By the end of this lesson you will be able to:
@@ -114,7 +116,7 @@ Example: `Shared` is used by 4 modules and uses none: I = 0 / (4 + 0) = 0. `Dash
 
 ### Five ways to break a cycle
 
-Say `Billing → Projects` (billing checks the project is active) and `Projects → Billing` (closing a project must freeze its bills).
+Say `Billing → Projects` (billing checks the project is active before charging for it) and `Projects → Billing` (when a customer shuts a project down, its unpaid bills must be frozen so no more reminders or late fees go out).
 
 1. **Invert one arrow (DIP).** Billing defines or uses an interface `IProjectDirectory` that lives with Projects' public contract, and Projects stops calling Billing. Use when one side only needs a narrow capability of the other.
 2. **Extract the shared part.** If both depend on the same concept (say, a `ProjectId` and a status enum), move it into a lower module both can use. Use when the cycle exists because of shared data types.
@@ -189,7 +191,7 @@ classDiagram
         +Close(ProjectId id)
     }
     class BillingService {
-        +Raise(ProjectId id, decimal amount) RaBill
+        +Raise(ProjectId id, decimal amount) UsageBill
         +TotalBilled(ProjectId id) decimal
     }
     class FreezeBillsOnProjectClosed {
@@ -271,7 +273,7 @@ Add an architecture test that builds the namespace graph from the compiled assem
 ## Production-style C# implementation
 
 ```text
-SiteWorks.Api/
+CloudDock.Api/
   Program.cs
   Shared/Events.cs                 event contracts + in-process publisher
   Projects/Projects.cs             ProjectId, IProjectDirectory, ProjectService, ProjectClosed
@@ -283,7 +285,7 @@ SiteWorks.Api/
 ```csharp file=Shared/Events.cs
 using Microsoft.Extensions.DependencyInjection;
 
-namespace SiteWorks.Shared;
+namespace CloudDock.Shared;
 
 public interface IDomainEvent { }
 
@@ -313,9 +315,9 @@ This publisher does resolve from `IServiceProvider`, which the previous section 
 
 ```csharp file=Projects/Projects.cs
 using System.Collections.Concurrent;
-using SiteWorks.Shared;
+using CloudDock.Shared;
 
-namespace SiteWorks.Projects;
+namespace CloudDock.Projects;
 
 public readonly record struct ProjectId(int Value);
 public enum ProjectStatus { Active, Closed }
@@ -334,8 +336,8 @@ public sealed class ProjectRepository
 {
     private readonly ConcurrentDictionary<ProjectId, ProjectInfo> _items = new(new Dictionary<ProjectId, ProjectInfo>
     {
-        [new ProjectId(7)] = new(new ProjectId(7), "NH-44 four-laning, km 112-148", ProjectStatus.Active),
-        [new ProjectId(9)] = new(new ProjectId(9), "Ring road flyover, package 3", ProjectStatus.Active),
+        [new ProjectId(7)] = new(new ProjectId(7), "FreshCart storefront (Mumbai region)", ProjectStatus.Active),
+        [new ProjectId(9)] = new(new ProjectId(9), "Clinic booking API", ProjectStatus.Active),
     });
 
     public ProjectInfo? Get(ProjectId id) => _items.TryGetValue(id, out var p) ? p : null;
@@ -358,13 +360,13 @@ public sealed class ProjectService(ProjectRepository repo, IEventPublisher event
 
 ```csharp file=Billing/Billing.cs
 using Microsoft.Extensions.Logging;
-using SiteWorks.Projects;
-using SiteWorks.Shared;
+using CloudDock.Projects;
+using CloudDock.Shared;
 
-namespace SiteWorks.Billing;
+namespace CloudDock.Billing;
 
-/// <summary>A running-account (RA) bill raised by a contractor against a project.</summary>
-public sealed record RaBill(int Number, ProjectId Project, decimal Amount, bool Frozen);
+/// <summary>A monthly usage bill (compute, bandwidth, storage) raised against a hosted project.</summary>
+public sealed record UsageBill(int Number, ProjectId Project, decimal Amount, bool Frozen);
 
 public interface IBillingTotals
 {
@@ -374,19 +376,19 @@ public interface IBillingTotals
 public sealed class BillLedger
 {
     private readonly object _gate = new();
-    private readonly List<RaBill> _bills = [];
+    private readonly List<UsageBill> _bills = [];
 
-    public RaBill Add(ProjectId project, decimal amount)
+    public UsageBill Add(ProjectId project, decimal amount)
     {
         lock (_gate)
         {
-            var bill = new RaBill(_bills.Count + 1, project, amount, Frozen: false);
+            var bill = new UsageBill(_bills.Count + 1, project, amount, Frozen: false);
             _bills.Add(bill);
             return bill;
         }
     }
 
-    public IReadOnlyList<RaBill> For(ProjectId project) { lock (_gate) return _bills.Where(b => b.Project == project).ToList(); }
+    public IReadOnlyList<UsageBill> For(ProjectId project) { lock (_gate) return _bills.Where(b => b.Project == project).ToList(); }
 
     public int FreezeAll(ProjectId project)
     {
@@ -403,7 +405,7 @@ public sealed class BillLedger
 /// <summary>Billing depends on Projects' small contract, never on ProjectService itself.</summary>
 public sealed class BillingService(IProjectDirectory projects, BillLedger ledger) : IBillingTotals
 {
-    public RaBill Raise(ProjectId id, decimal amount)
+    public UsageBill Raise(ProjectId id, decimal amount)
     {
         if (amount <= 0) throw new ArgumentOutOfRangeException(nameof(amount));
         var project = projects.Find(id) ?? throw new KeyNotFoundException($"Project {id.Value} not found.");
@@ -429,10 +431,10 @@ public sealed class FreezeBillsOnProjectClosed(BillLedger ledger, ILogger<Freeze
 ```
 
 ```csharp file=Dashboard/ProjectDashboard.cs
-using SiteWorks.Billing;
-using SiteWorks.Projects;
+using CloudDock.Billing;
+using CloudDock.Projects;
 
-namespace SiteWorks.Dashboard;
+namespace CloudDock.Dashboard;
 
 public sealed record DashboardRow(int ProjectId, string Name, string Status, decimal TotalBilled);
 
@@ -447,7 +449,7 @@ public sealed class ProjectDashboard(IProjectDirectory projects, IBillingTotals 
 ```csharp file=Architecture/DependencyGraph.cs
 using System.Reflection;
 
-namespace SiteWorks.Architecture;
+namespace CloudDock.Architecture;
 
 /// <summary>A small directed graph with deterministic cycle detection and topological ordering.</summary>
 public sealed class DependencyGraph<T> where T : notnull
@@ -549,11 +551,11 @@ public sealed class DependencyGraph<T> where T : notnull
 The scanner only follows constructor parameters, which catches the dependencies DI wires up. A complete tool would also follow base types, fields, method signatures and method bodies; libraries such as NetArchTest or ArchUnitNET do this by reading IL. For many teams, constructor-level checks catch most accidental module cycles at a fraction of the effort.
 
 ```csharp file=Program.cs
-using SiteWorks.Architecture;
-using SiteWorks.Billing;
-using SiteWorks.Dashboard;
-using SiteWorks.Projects;
-using SiteWorks.Shared;
+using CloudDock.Architecture;
+using CloudDock.Billing;
+using CloudDock.Dashboard;
+using CloudDock.Projects;
+using CloudDock.Shared;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -593,7 +595,7 @@ app.MapGet("/projects/{id:int}/dashboard", (int id, ProjectDashboard dashboard) 
 
 app.MapGet("/architecture/modules", () =>
 {
-    var g = DependencyGraph<string>.FromConstructors(typeof(ProjectService).Assembly, "SiteWorks");
+    var g = DependencyGraph<string>.FromConstructors(typeof(ProjectService).Assembly, "CloudDock");
     return Results.Ok(new
     {
         modules = g.Nodes.ToDictionary(n => n, n => g.DependenciesOf(n)),
@@ -650,7 +652,7 @@ namespace Acyclic
     public sealed class BillingService(IProjectDirectory projects)
     {
         public string Raise(int projectId, decimal amount) =>
-            projects.IsActive(projectId) ? $"Bill raised: project {projectId}, ₹{amount:N0}" : $"Project {projectId} is closed";
+            projects.IsActive(projectId) ? $"Usage bill raised: project {projectId}, ₹{amount:N0}" : $"Project {projectId} is closed";
     }
 }
 
@@ -679,8 +681,8 @@ public static class Program
         using var provider = good.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
         using var scope = provider.CreateScope();
         var billing = scope.ServiceProvider.GetRequiredService<Acyclic.BillingService>();
-        Console.WriteLine(billing.Raise(7, 1_850_000m));
-        Console.WriteLine(billing.Raise(13, 50_000m));
+        Console.WriteLine(billing.Raise(7, 18_500m));
+        Console.WriteLine(billing.Raise(13, 2_400m));
     }
 }
 ```
@@ -1065,39 +1067,39 @@ public static class StartupPlanner
 - Running a full DFS cycle check on every iteration, making the algorithm O(V × (V + E)).
 :::
 
-:::exercise id=m07-dependency-graphs-ex4 difficulty=intermediate kind=design title="Untie a contractor-billing-notification knot"
-In a contractor management system, three services call each other:
+:::exercise id=m07-dependency-graphs-ex4 difficulty=intermediate kind=design title="Untie a seller-payout-notification knot"
+In an online marketplace where independent sellers list products and receive payouts for their sales, three services call each other:
 
-- `ContractorService` calls `BillingService.HasOutstandingBills(contractorId)` before it allows blacklisting.
-- `BillingService` calls `ContractorService.GetBankAccount(contractorId)` when releasing payment, and `NotificationService.Send(...)` after payment.
-- `NotificationService` calls `ContractorService.GetContact(contractorId)` to find the phone number.
+- `SellerService` calls `PayoutService.HasPendingPayouts(sellerId)` before it allows a seller to be suspended.
+- `PayoutService` calls `SellerService.GetBankAccount(sellerId)` when releasing a payout, and `NotificationService.Send(...)` after a payout.
+- `NotificationService` calls `SellerService.GetContact(sellerId)` to find the phone number.
 
 Redesign the classes in the LLD designer so the class graph is acyclic. For each arrow you remove or reverse, note which technique you used and why.
 ::acceptance
 - No cycle among the classes in your diagram.
-- Each original need is still met (blacklist check, bank account for payment, contact for notifications, a notification after payment).
+- Each original need is still met (suspension check, bank account for payouts, contact for notifications, a notification after a payout).
 - At least two different cycle-breaking techniques are used, each justified.
 - No `Lazy<T>`, `IServiceProvider` or property injection used to break a cycle.
 ::hint
-Draw the current graph first: you'll find two loops, Contractor ↔ Billing and Billing → Notification → Contractor → Billing.
+Draw the current graph first: you'll find two loops, Seller ↔ Payouts and Payouts → Notification → Seller → Payouts.
 ::hint
-Which arrows need an *answer right now* (preconditions) and which are *reactions* (things that happen after)? The notification after payment is a reaction.
+Which arrows need an *answer right now* (preconditions) and which are *reactions* (things that happen after)? The notification after a payout is a reaction.
 ::hint
-Bank account and contact details are both "contractor profile" data. A narrow read contract (`IContractorDirectory`) can serve both Billing and Notifications.
+Bank account and contact details are both "seller profile" data. A narrow read contract (`ISellerDirectory`) can serve both Payouts and Notifications.
 ::hint
-"Can this contractor be blacklisted?" needs facts from two modules. That's a policy above both, or Billing can expose a narrow query that Contractors depends on—but then Billing can't depend on Contractors. Pick one direction and put the other need behind the extracted directory.
+"Can this seller be suspended?" needs facts from two modules. That's a policy above both, or Payouts can expose a narrow query that Sellers depends on—but then Payouts can't depend on Sellers. Pick one direction and put the other need behind the extracted directory.
 ::starter
 ```json file=design.json
 {
   "classes": [
-    { "id": "Con", "name": "ContractorService", "kind": "class", "fields": [], "methods": ["+void Blacklist(int id)", "+BankAccount GetBankAccount(int id)", "+Contact GetContact(int id)"] },
-    { "id": "Bill", "name": "BillingService", "kind": "class", "fields": [], "methods": ["+bool HasOutstandingBills(int id)", "+void ReleasePayment(int billId)"] },
-    { "id": "Notif", "name": "NotificationService", "kind": "class", "fields": [], "methods": ["+void Send(int contractorId, string text)"] }
+    { "id": "Con", "name": "SellerService", "kind": "class", "fields": [], "methods": ["+void Suspend(int id)", "+BankAccount GetBankAccount(int id)", "+Contact GetContact(int id)"] },
+    { "id": "Pay", "name": "PayoutService", "kind": "class", "fields": [], "methods": ["+bool HasPendingPayouts(int id)", "+void ReleasePayout(int payoutId)"] },
+    { "id": "Notif", "name": "NotificationService", "kind": "class", "fields": [], "methods": ["+void Send(int sellerId, string text)"] }
   ],
   "relations": [
-    { "from": "Con", "to": "Bill", "kind": "dependency", "label": "HasOutstandingBills" },
-    { "from": "Bill", "to": "Con", "kind": "dependency", "label": "GetBankAccount" },
-    { "from": "Bill", "to": "Notif", "kind": "dependency", "label": "Send" },
+    { "from": "Con", "to": "Pay", "kind": "dependency", "label": "HasPendingPayouts" },
+    { "from": "Pay", "to": "Con", "kind": "dependency", "label": "GetBankAccount" },
+    { "from": "Pay", "to": "Notif", "kind": "dependency", "label": "Send" },
     { "from": "Notif", "to": "Con", "kind": "dependency", "label": "GetContact" }
   ]
 }
@@ -1106,15 +1108,15 @@ Bank account and contact details are both "contractor profile" data. A narrow re
 ```json file=design.json
 {
   "classes": [
-    { "id": "Dir", "name": "IContractorDirectory", "kind": "interface", "fields": [], "methods": ["+BankAccount GetBankAccount(int id)", "+Contact GetContact(int id)"], "responsibility": "Extracted read contract for contractor profile data" },
-    { "id": "Prof", "name": "ContractorProfileStore", "kind": "class", "fields": [], "methods": [], "responsibility": "Owns contractor master data; implements the directory" },
-    { "id": "Con", "name": "ContractorService", "kind": "class", "fields": [], "methods": ["+void Blacklist(int id)"], "responsibility": "Contractor lifecycle; asks a policy before blacklisting" },
-    { "id": "Pol", "name": "IBlacklistPolicy", "kind": "interface", "fields": [], "methods": ["+bool CanBlacklist(int id)"], "responsibility": "Owned by Contractors: what Contractors needs to know" },
-    { "id": "OutPol", "name": "NoOutstandingBillsPolicy", "kind": "class", "fields": [], "methods": ["+bool CanBlacklist(int id)"], "responsibility": "Billing-side adapter implementing the Contractors-owned port" },
-    { "id": "Bill", "name": "BillingService", "kind": "class", "fields": [], "methods": ["+void ReleasePayment(int billId)", "+bool HasOutstandingBills(int id)"], "responsibility": "Bills and payments" },
+    { "id": "Dir", "name": "ISellerDirectory", "kind": "interface", "fields": [], "methods": ["+BankAccount GetBankAccount(int id)", "+Contact GetContact(int id)"], "responsibility": "Extracted read contract for seller profile data" },
+    { "id": "Prof", "name": "SellerProfileStore", "kind": "class", "fields": [], "methods": [], "responsibility": "Owns seller master data; implements the directory" },
+    { "id": "Con", "name": "SellerService", "kind": "class", "fields": [], "methods": ["+void Suspend(int id)"], "responsibility": "Seller lifecycle; asks a policy before suspending" },
+    { "id": "Pol", "name": "ISuspensionPolicy", "kind": "interface", "fields": [], "methods": ["+bool CanSuspend(int id)"], "responsibility": "Owned by Sellers: what Sellers needs to know" },
+    { "id": "OutPol", "name": "NoPendingPayoutsPolicy", "kind": "class", "fields": [], "methods": ["+bool CanSuspend(int id)"], "responsibility": "Payouts-side adapter implementing the Sellers-owned port" },
+    { "id": "Pay", "name": "PayoutService", "kind": "class", "fields": [], "methods": ["+void ReleasePayout(int payoutId)", "+bool HasPendingPayouts(int id)"], "responsibility": "Payouts to sellers" },
     { "id": "Pub", "name": "IEventPublisher", "kind": "interface", "fields": [], "methods": ["+Task PublishAsync(TEvent e)"] },
-    { "id": "Evt", "name": "PaymentReleased", "kind": "record", "fields": ["+int ContractorId", "+decimal Amount", "+DateTimeOffset At"], "methods": [], "responsibility": "Event published by Billing" },
-    { "id": "Notif", "name": "PaymentNotificationHandler", "kind": "class", "fields": [], "methods": ["+Task HandleAsync(PaymentReleased e)"], "responsibility": "Notifications reacts to Billing's event" },
+    { "id": "Evt", "name": "PayoutReleased", "kind": "record", "fields": ["+int SellerId", "+decimal Amount", "+DateTimeOffset At"], "methods": [], "responsibility": "Event published by Payouts" },
+    { "id": "Notif", "name": "PayoutNotificationHandler", "kind": "class", "fields": [], "methods": ["+Task HandleAsync(PayoutReleased e)"], "responsibility": "Notifications reacts to Payouts's event" },
     { "id": "Sms", "name": "ISmsSender", "kind": "interface", "fields": [], "methods": ["+Task SendAsync(string phone, string text)"] }
   ],
   "relations": [
@@ -1122,10 +1124,10 @@ Bank account and contact details are both "contractor profile" data. A narrow re
     { "from": "Con", "to": "Prof", "kind": "dependency", "label": "owns profile" },
     { "from": "Con", "to": "Pol", "kind": "dependency" },
     { "from": "OutPol", "to": "Pol", "kind": "implements" },
-    { "from": "OutPol", "to": "Bill", "kind": "dependency" },
-    { "from": "Bill", "to": "Dir", "kind": "dependency", "label": "bank account" },
-    { "from": "Bill", "to": "Pub", "kind": "dependency" },
-    { "from": "Bill", "to": "Evt", "kind": "dependency", "label": "publishes" },
+    { "from": "OutPol", "to": "Pay", "kind": "dependency" },
+    { "from": "Pay", "to": "Dir", "kind": "dependency", "label": "bank account" },
+    { "from": "Pay", "to": "Pub", "kind": "dependency" },
+    { "from": "Pay", "to": "Evt", "kind": "dependency", "label": "publishes" },
     { "from": "Notif", "to": "Evt", "kind": "dependency", "label": "handles" },
     { "from": "Notif", "to": "Dir", "kind": "dependency", "label": "contact" },
     { "from": "Notif", "to": "Sms", "kind": "dependency" }
@@ -1135,17 +1137,17 @@ Bank account and contact details are both "contractor profile" data. A narrow re
 
 Techniques used:
 
-1. **Extract** (`IContractorDirectory` + `ContractorProfileStore`): bank account and contact are profile data that Billing and Notifications both read. Pulling them into a low-level read contract removes `Billing → ContractorService` and `Notification → ContractorService`.
-2. **Invert** (`IBlacklistPolicy`): Contractors owns the question it needs answered and depends only on its own interface. Billing provides `NoOutstandingBillsPolicy`, the implementation. The arrow that used to be `Contractor → Billing` is now `Billing adapter → Contractors port`.
-3. **Event** (`PaymentReleased`): notifying after payment is a reaction, so Billing publishes and Notifications subscribes. Billing no longer knows notifications exist.
+1. **Extract** (`ISellerDirectory` + `SellerProfileStore`): bank account and contact are profile data that Payouts and Notifications both read. Pulling them into a low-level read contract removes `Payouts → SellerService` and `Notification → SellerService`.
+2. **Invert** (`ISuspensionPolicy`): Sellers owns the question it needs answered and depends only on its own interface. Payouts provides `NoPendingPayoutsPolicy`, the implementation. The arrow that used to be `Seller → Payouts` is now `Payouts adapter → Sellers port`.
+3. **Event** (`PayoutReleased`): notifying after a payout is a reaction, so Payouts publishes and Notifications subscribes. Payouts no longer knows notifications exist.
 
-Check the result: Billing → Directory, Billing → Publisher; Notifications → Event, Directory; Contractors → Policy (its own), ProfileStore; the policy adapter → Billing. No path leads back to where it started.
+Check the result: Payouts → Directory, Payouts → Publisher; Notifications → Event, Directory; Sellers → Policy (its own), ProfileStore; the policy adapter → Payouts. No path leads back to where it started.
 ::alternatives
-A `BlacklistContractorWorkflow` above both modules (lift) is equally valid for the blacklist check, especially if more checks are coming (pending court cases, safety incidents). Choose the policy port if Contractors should own the rule; choose the workflow if the rule is cross-cutting and owned by a process team.
+A `SuspendSellerWorkflow` above both modules (lift) is equally valid for the suspension check, especially if more checks are coming (open customer complaints, counterfeit-product reports). Choose the policy port if Sellers should own the rule; choose the workflow if the rule is cross-cutting and owned by a process team.
 ::mistakes
-- Moving everything into one `ContractorBillingService`. That removes the cycle by creating a god class.
-- Making Notifications depend on Billing to look up the contractor. That adds a new edge instead of extracting the shared data.
-- Using an event for the blacklist check. The caller needs an answer *before* it acts, so a query is required.
+- Moving everything into one `SellerPayoutService`. That removes the cycle by creating a god class.
+- Making Notifications depend on Payouts to look up the seller. That adds a new edge instead of extracting the shared data.
+- Using an event for the suspension check. The caller needs an answer *before* it acts, so a query is required.
 :::
 
 :::exercise id=m07-dependency-graphs-ex5 difficulty=advanced kind=code title="Detect DI cycles hidden behind Lazy and Func"
@@ -1316,7 +1318,7 @@ Unit tests protect behaviour. **Architecture tests** protect the shape of the gr
 public class ArchitectureTests
 {
     private static readonly DependencyGraph<string> Modules =
-        DependencyGraph<string>.FromConstructors(typeof(ProjectService).Assembly, "SiteWorks");
+        DependencyGraph<string>.FromConstructors(typeof(ProjectService).Assembly, "CloudDock");
 
     [Fact]
     public void Module_graph_is_acyclic() => Assert.Null(Modules.FindCycle());
@@ -1337,7 +1339,7 @@ public class ArchitectureTests
     public void Container_has_no_cycles_or_captive_dependencies()
     {
         var builder = WebApplication.CreateBuilder();
-        // ... same registrations as Program.cs (extract them to an AddSiteWorks() extension method)
+        // ... same registrations as Program.cs (extract them to an AddCloudDock() extension method)
         using var sp = builder.Services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
     }
 }
@@ -1358,7 +1360,8 @@ Practical tips:
 - **Package managers** (NuGet, npm) and build systems (MSBuild, Bazel) all run topological sorts to decide build and restore order, and refuse or warn on cycles.
 - **Database migrations and seed data**: tables with foreign keys must be created and seeded in dependency order. Mutually referencing tables are a cycle that needs a nullable column or a deferred constraint, the database version of breaking a cycle.
 - **Microservices**: synchronous call cycles between services (A → B → A) amplify latency and failures. Teams break them with events, by moving data ownership, or by merging services that were split too finely.
-- **Large infrastructure programmes** model task dependencies the same way: a schedule network (critical path method) must be acyclic, and scheduling tools report loops as errors before computing the critical path.
+- **Task trackers and CI pipelines** model work the same way: Jira-style "blocked by" links, GitHub Actions `needs:` between jobs and Azure Pipelines stage dependencies must form an acyclic graph, and the tools reject or flag loops before scheduling anything.
+
 
 ## Interview questions
 

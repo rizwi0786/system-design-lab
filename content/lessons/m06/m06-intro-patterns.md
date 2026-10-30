@@ -22,7 +22,7 @@ references:
     url: https://learn.microsoft.com/dotnet/core/extensions/dependency-injection
 ---
 
-This module covers every classic pattern from the 1994 "Gang of Four" book, plus the patterns modern .NET teams use every day (Repository, Options, Result, Pipeline, Specification). This first lesson is the map. It teaches you *how* to learn patterns, so the next 30 lessons feel like variations on one idea instead of 30 things to memorise.
+This module covers the classic "Gang of Four" (1994) patterns you actually meet in .NET backends, plus the patterns modern .NET teams use every day (Repository, Options, Result, Pipeline, Specification). This first lesson is the map. It teaches you *how* to learn patterns, so the 24 lessons after it (16 GoF patterns, 6 enterprise and .NET patterns, and 2 wrap-up lessons) feel like variations on one idea instead of 24 things to memorise.
 
 ## Learning objectives
 
@@ -79,11 +79,13 @@ So why learn a 30-year-old catalogue? Because the *problems* haven't changed. Co
 
 The GoF grouped the 23 patterns by *what kind of problem* they solve.
 
-| Family | Question it answers | Count | Members |
+| Family | Question it answers | Count | Members (**bold** = has its own lesson in this module) |
 |---|---|---|---|
-| **Creational** | How do objects get *made*, without the caller hard-wiring concrete classes? | 5 | Singleton, Factory Method, Abstract Factory, Builder, Prototype |
-| **Structural** | How are objects *combined* or *wrapped* to form bigger structures? | 7 | Adapter, Bridge, Composite, Decorator, Facade, Flyweight, Proxy |
-| **Behavioral** | How do objects *share work and talk* to each other? | 11 | Chain of Responsibility, Command, Interpreter, Iterator, Mediator, Memento, Observer, State, Strategy, Template Method, Visitor |
+| **Creational** | How do objects get *made*, without the caller hard-wiring concrete classes? | 5 | **Singleton**, **Factory Method**, **Abstract Factory**, **Builder**, Prototype |
+| **Structural** | How are objects *combined* or *wrapped* to form bigger structures? | 7 | **Adapter**, Bridge, **Composite**, **Decorator**, **Facade**, Flyweight, **Proxy** |
+| **Behavioral** | How do objects *share work and talk* to each other? | 11 | **Chain of Responsibility**, **Command**, Interpreter, Iterator, **Mediator**, Memento, **Observer**, **State**, **Strategy**, **Template Method**, Visitor |
+
+So 16 of the 23 GoF patterns get a full lesson here (4 creational, 5 structural, 7 behavioral). The other 7, plus the non-GoF Object Pool, are covered by a short note in the catalogue map below.
 
 A quick way to remember: creational is about **`new`**, structural is about **references between objects**, behavioral is about **method calls between objects**.
 
@@ -128,15 +130,13 @@ Above patterns sit **architectural styles** (layered, hexagonal, microservices),
 
 ### The catalogue map for this module
 
-Use this as your table of contents. Every link opens the lesson.
+Use this as your table of contents. Every link opens the lesson. After this introduction there are 24 lessons: 4 creational, 5 structural, 7 behavioral, 6 enterprise and modern .NET patterns, and 2 lessons that put it all together.
 
 **Creational: how objects get made**
 - [Singleton](#/lesson/m06-singleton): exactly one shared instance, and why DI does it better.
 - [Factory Method](#/lesson/m06-factory-method): let a subclass or a registered function decide which class to create.
 - [Abstract Factory](#/lesson/m06-abstract-factory): create *families* of related objects that must match.
 - [Builder](#/lesson/m06-builder): build a complex object step by step, validated at the end.
-- [Prototype](#/lesson/m06-prototype): create new objects by copying an existing one.
-- [Object Pool](#/lesson/m06-object-pool): reuse expensive objects (`ArrayPool<T>`, `ObjectPool<T>`).
 
 **Structural: how objects are wrapped and combined**
 - [Adapter](#/lesson/m06-adapter): translate one interface into another.
@@ -144,8 +144,6 @@ Use this as your table of contents. Every link opens the lesson.
 - [Facade](#/lesson/m06-facade): one simple entry point over a complicated subsystem.
 - [Proxy](#/lesson/m06-proxy): a stand-in that controls access (lazy, caching, security).
 - [Composite](#/lesson/m06-composite): treat a tree of objects like a single object.
-- [Bridge](#/lesson/m06-bridge): split two independent dimensions of variation.
-- [Flyweight](#/lesson/m06-flyweight): share small immutable objects to save memory.
 
 **Behavioral: how objects share work**
 - [Strategy](#/lesson/m06-strategy): swap algorithms behind one interface.
@@ -155,18 +153,24 @@ Use this as your table of contents. Every link opens the lesson.
 - [Template Method](#/lesson/m06-template-method): fixed steps, customisable parts.
 - [Chain of Responsibility](#/lesson/m06-chain-of-responsibility): pass a request along handlers, like middleware.
 - [Mediator](#/lesson/m06-mediator): objects talk through a hub instead of to each other.
-- [Iterator](#/lesson/m06-iterator): walk a collection without knowing its insides.
-- [Memento](#/lesson/m06-memento): save and restore snapshots.
-- [Visitor](#/lesson/m06-visitor): add operations to a class hierarchy without editing it.
-- [Interpreter](#/lesson/m06-interpreter): evaluate sentences in a small language.
 
 **Enterprise and modern .NET patterns**
 - [Specification](#/lesson/m06-specification), [Repository and Unit of Work](#/lesson/m06-repository-uow), [Null Object](#/lesson/m06-null-object), [Dependency Injection as a pattern](#/lesson/m06-dependency-injection-pattern), [Options and Result](#/lesson/m06-options-result), [Pipeline and middleware](#/lesson/m06-pipeline).
 
+**Not taught as separate lessons**
+- Prototype, Bridge, Flyweight, Iterator, Memento, Visitor and Interpreter are part of the GoF catalogue, and Object Pool is a well-known pattern from outside it, but you rarely write any of them by hand in an ASP.NET Core backend. C# already gives you Iterator (`foreach`, `yield`) and Prototype (`record` + `with`), and .NET gives you Object Pool (`ArrayPool<T>`). Recognise the names; spend your time on the patterns above.
+
 **Putting it together**
 - [Choosing between similar patterns](#/lesson/m06-pattern-comparison) and [Anti-patterns](#/lesson/m06-anti-patterns).
 
-A sensible order for a beginner: Strategy → Factory Method → Decorator → Adapter → Facade → Builder → Singleton → Observer → Template Method → Chain of Responsibility. Those ten cover most of what you will see in a typical ASP.NET Core codebase.
+A sensible order for a beginner:
+
+1. **First ten (the everyday core):** Strategy → Factory Method → Decorator → Adapter → Facade → Builder → Singleton → Observer → Template Method → Chain of Responsibility. Those ten cover most of what you will see in a typical ASP.NET Core codebase.
+2. **Modern .NET essentials (six):** Dependency Injection as a pattern → Options and Result → Pipeline and middleware → Null Object → Repository and Unit of Work → Specification.
+3. **The rest of the GoF set (six):** Proxy → Composite → Abstract Factory → Command → State → Mediator.
+4. **Wrap-up (two):** Choosing between similar patterns → Anti-patterns.
+
+That is all 24 lessons. You can jump ahead when a pattern shows up in your own work; each lesson lists its prerequisites.
 
 ## Visual explanation
 
@@ -963,9 +967,9 @@ If the SDK were async and threw exceptions instead of returning codes, the adapt
 :::
 
 :::exercise id=m06-intro-patterns-ex5 difficulty=advanced kind=design title="Choose patterns for an approval workflow (and reject some)"
-Your team is building purchase-order approvals for an infrastructure company. Requirements:
+Your team is building purchase-order (PO) approvals for a chain of 40 clinics that buys equipment and medicines. Requirements:
 
-- A PO under ₹50,000 needs the project manager. ₹50,000–₹5,00,000 adds the finance head. Above ₹5,00,000 adds a director.
+- A PO under ₹50,000 needs the clinic manager. ₹50,000–₹5,00,000 adds the finance head. Above ₹5,00,000 adds a director.
 - Thresholds differ per business unit and change once or twice a year.
 - When a PO is approved, three things happen: an email to the vendor, an entry in the ERP, and a dashboard update.
 - A PO moves Draft → Submitted → Approved/Rejected → Closed, and only some actions are allowed in each state.
@@ -995,7 +999,7 @@ Core diagram: `PurchaseOrder` with a `IPoState` field; `IApprovalRule` list buil
 | Lifecycle Draft → … → Closed | **State** (or an explicit transition table) | Allowed actions depend on the current stage; each state class rejects invalid actions. With only 5 states, a transition table inside `PurchaseOrder` is a valid simpler alternative. |
 | Approvers by amount | **Chain of Responsibility** or a simple **rule list** | Each rule says "I add the finance head when amount ≥ threshold". Rules read thresholds from `IOptionsMonitor<ApprovalOptions>` per business unit. |
 | Reactions after approval | **Observer** via domain events | Email, ERP and dashboard are independent; a failure in the dashboard update must not block the ERP entry. In production use an outbox so reactions survive restarts. |
-| Building a complex PO in tests | **Builder** (test data builder) | Keeps tests short: `new PoBuilder().ForUnit("Roads").WithAmount(6_00_000m).Build()`. |
+| Building a complex PO in tests | **Builder** (test data builder) | Keeps tests short: `new PoBuilder().ForUnit("Diagnostics").WithAmount(6_00_000m).Build()`. |
 
 ```mermaid
 classDiagram
@@ -1077,7 +1081,7 @@ Notice there is no mocking library. A hand-written fake of a one-method interfac
 
 - **ASP.NET Core** is a pattern showcase: the middleware pipeline is Chain of Responsibility, `WebApplicationBuilder` is Builder, `IOptions<T>` is the Options pattern, authentication handlers are Strategies chosen by scheme, and `IHttpClientFactory` is a Factory that also pools handlers.
 - **Payment platforms** typically adapt each bank or gateway API behind one interface (Adapter + Strategy) and add retries, idempotency and logging with wrappers (Decorator).
-- **Infrastructure project-management systems** (progress tracking, RFIs, billing) often use State for document lifecycles, Observer or domain events for notifications, and Builder for complex monthly reports.
+- **Food-delivery and e-commerce order systems** often use State for the order lifecycle (placed → preparing → out for delivery → delivered), Observer or domain events for notifications ("your order is on the way"), and Builder for complex monthly settlement reports.
 - **Libraries you use daily** follow them too: `Stream` decorators (`BufferedStream`, `GZipStream`, `CryptoStream`), LINQ (Iterator plus deferred execution), `ExpressionVisitor` (Visitor).
 
 The lesson for your career: when you meet a new framework, look for these shapes first. They are the fastest route to understanding how it's put together.

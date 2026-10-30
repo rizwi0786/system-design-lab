@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 100
 prerequisites: [m08-aggregates, m08-domain-events, m08-cqrs-fundamentals, m09-transactions-acid]
-related: [m16-event-sourcing, m08-cqrs-fundamentals, m12-outbox, m12-idempotent-consumers, m06-memento, m09-jsonb]
+related: [m16-event-sourcing, m08-cqrs-fundamentals, m12-outbox, m12-idempotent-consumers, m09-jsonb]
 tags: [event-sourcing, event-store, projections, snapshots, event-versioning, upcasting, ddd, postgresql]
 patterns: [Event Sourcing, Projection, Snapshot, Upcaster, Optimistic Concurrency]
 summary: "Store every change as an immutable event in an append-only stream, rebuild current state by replaying it, feed read models from the same events, and understand the real costs: versioning, snapshots, projections, privacy, and when plain state tables are the better choice."
@@ -24,11 +24,11 @@ references:
     url: https://learn.microsoft.com/aspnet/core/fundamentals/host/hosted-services
 ---
 
-Most systems store **current state**: a row says "Cement OPC 53, site NH48-P3, 1,240 bags". When someone issues 60 bags, the row is updated to 1,180 and the old value is gone. If an auditor asks "why did the count drop by 300 last Tuesday?", you hope someone wrote a log.
+Most systems store **current state**: a row says "Amoxicillin 500 mg (box of 10 strips), Bengaluru warehouse, 1,240 boxes". When the warehouse sends 60 boxes to a branch pharmacy, the row is updated to 1,180 and the old value is gone. If a drug inspector asks "why did the count drop by 300 last Tuesday, and which stores got those boxes?", you hope someone wrote a log.
 
-**Event sourcing** turns this around. You store **what happened**, as a sequence of facts: *opened*, *received 500 bags at ₹385 under GRN 1041*, *issued 60 bags to work order WO-77*, *adjusted −12 after physical count*. Current state is not stored at all (or only as a cache). It is computed by replaying the facts. The history is not a log next to the data. The history **is** the data.
+**Event sourcing** turns this around. You store **what happened**, as a sequence of facts: *opened*, *received 500 boxes at ₹385 under GRN 1041*, *issued 60 boxes to store order SO-77*, *adjusted −12 after physical count*. Current state is not stored at all (or only as a cache). It is computed by replaying the facts. The history is not a log next to the data. The history **is** the data.
 
-This lesson builds an event-sourced site-store ledger for construction materials in C#, with an event store, rehydration, projections, snapshots and event versioning. It ends with the most important part: when *not* to do this, because event sourcing is powerful and expensive in equal measure.
+This lesson builds an event-sourced stock ledger for a pharmacy chain's central warehouse in C#, with an event store, rehydration, projections, snapshots and event versioning. It ends with the most important part: when *not* to do this, because event sourcing is powerful and expensive in equal measure.
 
 ## Learning objectives
 
@@ -63,11 +63,11 @@ Three useful things follow:
 
 Event sourcing stores business data like a passbook:
 
-- Each entry is an **event**: a fact in the past tense (`MaterialReceived`, `MaterialIssued`).
-- The list of entries for one thing (one material at one site) is an **event stream**.
+- Each entry is an **event**: a fact in the past tense (`StockReceived`, `StockIssued`).
+- The list of entries for one thing (one medicine at one warehouse) is an **event stream**.
 - The book shelf holding all streams is the **event store**.
 - Adding up the entries to get the balance is **rehydration** (or replaying).
-- A printed summary sheet, "balance of every material at every site", is a **projection**.
+- A printed summary sheet, "balance of every medicine at every warehouse", is a **projection**.
 - Writing the balance on a bookmark every 50 pages, so you don't have to start from page 1 each time, is a **snapshot**.
 
 ## First-principles explanation
@@ -89,7 +89,7 @@ Many systems keep a current-state table *and* an audit table. That is not event 
 |---|---|---|
 | Source of truth | The state table | The events |
 | Audit log | Written alongside, can drift or be forgotten | Cannot drift: it *is* the data |
-| Meaning of entries | Often technical ("column qty changed from 1240 to 1180") | Business facts ("issued 60 bags to WO-77") |
+| Meaning of entries | Often technical ("column qty changed from 1240 to 1180") | Business facts ("issued 60 boxes to SO-77") |
 | New questions about the past | Only if the audit captured enough | Answerable by a new projection over existing events |
 | Complexity | Low | High |
 
@@ -99,9 +99,9 @@ If all you need is "who changed what, when", an audit table (or a temporal table
 
 **Writing (handling a command):**
 
-1. Load the stream for the aggregate id (`stock-NH48P3-CEM-OPC53`): read its events in version order.
+1. Load the stream for the aggregate id (`stock-BLRWH-AMOX500`): read its events in version order.
 2. Rehydrate: start from an empty aggregate and apply each event to update in-memory state.
-3. Decide: call the command method (`Issue(60, "WO-77")`). It checks rules against the current state ("60 ≤ 1,240 on hand") and produces new events. It does *not* store anything.
+3. Decide: call the command method (`Issue(60, "SO-77")`). It checks rules against the current state ("60 ≤ 1,240 on hand") and produces new events. It does *not* store anything.
 4. Append the new events with an **expected version**: "append these if the stream is still at version 17". The store rejects the append if someone else appended in the meantime. That is optimistic concurrency, with the stream version playing the role of a row version.
 5. Done. No `UPDATE` ever happens.
 
@@ -116,17 +116,17 @@ An event-sourced aggregate has two kinds of methods, and keeping them separate i
 
 | Decide (command methods) | Evolve (apply methods) |
 |---|---|
-| `Issue(quantity, workOrder)` | `Apply(MaterialIssued e)` |
+| `Issue(quantity, storeOrder)` | `Apply(StockIssued e)` |
 | Validates rules against current state | Never validates: the event already happened |
 | May throw or reject | Must never fail for a valid stored event |
 | Produces events | Changes state fields |
 | Runs only when handling a new command | Runs for every replay, forever |
 
-Why must `Apply` never validate? Because the event is a fact that was accepted in the past. If you later tighten a rule ("issues above 500 bags need approval"), replaying an old 600-bag issue must still work. Rules belong in `Decide`. History is history.
+Why must `Apply` never validate? Because the event is a fact that was accepted in the past. If you later tighten a rule ("issues above 500 boxes need approval"), replaying an old 600-box issue must still work. Rules belong in `Decide`. History is history.
 
 ### Streams, versions and positions
 
-- **Stream id**: one per aggregate instance, for example `stock-{site}-{material}`.
+- **Stream id**: one per aggregate instance, for example `stock-{warehouse}-{sku}`.
 - **Stream version**: 1, 2, 3... within a stream. Used for optimistic concurrency and for snapshots.
 - **Global position**: a store-wide, increasing sequence across all streams. Projections use it as a checkpoint ("I have processed everything up to position 98,412").
 
@@ -141,7 +141,7 @@ A projection is a function from events to a read model: `(readModel, event) → 
 
 ### Snapshots
 
-Rehydrating a stream of 200 events is quick (an estimate: well under a few milliseconds in memory once loaded). A stream of 200,000 events (a busy material at a large site over several years) is not. A **snapshot** stores the aggregate's state at some version. Loading becomes: read the latest snapshot, then only the events after it.
+Rehydrating a stream of 200 events is quick (an estimate: well under a few milliseconds in memory once loaded). A stream of 200,000 events (a fast-moving medicine at a large warehouse over several years) is not. A **snapshot** stores the aggregate's state at some version. Loading becomes: read the latest snapshot, then only the events after it.
 
 Snapshot rules of thumb:
 
@@ -154,17 +154,17 @@ Snapshot rules of thumb:
 Events are stored forever, but your code changes. Strategies, from most to least preferred:
 
 1. **Add optional fields only.** New code handles the missing field with a default. Old events still deserialise. Most changes can be done this way.
-2. **Upcasting.** When reading an old event, transform its JSON from version 1 to version 2 before deserialising (for example, add `workOrder: "UNKNOWN"`). The stored bytes never change. Upcasters are small, pure and tested.
-3. **New event type.** If the meaning changes, create `MaterialIssuedV2` (or better, a new name such as `MaterialIssuedToWorkOrder`) and keep handling the old one.
+2. **Upcasting.** When reading an old event, transform its JSON from version 1 to version 2 before deserialising (for example, add `storeOrder: "UNKNOWN"`). The stored bytes never change. Upcasters are small, pure and tested.
+3. **New event type.** If the meaning changes, create `StockIssuedV2` (or better, a new name such as `StockTransferredToStore`) and keep handling the old one.
 4. **Copy-and-transform the stream** (rewrite into a new store). A last resort, for large refactors, done as a migration with verification.
 
-Never change the meaning of an existing event type's fields. `Quantity` that used to mean "bags" must not start meaning "kilograms".
+Never change the meaning of an existing event type's fields. `Quantity` that used to mean "boxes" must not start meaning "strips".
 
 ### Why it exists — what you get
 
-- **Complete, trustworthy history** in business terms, for audit and dispute resolution. On infrastructure projects, "who issued 300 bags of cement to which work order, and was it reversed?" is a common question during billing reconciliations.
+- **Complete, trustworthy history** in business terms, for audit and dispute resolution. In a pharmacy chain, "which store orders received the 300 boxes from batch B-2291, and was any of it returned?" is the first question in a drug recall or an inspector's audit.
 - **Temporal queries**: state as of any version or date.
-- **New read models from old data**: build a "wastage per work order" report today over events from three years ago.
+- **New read models from old data**: build an "expiry write-off per store" report today over events from three years ago.
 - **Natural integration**: events can be published to other systems (through an [outbox](#/lesson/m12-outbox)-like relay) without inventing a second change feed.
 - **Debugging**: replay a stream to reproduce exactly how a bad state arose.
 
@@ -176,7 +176,7 @@ Never change the meaning of an existing event type's fields. `Quantity` that use
 - **Versioning forever.** Every event type you ship is a contract with your future self.
 - **Privacy and erasure.** "Never delete" collides with rights to erasure under data-protection law (for example India's DPDP Act 2023 or the EU's GDPR). Mitigations: keep personal data out of events (store a reference), or encrypt personal fields with a per-person key and delete the key ("crypto-shredding").
 - **Fewer tools.** ORMs, reporting tools and ad-hoc SQL work naturally on state tables, less so on event streams.
-- **Set-based rules are hard.** "Material codes must be unique across the company" spans streams. You need a separate uniqueness table or a reservation process.
+- **Set-based rules are hard.** "SKU codes must be unique across the company" spans streams. You need a separate uniqueness table or a reservation process.
 
 ### When it is useful
 
@@ -191,7 +191,7 @@ Never change the meaning of an existing event type's fields. `Quantity` that use
 - The audit requirement is "who changed which field when": use an audit table or temporal tables.
 - A small team under delivery pressure, without experience in projections and versioning.
 - Data with heavy erasure requirements and lots of personal information in every change.
-- **The whole system.** Even when event sourcing fits, apply it to the one or two bounded contexts that need it (the stock ledger), not to everything (site master data, user accounts).
+- **The whole system.** Even when event sourcing fits, apply it to the one or two bounded contexts that need it (the stock ledger), not to everything (store master data, user accounts).
 
 ## Visual explanation
 
@@ -219,25 +219,25 @@ flowchart LR
     ES -.-> PUB
 ```
 
-The command side is on the left. The handler loads the latest snapshot (if any) and the events after it, rehydrates `StockItem`, asks it to decide, and appends the resulting events with an expected version. The event store is the only thing written by commands. On the right, a projection worker reads the global stream after its last checkpoint and updates the `stock_levels` table, which queries read. The dotted arrow shows that the same events can feed other systems (for example, the finance module) through a relay. Snapshots are drawn as a cache: deleting them changes speed, not correctness.
+The command side is on the left. The handler loads the latest snapshot (if any) and the events after it, rehydrates `StockItem`, asks it to decide, and appends the resulting events with an expected version. The event store is the only thing written by commands. On the right, a projection worker reads the global stream after its last checkpoint and updates the `stock_levels` table, which queries read. The dotted arrow shows that the same events can feed other systems (for example, finance or the store-replenishment service) through a relay. Snapshots are drawn as a cache: deleting them changes speed, not correctness.
 
 ### Handling a command
 
 ```mermaid
 sequenceDiagram
-    participant C as Store keeper app
-    participant H as IssueMaterialHandler
+    participant C as Warehouse app
+    participant H as IssueStockHandler
     participant R as StockItemRepository
     participant S as Event store
     participant A as StockItem
-    C->>H: Issue 60 bags to WO-77
-    H->>R: LoadAsync(stock-NH48P3-CEM)
+    C->>H: Issue 60 boxes to SO-77
+    H->>R: LoadAsync(stock-BLRWH-AMOX500)
     R->>S: read stream after version 0
     S-->>R: 17 events
     R->>A: replay 17 events
     R-->>H: StockItem at version 17 with 1240 on hand
-    H->>A: Issue(60, WO-77)
-    A-->>H: pending MaterialIssued
+    H->>A: Issue(60, SO-77)
+    A-->>H: pending StockIssued
     H->>R: SaveAsync(item)
     R->>S: append 1 event expecting version 17
     alt nobody else appended
@@ -251,7 +251,9 @@ sequenceDiagram
     end
 ```
 
-The handler never edits stored data. It replays history into memory, makes a decision, and appends a new fact. The `alt` block shows optimistic concurrency. If another store keeper issued cement a moment earlier, the stream is at version 18, the append expecting 17 fails, and the handler reloads (now 1,180 on hand) and decides again. If the second decision is still valid, it succeeds. If not (not enough stock left), the user gets a clear rule violation. Retrying is safe because the handler re-runs the *decision*, not the old result.
+The handler never edits stored data. It replays history into memory, makes a decision, and appends a new fact. The `alt` block shows optimistic concurrency. If another packer issued the same medicine a moment earlier, the stream is at version 18, the append expecting 17 fails, and the handler reloads (now 1,180 on hand) and decides again. If the second decision is still valid, it succeeds. If not (not enough stock left), the user gets a clear rule violation. Retrying is safe because the handler re-runs the *decision*, not the old result.
+
+One thing the version check does **not** protect against is the same command arriving twice. If the warehouse app times out and resends "issue 60 boxes to SO-77", the second request loads version 18, decides again and appends a second issue. Optimistic concurrency stops *lost updates*, not *duplicates*. Give each command an id (or use the store order number as a natural key), record it in the event metadata, and have the aggregate or handler ignore a command id it has already seen, as in [idempotent consumers](#/lesson/m12-idempotent-consumers).
 
 ### The aggregate's structure
 
@@ -263,15 +265,15 @@ classDiagram
         +decimal AverageCost
         +int Version
         +int OriginalVersion
-        +Open(string site, string material, string unit)$ StockItem
+        +Open(string warehouse, string sku, string unit)$ StockItem
         +Receive(decimal qty, decimal unitCost, string grnNo)
-        +Issue(decimal qty, string workOrder, string issuedTo)
+        +Issue(decimal qty, string storeOrder, string packedBy)
         +Adjust(decimal delta, string reason)
         -Apply(object e)
     }
     class StockItemOpened { <<record>> }
-    class MaterialReceived { <<record>> }
-    class MaterialIssued { <<record>> }
+    class StockReceived { <<record>> }
+    class StockIssued { <<record>> }
     class StockAdjusted { <<record>> }
     class IEventStore {
         <<interface>>
@@ -282,8 +284,8 @@ classDiagram
     class StockItemRepository
     class StockLevelProjection
     StockItem ..> StockItemOpened : raises and applies
-    StockItem ..> MaterialReceived : raises and applies
-    StockItem ..> MaterialIssued : raises and applies
+    StockItem ..> StockReceived : raises and applies
+    StockItem ..> StockIssued : raises and applies
     StockItem ..> StockAdjusted : raises and applies
     StockItemRepository --> IEventStore
     StockItemRepository --> StockItem : rehydrates
@@ -297,9 +299,9 @@ The four event records are the aggregate's entire persistent vocabulary. `StockI
 ### Step 1 — the state-based version
 
 ```csharp
-public async Task Issue(string site, string material, decimal qty, string workOrder)
+public async Task Issue(string warehouse, string sku, decimal qty, string storeOrder)
 {
-    var row = await db.Stock.SingleAsync(s => s.Site == site && s.Material == material);
+    var row = await db.Stock.SingleAsync(s => s.Warehouse == warehouse && s.Sku == sku);
     if (row.OnHand < qty) throw new InvalidOperationException("Insufficient stock");
     row.OnHand -= qty;                                      // previous value is lost
     db.AuditLog.Add(new AuditRow("Stock", row.Id, $"OnHand {row.OnHand + qty} -> {row.OnHand}"));
@@ -307,15 +309,15 @@ public async Task Issue(string site, string material, decimal qty, string workOr
 }
 ```
 
-This is fine for many systems. But the audit row doesn't say *which work order* the cement went to, and the weighted average cost after each receipt can't be recomputed if a past receipt's rate was wrong.
+This is fine for many systems. But the audit row doesn't say *which store order* the boxes went to, and the weighted average cost after each receipt can't be recomputed if a past receipt's rate was wrong.
 
 ### Step 2 — name the facts
 
-List what the store keeper's register records: stock item opened for a site; material received (quantity, rate, GRN number); material issued (quantity, work order, person); stock adjusted after physical verification (difference, reason). Each becomes an immutable event record, named in the past tense.
+List what the warehouse stock register records: stock item opened for a warehouse; stock received (quantity, rate, GRN number); stock issued (quantity, store order, packer); stock adjusted after physical verification (difference, reason). Each becomes an immutable event record, named in the past tense.
 
 ### Step 3 — split decide from evolve
 
-`Issue(qty, workOrder, issuedTo)` checks "qty > 0" and "qty ≤ on hand", then raises `MaterialIssued`. `Apply(MaterialIssued e)` subtracts the quantity. `Apply` contains no `if` that could reject the event.
+`Issue(qty, storeOrder, packedBy)` checks "qty > 0" and "qty ≤ on hand", then raises `StockIssued`. `Apply(StockIssued e)` subtracts the quantity. `Apply` contains no `if` that could reject the event.
 
 ### Step 4 — append with an expected version
 
@@ -323,16 +325,16 @@ The repository appends pending events with `expectedVersion = OriginalVersion`. 
 
 ### Step 5 — project for reads
 
-A worker reads all events after its checkpoint and maintains `stock_levels(site, material, on_hand, total_received, total_issued)`. The site dashboard reads that table and never touches the event store.
+A worker reads all events after its checkpoint and maintains `stock_levels(warehouse, sku, on_hand, total_received, total_issued)`. The warehouse dashboard reads that table and never touches the event store.
 
 ### Step 6 — only when needed: snapshots and upcasters
 
-When a stream's load time becomes noticeable, store a snapshot every 100 events. When `MaterialIssued` gains a required meaning (a work order became mandatory in version 2), register an upcaster that fills `"UNKNOWN"` for old events.
+When a stream's load time becomes noticeable, store a snapshot every 100 events. When `StockIssued` gains a required meaning (a store order became mandatory in version 2), register an upcaster that fills `"UNKNOWN"` for old events.
 
 ## Production-style C# implementation
 
 ```text
-SiteStore.Api/
+PharmacyStock.Api/
   Program.cs
   Stock/Events.cs
   Stock/StockItem.cs
@@ -347,24 +349,24 @@ SiteStore.Api/
 ### Events
 
 ```csharp file=Stock/Events.cs
-namespace SiteStore.Stock;
+namespace PharmacyStock.Stock;
 
 // Past tense, business language, immutable. These records are a contract with every future version of the code.
-public sealed record StockItemOpened(string SiteCode, string MaterialCode, string Unit);
-public sealed record MaterialReceived(decimal Quantity, decimal UnitCost, string GrnNo);
-/// <summary>Schema version 2: WorkOrder was added. Version 1 events are upcast with WorkOrder = "UNKNOWN".</summary>
-public sealed record MaterialIssued(decimal Quantity, string WorkOrder, string IssuedTo);
+public sealed record StockItemOpened(string WarehouseCode, string SkuCode, string Unit);
+public sealed record StockReceived(decimal Quantity, decimal UnitCost, string GrnNo);
+/// <summary>Schema version 2: StoreOrder was added. Version 1 events are upcast with StoreOrder = "UNKNOWN".</summary>
+public sealed record StockIssued(decimal Quantity, string StoreOrder, string PackedBy);
 public sealed record StockAdjusted(decimal Delta, string Reason);
 ```
 
 ### The aggregate: decide and evolve
 
 ```csharp file=Stock/StockItem.cs
-namespace SiteStore.Stock;
+namespace PharmacyStock.Stock;
 
 public sealed class StockRuleException(string message) : Exception(message);
 
-public sealed record StockItemSnapshot(string Id, string SiteCode, string MaterialCode, string Unit,
+public sealed record StockItemSnapshot(string Id, string WarehouseCode, string SkuCode, string Unit,
     decimal OnHand, decimal AverageCost, int Version, int SnapshotSchema = 1);
 
 public sealed class StockItem
@@ -372,8 +374,8 @@ public sealed class StockItem
     private readonly List<object> _pending = new();
 
     public string Id { get; private set; } = "";
-    public string SiteCode { get; private set; } = "";
-    public string MaterialCode { get; private set; } = "";
+    public string WarehouseCode { get; private set; } = "";
+    public string SkuCode { get; private set; } = "";
     public string Unit { get; private set; } = "";
     public decimal OnHand { get; private set; }
     public decimal AverageCost { get; private set; }
@@ -383,19 +385,19 @@ public sealed class StockItem
     public int OriginalVersion => Version - _pending.Count;
     public IReadOnlyList<object> PendingEvents => _pending;
 
-    public static string StreamIdFor(string site, string material) =>
-        $"stock-{site.ToUpperInvariant()}-{material.ToUpperInvariant()}";
+    public static string StreamIdFor(string warehouse, string sku) =>
+        $"stock-{warehouse.ToUpperInvariant()}-{sku.ToUpperInvariant()}";
 
     // ---------- Decide: validate against current state, then raise events ----------
 
-    public static StockItem Open(string siteCode, string materialCode, string unit)
+    public static StockItem Open(string warehouseCode, string skuCode, string unit)
     {
-        if (string.IsNullOrWhiteSpace(siteCode) || string.IsNullOrWhiteSpace(materialCode))
-            throw new StockRuleException("Site and material are required.");
-        if (unit is not ("bag" or "kg" or "tonne" or "m3" or "nos"))
+        if (string.IsNullOrWhiteSpace(warehouseCode) || string.IsNullOrWhiteSpace(skuCode))
+            throw new StockRuleException("Warehouse and SKU are required.");
+        if (unit is not ("box" or "strip" or "bottle" or "tube" or "nos"))
             throw new StockRuleException($"Unit '{unit}' is not supported.");
         var item = new StockItem();
-        item.Raise(new StockItemOpened(siteCode.ToUpperInvariant(), materialCode.ToUpperInvariant(), unit));
+        item.Raise(new StockItemOpened(warehouseCode.ToUpperInvariant(), skuCode.ToUpperInvariant(), unit));
         return item;
     }
 
@@ -405,16 +407,16 @@ public sealed class StockItem
         if (quantity <= 0) throw new StockRuleException("Received quantity must be positive.");
         if (unitCost <= 0) throw new StockRuleException("Unit cost must be positive.");
         if (string.IsNullOrWhiteSpace(grnNo)) throw new StockRuleException("A goods receipt note number is required.");
-        Raise(new MaterialReceived(quantity, unitCost, grnNo));
+        Raise(new StockReceived(quantity, unitCost, grnNo));
     }
 
-    public void Issue(decimal quantity, string workOrder, string issuedTo)
+    public void Issue(decimal quantity, string storeOrder, string packedBy)
     {
         EnsureOpened();
         if (quantity <= 0) throw new StockRuleException("Issued quantity must be positive.");
-        if (string.IsNullOrWhiteSpace(workOrder)) throw new StockRuleException("A work order is required.");
+        if (string.IsNullOrWhiteSpace(storeOrder)) throw new StockRuleException("A store order is required.");
         if (quantity > OnHand) throw new StockRuleException($"Only {OnHand} {Unit} on hand; cannot issue {quantity}.");
-        Raise(new MaterialIssued(quantity, workOrder, issuedTo));
+        Raise(new StockIssued(quantity, storeOrder, packedBy));
     }
 
     public void Adjust(decimal delta, string reason)
@@ -433,15 +435,15 @@ public sealed class StockItem
         switch (e)
         {
             case StockItemOpened o:
-                Id = StreamIdFor(o.SiteCode, o.MaterialCode);
-                SiteCode = o.SiteCode; MaterialCode = o.MaterialCode; Unit = o.Unit;
+                Id = StreamIdFor(o.WarehouseCode, o.SkuCode);
+                WarehouseCode = o.WarehouseCode; SkuCode = o.SkuCode; Unit = o.Unit;
                 break;
-            case MaterialReceived r:
+            case StockReceived r:
                 var newOnHand = OnHand + r.Quantity;
                 AverageCost = Math.Round((OnHand * AverageCost + r.Quantity * r.UnitCost) / newOnHand, 4);
                 OnHand = newOnHand;
                 break;
-            case MaterialIssued i:
+            case StockIssued i:
                 OnHand -= i.Quantity;
                 break;
             case StockAdjusted a:
@@ -466,13 +468,13 @@ public sealed class StockItem
 
     public static StockItem FromSnapshot(StockItemSnapshot s, IEnumerable<object> eventsAfter) => Replay(new StockItem
     {
-        Id = s.Id, SiteCode = s.SiteCode, MaterialCode = s.MaterialCode, Unit = s.Unit,
+        Id = s.Id, WarehouseCode = s.WarehouseCode, SkuCode = s.SkuCode, Unit = s.Unit,
         OnHand = s.OnHand, AverageCost = s.AverageCost, Version = s.Version
     }, eventsAfter);
 
     /// <summary>Only committed state may be snapshotted, so the snapshot version always exists in the store.</summary>
     public StockItemSnapshot ToSnapshot() => _pending.Count == 0
-        ? new(Id, SiteCode, MaterialCode, Unit, OnHand, AverageCost, Version)
+        ? new(Id, WarehouseCode, SkuCode, Unit, OnHand, AverageCost, Version)
         : throw new InvalidOperationException("Save pending events before taking a snapshot.");
 
     public void MarkCommitted() => _pending.Clear();
@@ -493,7 +495,7 @@ Weighted average cost is a good example of why `Apply` must be deterministic: it
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace SiteStore.EventStore;
+namespace PharmacyStock.EventStore;
 
 /// <summary>Maps event CLR types to stable names and schema versions, and upcasts old JSON on read.</summary>
 public sealed class EventSerializer
@@ -540,12 +542,12 @@ public sealed class EventSerializer
 }
 ```
 
-Event names are stored as stable strings (`"MaterialIssued"`), not CLR type names, so renaming or moving a C# class never breaks history.
+Event names are stored as stable strings (`"StockIssued"`), not CLR type names, so renaming or moving a C# class never breaks history.
 
 ### The event store
 
 ```csharp file=EventStore/InMemoryEventStore.cs
-namespace SiteStore.EventStore;
+namespace PharmacyStock.EventStore;
 
 public sealed record StoredEvent(long Position, string StreamId, int Version, string Type, int SchemaVersion,
     string Data, DateTimeOffset RecordedAt);
@@ -618,9 +620,9 @@ public sealed class InMemoryEventStore(EventSerializer serializer, TimeProvider 
 
 ```csharp file=EventStore/Snapshots.cs
 using System.Collections.Concurrent;
-using SiteStore.Stock;
+using PharmacyStock.Stock;
 
-namespace SiteStore.EventStore;
+namespace PharmacyStock.EventStore;
 
 public interface ISnapshotStore
 {
@@ -643,9 +645,9 @@ public sealed class InMemorySnapshotStore : ISnapshotStore
 ```
 
 ```csharp file=Stock/StockItemRepository.cs
-using SiteStore.EventStore;
+using PharmacyStock.EventStore;
 
-namespace SiteStore.Stock;
+namespace PharmacyStock.Stock;
 
 public sealed class StockItemRepository(IEventStore store, ISnapshotStore snapshots, EventSerializer serializer)
 {
@@ -689,11 +691,11 @@ public sealed class StockItemRepository(IEventStore store, ISnapshotStore snapsh
 
 ```csharp file=Stock/StockLevelProjection.cs
 using System.Collections.Concurrent;
-using SiteStore.EventStore;
+using PharmacyStock.EventStore;
 
-namespace SiteStore.Stock;
+namespace PharmacyStock.Stock;
 
-public sealed record StockLevelRow(string StreamId, string SiteCode, string MaterialCode, string Unit,
+public sealed record StockLevelRow(string StreamId, string WarehouseCode, string SkuCode, string Unit,
     decimal OnHand, decimal TotalReceived, decimal TotalIssued, DateTimeOffset LastMovementAt);
 
 /// <summary>Read model: one row per stock item. In production, a table updated with the checkpoint in one transaction.</summary>
@@ -703,8 +705,8 @@ public sealed class StockLevelProjection(EventSerializer serializer)
     private long _checkpoint;
 
     public long Checkpoint => Interlocked.Read(ref _checkpoint);
-    public IEnumerable<StockLevelRow> ForSite(string site) =>
-        _rows.Values.Where(r => r.SiteCode == site.ToUpperInvariant()).OrderBy(r => r.MaterialCode);
+    public IEnumerable<StockLevelRow> ForWarehouse(string warehouse) =>
+        _rows.Values.Where(r => r.WarehouseCode == warehouse.ToUpperInvariant()).OrderBy(r => r.SkuCode);
 
     public void Apply(StoredEvent stored)
     {
@@ -712,12 +714,12 @@ public sealed class StockLevelProjection(EventSerializer serializer)
         var e = serializer.Deserialize(stored.Type, stored.SchemaVersion, stored.Data);
         _rows.AddOrUpdate(stored.StreamId,
             _ => e is StockItemOpened o
-                ? new StockLevelRow(stored.StreamId, o.SiteCode, o.MaterialCode, o.Unit, 0, 0, 0, stored.RecordedAt)
+                ? new StockLevelRow(stored.StreamId, o.WarehouseCode, o.SkuCode, o.Unit, 0, 0, 0, stored.RecordedAt)
                 : throw new InvalidOperationException($"First event of {stored.StreamId} must be StockItemOpened."),
             (_, row) => e switch
             {
-                MaterialReceived r => row with { OnHand = row.OnHand + r.Quantity, TotalReceived = row.TotalReceived + r.Quantity, LastMovementAt = stored.RecordedAt },
-                MaterialIssued i => row with { OnHand = row.OnHand - i.Quantity, TotalIssued = row.TotalIssued + i.Quantity, LastMovementAt = stored.RecordedAt },
+                StockReceived r => row with { OnHand = row.OnHand + r.Quantity, TotalReceived = row.TotalReceived + r.Quantity, LastMovementAt = stored.RecordedAt },
+                StockIssued i => row with { OnHand = row.OnHand - i.Quantity, TotalIssued = row.TotalIssued + i.Quantity, LastMovementAt = stored.RecordedAt },
                 StockAdjusted a => row with { OnHand = row.OnHand + a.Delta, LastMovementAt = stored.RecordedAt },
                 _ => row
             });
@@ -752,33 +754,33 @@ public sealed class ProjectionWorker(IEventStore store, StockLevelProjection pro
 ### Command handlers with conflict retry
 
 ```csharp file=Stock/StockCommands.cs
-using SiteStore.EventStore;
+using PharmacyStock.EventStore;
 
-namespace SiteStore.Stock;
+namespace PharmacyStock.Stock;
 
-public sealed record ReceiveMaterial(string Site, string Material, decimal Quantity, decimal UnitCost, string GrnNo, string Unit = "bag");
-public sealed record IssueMaterial(string Site, string Material, decimal Quantity, string WorkOrder, string IssuedTo);
+public sealed record ReceiveStock(string Warehouse, string Sku, decimal Quantity, decimal UnitCost, string GrnNo, string Unit = "box");
+public sealed record IssueStock(string Warehouse, string Sku, decimal Quantity, string StoreOrder, string PackedBy);
 
 public sealed class StockCommandHandler(StockItemRepository repository)
 {
     private const int MaxAttempts = 3;
 
-    public Task<int> HandleAsync(ReceiveMaterial c, CancellationToken ct) =>
-        WithRetry(StockItem.StreamIdFor(c.Site, c.Material), allowCreate: true, c.Site, c.Material, c.Unit,
+    public Task<int> HandleAsync(ReceiveStock c, CancellationToken ct) =>
+        WithRetry(StockItem.StreamIdFor(c.Warehouse, c.Sku), allowCreate: true, c.Warehouse, c.Sku, c.Unit,
             item => item.Receive(c.Quantity, c.UnitCost, c.GrnNo), ct);
 
-    public Task<int> HandleAsync(IssueMaterial c, CancellationToken ct) =>
-        WithRetry(StockItem.StreamIdFor(c.Site, c.Material), allowCreate: false, c.Site, c.Material, "",
-            item => item.Issue(c.Quantity, c.WorkOrder, c.IssuedTo), ct);
+    public Task<int> HandleAsync(IssueStock c, CancellationToken ct) =>
+        WithRetry(StockItem.StreamIdFor(c.Warehouse, c.Sku), allowCreate: false, c.Warehouse, c.Sku, "",
+            item => item.Issue(c.Quantity, c.StoreOrder, c.PackedBy), ct);
 
     /// <summary>On a version conflict, reload and run the decision again against fresh state.</summary>
-    private async Task<int> WithRetry(string streamId, bool allowCreate, string site, string material, string unit,
+    private async Task<int> WithRetry(string streamId, bool allowCreate, string warehouse, string sku, string unit,
         Action<StockItem> decide, CancellationToken ct)
     {
         for (var attempt = 1; ; attempt++)
         {
             var item = await repository.LoadAsync(streamId, ct)
-                       ?? (allowCreate ? StockItem.Open(site, material, unit)
+                       ?? (allowCreate ? StockItem.Open(warehouse, sku, unit)
                                        : throw new KeyNotFoundException($"No stock item {streamId}."));
             decide(item);
             try { return await repository.SaveAsync(item, ct); }
@@ -789,18 +791,18 @@ public sealed class StockCommandHandler(StockItemRepository repository)
 ```
 
 ```csharp file=Program.cs
-using SiteStore.EventStore;
-using SiteStore.Stock;
+using PharmacyStock.EventStore;
+using PharmacyStock.Stock;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(_ => new EventSerializer()
     .Register<StockItemOpened>("StockItemOpened")
-    .Register<MaterialReceived>("MaterialReceived")
-    .Register<MaterialIssued>("MaterialIssued", currentVersion: 2)
+    .Register<StockReceived>("StockReceived")
+    .Register<StockIssued>("StockIssued", currentVersion: 2)
     .Register<StockAdjusted>("StockAdjusted")
-    .Upcast("MaterialIssued", fromVersion: 1, json => { json["workOrder"] ??= "UNKNOWN"; return json; }));
+    .Upcast("StockIssued", fromVersion: 1, json => { json["storeOrder"] ??= "UNKNOWN"; return json; }));
 builder.Services.AddSingleton<IEventStore, InMemoryEventStore>();
 builder.Services.AddSingleton<ISnapshotStore, InMemorySnapshotStore>();
 builder.Services.AddSingleton<StockItemRepository>();
@@ -810,13 +812,13 @@ builder.Services.AddHostedService<ProjectionWorker>();
 
 var app = builder.Build();
 
-app.MapPost("/stock/receipts", async (ReceiveMaterial cmd, StockCommandHandler h, CancellationToken ct) =>
+app.MapPost("/stock/receipts", async (ReceiveStock cmd, StockCommandHandler h, CancellationToken ct) =>
 {
     try { return Results.Ok(new { version = await h.HandleAsync(cmd, ct) }); }
     catch (StockRuleException ex) { return Results.Problem(ex.Message, statusCode: 422); }
 });
 
-app.MapPost("/stock/issues", async (IssueMaterial cmd, StockCommandHandler h, CancellationToken ct) =>
+app.MapPost("/stock/issues", async (IssueStock cmd, StockCommandHandler h, CancellationToken ct) =>
 {
     try { return Results.Ok(new { version = await h.HandleAsync(cmd, ct) }); }
     catch (KeyNotFoundException) { return Results.NotFound(); }
@@ -825,11 +827,11 @@ app.MapPost("/stock/issues", async (IssueMaterial cmd, StockCommandHandler h, Ca
 });
 
 // Query side: reads the projection, never the event store.
-app.MapGet("/stock/{site}", (string site, StockLevelProjection p) => Results.Ok(p.ForSite(site)));
+app.MapGet("/stock/{warehouse}", (string warehouse, StockLevelProjection p) => Results.Ok(p.ForWarehouse(warehouse)));
 
 // Audit: the state as of any version, rebuilt from events.
-app.MapGet("/stock/{site}/{material}/as-of/{version:int}", async (string site, string material, int version, StockItemRepository repo, CancellationToken ct) =>
-    await repo.LoadAsOfAsync(StockItem.StreamIdFor(site, material), version, ct) is { } item
+app.MapGet("/stock/{warehouse}/{sku}/as-of/{version:int}", async (string warehouse, string sku, int version, StockItemRepository repo, CancellationToken ct) =>
+    await repo.LoadAsOfAsync(StockItem.StreamIdFor(warehouse, sku), version, ct) is { } item
         ? Results.Ok(new { item.OnHand, item.AverageCost, item.Version })
         : Results.NotFound());
 
@@ -857,8 +859,8 @@ CREATE TABLE events (
 -- (stream_id, version) first, PostgreSQL raises unique_violation (SQLSTATE 23505),
 -- which the adapter translates into WrongExpectedVersionException.
 INSERT INTO events (stream_id, version, type, schema_version, data)
-VALUES ('stock-NH48P3-CEM-OPC53', 18, 'MaterialIssued', 2,
-        '{"quantity":60,"workOrder":"WO-77","issuedTo":"R. Yadav"}');
+VALUES ('stock-BLRWH-AMOX500', 18, 'StockIssued', 2,
+        '{"quantity":60,"storeOrder":"SO-77","packedBy":"R. Yadav"}');
 
 CREATE TABLE projection_checkpoints (name text PRIMARY KEY, position bigint NOT NULL);
 ```
@@ -871,13 +873,13 @@ Identity and sequence values are assigned when a row is inserted, not when its t
 
 **Bad: events as database diffs.** `StockRowUpdated { OldQty: 1240, NewQty: 1180 }`. This is a change-data-capture log, not domain events. It loses intent (issue? adjustment? reversal?) and makes projections reverse-engineer meaning.
 
-**Bad: validation inside `Apply`.** `Apply(MaterialIssued e) { if (e.Quantity > OnHand) throw ...; }`. It works today. A year later a data fix or a new rule makes an old stream unloadable, and the stock item is frozen in production.
+**Bad: validation inside `Apply`.** `Apply(StockIssued e) { if (e.Quantity > OnHand) throw ...; }`. It works today. A year later a data fix or a new rule makes an old stream unloadable, and the stock item is frozen in production.
 
-**Bad: queries that rehydrate everything.** The site dashboard loads 2,000 stock items by replaying each stream. Page load grows with history. Read models exist for this.
+**Bad: queries that rehydrate everything.** The warehouse dashboard loads 2,000 stock items by replaying each stream. Page load grows with history. Read models exist for this.
 
 **Bad: editing history.** A wrong receipt rate is "fixed" with `UPDATE events SET data = ...`. Projections are now inconsistent, any external consumer has the old value, and the audit trail is a lie. Append a correcting event instead.
 
-**Bad: event sourcing the whole system.** Site master data, user accounts and material catalogues all event-sourced "for consistency". The team spends its time writing projections for screens that a 20-line EF Core entity would serve.
+**Bad: event sourcing the whole system.** Store master data, user accounts and the product catalogue all event-sourced "for consistency". The team spends its time writing projections for screens that a 20-line EF Core entity would serve.
 
 **Good:** the implementation above. Business-named facts, decide and evolve kept separate, a deterministic `Apply`, optimistic concurrency on append, projections for every read, snapshots as an optional cache, versioned and upcast events, and event sourcing used only for the stock ledger.
 
@@ -897,7 +899,7 @@ using System.Linq;
 
 public abstract record Event;
 public sealed record Received(decimal Qty, decimal Rate, string Grn) : Event;
-public sealed record Issued(decimal Qty, string WorkOrder) : Event;
+public sealed record Issued(decimal Qty, string StoreOrder) : Event;
 public sealed record Adjusted(decimal Delta, string Reason) : Event;
 
 public sealed record State(decimal OnHand, decimal AvgCost, int Version)
@@ -917,8 +919,8 @@ public static class Stock
     };
 
     // Decide: validates against current state.
-    public static Event Issue(State s, decimal qty, string wo) =>
-        qty > s.OnHand ? throw new InvalidOperationException($"only {s.OnHand} on hand") : new Issued(qty, wo);
+    public static Event Issue(State s, decimal qty, string storeOrder) =>
+        qty > s.OnHand ? throw new InvalidOperationException($"only {s.OnHand} on hand") : new Issued(qty, storeOrder);
 }
 
 public static class Program
@@ -935,8 +937,8 @@ public static class Program
     {
         Append(0, new Received(500, 385m, "GRN-1041"));
         Append(1, new Received(300, 392m, "GRN-1057"));
-        Append(2, new Issued(60, "WO-77"));
-        Append(3, new Adjusted(-12, "Physical count, torn bags"));
+        Append(2, new Issued(60, "SO-77"));
+        Append(3, new Adjusted(-12, "Physical count, damaged boxes"));
 
         Console.WriteLine("Time travel:");
         var state = State.Empty;
@@ -946,17 +948,17 @@ public static class Program
             Console.WriteLine($"  v{state.Version}: {e.GetType().Name,-9} on hand {state.OnHand,5} avg {state.AvgCost:N2}");
         }
 
-        // Two store keepers load version 4 at the same time.
+        // Two packers load version 4 at the same time.
         var loaded = Stream.Aggregate(State.Empty, Stock.Apply);
-        var first = Stock.Issue(loaded, 400, "WO-80");
-        var second = Stock.Issue(loaded, 400, "WO-81");
+        var first = Stock.Issue(loaded, 400, "SO-80");
+        var second = Stock.Issue(loaded, 400, "SO-81");
         Append(loaded.Version, first);
         try { Append(loaded.Version, second); }
         catch (InvalidOperationException ex)
         {
             Console.WriteLine($"Second issue: {ex.Message}. Reloading and deciding again...");
             var fresh = Stream.Aggregate(State.Empty, Stock.Apply);
-            try { Append(fresh.Version, Stock.Issue(fresh, 400, "WO-81")); }
+            try { Append(fresh.Version, Stock.Issue(fresh, 400, "SO-81")); }
             catch (InvalidOperationException rule) { Console.WriteLine($"Rejected by rule: {rule.Message}"); }
         }
         // Challenge: add a ReceiptReversed(Grn) event. What should Apply do to the average cost?
@@ -1000,7 +1002,7 @@ using System.Linq;
 
 public abstract record StockEvent;
 public sealed record Received(decimal Quantity, decimal UnitCost) : StockEvent;
-public sealed record Issued(decimal Quantity, string WorkOrder) : StockEvent;
+public sealed record Issued(decimal Quantity, string StoreOrder) : StockEvent;
 public sealed record Adjusted(decimal Delta, string Reason) : StockEvent;
 
 public sealed record StockState(decimal OnHand, decimal AverageCost, int Version)
@@ -1035,7 +1037,7 @@ public class StockStateTests
     {
         var s = StockEvolution.Rehydrate(new StockEvent[]
         {
-            new Received(500m, 385m), new Received(300m, 392m), new Issued(60m, "WO-77"), new Adjusted(-12m, "count")
+            new Received(500m, 385m), new Received(300m, 392m), new Issued(60m, "SO-77"), new Adjusted(-12m, "count")
         });
         Assert.Equal(728m, s.OnHand);
         Assert.Equal(387.63m, s.AverageCost);
@@ -1049,7 +1051,7 @@ public class StockStateTests
     [Fact]
     public void Evolve_never_validates()
     {
-        var s = StockEvolution.Rehydrate(new StockEvent[] { new Received(10m, 100m), new Issued(15m, "WO-1") });
+        var s = StockEvolution.Rehydrate(new StockEvent[] { new Received(10m, 100m), new Issued(15m, "SO-1") });
         Assert.Equal(-5m, s.OnHand);
     }
 }
@@ -1062,7 +1064,7 @@ using System.Linq;
 
 public abstract record StockEvent;
 public sealed record Received(decimal Quantity, decimal UnitCost) : StockEvent;
-public sealed record Issued(decimal Quantity, string WorkOrder) : StockEvent;
+public sealed record Issued(decimal Quantity, string StoreOrder) : StockEvent;
 public sealed record Adjusted(decimal Delta, string Reason) : StockEvent;
 
 public sealed record StockState(decimal OnHand, decimal AverageCost, int Version)
@@ -1103,22 +1105,22 @@ Add `ReceiptReversed(quantity, unitCost)` and decide how it should affect the av
 :::
 
 :::exercise id=m08-event-sourcing-ex2 difficulty=beginner kind=code title="Decide: turn a command into events"
-In the functional style, a command handler is `Decide(state, command) → events`. Implement `Decide` for issuing material. It must not change state; it only returns the events that should be appended.
+In the functional style, a command handler is `Decide(state, command) → events`. Implement `Decide` for issuing stock to a store. It must not change state; it only returns the events that should be appended.
 ::requirements
 - Quantity ≤ 0: throw `StockRuleException("Quantity must be positive.")`.
-- Missing work order: throw `StockRuleException("Work order is required.")`.
+- Missing store order: throw `StockRuleException("Store order is required.")`.
 - Quantity greater than on hand: throw `StockRuleException` mentioning the on-hand figure.
-- Issuing more than 500 units at once returns **two** events: `Issued` and `LargeIssueFlagged(quantity, workOrder)` for review. Otherwise, only `Issued`.
+- Issuing more than 500 units at once returns **two** events: `Issued` and `LargeIssueFlagged(quantity, storeOrder)` for review. Otherwise, only `Issued`.
 - The input state is never modified (records make this easy).
 ::acceptance
-- 60 from 728 gives exactly one `Issued(60, "WO-77")`.
+- 60 from 728 gives exactly one `Issued(60, "SO-77")`.
 - 600 from 728 gives `Issued` then `LargeIssueFlagged`.
 - 800 from 728 throws, and the message contains "728".
-- An empty work order throws.
+- An empty store order throws.
 ::hint
 `Decide` only reads `state`. It returns a list; appending is someone else's job.
 ::hint
-Check rules in order: quantity, work order, availability.
+Check rules in order: quantity, store order, availability.
 ::hint
 Build a `List<StockEvent>` and add the flag event conditionally.
 ::starter
@@ -1129,16 +1131,16 @@ using System.Collections.Generic;
 public sealed class StockRuleException(string message) : Exception(message);
 
 public abstract record StockEvent;
-public sealed record Issued(decimal Quantity, string WorkOrder) : StockEvent;
-public sealed record LargeIssueFlagged(decimal Quantity, string WorkOrder) : StockEvent;
+public sealed record Issued(decimal Quantity, string StoreOrder) : StockEvent;
+public sealed record LargeIssueFlagged(decimal Quantity, string StoreOrder) : StockEvent;
 
 public sealed record StockState(decimal OnHand, int Version);
-public sealed record IssueMaterial(decimal Quantity, string WorkOrder);
+public sealed record IssueStock(decimal Quantity, string StoreOrder);
 
 public static class StockDecider
 {
     public const decimal LargeIssueThreshold = 500m;
-    public static IReadOnlyList<StockEvent> Decide(StockState state, IssueMaterial command) => throw new NotImplementedException();
+    public static IReadOnlyList<StockEvent> Decide(StockState state, IssueStock command) => throw new NotImplementedException();
 }
 ```
 ::tests
@@ -1152,31 +1154,31 @@ public class DecideTests
 
     [Fact]
     public void Normal_issue_gives_one_event() =>
-        Assert.Equal(new StockEvent[] { new Issued(60m, "WO-77") }, StockDecider.Decide(State, new IssueMaterial(60m, "WO-77")));
+        Assert.Equal(new StockEvent[] { new Issued(60m, "SO-77") }, StockDecider.Decide(State, new IssueStock(60m, "SO-77")));
 
     [Fact]
     public void Large_issue_is_flagged()
     {
-        var events = StockDecider.Decide(State, new IssueMaterial(600m, "WO-80"));
+        var events = StockDecider.Decide(State, new IssueStock(600m, "SO-80"));
         Assert.Equal(2, events.Count);
         Assert.IsType<Issued>(events[0]);
-        Assert.Equal(new LargeIssueFlagged(600m, "WO-80"), events[1]);
+        Assert.Equal(new LargeIssueFlagged(600m, "SO-80"), events[1]);
     }
 
     [Fact]
     public void Insufficient_stock_is_rejected()
     {
-        var ex = Assert.Throws<StockRuleException>(() => StockDecider.Decide(State, new IssueMaterial(800m, "WO-81")));
+        var ex = Assert.Throws<StockRuleException>(() => StockDecider.Decide(State, new IssueStock(800m, "SO-81")));
         Assert.Contains("728", ex.Message);
     }
 
     [Fact]
-    public void Work_order_is_required() =>
-        Assert.Throws<StockRuleException>(() => StockDecider.Decide(State, new IssueMaterial(10m, " ")));
+    public void Store_order_is_required() =>
+        Assert.Throws<StockRuleException>(() => StockDecider.Decide(State, new IssueStock(10m, " ")));
 
     [Fact]
     public void Zero_quantity_is_rejected() =>
-        Assert.Throws<StockRuleException>(() => StockDecider.Decide(State, new IssueMaterial(0m, "WO-1")));
+        Assert.Throws<StockRuleException>(() => StockDecider.Decide(State, new IssueStock(0m, "SO-1")));
 }
 ```
 ::solution
@@ -1187,26 +1189,26 @@ using System.Collections.Generic;
 public sealed class StockRuleException(string message) : Exception(message);
 
 public abstract record StockEvent;
-public sealed record Issued(decimal Quantity, string WorkOrder) : StockEvent;
-public sealed record LargeIssueFlagged(decimal Quantity, string WorkOrder) : StockEvent;
+public sealed record Issued(decimal Quantity, string StoreOrder) : StockEvent;
+public sealed record LargeIssueFlagged(decimal Quantity, string StoreOrder) : StockEvent;
 
 public sealed record StockState(decimal OnHand, int Version);
-public sealed record IssueMaterial(decimal Quantity, string WorkOrder);
+public sealed record IssueStock(decimal Quantity, string StoreOrder);
 
 public static class StockDecider
 {
     public const decimal LargeIssueThreshold = 500m;
 
-    public static IReadOnlyList<StockEvent> Decide(StockState state, IssueMaterial command)
+    public static IReadOnlyList<StockEvent> Decide(StockState state, IssueStock command)
     {
         if (command.Quantity <= 0) throw new StockRuleException("Quantity must be positive.");
-        if (string.IsNullOrWhiteSpace(command.WorkOrder)) throw new StockRuleException("Work order is required.");
+        if (string.IsNullOrWhiteSpace(command.StoreOrder)) throw new StockRuleException("Store order is required.");
         if (command.Quantity > state.OnHand)
             throw new StockRuleException($"Only {state.OnHand} on hand; cannot issue {command.Quantity}.");
 
-        var events = new List<StockEvent> { new Issued(command.Quantity, command.WorkOrder) };
+        var events = new List<StockEvent> { new Issued(command.Quantity, command.StoreOrder) };
         if (command.Quantity > LargeIssueThreshold)
-            events.Add(new LargeIssueFlagged(command.Quantity, command.WorkOrder));
+            events.Add(new LargeIssueFlagged(command.Quantity, command.StoreOrder));
         return events;
     }
 }
@@ -1216,8 +1218,8 @@ public static class StockDecider
 
 ```text
 Given  Received 500, Received 300, Issued 60, Adjusted -12
-When   IssueMaterial 600 for WO-80
-Then   Issued 600 WO-80, LargeIssueFlagged 600 WO-80
+When   IssueStock 600 for SO-80
+Then   Issued 600 SO-80, LargeIssueFlagged 600 SO-80
 ```
 ::mistakes
 - Mutating the state inside `Decide` "to save a step".
@@ -1400,25 +1402,25 @@ A lock per stream allows parallel appends to different streams, but then global 
 - Returning the live internal list from `ReadStream`, so callers can mutate history.
 :::
 
-:::exercise id=m08-event-sourcing-ex4 difficulty=intermediate kind=design title="Design an event-sourced toll wallet"
-A highway operator runs a prepaid wallet for frequent users, separate from national electronic toll collection. Users top up by UPI, toll is deducted at each plaza crossing, failed reads are retried, disputes can reverse a deduction, and monthly passes give a discount after 30 crossings at the same plaza. Regulators require that any balance can be explained transaction by transaction for 8 years.
+:::exercise id=m08-event-sourcing-ex4 difficulty=intermediate kind=design title="Design an event-sourced metro travel wallet"
+A city metro operator runs a prepaid travel wallet linked to a QR ticket in its app. Users top up by UPI, the fare is deducted when they tap out at the exit gate, gates retry when the network is flaky (so the same tap can arrive twice), disputes can reverse a deduction, and frequent riders get a discount after 30 trips from the same station in a month. Regulators require that any balance can be explained transaction by transaction for 8 years.
 
 Design the event-sourced model: streams, events, aggregate decisions, projections and snapshot policy. Use the LLD designer.
 ::acceptance
 - One aggregate per wallet, with its stream id format stated.
 - At least six past-tense events with their key fields.
-- Decide methods with their rules (balance cannot go negative except a stated grace, duplicate plaza reads are idempotent, reversal only for an existing deduction).
-- At least three projections (user statement, plaza revenue, dispute queue) with how each is fed.
+- Decide methods with their rules (balance cannot go negative except a stated grace, duplicate gate taps are idempotent, reversal only for an existing deduction).
+- At least three projections (user statement, station revenue, dispute queue) with how each is fed.
 - A snapshot or "closing the books" policy for 8 years of history.
 - Personal data handling stated.
 ::hint
-What makes a plaza read a duplicate? A unique transaction id from the plaza. Where do you remember the ids you have seen?
+What makes a gate tap a duplicate? A unique transaction id from the gate. Where do you remember the ids you have seen?
 ::hint
-A wallet with 4 crossings a day for 8 years has about 11,700 events (4 × 365 × 8). Is that a problem? How would a monthly `StatementClosed` event help?
+A wallet with 4 trips a day for 8 years has about 11,700 events (4 × 365 × 8). Is that a problem? How would a monthly `StatementClosed` event help?
 ::hint
-Keep phone numbers and vehicle numbers out of events where possible. Reference a `CustomerId` and store personal data elsewhere.
+Keep phone numbers and names out of events where possible. Reference a `CustomerId` and store personal data elsewhere.
 ::hint
-The monthly-pass discount depends on a count per plaza per month. That count is state inside the wallet, rebuilt from events.
+The frequent-rider discount depends on a count of trips per station per month. That count is state inside the wallet, rebuilt from events.
 ::starter
 ```json
 {
@@ -1434,18 +1436,18 @@ The monthly-pass discount depends on a count per plaza per month. That count is 
 {
   "classes": [
     { "id": "Wallet", "name": "Wallet", "kind": "class",
-      "fields": ["-WalletId Id", "-CustomerId Customer", "-Money Balance", "-HashSet~string~ recentPlazaTxnIds", "-Dictionary~PlazaId,int~ crossingsThisMonth", "-YearMonth currentMonth", "-int Version"],
-      "methods": ["+void TopUp(Money amount, string upiRef)", "+void ChargeToll(PlazaId plaza, string plazaTxnId, Money fare, DateTimeOffset at)", "+void ReverseCharge(string plazaTxnId, string disputeRef)", "+void CloseStatement(YearMonth month)"],
-      "responsibility": "Aggregate. Stream id wallet-{walletId}. Rules: balance >= -grace (Rs 200); duplicate plazaTxnId ignored; reversal only for an existing, unreversed charge; 31st+ crossing at a plaza in a month gets pass discount" },
+      "fields": ["-WalletId Id", "-CustomerId Customer", "-Money Balance", "-HashSet~string~ recentGateTxnIds", "-Dictionary~StationId,int~ tripsThisMonth", "-YearMonth currentMonth", "-int Version"],
+      "methods": ["+void TopUp(Money amount, string upiRef)", "+void ChargeFare(StationId from, StationId to, string gateTxnId, Money fare, DateTimeOffset at)", "+void ReverseCharge(string gateTxnId, string disputeRef)", "+void CloseStatement(YearMonth month)"],
+      "responsibility": "Aggregate. Stream id wallet-{walletId}. Rules: balance >= -grace (Rs 50, so a rider is never stuck inside the gates); duplicate gateTxnId ignored; reversal only for an existing, unreversed charge; 31st+ trip from a station in a month gets the frequent-rider discount" },
     { "id": "Opened", "name": "WalletOpened", "kind": "record", "fields": ["+WalletId Id", "+CustomerId Customer", "+DateTimeOffset At"], "methods": [], "responsibility": "Event" },
     { "id": "ToppedUp", "name": "WalletToppedUp", "kind": "record", "fields": ["+Money Amount", "+string UpiRef"], "methods": [], "responsibility": "Event; UpiRef makes top-ups idempotent" },
-    { "id": "Charged", "name": "TollCharged", "kind": "record", "fields": ["+PlazaId Plaza", "+string PlazaTxnId", "+Money Fare", "+Money Discount", "+DateTimeOffset CrossedAt"], "methods": [], "responsibility": "Event" },
-    { "id": "Dup", "name": "DuplicateReadIgnored", "kind": "record", "fields": ["+PlazaId Plaza", "+string PlazaTxnId"], "methods": [], "responsibility": "Event (optional): records the retry for plaza reconciliation" },
-    { "id": "Reversed", "name": "TollChargeReversed", "kind": "record", "fields": ["+string PlazaTxnId", "+Money Amount", "+string DisputeRef"], "methods": [], "responsibility": "Event" },
+    { "id": "Charged", "name": "FareCharged", "kind": "record", "fields": ["+StationId From", "+StationId To", "+string GateTxnId", "+Money Fare", "+Money Discount", "+DateTimeOffset TappedOutAt"], "methods": [], "responsibility": "Event" },
+    { "id": "Dup", "name": "DuplicateTapIgnored", "kind": "record", "fields": ["+StationId Station", "+string GateTxnId"], "methods": [], "responsibility": "Event (optional): records the retry for gate reconciliation" },
+    { "id": "Reversed", "name": "FareChargeReversed", "kind": "record", "fields": ["+string GateTxnId", "+Money Amount", "+string DisputeRef"], "methods": [], "responsibility": "Event" },
     { "id": "Low", "name": "BalanceFellBelowThreshold", "kind": "record", "fields": ["+Money Balance"], "methods": [], "responsibility": "Event; triggers an SMS through a reactor" },
-    { "id": "Closed", "name": "StatementClosed", "kind": "record", "fields": ["+YearMonth Month", "+Money ClosingBalance", "+int Crossings"], "methods": [], "responsibility": "Event; resets monthly counters and is a natural snapshot point" },
+    { "id": "Closed", "name": "StatementClosed", "kind": "record", "fields": ["+YearMonth Month", "+Money ClosingBalance", "+int Trips"], "methods": [], "responsibility": "Event; resets monthly counters and is a natural snapshot point" },
     { "id": "Statement", "name": "WalletStatementProjection", "kind": "class", "fields": [], "methods": ["+void Apply(StoredEvent e)"], "responsibility": "Read model: one row per transaction for the app and regulators" },
-    { "id": "PlazaRev", "name": "PlazaRevenueProjection", "kind": "class", "fields": [], "methods": ["+void Apply(StoredEvent e)"], "responsibility": "Read model: revenue per plaza per day, net of reversals" },
+    { "id": "StationRev", "name": "StationRevenueProjection", "kind": "class", "fields": [], "methods": ["+void Apply(StoredEvent e)"], "responsibility": "Read model: revenue per station per day, net of reversals" },
     { "id": "Disputes", "name": "DisputeQueueProjection", "kind": "class", "fields": [], "methods": ["+void Apply(StoredEvent e)"], "responsibility": "Read model: open disputes joined from the dispute context's events" },
     { "id": "Snap", "name": "WalletSnapshot", "kind": "record", "fields": ["+Money Balance", "+YearMonth Month", "+int Version", "+int Schema"], "methods": [], "responsibility": "Taken at each StatementClosed; a cache only" }
   ],
@@ -1457,8 +1459,8 @@ The monthly-pass discount depends on a count per plaza per month. That count is 
     { "from": "Wallet", "to": "Low", "kind": "dependency", "label": "raises" },
     { "from": "Wallet", "to": "Closed", "kind": "dependency", "label": "raises" },
     { "from": "Statement", "to": "Charged", "kind": "dependency", "label": "projects" },
-    { "from": "PlazaRev", "to": "Charged", "kind": "dependency", "label": "projects" },
-    { "from": "PlazaRev", "to": "Reversed", "kind": "dependency", "label": "projects" },
+    { "from": "StationRev", "to": "Charged", "kind": "dependency", "label": "projects" },
+    { "from": "StationRev", "to": "Reversed", "kind": "dependency", "label": "projects" },
     { "from": "Wallet", "to": "Snap", "kind": "dependency", "label": "snapshot at close" }
   ]
 }
@@ -1467,16 +1469,16 @@ The monthly-pass discount depends on a count per plaza per month. That count is 
 Design notes:
 
 - **Stream per wallet** (`wallet-{id}`), because the balance rule needs all of one wallet's movements and nothing else.
-- **Idempotency** for plaza retries: the wallet keeps the set of plaza transaction ids for the current month in its state (rebuilt from events). A duplicate is ignored, optionally recorded as `DuplicateReadIgnored` for plaza reconciliation. Top-ups are idempotent on `UpiRef` the same way.
-- **Closing the books:** `StatementClosed` each month resets counters and is the snapshot point. Load = latest snapshot + at most one month of events (an estimate of about 120 events at 4 crossings a day). The full stream is kept for the 8-year retention requirement and replayed only for audits.
-- **Projections:** the statement projection is what users and regulators see. Plaza revenue nets out reversals. The dispute queue joins events from a separate disputes context.
-- **Personal data:** events carry `CustomerId` and `WalletId` only. Name, phone and vehicle number live in a customer table that can be erased or anonymised. If a vehicle number must be in an event, encrypt it with a per-customer key that can be destroyed (crypto-shredding).
+- **Idempotency** for gate retries: the wallet keeps the set of gate transaction ids for the current month in its state (rebuilt from events). A duplicate is ignored, optionally recorded as `DuplicateTapIgnored` for gate reconciliation. Top-ups are idempotent on `UpiRef` the same way.
+- **Closing the books:** `StatementClosed` each month resets counters and is the snapshot point. Load = latest snapshot + at most one month of events (an estimate of about 120 events at 4 trips a day). The full stream is kept for the 8-year retention requirement and replayed only for audits.
+- **Projections:** the statement projection is what users and regulators see. Station revenue nets out reversals. The dispute queue joins events from a separate disputes context.
+- **Personal data:** events carry `CustomerId` and `WalletId` only. Name and phone number live in a customer table that can be erased or anonymised. If a phone number must be in an event, encrypt it with a per-customer key that can be destroyed (crypto-shredding).
 ::alternatives
 A ledger table with immutable rows (`wallet_transactions`) plus a balance column updated in the same transaction gives most of the audit benefit with far less machinery. It is a strong alternative if the team is new to event sourcing; the explanation requirement is met by the ledger itself.
 ::mistakes
-- One stream per plaza, which makes the balance rule span thousands of streams.
-- Putting the vehicle registration number in every `TollCharged` event, making erasure impossible.
-- Rehydrating 8 years of events on every crossing.
+- One stream per station, which makes the balance rule span thousands of streams.
+- Putting the rider's phone number in every `FareCharged` event, making erasure impossible.
+- Rehydrating 8 years of events on every tap.
 :::
 
 :::exercise id=m08-event-sourcing-ex5 difficulty=advanced kind=code title="Load with a snapshot and upcast old events"
@@ -1487,7 +1489,7 @@ Write the loader that rebuilds a stock item from an optional snapshot plus raw s
 - Events must be contiguous: the next applied event's version must be exactly the current version + 1. Otherwise throw `InvalidOperationException` (a gap means lost data or a bad snapshot).
 - Event types and current schema versions: `Received` (current 2), `Issued` (current 2).
   - `Received` v1 JSON had `{"qty": n}`. v2 is `{"quantity": n}`.
-  - `Issued` v1 had `{"quantity": n}`. v2 is `{"quantity": n, "workOrder": "..."}`; upcast v1 with `"workOrder": "UNKNOWN"`.
+  - `Issued` v1 had `{"quantity": n}`. v2 is `{"quantity": n, "storeOrder": "..."}`; upcast v1 with `"storeOrder": "UNKNOWN"`.
 - Unknown event types throw `InvalidOperationException`.
 - Use `System.Text.Json.Nodes` for upcasting. Do not change the input.
 ::acceptance
@@ -1536,8 +1538,8 @@ public class StockLoaderTests
         new(1, "Received", 1, "{\"qty\": 500}"),
         new(2, "Issued", 1, "{\"quantity\": 60}"),
         new(3, "Received", 2, "{\"quantity\": 300}"),
-        new(4, "Issued", 2, "{\"quantity\": 40, \"workOrder\": \"WO-77\"}"),
-        new(5, "Issued", 2, "{\"quantity\": 100, \"workOrder\": \"WO-80\"}"),
+        new(4, "Issued", 2, "{\"quantity\": 40, \"storeOrder\": \"SO-77\"}"),
+        new(5, "Issued", 2, "{\"quantity\": 100, \"storeOrder\": \"SO-80\"}"),
     };
 
     [Fact]
@@ -1583,7 +1585,7 @@ public static class StockLoader
     private static readonly Dictionary<(string Type, int From), Func<JsonObject, JsonObject>> Upcasters = new()
     {
         [("Received", 1)] = n => { n["quantity"] = n["qty"]!.DeepClone(); n.Remove("qty"); return n; },
-        [("Issued", 1)] = n => { n["workOrder"] ??= "UNKNOWN"; return n; },
+        [("Issued", 1)] = n => { n["storeOrder"] ??= "UNKNOWN"; return n; },
     };
 
     public static StockState Load(Snapshot? snapshot, IEnumerable<RawEvent> events)
@@ -1640,11 +1642,11 @@ Instead of upcasting on every read, a one-off migration can rewrite old events i
 :::exercise id=m08-event-sourcing-ex6 difficulty=intermediate kind=written title="Should this system be event-sourced?"
 For each system, decide: event sourcing, a state table with an append-only history table, or plain CRUD. Give two reasons each.
 
-1. A material catalogue (codes, units, HSN codes) edited by two admins a few times a week.
-2. A site store's stock ledger, where auditors regularly reconcile issues against work orders and contractor bills.
+1. A product catalogue (SKU codes, pack sizes, HSN codes) edited by two admins a few times a week.
+2. A pharmacy warehouse's stock ledger, where auditors and drug inspectors regularly reconcile issues against store orders and supplier invoices, batch by batch.
 3. An employee profile service (name, phone, bank account), subject to data-protection erasure requests.
-4. A contract claims system where each claim moves through submission, review, partial approval, appeal and settlement over months, and disputes often ask "what did the reviewer see when they decided?"
-5. A real-time dashboard of crane GPS positions updated every 5 seconds.
+4. A health-insurance claims system where each claim moves through submission, review, partial approval, appeal and settlement over months, and disputes often ask "what did the reviewer see when they decided?"
+5. A real-time dashboard of delivery-van GPS positions updated every 5 seconds.
 ::acceptance
 - A decision and two reasons for each of the five.
 - At least one answer explicitly mentions personal data and erasure.
@@ -1657,10 +1659,10 @@ High-frequency telemetry is a time series, not a business event stream.
 "What did the reviewer see when they decided?" is a temporal query.
 ::solution
 1. **Plain CRUD.** Few changes, no business questions about the sequence of edits. If needed, an audit table records who changed what.
-2. **Event sourcing (or at least an immutable ledger).** The domain already thinks in movements (receipts, issues, adjustments). Auditors need the exact sequence, with work orders, and new reconciliation reports over old data are a recurring need.
+2. **Event sourcing (or at least an immutable ledger).** The domain already thinks in movements (receipts, issues, adjustments). Auditors need the exact sequence, with store orders and batches (a drug recall starts from it), and new reconciliation reports over old data are a recurring need.
 3. **CRUD with a history table, no event sourcing.** Erasure requests conflict with immutable events full of personal data. A current-state row can be anonymised. If history is needed, keep it in a separate table that can also be anonymised.
 4. **Event sourcing.** Long-running workflow, temporal questions ("state as of the decision"), and many reports over the sequence of steps. Rebuilding the reviewer's view at the moment of decision is a natural replay up to that event.
-5. **Neither: a time-series store or a table with retention.** Positions every 5 seconds are telemetry. A fleet of 400 cranes produces about 6.9 million rows a day (400 × 17,280). Keep the latest position in a table or cache, and raw points in a time-partitioned table with a retention policy. Business events such as `CraneEnteredSite` can be derived from it if needed.
+5. **Neither: a time-series store or a table with retention.** Positions every 5 seconds are telemetry. A fleet of 400 vans produces about 6.9 million rows a day (400 × 17,280 five-second intervals). Keep the latest position in a table or cache, and raw points in a time-partitioned table with a retention policy. Business events such as `VanArrivedAtStore` can be derived from it if needed.
 ::mistakes
 - Choosing event sourcing for every system because "audit is always useful".
 - Treating telemetry as domain events.
@@ -1678,19 +1680,19 @@ public class StockItemSpecs
     private static StockItem Given(params object[] history) => StockItem.Rehydrate(history);
 
     [Fact]
-    public void Issue_within_stock_raises_material_issued()
+    public void Issue_within_stock_raises_stock_issued()
     {
-        var item = Given(new StockItemOpened("NH48P3", "CEM-OPC53", "bag"),
-                         new MaterialReceived(500m, 385m, "GRN-1041"));
-        item.Issue(60m, "WO-77", "R. Yadav");
-        Assert.Equal(new object[] { new MaterialIssued(60m, "WO-77", "R. Yadav") }, item.PendingEvents);
+        var item = Given(new StockItemOpened("BLRWH", "AMOX500", "box"),
+                         new StockReceived(500m, 385m, "GRN-1041"));
+        item.Issue(60m, "SO-77", "R. Yadav");
+        Assert.Equal(new object[] { new StockIssued(60m, "SO-77", "R. Yadav") }, item.PendingEvents);
     }
 
     [Fact]
     public void Issue_beyond_stock_is_rejected_and_raises_nothing()
     {
-        var item = Given(new StockItemOpened("NH48P3", "CEM-OPC53", "bag"), new MaterialReceived(50m, 385m, "GRN-1"));
-        Assert.Throws<StockRuleException>(() => item.Issue(60m, "WO-77", "R. Yadav"));
+        var item = Given(new StockItemOpened("BLRWH", "AMOX500", "box"), new StockReceived(50m, 385m, "GRN-1"));
+        Assert.Throws<StockRuleException>(() => item.Issue(60m, "SO-77", "R. Yadav"));
         Assert.Empty(item.PendingEvents);
     }
 }
@@ -1698,7 +1700,7 @@ public class StockItemSpecs
 
 **2. Replay determinism.** Rehydrate the same history twice and compare. Then serialise every event type, deserialise it, and replay again; the state must match. This catches non-deterministic `Apply` code and serialisation gaps.
 
-**3. Upcaster tests with stored samples.** Keep a folder of real JSON payloads for every historical schema version (`MaterialIssued.v1.json`). Each test upcasts the sample to the current version and asserts the result. Never delete a sample while events of that version exist in production.
+**3. Upcaster tests with stored samples.** Keep a folder of real JSON payloads for every historical schema version (`StockIssued.v1.json`). Each test upcasts the sample to the current version and asserts the result. Never delete a sample while events of that version exist in production.
 
 **4. Event store contract tests.** One test suite, run against both the in-memory store and the PostgreSQL store: expected-version conflicts, atomic multi-event appends, ordering, reading after a version, and the commit-order visibility case from the warning callout.
 
@@ -1710,7 +1712,7 @@ public class StockItemSpecs
 
 - **Financial ledgers and wallets** are the classic fit. Accounting has worked this way for centuries: journal entries are never erased, only reversed.
 - **Inventory and warehouse systems** often model stock as movements (receipts, issues, transfers, adjustments). Even systems that are not formally event-sourced keep an immutable movement ledger, which is the same idea in table form.
-- **Claims and case management** (insurance claims, contract disputes, grievance redressal workflows) benefit from temporal questions about who knew what, when.
+- **Claims and case management** (insurance claims, chargeback disputes, grievance redressal workflows) benefit from temporal questions about who knew what, when.
 - **Version control.** Git stores history as an append-only chain of commits, and a working tree is a projection of it. Developers already use an event-sourced system daily.
 - **.NET tooling.** Marten (on PostgreSQL), EventStoreDB (now KurrentDB) and Azure Cosmos DB's change feed are common building blocks. Choose based on your existing operations skills. A PostgreSQL-based store lets a team that already runs PostgreSQL avoid a new database.
 
@@ -1787,7 +1789,7 @@ A receipt from last month had the wrong rate. What is the correct fix in an even
 - [ ] Change `Apply` to ignore that GRN number.
 > History is append-only. Corrections are new facts, which keeps the audit trail honest and projections consistent.
 ::q single
-`Apply(MaterialIssued e)` throws when the quantity exceeds on hand. A year later, a stream fails to load in production. Why?
+`Apply(StockIssued e)` throws when the quantity exceeds on hand. A year later, a stream fails to load in production. Why?
 - [ ] The event store is corrupted.
 - [x] Validation belongs in decide. Applying a past fact must never fail, or old streams can become unloadable.
 - [ ] Snapshots were not enabled.
@@ -1801,16 +1803,16 @@ Which are properties a reliable projection needs? (Select all that apply.)
 - [ ] It validates business rules before updating rows.
 > Projections translate facts into read models. Rules were already enforced on the write side.
 ::q single
-Two store keepers issue cement from the same stock item at the same moment. Both loaded version 17. What should happen?
+Two packers issue the same medicine from the same stock item at the same moment. Both loaded version 17. What should happen?
 - [ ] Both appends succeed and the stock may go negative.
 - [x] The second append fails the expected-version check, and its handler reloads and decides again.
 - [ ] The event store merges both events automatically.
 - [ ] The projection rejects the second event.
 > Optimistic concurrency on the stream protects the aggregate's rules under concurrency.
 ::q single
-`MaterialIssued` gains a required `WorkOrder` field. Millions of old events lack it. What is the usual first choice?
+`StockIssued` gains a required `StoreOrder` field. Millions of old events lack it. What is the usual first choice?
 - [ ] Run an `UPDATE` on all old events.
-- [x] Register an upcaster that adds a default work order when reading v1 events.
+- [x] Register an upcaster that adds a default store order when reading v1 events.
 - [ ] Delete the old events and re-import from the legacy system.
 - [ ] Make every reader catch `NullReferenceException`.
 > Upcasting on read changes no stored data and is easy to test with stored samples.
@@ -1818,8 +1820,8 @@ Two store keepers issue cement from the same stock item at the same moment. Both
 Which system is the weakest fit for event sourcing?
 - [ ] A wallet ledger with strict audit requirements.
 - [ ] A long-running claims workflow with temporal queries.
-- [x] A material-catalogue CRUD screen edited a few times a week.
-- [ ] A stock ledger reconciled against work orders.
+- [x] A product-catalogue CRUD screen edited a few times a week.
+- [ ] A stock ledger reconciled against store orders and batches.
 > CRUD with no business questions about history gains nothing from event sourcing and pays all its costs.
 ::q single
 A PostgreSQL event store uses an identity column for global position. A projection occasionally misses events. What is the likely cause?

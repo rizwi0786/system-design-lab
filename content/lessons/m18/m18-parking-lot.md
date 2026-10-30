@@ -230,11 +230,12 @@ It is tempting to write `ParkingLot.Instance`. Don't. A static singleton makes t
 
 ### Concurrency: two cars, one spot
 
-There are three races to handle.
+There are four races to handle. The first three are the classic interview answer; the fourth is the one reviewers catch.
 
 1. **Two gates claim the same spot.** Each `ParkingSpot` stores the id of the ticket parked in it, or `null` when free. `TryOccupy` uses `Interlocked.CompareExchange(ref _ticketId, ticketId, null)`. In plain English: "set the field to my ticket id, *but only if* it is still null, and tell me what was there". The CPU does the check and the write as one indivisible step. If two threads try at once, exactly one sees `null` come back and wins; the other sees the winner's id and moves on.
 2. **The same plate at two gates** (a misread, or a car that reversed and re-entered). `ConcurrentDictionary.TryAdd(plate, ticketId)` is atomic too: only one `TryAdd` for a given key succeeds.
 3. **The same ticket scanned at two exits.** `ConcurrentDictionary.TryRemove(ticketId, out ticket)` hands the ticket to exactly one caller. The other gets `false` and we report "ticket not active".
+4. **Maintenance closes a spot while a car is being admitted to it.** This one is easy to miss. A first draft kept a separate `_outOfService` flag: `MarkOutOfService` checked "no ticket" and then set the flag, while `TryOccupy` checked the flag and then did its compare-and-swap. Interleave those four steps and a car is parked in a spot that is closed for a water leak. The fix is to keep the spot's *whole* state in the one field that is compare-and-swapped: `null` (free), a private marker object (out of service), or a ticket id (occupied). Closing a spot is then `CompareExchange(ref _ticketId, marker, null)`, exactly like claiming it, and only one of the two can win.
 
 Why not one big `lock` around `Enter` and `Exit`? It would also be correct, and for 450 spots and 4 gates it would be fast enough. Honestly, a single lock is a perfectly good interview answer if you say why. The atomic version scales better (gates never wait for each other), and it keeps each invariant next to the data it protects. The trade-off is that you must reason carefully about the order of steps, which we do in the comments in the code.
 
@@ -324,13 +325,15 @@ public sealed record Vehicle
 namespace ParkingLot.Domain;
 
 /// <summary>
-/// One physical bay. Thread-safe: the occupant is a single reference that is only ever changed
+/// One physical bay. Thread-safe: the spot's whole state is a single reference that is only ever changed
 /// with Interlocked.CompareExchange, so "check free" and "claim" happen as one atomic step.
+/// null = free; OutOfServiceMarker = closed for maintenance; anything else = the ticket parked here.
 /// </summary>
 public sealed class ParkingSpot
 {
-    private string? _ticketId;          // null means free
-    private volatile bool _outOfService;
+    // A private instance, compared by reference, so no ticket id can ever be mistaken for it.
+    private static readonly string OutOfServiceMarker = new("#out-of-service#".ToCharArray());
+    private string? _ticketId;
 
     public ParkingSpot(int level, int number, SpotSize size)
     {
@@ -347,9 +350,17 @@ public sealed class ParkingSpot
     public int Number { get; }
     public SpotSize Size { get; }
 
-    public string? TicketId => Volatile.Read(ref _ticketId);
-    public bool IsOutOfService => _outOfService;
-    public bool IsFree => !_outOfService && Volatile.Read(ref _ticketId) is null;
+    public string? TicketId
+    {
+        get
+        {
+            var holder = Volatile.Read(ref _ticketId);
+            return ReferenceEquals(holder, OutOfServiceMarker) ? null : holder;
+        }
+    }
+
+    public bool IsOutOfService => ReferenceEquals(Volatile.Read(ref _ticketId), OutOfServiceMarker);
+    public bool IsFree => Volatile.Read(ref _ticketId) is null;
 
     public bool CanFit(Vehicle vehicle) => Size >= vehicle.MinimumSpotSize;
 
@@ -357,8 +368,7 @@ public sealed class ParkingSpot
     public bool TryOccupy(string ticketId)
     {
         ArgumentException.ThrowIfNullOrEmpty(ticketId);
-        if (_outOfService) return false;
-        // Atomic: write ticketId only if the field is still null. Returns the previous value.
+        // Atomic: write ticketId only if the field is still null (free). Fails if occupied or out of service.
         return Interlocked.CompareExchange(ref _ticketId, ticketId, null) is null;
     }
 
@@ -368,20 +378,24 @@ public sealed class ParkingSpot
         while (true)
         {
             var current = Volatile.Read(ref _ticketId);
-            if (!string.Equals(current, ticketId, StringComparison.Ordinal))
+            if (ReferenceEquals(current, OutOfServiceMarker) || !string.Equals(current, ticketId, StringComparison.Ordinal))
                 throw new InvalidOperationException($"Spot {Id} is not held by ticket {ticketId}.");
             // CompareExchange compares references, so swap using the exact instance we just read.
             if (ReferenceEquals(Interlocked.CompareExchange(ref _ticketId, null, current), current)) return;
         }
     }
 
+    /// <summary>Closes a free spot. Same compare-and-swap as TryOccupy, so a car can't slip in between
+    /// "is it free?" and "close it".</summary>
     public void MarkOutOfService()
     {
-        if (TicketId is not null) throw new InvalidOperationException($"Spot {Id} is occupied; move the vehicle first.");
-        _outOfService = true;
+        var previous = Interlocked.CompareExchange(ref _ticketId, OutOfServiceMarker, null);
+        if (previous is null || ReferenceEquals(previous, OutOfServiceMarker)) return;   // closed now, or already
+        throw new InvalidOperationException($"Spot {Id} is occupied; move the vehicle first.");
     }
 
-    public void ReturnToService() => _outOfService = false;
+    /// <summary>Reopens the spot only if it is out of service; never frees a parked car.</summary>
+    public void ReturnToService() => Interlocked.CompareExchange(ref _ticketId, null, OutOfServiceMarker);
 }
 ```
 
@@ -806,6 +820,30 @@ public class ParkingConcurrencyTests
         Assert.Equal(1, ok);
         Assert.Equal(7, rejected);
     }
+
+    [Fact]
+    public void Maintenance_and_entry_never_both_win_a_spot()
+    {
+        for (var round = 0; round < 200; round++)
+        {
+            var spot = new ParkingSpot(1, 1, SpotSize.Compact);
+            var occupied = false;
+            var closed = false;
+            Parallel.Invoke(
+                () => occupied = spot.TryOccupy("T-1"),
+                () => { try { spot.MarkOutOfService(); closed = true; } catch (InvalidOperationException) { } });
+            Assert.True(occupied ^ closed);                       // exactly one of them wins, every time
+        }
+    }
+
+    [Fact]
+    public void Return_to_service_never_frees_a_parked_car()
+    {
+        var spot = new ParkingSpot(1, 1, SpotSize.Compact);
+        Assert.True(spot.TryOccupy("T-1"));
+        spot.ReturnToService();
+        Assert.Equal("T-1", spot.TicketId);
+    }
 }
 ```
 
@@ -813,6 +851,7 @@ What these tests buy you:
 
 - The tariff tests pin the edge cases (exactly 15 minutes, exactly a started hour, the cap, more than a day). Pricing bugs cost real money and real complaints, so test boundaries, not just one happy path.
 - `ManualClock` is a hand-written fake. The real `FakeTimeProvider` lives in the `Microsoft.Extensions.TimeProvider.Testing` package; ours is six lines and does the same job here.
+- The maintenance test pins race 4. Before the fix, it could pass a hundred times and fail on the hundred-and-first; with one compare-and-swapped field there is no interleaving in which both sides win.
 - The concurrency test runs 500 entries across 16 threads against 10 spots. Against a naive check-then-act spot, it fails often but not always, which is the nature of race bugs. A passing run doesn't *prove* the code is safe; the proof is the reasoning about atomic operations. The test is a smoke alarm, not a guarantee. Run it in a loop of 100 when you change the locking code.
 
 ## Bad design vs good design
@@ -1468,7 +1507,7 @@ SELECT $3, $1, id, $4, $5 FROM candidate
 RETURNING spot_id;
 ```
 
-`SKIP LOCKED` means a second gate's transaction skips the spot row the first one has locked and takes the next one, so gates don't queue. The partial unique indexes are the real guarantee: even if the query logic had a bug, PostgreSQL rejects a second open session for the same spot or plate with a unique-violation error (SQLSTATE 23505). The application maps a plate violation to "already inside" and retries a spot violation once.
+`SKIP LOCKED` means a second gate's transaction skips the spot row the first one has locked and takes the next one, so gates don't queue. The lock alone isn't enough, though: it is taken on the `spot` row, but "occupied" lives in `parking_session`. A transaction whose snapshot was taken just before another gate committed can still see the spot as free, lock it once the first lock is released, and try to insert. The partial unique indexes are the real guarantee: even if the query logic had a bug, PostgreSQL rejects a second open session for the same spot or plate with a unique-violation error (SQLSTATE 23505). The application maps a plate violation to "already inside" and retries a spot violation once.
 
 **Exit (race 3)**
 

@@ -22,7 +22,7 @@ references:
     url: https://learn.microsoft.com/dotnet/standard/garbage-collection/fundamentals
 ---
 
-Sooner or later every C# developer meets this surprise: you change one variable, and a *different* variable changes too. Or you change a variable inside a method, and the caller sees nothing. Both behaviours follow from one rule about how C# copies data. This lesson explains that rule, the memory areas behind it (the stack and the heap), the hidden cost called boxing, how to choose between `struct` and `class`, and how .NET cleans up memory for you. The running example is a highway survey app that records GPS points along a road.
+Sooner or later every C# developer meets this surprise: you change one variable, and a *different* variable changes too. Or you change a variable inside a method, and the caller sees nothing. Both behaviours follow from one rule about how C# copies data. This lesson explains that rule, the memory areas behind it (the stack and the heap), the hidden cost called boxing, how to choose between `struct` and `class`, and how .NET cleans up memory for you. The running example is a ride-hailing trip tracker that records the GPS points of each ride.
 
 ## Learning objectives
 
@@ -45,10 +45,10 @@ By the end of this lesson you will be able to:
 
 ### A photocopy or a shared link
 
-Imagine you have a site inspection form and a colleague asks for it.
+Imagine you have the receipt for a shared cab ride and your flatmate asks for it, to split the fare.
 
-- **Option 1: you hand over a photocopy.** Your colleague scribbles on their copy. Your original is untouched. Two separate pieces of paper now exist.
-- **Option 2: you send a link to a shared online document.** There is still only *one* document. If your colleague edits it, you see the edits too, because you are both looking at the same thing.
+- **Option 1: you hand over a photocopy.** Your flatmate scribbles on their copy. Your original is untouched. Two separate pieces of paper now exist.
+- **Option 2: you send a link to a shared online document.** There is still only *one* document. If your flatmate edits it, you see the edits too, because you are both looking at the same thing.
 
 C# has exactly these two behaviours:
 
@@ -61,7 +61,7 @@ That is the whole rule. Everything else in this lesson is a consequence of it.
 
 ### A desk and a warehouse
 
-Where does the data physically live? Think of an engineer's office.
+Where does the data physically live? Think of a busy office.
 
 - The **desk** is small and very fast to use. When you start a task, you put a sticky note on the pile; when you finish, you throw away the top note. This is the **stack**: short-lived, tidy, automatic.
 - The **warehouse** is huge. Big things, or things that must be kept after the current task finishes, go there, each with a tag. This is the **managed heap**.
@@ -89,10 +89,10 @@ The built-in value types are the numbers (`int`, `long`, `double`, `decimal`...)
 A reference-type variable holds a **reference**, the address of an object stored somewhere else. Assigning it copies the address, not the object:
 
 ```csharp
-var report = new SiteReport { Inspector = "Meera" };
-var sameReport = report;            // copy the link
-sameReport.Inspector = "Kabir";
-Console.WriteLine(report.Inspector); // Kabir: one object, two links
+var receipt = new RideReceipt { Rider = "Meera" };
+var sameReceipt = receipt;            // copy the link
+sameReceipt.Rider = "Kabir";
+Console.WriteLine(receipt.Rider); // Kabir: one object, two links
 ```
 
 Reference types are everything declared with `class` or `record` (which means `record class`), plus `string`, arrays, delegates and interfaces (when a variable has an interface type, it holds a reference). A reference variable can also hold **`null`**, meaning "no link at all". Using a member through a `null` reference throws the famous `NullReferenceException`. A plain value type can't be `null`; `int?` (short for `Nullable<int>`) is a value type with an extra "has a value?" flag.
@@ -102,13 +102,13 @@ Reference types are everything declared with `class` or `record` (which means `r
 C# passes arguments **by value** by default. The method receives a copy of whatever the variable holds:
 
 ```csharp
-static void Rename(SiteReport r) => r.Inspector = "Changed";   // changes the shared object
-static void Replace(SiteReport r) => r = new SiteReport();      // changes only the local copy of the link
+static void Rename(RideReceipt r) => r.Rider = "Changed";   // changes the shared object
+static void Replace(RideReceipt r) => r = new RideReceipt();      // changes only the local copy of the link
 static void AddOne(int n) => n++;                               // changes only the local copy
 
-var report = new SiteReport { Inspector = "Meera" };
-Rename(report);   // report.Inspector is now "Changed"
-Replace(report);  // report still points to the same object
+var receipt = new RideReceipt { Rider = "Meera" };
+Rename(receipt);   // receipt.Rider is now "Changed"
+Replace(receipt);  // receipt still points to the same object
 int count = 5;
 AddOne(count);    // count is still 5
 ```
@@ -120,13 +120,13 @@ If you truly need a method to change the caller's variable, C# has **`ref`** (re
 ### Equality follows the same split
 
 - For value types, `==` and `Equals` normally compare the **data**: two `DateOnly` values for 15 August 2026 are equal.
-- For classes, `==` by default compares the **references**: two different `SiteReport` objects with identical fields are *not* equal unless the class overrides equality. `ReferenceEquals(a, b)` always asks "is this the same object?".
+- For classes, `==` by default compares the **references**: two different `RideReceipt` objects with identical fields are *not* equal unless the class overrides equality. `ReferenceEquals(a, b)` always asks "is this the same object?".
 - **Records** (`record` and `record struct`) generate value-based equality for you: two records with the same property values are equal.
 - **`string`** is a reference type that overrides `==` to compare text. It is also **immutable**, so sharing a string is always safe: nobody can change it under you. That is why strings *feel* like values.
 
 ### The stack
 
-Each thread has a **stack**: a block of memory (by default about 1 MB per thread on Windows, 8 MB on many Linux systems) used for method calls. When a method starts, a **stack frame** is pushed holding its parameters and local variables. When it returns, the frame is popped and that memory is instantly reused. No cleaning crew is needed. That makes the stack extremely cheap.
+Each thread has a **stack**: a block of memory (typically 1 MB per thread on Windows and 1.5 to 8 MB on Linux, depending on the thread) used for method calls. When a method starts, a **stack frame** is pushed holding its parameters and local variables. When it returns, the frame is popped and that memory is instantly reused. No cleaning crew is needed. That makes the stack extremely cheap.
 
 Recursion that never stops keeps pushing frames until the stack is full, which crashes the process with a `StackOverflowException`. You can't catch that one; you must avoid it.
 
@@ -173,20 +173,20 @@ You choose by meaning first, then by size:
 
 | Question | Struct (value type) | Class (reference type) |
 |---|---|---|
-| Is it "just a value", where two with the same data are the same thing? | Yes: a coordinate, money, a date range | No: a customer, an invoice, a survey run has *identity* |
+| Is it "just a value", where two with the same data are the same thing? | Yes: a coordinate, money, a date range | No: a customer, an invoice, a trip has *identity* |
 | Should a copy be independent? | Yes | No, sharing is the point |
 | Is it small? | Ideally 16 bytes or less (Microsoft's guideline) | Any size |
 | Is it immutable? | It should be (`readonly struct`) | Either |
 | Will it be boxed often (stored as `object`)? | Then a class may be better | — |
 | Does it need inheritance? | Structs can't inherit | Classes can |
 
-A `GeoPoint` (two `double`s, 16 bytes) is a textbook struct. A `SurveyRun` with a name, a list of points and an owner is a textbook class. When in doubt, choose a **class**: the bugs from accidentally copying a big mutable struct are worse than the small cost of an allocation.
+A `GeoPoint` (two `double`s, 16 bytes) is a textbook struct. A `Trip` with a rider, a list of points and a status is a textbook class. When in doubt, choose a **class**: the bugs from accidentally copying a big mutable struct are worse than the small cost of an allocation.
 
 C# gives you convenient shapes:
 
 - `readonly record struct GeoPoint(double Latitude, double Longitude);`: immutable value type with value equality and a nice `ToString`.
 - `record Invoice(...)` (a reference type) with value equality, good for immutable data with identity-free comparison.
-- `class SurveyRun { ... }` for mutable objects with identity and behaviour.
+- `class Trip { ... }` for mutable objects with identity and behaviour.
 
 **Every struct has a default value.** `default(GeoPoint)` (or a `new GeoPoint[100]` array) gives all fields zeroed, with no constructor run. So a struct must make sense when all its fields are zero, or code must check for it. For a `Money` struct, `default` has a `null` currency, which is a trap you will meet in the exercises.
 
@@ -217,7 +217,7 @@ Most objects die young: a request's temporary strings and lists are garbage with
 - **Generation 2**: long-lived objects, such as caches and singletons. Collected rarely, and a full collection is the most expensive.
 - The **Large Object Heap (LOH)**: objects of 85,000 bytes or more (for example a big array) go here directly. It is collected with gen 2 and not compacted by default, so creating many large temporary arrays is costly. `ArrayPool<T>` helps by reusing them.
 
-During parts of a collection, the GC must pause your threads. For gen 0 this pause is typically very short, but a server that allocates heavily triggers it often. ASP.NET Core apps use **Server GC** by default, which has one heap per CPU core and collects in parallel.
+During parts of a collection, the GC must pause your threads. For gen 0 this pause is typically very short, but a server that allocates heavily triggers it often. ASP.NET Core apps use **Server GC** by default, which collects in parallel on several heaps. Since .NET 9 it also turns on **DATAS** (dynamic adaptation to application sizes) by default: it starts with few heaps and adds more only as load grows, so a small container no longer reserves one heap per CPU core up front.
 
 Three practical rules follow:
 
@@ -238,11 +238,11 @@ flowchart LR
     subgraph Stack["Stack frame of AddPoint"]
         n["count : int = 3"]
         p["point : GeoPoint<br/>Lat 18.52, Lon 73.85"]
-        r["run : reference"]
+        r["trip : reference"]
     end
     subgraph Heap["Managed heap"]
-        sr["SurveyRun object<br/>Id = 7f3a...<br/>Name : reference<br/>_points : reference"]
-        s["string 'NH-48 km 120'"]
+        sr["Trip object<br/>Id = 7f3a...<br/>RiderName : reference<br/>_points : reference"]
+        s["string 'Meera'"]
         l["List of GeoPoint<br/>Count = 3<br/>_items : reference"]
         arr["GeoPoint array<br/>(18.51, 73.84)<br/>(18.52, 73.85)<br/>(18.53, 73.86)"]
         b["boxed int 42"]
@@ -255,7 +255,7 @@ flowchart LR
     o --> b
 ```
 
-This is a snapshot of memory while a method called `AddPoint` runs. The stack frame on the left holds three locals. `count` and `point` are value types, so their data sits **right inside the frame**: the latitude and longitude are not anywhere else. `run` is a reference type, so the frame only holds an arrow to the `SurveyRun` object on the heap. That object holds arrows of its own: to the `Name` string and to a `List`, whose internal array stores the `GeoPoint` structs **inline**, three pairs of numbers back to back with no extra objects. Finally, `obj` shows boxing: the `int` 42 needed its own little heap object. When `AddPoint` returns, its frame disappears instantly. The heap objects stay until the GC finds that no arrow leads to them.
+This is a snapshot of memory while a method called `AddPoint` runs. The stack frame on the left holds three locals. `count` and `point` are value types, so their data sits **right inside the frame**: the latitude and longitude are not anywhere else. `trip` is a reference type, so the frame only holds an arrow to the `Trip` object on the heap. That object holds arrows of its own: to the `RiderName` string and to a `List`, whose internal array stores the `GeoPoint` structs **inline**, three pairs of numbers back to back with no extra objects. Finally, `obj` shows boxing: the `int` 42 needed its own little heap object. When `AddPoint` returns, its frame disappears instantly. The heap objects stay until the GC finds that no arrow leads to them.
 
 ### A garbage collection, step by step
 
@@ -280,7 +280,7 @@ Read this top to bottom as time. Your code allocates new objects into generation
 
 ## Step-by-step example
 
-We'll build the survey app's core types and hit each surprise on purpose.
+We'll build the trip tracker's core types and hit each surprise on purpose.
 
 ### Step 1: a coordinate as a class (shared by accident)
 
@@ -288,7 +288,7 @@ We'll build the survey app's core types and hit each surprise on purpose.
 public class PointClass { public double Lat; public double Lon; }
 
 var start = new PointClass { Lat = 18.52, Lon = 73.85 };
-var next = start;          // intention: "start from the same place, then move"
+var next = start;          // intention: "the next ping starts from the same place, then moves"
 next.Lat += 0.01;
 Console.WriteLine(start.Lat);   // 18.53: we moved the start point too!
 ```
@@ -323,12 +323,12 @@ var next = start.Offset(0.01, 0);
 Console.WriteLine(start == new GeoPoint(18.52, 73.85));   // True: value equality, for free
 ```
 
-### Step 4: the survey run is a class, on purpose
+### Step 4: the trip is a class, on purpose
 
-A survey run has **identity**: "the morning survey of NH-48 on 12 March" is one specific thing that many parts of the app refer to and update. Sharing is the point:
+A trip has **identity**: "Meera's 9:10 ride from Pune station to Hinjewadi on 12 March" is one specific thing that the rider app, the driver app, the fare calculator and support all refer to and update. Sharing is the point:
 
 ```csharp
-public sealed class SurveyRun
+public sealed class Trip
 {
     private readonly List<GeoPoint> _points = new();
     public Guid Id { get; } = Guid.NewGuid();
@@ -337,7 +337,7 @@ public sealed class SurveyRun
 }
 ```
 
-Two runs with identical points are still two different runs. Class (reference) semantics match that.
+Two trips with identical points are still two different trips (two riders can take the same route). Class (reference) semantics match that.
 
 ### Step 5: see boxing happen
 
@@ -353,22 +353,22 @@ Run the same loop with `List<int>` and compare. On a 64-bit machine the `ArrayLi
 
 ## Production-style C# implementation
 
-A small ASP.NET Core API for recording survey points along a highway. Notice which types are structs, which are classes, and why.
+A small ASP.NET Core API for recording the GPS trace of a ride, as the driver's phone sends a ping every few seconds. Notice which types are structs, which are classes, and why.
 
 ```text
-Survey.Api/
+Rides.Api/
   Program.cs
-  Survey/
+  Trips/
     GeoPoint.cs              // readonly record struct: a value
-    Chainage.cs              // readonly record struct: distance along the road
-    SurveyRun.cs             // class: has identity, changes over time
-    ISurveyStore.cs          // where runs are kept
-    InMemorySurveyStore.cs
+    OdometerReading.cs       // readonly record struct: the car's odometer in whole metres
+    Trip.cs                  // class: has identity, changes over time
+    ITripStore.cs            // where trips are kept
+    InMemoryTripStore.cs
     Contracts.cs             // request and response shapes
 ```
 
-```csharp file=Survey/GeoPoint.cs
-namespace Survey.Api.Survey;
+```csharp file=Trips/GeoPoint.cs
+namespace Rides.Api.Trips;
 
 /// <summary>A WGS-84 coordinate. A small immutable value (16 bytes), so a struct is the right choice.
 /// Note: default(GeoPoint) is (0, 0), a real point in the Atlantic Ocean, so callers must not
@@ -388,7 +388,8 @@ public readonly record struct GeoPoint
     public double Latitude { get; }
     public double Longitude { get; }
 
-    /// <summary>Great-circle distance (haversine formula). Accurate enough for survey spacing, not for geodesy.</summary>
+    /// <summary>Great-circle distance (haversine formula). Straight line between two pings:
+    /// good enough between pings a few seconds apart, not a replacement for road-snapped distance.</summary>
     public double DistanceTo(GeoPoint other)
     {
         static double Rad(double deg) => deg * Math.PI / 180.0;
@@ -401,49 +402,55 @@ public readonly record struct GeoPoint
 }
 ```
 
-```csharp file=Survey/Chainage.cs
-namespace Survey.Api.Survey;
+```csharp file=Trips/OdometerReading.cs
+namespace Rides.Api.Trips;
 
-/// <summary>Distance along a road from its start, written "km+metres" on Indian highway drawings, e.g. 120+350.
-/// Stored as whole metres: one int, 4 bytes, compared by value.</summary>
-public readonly record struct Chainage(int Metres) : IComparable<Chainage>
+/// <summary>The car's odometer, stored as whole metres: one int, 4 bytes, compared by value.
+/// Shown as "km.metres", e.g. 48213.350 km. An int holds up to about 2.1 million km, plenty for a car.</summary>
+public readonly record struct OdometerReading(int Metres) : IComparable<OdometerReading>
 {
-    public static Chainage FromKm(int km, int metres = 0) => new(checked(km * 1000 + metres));
-    public Chainage Add(double metres) => new(checked(Metres + (int)Math.Round(metres)));
-    public int CompareTo(Chainage other) => Metres.CompareTo(other.Metres);
-    public override string ToString() => $"{Metres / 1000}+{Metres % 1000:D3}";
+    public static OdometerReading FromKm(int km, int metres = 0)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(km);
+        if (metres is < 0 or > 999) throw new ArgumentOutOfRangeException(nameof(metres));
+        return new(checked(km * 1000 + metres));
+    }
+
+    public OdometerReading Add(double metres) => new(checked(Metres + (int)Math.Round(metres)));
+    public int CompareTo(OdometerReading other) => Metres.CompareTo(other.Metres);
+    public override string ToString() => $"{Metres / 1000}.{Metres % 1000:D3} km";
 }
 ```
 
-```csharp file=Survey/SurveyRun.cs
-namespace Survey.Api.Survey;
+```csharp file=Trips/Trip.cs
+namespace Rides.Api.Trips;
 
-/// <summary>A survey run has identity and changes over time, so it is a class (reference type).
-/// Everyone holding a reference sees the same run.</summary>
-public sealed class SurveyRun
+/// <summary>A trip has identity and changes over time, so it is a class (reference type).
+/// Everyone holding a reference sees the same trip.</summary>
+public sealed class Trip
 {
-    public const int MaxPoints = 50_000;     // bound memory per run: an unbounded list is a slow leak
+    public const int MaxPoints = 50_000;     // about 14 hours at one ping per second: bounds memory per trip
 
     private readonly Lock _gate = new();
     private readonly List<GeoPoint> _points = new();   // structs stored inline, no box per point
     private double _lengthMetres;
 
-    public SurveyRun(string name, Chainage start)
+    public Trip(string riderName, OdometerReading startOdometer)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        Name = name.Trim();
-        Start = start;
+        ArgumentException.ThrowIfNullOrWhiteSpace(riderName);
+        RiderName = riderName.Trim();
+        StartOdometer = startOdometer;
     }
 
     public Guid Id { get; } = Guid.NewGuid();
-    public string Name { get; }
-    public Chainage Start { get; }
+    public string RiderName { get; }
+    public OdometerReading StartOdometer { get; }
 
     public int PointCount { get { lock (_gate) return _points.Count; } }
     public double LengthMetres { get { lock (_gate) return _lengthMetres; } }
-    public Chainage End => Start.Add(LengthMetres);
+    public OdometerReading CurrentOdometer => StartOdometer.Add(LengthMetres);
 
-    /// <summary>Returns a copy. Handing out the live List would let callers change the run without rules.</summary>
+    /// <summary>Returns a copy. Handing out the live List would let callers change the trip without rules.</summary>
     public GeoPoint[] SnapshotPoints() { lock (_gate) return _points.ToArray(); }
 
     public void AddPoint(GeoPoint point)
@@ -451,7 +458,7 @@ public sealed class SurveyRun
         lock (_gate)
         {
             if (_points.Count >= MaxPoints)
-                throw new InvalidOperationException($"A run can hold at most {MaxPoints} points.");
+                throw new InvalidOperationException($"A trip can hold at most {MaxPoints} points.");
             if (_points.Count > 0)
                 _lengthMetres += _points[^1].DistanceTo(point);   // _points[^1] returns a copy of the struct: cheap and safe
             _points.Add(point);
@@ -460,93 +467,94 @@ public sealed class SurveyRun
 }
 ```
 
-```csharp file=Survey/ISurveyStore.cs
-namespace Survey.Api.Survey;
+```csharp file=Trips/ITripStore.cs
+namespace Rides.Api.Trips;
 
-public interface ISurveyStore
+public interface ITripStore
 {
-    void Add(SurveyRun run);
-    SurveyRun? Find(Guid id);
+    void Add(Trip trip);
+    Trip? Find(Guid id);
 }
 ```
 
-```csharp file=Survey/InMemorySurveyStore.cs
+```csharp file=Trips/InMemoryTripStore.cs
 using System.Collections.Concurrent;
 
-namespace Survey.Api.Survey;
+namespace Rides.Api.Trips;
 
-/// <summary>Demo store. The dictionary holds references, so runs stay alive (reachable) until removed:
-/// in production, store runs in PostgreSQL and keep only what you need in memory.</summary>
-public sealed class InMemorySurveyStore : ISurveyStore
+/// <summary>Demo store. The dictionary holds references, so trips stay alive (reachable) until removed:
+/// in production, store trips in PostgreSQL and keep only active trips in memory.</summary>
+public sealed class InMemoryTripStore : ITripStore
 {
-    private readonly ConcurrentDictionary<Guid, SurveyRun> _runs = new();
+    private readonly ConcurrentDictionary<Guid, Trip> _trips = new();
 
-    public void Add(SurveyRun run)
+    public void Add(Trip trip)
     {
-        if (!_runs.TryAdd(run.Id, run)) throw new InvalidOperationException("Duplicate survey id.");
+        if (!_trips.TryAdd(trip.Id, trip)) throw new InvalidOperationException("Duplicate trip id.");
     }
 
-    public SurveyRun? Find(Guid id) => _runs.GetValueOrDefault(id);
+    public Trip? Find(Guid id) => _trips.GetValueOrDefault(id);
 }
 ```
 
-```csharp file=Survey/Contracts.cs
-namespace Survey.Api.Survey;
+```csharp file=Trips/Contracts.cs
+namespace Rides.Api.Trips;
 
-public sealed record CreateRunRequest(string Name, int StartKm, int StartMetres);
+public sealed record StartTripRequest(string RiderName, int OdometerKm, int OdometerMetres);
 public sealed record AddPointRequest(double Latitude, double Longitude);
 
-public sealed record RunView(Guid Id, string Name, string Start, string End, int PointCount, double LengthMetres)
+public sealed record TripView(Guid Id, string RiderName, string StartOdometer, string CurrentOdometer, int PointCount, double LengthMetres)
 {
-    public static RunView From(SurveyRun run) => new(
-        run.Id, run.Name, run.Start.ToString(), run.End.ToString(), run.PointCount, Math.Round(run.LengthMetres, 1));
+    public static TripView From(Trip trip) => new(
+        trip.Id, trip.RiderName, trip.StartOdometer.ToString(), trip.CurrentOdometer.ToString(),
+        trip.PointCount, Math.Round(trip.LengthMetres, 1));
 }
 ```
 
 ```csharp file=Program.cs
-using Survey.Api.Survey;
+using Rides.Api.Trips;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddSingleton<ISurveyStore, InMemorySurveyStore>();
+builder.Services.AddSingleton<ITripStore, InMemoryTripStore>();
 var app = builder.Build();
 
-app.MapPost("/runs", (CreateRunRequest req, ISurveyStore store) =>
+app.MapPost("/trips", (StartTripRequest req, ITripStore store) =>
 {
     try
     {
-        var run = new SurveyRun(req.Name, Chainage.FromKm(req.StartKm, req.StartMetres));
-        store.Add(run);
-        return Results.Created($"/runs/{run.Id}", RunView.From(run));
+        var trip = new Trip(req.RiderName, OdometerReading.FromKm(req.OdometerKm, req.OdometerMetres));
+        store.Add(trip);
+        return Results.Created($"/trips/{trip.Id}", TripView.From(trip));
     }
     catch (ArgumentException ex) { return Results.Problem(ex.Message, statusCode: 400); }
-    catch (OverflowException) { return Results.Problem("Start chainage is too large.", statusCode: 400); }
+    catch (OverflowException) { return Results.Problem("Odometer reading is too large.", statusCode: 400); }
 });
 
-app.MapPost("/runs/{id:guid}/points", (Guid id, AddPointRequest req, ISurveyStore store) =>
+app.MapPost("/trips/{id:guid}/points", (Guid id, AddPointRequest req, ITripStore store) =>
 {
-    if (store.Find(id) is not { } run) return Results.NotFound();
+    if (store.Find(id) is not { } trip) return Results.NotFound();
     try
     {
-        run.AddPoint(new GeoPoint(req.Latitude, req.Longitude));
-        return Results.Ok(RunView.From(run));
+        trip.AddPoint(new GeoPoint(req.Latitude, req.Longitude));
+        return Results.Ok(TripView.From(trip));
     }
     catch (ArgumentOutOfRangeException ex) { return Results.Problem(ex.Message, statusCode: 400); }
     catch (InvalidOperationException ex) { return Results.Problem(ex.Message, statusCode: 409); }
 });
 
-app.MapGet("/runs/{id:guid}", (Guid id, ISurveyStore store) =>
-    store.Find(id) is { } run ? Results.Ok(RunView.From(run)) : Results.NotFound());
+app.MapGet("/trips/{id:guid}", (Guid id, ITripStore store) =>
+    store.Find(id) is { } trip ? Results.Ok(TripView.From(trip)) : Results.NotFound());
 
 app.Run();
 ```
 
 What to notice:
 
-- **`GeoPoint` and `Chainage` are `readonly record struct`s.** They are small, they are values, and they can never be modified after creation. Copying them is as cheap as copying two numbers, and you get `==` that compares data.
-- **`SurveyRun` is a class.** The store, the endpoint and any background job all hold references to the *same* run. A struct here would make every `store.Find(id)` return a separate copy, and `AddPoint` would update a copy that is immediately thrown away.
-- **`List<GeoPoint>` stores points inline.** 50,000 points take roughly 800 KB in one array (16 bytes each, an estimate ignoring list growth). With a class `GeoPoint`, the same data would need 50,000 separate heap objects plus 8-byte references, more than doubling memory and giving the GC 50,000 things to track.
-- **`SnapshotPoints()` returns a copy.** The array copy costs memory, but no caller can change the run's internal list. That is the reference-type version of "hand over a photocopy, not a link".
-- **`MaxPoints` bounds memory.** An in-memory collection that only grows is the most common .NET "leak". The store has the same issue: runs stay reachable forever. Fine for a demo; a real system would keep runs in PostgreSQL.
+- **`GeoPoint` and `OdometerReading` are `readonly record struct`s.** They are small, they are values, and they can never be modified after creation. Copying them is as cheap as copying one or two numbers, and you get `==` that compares data.
+- **`Trip` is a class.** The store, the endpoint, the fare calculator and any background job all hold references to the *same* trip. A struct here would make every `store.Find(id)` return a separate copy, and `AddPoint` would update a copy that is immediately thrown away.
+- **`List<GeoPoint>` stores points inline.** 50,000 points take roughly 800 KB in one array (16 bytes each, an estimate ignoring list growth). With a class `GeoPoint`, the same data would need 50,000 separate heap objects (about 32 bytes each) plus an 8-byte reference per slot, roughly 2.5 times the memory and 50,000 things for the GC to track.
+- **`SnapshotPoints()` returns a copy.** The array copy costs memory, but no caller can change the trip's internal list. That is the reference-type version of "hand over a photocopy, not a link".
+- **`MaxPoints` bounds memory.** An in-memory collection that only grows is the most common .NET "leak". The store has the same issue: trips stay reachable forever. Fine for a demo; a real system keeps finished trips in PostgreSQL and holds only active ones in memory (and needs an idempotency key on pings, because phones on a flaky network retry).
 - **`default(GeoPoint)` is a valid-looking point** (0, 0). The comment warns about it. Where a point is optional, use `GeoPoint?`.
 
 ## Bad design vs good design
@@ -554,9 +562,9 @@ What to notice:
 **Bad**: a large mutable struct, a shared mutable class used as a value, and boxing in a hot loop.
 
 ```csharp
-public struct SurveyRunStruct              // 1. identity-bearing, mutable, large: should be a class
+public struct TripStruct                   // 1. identity-bearing, mutable, large: should be a class
 {
-    public string Name;
+    public string RiderName;
     public List<double> Lats;
     public double Length;
     public void AddLength(double m) => Length += m;
@@ -567,27 +575,27 @@ public class Money                         // 2. a value modelled as a shared, m
     public decimal Amount;
 }
 
-var fee = new Money { Amount = 500m };
-var invoiceA = fee;
-var invoiceB = fee;
-invoiceB.Amount += 90m;                    // invoice A silently changes too
+var fare = new Money { Amount = 500m };
+var receiptA = fare;
+var receiptB = fare;
+receiptB.Amount += 90m;                    // tip added to B: receipt A silently changes too
 
-var readings = new ArrayList();            // 3. boxing every reading in a hot path
-foreach (int r in sensorReadings) readings.Add(r);
+var fares = new ArrayList();               // 3. boxing every fare in a hot path
+foreach (int f in faresInPaise) fares.Add(f);
 ```
 
 Problems:
 
-1. `SurveyRunStruct` copied into a dictionary and read back gives *copies*. `dict[id].AddLength(10)` updates a temporary and the change is lost, yet `Lats` (a reference inside the struct) *is* shared between copies. Half value, half reference: the worst of both.
-2. `Money` as a mutable class means two invoices can share one amount object. A change for invoice B leaks into invoice A. This class of bug can sit unnoticed for months.
-3. `ArrayList` boxes every `int`, creating one heap object per reading and extra GC work, and reading back needs casts that can fail at runtime.
+1. `TripStruct` copied into a dictionary and read back gives *copies*. `dict[id].AddLength(10)` updates a temporary and the change is lost, yet `Lats` (a reference inside the struct) *is* shared between copies. Half value, half reference: the worst of both.
+2. `Money` as a mutable class means two receipts can share one amount object. A tip added to receipt B leaks into receipt A. This class of bug can sit unnoticed for months.
+3. `ArrayList` boxes every `int`, creating one heap object per fare and extra GC work, and reading back needs casts that can fail at runtime.
 
 **Good**:
 
 ```csharp
-public sealed class SurveyRun { /* class: identity, behaviour, private list */ }
+public sealed class Trip { /* class: identity, behaviour, private list */ }
 public readonly record struct Money(decimal Amount, string Currency);   // immutable value
-var readings = new List<int>(capacity: sensorReadings.Length);         // no boxing, one array
+var fares = new List<int>(capacity: faresInPaise.Length);              // no boxing, one array
 ```
 
 **Is the improvement always worth it?** The `List<int>` change is free and always right. Converting a class to a struct is only worth it when the type is small, immutable and value-like. If you are unsure, a `record` class gives you value equality and immutability without any copying surprises, at the cost of one heap allocation per instance, which for most business code is irrelevant.
@@ -609,7 +617,7 @@ using System.Collections.Generic;
 public struct PointStruct { public double Lat; public double Lon; }
 public class PointClass { public double Lat; public double Lon; }
 public readonly record struct GeoPoint(double Lat, double Lon);
-public sealed class SiteReport { public string Inspector = ""; }
+public sealed class RideReceipt { public string Rider = ""; }
 
 public static class Program
 {
@@ -625,17 +633,17 @@ public static class Program
         Console.WriteLine($"struct: s1.Lat = {s1.Lat}   class: c1.Lat = {c1.Lat}");
 
         // 2. Methods get a copy of the variable
-        var report = new SiteReport { Inspector = "Meera" };
-        Rename(report);
-        Replace(report);
+        var receipt = new RideReceipt { Rider = "Meera" };
+        Rename(receipt);
+        Replace(receipt);
         int count = 5;
         AddOne(count);
-        Console.WriteLine($"Inspector = {report.Inspector}, count = {count}");
+        Console.WriteLine($"Rider = {receipt.Rider}, count = {count}");
 
         // 3. Equality
         Console.WriteLine($"record struct equal? {new GeoPoint(1, 2) == new GeoPoint(1, 2)}");
         Console.WriteLine($"class equal?         {new PointClass() == new PointClass()}");
-        string a = "NH-48", b = string.Concat("NH-", "48");
+        string a = "KA-01", b = string.Concat("KA-", "01");
         Console.WriteLine($"strings == ? {a == b}   same object? {ReferenceEquals(a, b)}");
 
         // 4. The mutable struct trap
@@ -675,8 +683,8 @@ public static class Program
         // 4. Make the array 84,000 bytes. Which generation does it start in now?
     }
 
-    static void Rename(SiteReport r) => r.Inspector = "Kabir";
-    static void Replace(SiteReport r) => r = new SiteReport { Inspector = "Nobody" };
+    static void Rename(RideReceipt r) => r.Rider = "Kabir";
+    static void Replace(RideReceipt r) => r = new RideReceipt { Rider = "Nobody" };
     static void AddOne(int n) => n++;
 }
 ```
@@ -943,34 +951,34 @@ Use `ImmutableArray<string>` from `System.Collections.Immutable`: it is a struct
 Add `Reversed()` returning the return-direction route. Add value equality: two routes are equal if they have the same number and the same stops in order.
 :::
 
-:::exercise id=m01-value-reference-memory-ex3 difficulty=intermediate kind=code title="Remove the boxing from a sensor log"
-A legacy class stores bridge vibration readings (whole numbers in micrometres) like this:
+:::exercise id=m01-value-reference-memory-ex3 difficulty=intermediate kind=code title="Remove the boxing from a fare log"
+A legacy class in the payments service keeps the fares of completed trips (whole numbers in paise, so ₹245.50 is 24550) like this:
 
 ```csharp
-public class OldReadingLog
+public class OldFareLog
 {
     private readonly ArrayList _items = new();
-    public void Add(int reading) => _items.Add(reading);           // boxes
+    public void Add(int farePaise) => _items.Add(farePaise);       // boxes
     public long Sum() { long s = 0; foreach (object o in _items) s += (int)o; return s; }   // unboxes
 }
 ```
 
-At 200 sensors × 10 readings per second, that is 2,000 boxes per second, all garbage. Rewrite it so that reading and analysing the log allocates nothing.
+At an evening peak of 200 completed trips per second, that is 200 extra heap objects per second (about 24 bytes each, plus an 8-byte slot), 1.7 crore a day, every one of which the GC must trace, and every read needs a cast that can fail at runtime. Rewrite it so that storing fares never boxes and analysing the log allocates nothing.
 ::requirements
-- `Add(int reading)` stores a reading. Negative readings throw `ArgumentOutOfRangeException`.
+- `Add(int farePaise)` stores a fare. A negative fare throws `ArgumentOutOfRangeException` (a zero fare, such as a fully discounted promo ride, is allowed).
 - `Count`, `Sum()` (as `long`), `Max()` and `CountAbove(int threshold)`.
 - `Max()` on an empty log throws `InvalidOperationException`.
 - `Sum()`, `Max()` and `CountAbove()` must not allocate on the heap.
 ::acceptance
-- Readings 10, 250, 40 give Count 3, Sum 300, Max 250, `CountAbove(39)` = 2.
-- Sum of 100,000 readings of 30,000 is 3,000,000,000 (bigger than `int.MaxValue`, so it must be summed in `long`).
+- Fares 12,000, 45,000 and 9,000 paise give Count 3, Sum 66,000, Max 45,000, `CountAbove(9_999)` = 2.
+- The sum of 100,000 fares of 30,000 paise (₹300 each) is 3,000,000,000 paise, bigger than `int.MaxValue`, so it must be summed in `long`.
 - A test measuring `GC.GetAllocatedBytesForCurrentThread()` around `Sum`, `Max` and `CountAbove` sees fewer than 1,000 bytes allocated.
 ::hint
 Which collection stores `int`s without boxing? The generic one.
 ::hint
 `List<int>` keeps an `int[]` inside. `foreach` over a `List<int>` uses a struct enumerator, so it doesn't allocate either.
 ::hint
-Be careful with LINQ in the "no allocation" methods: `_items.Count(r => r > threshold)` captures `threshold` in a closure, which allocates an object (and an enumerator). A plain loop does not.
+Be careful with LINQ in the "no allocation" methods: `_items.Count(r => r > threshold)` captures `threshold` in a closure, which allocates an object (and, depending on the runtime, an enumerator). A plain loop does not.
 ::hint
 ```csharp
 public int CountAbove(int threshold)
@@ -981,54 +989,54 @@ public int CountAbove(int threshold)
 }
 ```
 ::starter
-```csharp file=ReadingLog.cs
+```csharp file=FareLog.cs
 using System;
 using System.Collections.Generic;
 
-public sealed class ReadingLog
+public sealed class FareLog
 {
     public int Count => throw new NotImplementedException();
 
-    public void Add(int reading) => throw new NotImplementedException();
+    public void Add(int farePaise) => throw new NotImplementedException();
     public long Sum() => throw new NotImplementedException();
     public int Max() => throw new NotImplementedException();
     public int CountAbove(int threshold) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=ReadingLogTests.cs
+```csharp file=FareLogTests.cs
 using System;
 using Xunit;
 
-public class ReadingLogTests
+public class FareLogTests
 {
     [Fact]
     public void Basic_statistics()
     {
-        var log = new ReadingLog();
-        log.Add(10); log.Add(250); log.Add(40);
+        var log = new FareLog();
+        log.Add(12_000); log.Add(45_000); log.Add(9_000);
         Assert.Equal(3, log.Count);
-        Assert.Equal(300L, log.Sum());
-        Assert.Equal(250, log.Max());
-        Assert.Equal(2, log.CountAbove(39));
+        Assert.Equal(66_000L, log.Sum());
+        Assert.Equal(45_000, log.Max());
+        Assert.Equal(2, log.CountAbove(9_999));
     }
 
     [Fact]
     public void Sum_does_not_overflow()
     {
-        var log = new ReadingLog();
+        var log = new FareLog();
         for (int i = 0; i < 100_000; i++) log.Add(30_000);
         Assert.Equal(3_000_000_000L, log.Sum());
     }
 
-    [Fact] public void Max_of_empty_throws() => Assert.Throws<InvalidOperationException>(() => new ReadingLog().Max());
+    [Fact] public void Max_of_empty_throws() => Assert.Throws<InvalidOperationException>(() => new FareLog().Max());
 
-    [Fact] public void Negative_reading_throws() => Assert.Throws<ArgumentOutOfRangeException>(() => new ReadingLog().Add(-1));
+    [Fact] public void Negative_fare_throws() => Assert.Throws<ArgumentOutOfRangeException>(() => new FareLog().Add(-1));
 
     [Fact]
     public void Analysis_does_not_allocate()
     {
-        var log = new ReadingLog();
+        var log = new FareLog();
         for (int i = 0; i < 10_000; i++) log.Add(i);
         log.Sum(); log.Max(); log.CountAbove(5);          // warm up so JIT work is not measured
 
@@ -1046,20 +1054,20 @@ public class ReadingLogTests
 }
 ```
 ::solution
-```csharp file=ReadingLog.cs
+```csharp file=FareLog.cs
 using System;
 using System.Collections.Generic;
 
-public sealed class ReadingLog
+public sealed class FareLog
 {
     private readonly List<int> _items = new();     // stores real ints in an int[]: no boxes
 
     public int Count => _items.Count;
 
-    public void Add(int reading)
+    public void Add(int farePaise)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(reading);
-        _items.Add(reading);
+        ArgumentOutOfRangeException.ThrowIfNegative(farePaise);
+        _items.Add(farePaise);
     }
 
     public long Sum()
@@ -1088,7 +1096,7 @@ public sealed class ReadingLog
 
 `List<int>` stores the values inline in one array, so `Add` only allocates when the list grows (it doubles its capacity, so that is rare). The analysis methods use plain loops: no boxes, no closures, no enumerator objects. Measuring with `GC.GetAllocatedBytesForCurrentThread()` turns "should not allocate" into a test that will catch a regression.
 ::alternatives
-`CollectionsMarshal.AsSpan(_items)` gives a `Span<int>` over the list's array, and `foreach` over a span is as fast as it gets. For huge logs, a fixed-size ring buffer (`int[]` plus a start index) caps memory. LINQ (`_items.Sum(r => (long)r)`) is fine for code that isn't hot; in .NET 8 and later, several LINQ methods are optimised for lists, but a lambda that captures a local still allocates a closure.
+`CollectionsMarshal.AsSpan(_items)` gives a `Span<int>` over the list's array, and `foreach` over a span is as fast as it gets. For a log that must cover only the last N trips, a fixed-size ring buffer (`int[]` plus a start index) caps memory. LINQ (`_items.Sum(r => (long)r)`) is fine for code that isn't hot; in .NET 8 and later, several LINQ methods are optimised for lists, but a lambda that captures a local still allocates a closure.
 ::mistakes
 - Switching to `List<object>`: still boxing, just with a different collection.
 - Summing into an `int`, which silently overflows at about 2.1 billion.
@@ -1101,12 +1109,12 @@ Add `Average()` returning `double`, and `Percentile(double p)` that sorts a *cop
 For each type below, choose `readonly record struct`, `struct`, `record` (class) or `class`. Give a one-line reason based on identity, size, mutability and how it will be used.
 
 1. `GeoPoint` (latitude and longitude, two doubles).
-2. `Invoice` for a road contractor (number, line items, status that changes from Draft to Approved to Paid).
+2. `Invoice` for a corporate ride account (number, trip lines, status that changes from Draft to Issued to Paid).
 3. `Money` (amount and currency).
 4. `RgbColour` (three bytes).
 5. `Customer` (id, name, addresses, order history).
 6. `DateRange` (start and end `DateOnly`).
-7. `Matrix4x4` of `double` used in a 3-D bridge visualiser (16 doubles = 128 bytes), created millions of times per second.
+7. `Matrix4x4` of `double` used in a 3-D city map renderer (16 doubles = 128 bytes), created millions of times per second.
 8. `HttpRequestLog` entry (URL, headers dictionary, body text) produced once per request.
 ::acceptance
 - A choice for all 8 types.
@@ -1140,7 +1148,7 @@ The general rule: **identity or mutability → class; small immutable value → 
 :::
 
 :::exercise id=m01-value-reference-memory-ex5 difficulty=advanced kind=code title="Fix the event-handler memory leak"
-A site-monitoring dashboard has an alert hub. Each open dashboard page subscribes to alerts with `hub.Alerted += page.OnAlert;` and never unsubscribes. Each page holds about 2 MB of chart data. After a day of engineers opening and closing pages, the server's memory keeps climbing: the hub's event still references every closed page, so the GC can't free them. The hub also keeps *every* alert ever published in a list.
+A ride-operations dashboard has an alert hub ("Zone-3: driver shortage, surge 1.8x"). Each open dashboard page subscribes to alerts with `hub.Alerted += page.OnAlert;` and never unsubscribes. Each page holds about 2 MB of map and chart data. After a day of operations staff opening and closing pages, the server's memory keeps climbing: the hub's event still references every closed page, so the GC can't free them. The hub also keeps *every* alert ever published in a list.
 
 Rebuild `AlertHub` so that subscriptions can be ended and memory stays bounded.
 ::requirements
@@ -1181,7 +1189,7 @@ private sealed class Subscription : IDisposable
 using System;
 using System.Collections.Generic;
 
-public sealed record Alert(string Site, string Message, int Severity);
+public sealed record Alert(string Zone, string Message, int Severity);
 
 public sealed class AlertHub
 {
@@ -1203,7 +1211,7 @@ using Xunit;
 
 public class AlertHubTests
 {
-    private static Alert A(int n) => new Alert("Bridge-" + n, "Vibration high", 2);
+    private static Alert A(int n) => new Alert("Zone-" + n, "Driver shortage", 2);
 
     [Fact]
     public void Subscriber_receives_until_disposed()
@@ -1235,8 +1243,8 @@ public class AlertHubTests
         var hub = new AlertHub(3);
         for (int i = 1; i <= 5; i++) hub.Publish(A(i));
         Assert.Equal(3, hub.Recent.Count);
-        Assert.Equal("Bridge-3", hub.Recent[0].Site);
-        Assert.Equal("Bridge-5", hub.Recent[2].Site);
+        Assert.Equal("Zone-3", hub.Recent[0].Zone);
+        Assert.Equal("Zone-5", hub.Recent[2].Zone);
     }
 
     [Fact]
@@ -1246,7 +1254,7 @@ public class AlertHubTests
         hub.Publish(A(1));
         hub.Publish(A(2));
         Assert.Equal(2, hub.Recent.Count);
-        Assert.Equal("Bridge-1", hub.Recent[0].Site);
+        Assert.Equal("Zone-1", hub.Recent[0].Zone);
     }
 
     [Fact]
@@ -1274,7 +1282,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 
-public sealed record Alert(string Site, string Message, int Severity);
+public sealed record Alert(string Zone, string Message, int Severity);
 
 public sealed class AlertHub
 {
@@ -1360,7 +1368,7 @@ public sealed class AlertHub
 }
 ```
 
-Why it fixes the leak: once a page disposes its subscription (typically in its own `Dispose`), the hub no longer holds a delegate pointing to the page, so the page and its 2 MB of chart data become unreachable and the GC can reclaim them. The ring buffer caps alert history at `capacity` items, so memory stays flat no matter how long the server runs. The snapshot makes self-unsubscribe safe and lets handlers run outside the lock, so a slow handler can't block publishers.
+Why it fixes the leak: once a page disposes its subscription (typically in its own `Dispose`), the hub no longer holds a delegate pointing to the page, so the page and its 2 MB of map and chart data become unreachable and the GC can reclaim them. The ring buffer caps alert history at `capacity` items, so memory stays flat no matter how long the server runs. The snapshot makes self-unsubscribe safe and lets handlers run outside the lock, so a slow handler can't block publishers.
 ::alternatives
 Weak event patterns (holding subscribers through `WeakReference<T>`) let the GC collect forgotten subscribers, but they add complexity and make timing unpredictable. In ASP.NET Core, prefer explicit `IDisposable` subscriptions tied to a scope's lifetime, or a channel (`System.Threading.Channels`) that consumers read from and simply stop reading.
 ::mistakes
@@ -1377,7 +1385,7 @@ Log a warning when `SubscriberCount` exceeds a threshold (a cheap leak detector)
 Value and reference behaviour is easy to pin down with tests, and worth pinning, because a refactor that changes `struct` to `class` (or the reverse) silently changes behaviour everywhere.
 
 ```csharp
-public class GeoPointAndRunTests
+public class GeoPointAndTripTests
 {
     [Fact]
     public void GeoPoint_has_value_equality()
@@ -1386,27 +1394,27 @@ public class GeoPointAndRunTests
     }
 
     [Fact]
-    public void Store_returns_the_same_run_object()
+    public void Store_returns_the_same_trip_object()
     {
-        var store = new InMemorySurveyStore();
-        var run = new SurveyRun("NH-48 morning", Chainage.FromKm(120));
-        store.Add(run);
-        Assert.Same(run, store.Find(run.Id));        // identity, not just equal data
+        var store = new InMemoryTripStore();
+        var trip = new Trip("Meera", OdometerReading.FromKm(48_213));
+        store.Add(trip);
+        Assert.Same(trip, store.Find(trip.Id));      // identity, not just equal data
     }
 
     [Fact]
     public void Snapshot_is_a_copy()
     {
-        var run = new SurveyRun("NH-48 morning", Chainage.FromKm(120));
-        run.AddPoint(new GeoPoint(18.52, 73.85));
-        var snapshot = run.SnapshotPoints();
-        run.AddPoint(new GeoPoint(18.53, 73.85));
+        var trip = new Trip("Meera", OdometerReading.FromKm(48_213));
+        trip.AddPoint(new GeoPoint(18.52, 73.85));
+        var snapshot = trip.SnapshotPoints();
+        trip.AddPoint(new GeoPoint(18.53, 73.85));
         Assert.Single(snapshot);                      // the earlier copy did not change
-        Assert.Equal(2, run.PointCount);
+        Assert.Equal(2, trip.PointCount);
     }
 
     [Fact]
-    public void Chainage_formats_like_drawings() => Assert.Equal("120+050", Chainage.FromKm(120, 50).ToString());
+    public void Odometer_formats_km_and_metres() => Assert.Equal("48213.050 km", OdometerReading.FromKm(48_213, 50).ToString());
 }
 ```
 
@@ -1422,8 +1430,8 @@ Testing tips for this topic:
 
 - **.NET itself uses structs for small values**: `DateTime`, `TimeSpan`, `Guid`, `decimal`, `KeyValuePair<TKey, TValue>`, `Span<T>` and `System.Numerics.Vector3` are all structs. `string`, `List<T>` and `HttpClient` are classes.
 - **High-throughput ASP.NET Core** code (Kestrel, the JSON serializer) avoids allocations with `Span<T>`, `ArrayPool<T>` and struct enumerators, because fewer allocations mean fewer GC pauses under load. Your business code rarely needs that level of care.
-- **GIS and survey software** stores millions of coordinates in arrays of structs, so a 10-lakh point drone survey is one contiguous block of memory rather than 10 lakh separate objects.
-- **Domain models** use immutable value objects (money, quantities, chainage ranges) and entity classes with identity (contracts, invoices, projects). That split, covered in [Entities, value objects and services](#/lesson/m07-entities-values-services), is the same split as this lesson's value and reference types, seen from the business side.
+- **Maps and ride-hailing software** keeps GPS traces as arrays of structs, so 10 lakh pings from one city zone are one contiguous block of memory rather than 10 lakh separate objects.
+- **Domain models** use immutable value objects (money, distances, time slots) and entity classes with identity (trips, riders, invoices). That split, covered in [Entities, value objects and services](#/lesson/m07-entities-values-services), is the same split as this lesson's value and reference types, seen from the business side.
 - **Production incidents** labelled "memory leak" in .NET services are very often an unbounded in-memory cache, a growing static collection, or forgotten event subscriptions: exactly the patterns in exercise 5.
 
 ## Interview questions
@@ -1471,7 +1479,7 @@ First confirm it's managed memory: use `dotnet-counters` to watch GC heap size a
 :::flashcards
 Q: What does `var b = a;` copy for a struct, and for a class?
 A: For a struct, all the data (independent copy). For a class, only the reference (both point to the same object).
-Q: Why doesn't `void Replace(Report r) { r = new Report(); }` affect the caller?
+Q: Why doesn't `void Replace(RideReceipt r) { r = new RideReceipt(); }` affect the caller?
 A: The parameter is a copy of the caller's reference; reassigning the copy doesn't touch the caller's variable.
 Q: What is boxing?
 A: Wrapping a value type in a heap object so it can be treated as `object` or an interface. It allocates and copies.
@@ -1493,14 +1501,14 @@ A: Not promptly. Use `Dispose` (via `using`) for resources; the GC manages memor
 
 :::quiz pass=70
 ::q single
-`var a = new SiteReport { Inspector = "Meera" }; var b = a; b.Inspector = "Kabir";` What is `a.Inspector` if `SiteReport` is a class?
+`var a = new RideReceipt { Rider = "Meera" }; var b = a; b.Rider = "Kabir";` What is `a.Rider` if `RideReceipt` is a class?
 - [ ] Meera
 - [x] Kabir
 - [ ] null
 - [ ] It does not compile.
 > `b = a` copies the reference. Both variables point to one object, so a change through `b` is visible through `a`.
 ::q single
-The same code, but `SiteReport` is a struct. What is `a.Inspector`?
+The same code, but `RideReceipt` is a struct. What is `a.Rider`?
 - [x] Meera
 - [ ] Kabir
 - [ ] null
@@ -1532,7 +1540,7 @@ Which are good candidates for a `readonly record struct`? (Select all that apply
 - [x] A latitude/longitude pair.
 - [x] A colour with three byte channels.
 - [ ] A customer with an order history that changes.
-- [ ] A 4 KB buffer of sensor samples passed between many methods.
+- [ ] A 4 KB buffer of GPS samples passed between many methods.
 > Small, immutable values fit structs. Entities with identity and changing state should be classes, and large data is expensive to copy as a struct.
 ::q single
 A singleton service subscribes each new request's handler object to its event and never unsubscribes. What happens?

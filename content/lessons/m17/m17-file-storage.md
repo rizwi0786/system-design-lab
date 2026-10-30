@@ -46,13 +46,13 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Imagine a construction company with site offices in Gurgaon, Pune and Guwahati, all working from the same set of drawings.
+Imagine a marketing agency with offices in Gurgaon, Pune and Guwahati, all working from the same set of client presentations.
 
-- The drawings themselves are stored in a big **warehouse** of filing cabinets. Each drawing is cut into numbered **sheets**, and each sheet gets a **fingerprint** (a hash). If two offices file the same sheet, the warehouse keeps only one copy (**deduplication**).
-- At head office there is a **register** listing every folder, every drawing, which sheets make up each version of it, and who may see it (**metadata**).
-- The register also has a **logbook**: line 1,041 "plan.dwg updated by Pune", line 1,042 "budget.xlsx renamed". Each site office remembers the last line it read (a **cursor**). To catch up, it reads everything after that line (**sync**).
-- When the logbook gets a new line, head office rings each site office that cares (a **notification**), so they don't have to keep calling to ask "anything new?".
-- If Pune and Guwahati both edit the same drawing offline, head office keeps both, naming one "plan (conflicted copy from Guwahati)". Nobody's work is silently lost (**conflict handling**).
+- The presentations themselves are stored in a big **warehouse** of filing cabinets. Each presentation is cut into numbered **pages**, and each page gets a **fingerprint** (a hash). If two offices file the same page, the warehouse keeps only one copy (**deduplication**).
+- At head office there is a **register** listing every folder, every presentation, which pages make up each version of it, and who may see it (**metadata**).
+- The register also has a **logbook**: line 1,041 "pitch.pptx updated by Pune", line 1,042 "budget.xlsx renamed". Each office remembers the last line it read (a **cursor**). To catch up, it reads everything after that line (**sync**).
+- When the logbook gets a new line, head office rings each office that cares (a **notification**), so they don't have to keep calling to ask "anything new?".
+- If Pune and Guwahati both edit the same presentation offline, head office keeps both, naming one "pitch (conflicted copy from Guwahati)". Nobody's work is silently lost (**conflict handling**).
 - Sharing a folder gives someone access to everything inside it, including folders inside folders (**inherited permissions**).
 
 ## Requirements
@@ -81,7 +81,7 @@ Imagine a construction company with site offices in Gurgaon, Pune and Guwahati, 
 | Sync latency | A change appears on other online devices within 10 s (p95) | Feels "live" without being real-time |
 | Upload efficiency | Only changed or new chunks are sent | Editing one slide in a 200 MB deck must not upload 200 MB |
 | Availability | 99.9 % for metadata and downloads; uploads may be deferred and retried by clients | Clients already handle offline mode |
-| Permission changes | Revocation effective within seconds for new requests; download links expire within minutes | Removing a contractor must actually remove access |
+| Permission changes | Revocation effective within seconds for new requests; download links expire within minutes | Removing a freelancer who has left the project must actually remove access |
 | Scale | 10 M users, 2 M daily active, 50 PB logical data | See estimates |
 
 ## Capacity estimation
@@ -116,7 +116,7 @@ All numbers are **estimates** for a regional Drive-style provider.
 
 - Chunk size: 4 MB maximum. Most files are smaller than one chunk, so the chunk count is dominated by the number of files.
 - Files: 10 M users × 2,000 files = **20 B file entries**. Versions kept: on average 1.5 per file → 30 B versions.
-- Unique chunks: roughly one per small file plus 37.5 PB ÷ 4 MB ≈ 9.4 B for large-file data. Call it **~25 B chunk records**.
+- Unique chunks: roughly one per small file (up to 20 B, fewer after identical small files dedupe) plus 37.5 PB ÷ 4 MB ≈ 9.4 B for large-file data. Call it **~25 B chunk records**.
 - Chunk index row (32-byte hash, size, storage key, reference count) ≈ 80 B → 25 B × 80 B ≈ **2 TB** of chunk index.
 - File entry (ids, name, parent, flags) ≈ 300 B; version + manifest ≈ 200 B on average → 20 B × 300 B + 30 B × 200 B ≈ **12 TB** of metadata.
 
@@ -157,12 +157,12 @@ The client `PUT`s each missing chunk straight to object storage. Large chunk pay
 
 ```http
 POST /api/v1/files/commit
-{ "namespaceId": "ns_7", "fileId": "f_88", "parentId": "d_12", "name": "plan.dwg",
+{ "namespaceId": "ns_7", "fileId": "f_88", "parentId": "d_12", "name": "pitch.pptx",
   "baseVersionId": "v_501", "size": 13107200, "contentHash": "c4d1…",
   "chunks": ["9f2c…", "41ab…", "9f2c…", "e07d…"], "deviceId": "laptop-01" }
 
 200 OK   { "status": "committed", "fileId": "f_88", "versionId": "v_502", "seq": 1042 }
-200 OK   { "status": "conflict", "fileId": "f_93", "name": "plan (conflicted copy from laptop-01 2026-10-19).dwg", "seq": 1043 }
+200 OK   { "status": "conflict", "fileId": "f_93", "name": "pitch (conflicted copy from laptop-01 2026-10-19).pptx", "seq": 1043 }
 409      { "status": "missingChunks", "missing": ["41ab…"] }
 ```
 
@@ -172,7 +172,7 @@ POST /api/v1/files/commit
 
 ```http
 GET /api/v1/namespaces/ns_7/changes?cursor=1039&limit=500
-200 OK { "changes": [ { "seq": 1040, "op": "update", "fileId": "f_88", "versionId": "v_501", "path": "/drawings/plan.dwg" }, … ],
+200 OK { "changes": [ { "seq": 1040, "op": "update", "fileId": "f_88", "versionId": "v_501", "path": "/decks/pitch.pptx" }, … ],
          "cursor": 1043, "hasMore": false }
 
 GET /api/v1/namespaces/ns_7/notify?cursor=1043        (long poll, held up to 60 s)
@@ -234,7 +234,7 @@ CREATE TABLE journal (
 CREATE TABLE acl_grant (
     namespace_id bigint NOT NULL,
     item_id      bigint NOT NULL,
-    principal    text   NOT NULL,                    -- 'user:42', 'group:site-engineers', 'link:<token hash>'
+    principal    text   NOT NULL,                    -- 'user:42', 'group:design-team', 'link:<token hash>'
     role         text   NOT NULL CHECK (role IN ('viewer','commenter','editor','owner')),
     expires_at   timestamptz,
     PRIMARY KEY (namespace_id, item_id, principal)
@@ -247,7 +247,7 @@ The **chunk index** is a separate store, sharded by the chunk hash (the hash is 
 CREATE TABLE chunk (
     hash        bytea  PRIMARY KEY,                  -- SHA-256 of the chunk bytes
     size_bytes  integer NOT NULL,
-    storage_key text   NOT NULL,                     -- object storage key
+    storage_key text   NOT NULL,                     -- object storage key, unique per upload (not the hash itself)
     ref_count   bigint NOT NULL DEFAULT 0,
     zero_since  timestamptz                          -- when ref_count last reached 0 (for GC grace)
 );
@@ -257,7 +257,7 @@ Design notes:
 
 - **Manifests as arrays**. A version's chunk list is stored inline as an array: one row per version, read and written whole. A separate `version_chunk` table is the normalised alternative, useful if you need "which versions use chunk X?" queries; GC can be done without that query (see deep dive 5).
 - **Journal sequence allocated in the same transaction** as the change: `UPDATE namespace SET next_seq = next_seq + 1 ... RETURNING next_seq - 1`. This gives a gap-free, totally ordered log per namespace. The row lock on `namespace` serialises commits within one namespace (fine at a few commits per second per namespace), while different namespaces commit in parallel.
-- **Unique name per folder** is enforced by a partial unique index that ignores trashed items, case-insensitively, because most desktop file systems treat `Plan.dwg` and `plan.dwg` as the same file.
+- **Unique name per folder** is enforced by a partial unique index that ignores trashed items, case-insensitively, because most desktop file systems treat `Pitch.pptx` and `pitch.pptx` as the same file.
 
 ## High-level architecture
 
@@ -320,7 +320,7 @@ sequenceDiagram
     M--)N: event ns_7 seq 1042 (via outbox)
     N-->>P: changed = true
     P->>M: GET changes?cursor=1041
-    M-->>P: update plan.dwg v_502 chunks list
+    M-->>P: update pitch.pptx v_502 chunks list
     P->>O: GET only the chunk it lacks (41ab)
 ```
 
@@ -368,11 +368,11 @@ A commit runs one transaction on the namespace's shard:
 
 1. Lock the namespace row and allocate `seq = next_seq` (incrementing it).
 2. Read the item. If `current_version_id` equals the client's `baseVersionId`, insert the new version, point the item at it, and append `journal(seq, 'update')`.
-3. If it doesn't match, someone else changed the file since this device last synced. Insert the new version under a **new item** named `plan (conflicted copy from laptop-01 2026-10-19).dwg` in the same folder, and append `journal(seq, 'create')`.
+3. If it doesn't match, someone else changed the file since this device last synced. Insert the new version under a **new item** named `pitch (conflicted copy from laptop-01 2026-10-19).pptx` in the same folder, and append `journal(seq, 'create')`.
 4. Insert an outbox row for the notification.
 5. Commit.
 
-Why not merge automatically? The server doesn't understand `.dwg` or `.xlsx`. Picking a winner silently ("last writer wins") destroys someone's work. A conflicted copy is ugly but safe; people resolve it with their own tools. Text formats could be merged, but that's an application feature, not a storage one.
+Why not merge automatically? The storage service doesn't understand the inside of a `.pptx` or `.xlsx`. Picking a winner silently ("last writer wins") destroys someone's work. A conflicted copy is ugly but safe; people resolve it with their own tools. Text formats could be merged, but that's an application feature, not a storage one.
 
 Renames and moves use the same optimistic check on the item (`baseItemVersion`), and the unique-name index catches two devices creating `notes.txt` in the same folder at the same time: the second gets a conflict and the client renames it `notes (1).txt`.
 
@@ -404,13 +404,18 @@ Order matters, because the two kinds of mistake are not equal:
 - **Over-counting** (count higher than the true number of references) leaks storage until a reconciliation pass fixes it. Annoying, not dangerous.
 - **Under-counting** deletes a chunk that a live version still needs. That's **data loss**.
 
-So: **increment references before the commit transaction, decrement after the deletion commits.** If the process crashes between the increment and the commit, we've over-counted, which is safe. The grace period covers the race where an upload plan said "you don't need to upload 41ab, we have it" just as GC was about to delete it: the commit re-checks existence and the increment resets `zero_since`.
+So: **increment references before the commit transaction, decrement after the deletion commits.** If the process crashes between the increment and the commit, we've over-counted, which is safe. The grace period covers the race where an upload plan said "you don't need to upload 41ab, we have it" just as its count reached zero.
+
+Two details close the remaining race between "does the chunk exist?" and "GC deletes it":
+
+- **Increment and existence check are one statement.** The commit runs `UPDATE chunk SET ref_count = ref_count + 1, zero_since = NULL WHERE hash = ANY($1) RETURNING hash` and treats any hash that did not come back as missing (it undoes the increments it did make and answers `missingChunks`). Checking first and incrementing later leaves a window in which GC can delete the row in between.
+- **GC deletes conditionally, then removes the object.** `DELETE FROM chunk WHERE hash = $1 AND ref_count = 0 AND zero_since < now() - interval '24 hours' RETURNING storage_key`; only if a row came back is that object moved to the soft-delete area. Because `storage_key` is unique per upload rather than equal to the hash, a fresh upload of the same content after the row is gone gets a new key, so GC can never delete bytes that a new row points at.
 
 On top of that, run a slow **mark-and-sweep reconciliation** monthly: stream all manifests, build the set of referenced hashes per chunk-index shard, and compare with stored counts. It catches drift from bugs. At 25 B chunks this is a big batch job, which is why it's monthly and not the primary mechanism.
 
 ### Deep dive 6: sharing and inherited permissions
 
-Permissions are granted on items and **inherited by everything below**. Priya is a viewer on `/Projects/NH-48 Widening` and an editor on its `drawings` subfolder. For `plan.dwg` inside `drawings`, her effective role is the **highest role** along the path from the file up to the root: editor.
+Permissions are granted on items and **inherited by everything below**. Priya is a viewer on `/Clients/Diwali Campaign` and an editor on its `decks` subfolder. For `pitch.pptx` inside `decks`, her effective role is the **highest role** along the path from the file up to the root: editor.
 
 Computing it means walking up the ancestors and taking the maximum grant. In SQL that's a recursive CTE (exercise 5). At 28,000 metadata reads/s you don't want to do that walk on every request, so:
 
@@ -478,9 +483,10 @@ public interface IChunkIndex
     /// <summary>Hashes from the list that are not stored yet, in first-seen order, without duplicates.</summary>
     Task<IReadOnlyList<string>> MissingAsync(IReadOnlyList<string> hashes, CancellationToken ct);
     Task RegisterAsync(string hash, int size, CancellationToken ct);
-    /// <summary>Adjust reference counts. Callers increment BEFORE committing metadata and decrement AFTER
-    /// deleting it, so a crash can only over-count (leak) and never under-count (data loss).</summary>
-    Task AddRefsAsync(IEnumerable<string> hashes, int delta, CancellationToken ct);
+    /// <summary>Adjust reference counts and return the hashes that are NOT stored (nothing was changed for them).
+    /// Callers increment BEFORE committing metadata and decrement AFTER deleting it, so a crash can only
+    /// over-count (leak) and never under-count (data loss). Production: one UPDATE … WHERE hash = ANY(…) RETURNING hash.</summary>
+    Task<IReadOnlyList<string>> AddRefsAsync(IEnumerable<string> hashes, int delta, CancellationToken ct);
 }
 
 public sealed class InMemoryChunkIndex : IChunkIndex
@@ -497,11 +503,13 @@ public sealed class InMemoryChunkIndex : IChunkIndex
         return Task.CompletedTask;
     }
 
-    public Task AddRefsAsync(IEnumerable<string> hashes, int delta, CancellationToken ct)
+    public Task<IReadOnlyList<string>> AddRefsAsync(IEnumerable<string> hashes, int delta, CancellationToken ct)
     {
+        var notStored = new List<string>();
         foreach (var h in hashes.Distinct(StringComparer.Ordinal))
             if (_chunks.TryGetValue(h, out var e)) Interlocked.Add(ref e.Refs, delta);
-        return Task.CompletedTask;
+            else notStored.Add(h);
+        return Task.FromResult<IReadOnlyList<string>>(notStored);
     }
 
     public long RefsOf(string hash) => _chunks.TryGetValue(hash, out var e) ? Interlocked.Read(ref e.Refs) : 0;
@@ -644,11 +652,16 @@ public sealed class SyncService(NamespaceRegistry spaces, IChunkIndex chunks, Ch
 
     public async Task<CommitResponse> CommitAsync(CommitRequest req, CancellationToken ct)
     {
-        var missing = await chunks.MissingAsync(req.Chunks, ct);
-        if (missing.Count > 0) return new("missingChunks", null, null, 0, null, missing);
         if (Chunker.ContentHash(req.Chunks) != req.ContentHash) return new("badManifest", null, null, 0, null, []);
 
-        await chunks.AddRefsAsync(req.Chunks, +1, ct);               // 1. references first (over-count is safe)
+        // 1. References first (over-count is safe). Incrementing IS the existence check, so GC can't delete
+        //    a chunk between "it exists" and "we hold a reference to it".
+        var missing = await chunks.AddRefsAsync(req.Chunks, +1, ct);
+        if (missing.Count > 0)
+        {
+            await chunks.AddRefsAsync(req.Chunks.Except(missing, StringComparer.Ordinal), -1, ct);   // undo our own increments
+            return new("missingChunks", null, null, 0, null, missing);
+        }
         var ns = spaces.Get(req.NamespaceId);
         var r = ns.Commit(req.ItemId, req.ParentId, req.Name, req.BaseVersionId, req.Size, req.ContentHash,
                           req.Chunks, req.DeviceId, clock.GetUtcNow()); // 2. one metadata transaction
@@ -775,7 +788,7 @@ Note that content caching is trivially safe here because chunks are named by the
 - **Dedupe privacy**: no cross-user "chunk exists" answers to clients (deep dive 2).
 - **Tenant isolation** for business customers: namespaces carry a tenant id, and queries are filtered by it at the data-access layer (row-level security is one option, see [multi-tenant security](#/lesson/m14-multi-tenant-security)).
 - **Audit log**: shares, permission changes, downloads by external users and admin actions go to an append-only audit store.
-- **Data residency**: Indian government and infrastructure clients often require data to stay in India. Keep namespace shards and chunk storage for those tenants in an Indian region, and make the region part of the namespace record.
+- **Data residency**: Indian government, banking and healthcare clients often require data to stay in India. Keep namespace shards and chunk storage for those tenants in an Indian region, and make the region part of the namespace record.
 
 ## Observability
 
@@ -803,7 +816,7 @@ Note that content caching is trivially safe here because chunks are named by the
 
 ### When a simpler design is enough
 
-A document repository for one company's 400 project engineers, with a web UI and no desktop sync, doesn't need chunking, dedupe, a journal or a notification tier. Store each file version as one blob, keep metadata in one PostgreSQL database, check permissions with a recursive CTE (with an index on `parent_id` it's fast for trees of tens of thousands of items), and let the browser refresh. Add chunking when large files and resumable uploads become a problem, and add the journal when you add sync clients.
+A document repository for one company's 400 employees, with a web UI and no desktop sync, doesn't need chunking, dedupe, a journal or a notification tier. Store each file version as one blob, keep metadata in one PostgreSQL database, check permissions with a recursive CTE (with an index on `parent_id` it's fast for trees of tens of thousands of items), and let the browser refresh. Add chunking when large files and resumable uploads become a problem, and add the journal when you add sync clients.
 
 ## Alternatives and trade-offs
 
@@ -1005,7 +1018,7 @@ CREATE TABLE device_cursor (
   PRIMARY KEY (device_id, namespace_id)
 );
 INSERT INTO item VALUES
-  (7, 1, 'plan.dwg'), (7, 2, 'budget.xlsx'), (7, 3, 'site-photos'), (7, 4, 'plan (conflicted copy from phone-02 2026-10-19).dwg'),
+  (7, 1, 'pitch.pptx'), (7, 2, 'budget.xlsx'), (7, 3, 'shoot-photos'), (7, 4, 'pitch (conflicted copy from phone-02 2026-10-19).pptx'),
   (9, 1, 'salaries.xlsx');
 INSERT INTO journal VALUES
   (7, 1039, 2, 'create'), (7, 1040, 1, 'update'), (7, 1041, 3, 'create'), (7, 1042, 1, 'update'),
@@ -1024,7 +1037,7 @@ ORDER BY j.seq
 LIMIT 4;
 ```
 ::acceptance
-- Returns seq 1041 (create site-photos), 1042 (update plan.dwg), 1043 (create the conflicted copy), 1044 (rename budget.xlsx), in that order.
+- Returns seq 1041 (create shoot-photos), 1042 (update pitch.pptx), 1043 (create the conflicted copy), 1044 (rename budget.xlsx), in that order.
 - Seq 1040 is not returned: the cursor means "already applied up to and including 1040".
 - Namespace 9's entries (which reuse the same seq numbers) never appear.
 ::hint
@@ -1332,10 +1345,10 @@ CREATE TABLE acl_grant (
   PRIMARY KEY (item_id, principal)
 );
 INSERT INTO item VALUES
-  (1, NULL, 'Projects', true),
-  (2, 1, 'NH-48 Widening', true),
-  (3, 2, 'drawings', true),
-  (4, 3, 'plan.dwg', false),
+  (1, NULL, 'Clients', true),
+  (2, 1, 'Diwali Campaign', true),
+  (3, 2, 'decks', true),
+  (4, 3, 'pitch.pptx', false),
   (5, 2, 'budget.xlsx', false),
   (6, NULL, 'HR', true),
   (7, 6, 'salaries.xlsx', false),
@@ -1370,8 +1383,8 @@ ORDER BY i.id;
 ```
 ::acceptance
 - Returns 5 rows: 2 viewer, 3 editor, 4 editor, 5 viewer, 7 commenter.
-- `plan.dwg` (4) is editor: it inherits viewer from 2 and editor from 3, and the higher wins.
-- `Projects` (1), `HR` (6) and `notes.txt` (8) are absent: Priya has no grant on them or their ancestors.
+- `pitch.pptx` (4) is editor: it inherits viewer from 2 and editor from 3, and the higher wins.
+- `Clients` (1), `HR` (6) and `notes.txt` (8) are absent: Priya has no grant on them or their ancestors.
 - Roles are compared by rank, not alphabetically (alphabetically, "viewer" would beat "editor").
 ::hint
 For each item, you need the list of the item itself plus all of its ancestors. Which SQL feature walks a tree of unknown depth?
@@ -1419,7 +1432,7 @@ ORDER BY i.id;
 - Returning items with no grant as `NULL` role rows instead of excluding them.
 - Forgetting a cycle guard in real data: if a bug ever makes a folder its own ancestor, the recursion never ends. PostgreSQL's `CYCLE` clause (or an array of visited ids) protects against that.
 ::extensions
-Add a `group_member(group_name, user_id)` table and grants to `group:site-engineers`. Extend the query so Priya's effective role includes roles granted to her groups.
+Add a `group_member(group_name, user_id)` table and grants to `group:design-team`. Extend the query so Priya's effective role includes roles granted to her groups.
 :::
 
 ## Interview questions
@@ -1444,7 +1457,7 @@ By namespace: a user's own tree, or one shared folder. Every transaction (commit
 ::q advanced
 Explain how you'd garbage-collect chunks safely.
 ::a
-Reference counts per chunk, incremented when a version referencing it is committed and decremented when that version is deleted or expires. Order the steps so failures over-count: increment **before** the metadata commit, decrement **after** the deletion commits. Over-counting leaks storage until reconciliation; under-counting deletes live data. Chunks with zero references are only deleted after a grace period (say 24 hours), which covers the race where an upload plan told a client "we already have that chunk" just before its count reached zero; the commit re-checks and increments, resetting the clock. Deleted chunks go to a soft-delete area for some days before physical deletion, and a monthly mark-and-sweep compares counts with the real set of referenced hashes.
+Reference counts per chunk, incremented when a version referencing it is committed and decremented when that version is deleted or expires. Order the steps so failures over-count: increment **before** the metadata commit, decrement **after** the deletion commits. Over-counting leaks storage until reconciliation; under-counting deletes live data. Chunks with zero references are only deleted after a grace period (say 24 hours), which covers the race where an upload plan told a client "we already have that chunk" just before its count reached zero. The commit's increment doubles as its existence check (one `UPDATE … RETURNING`), and GC deletes only with a conditional `DELETE … WHERE ref_count = 0 AND zero_since < cutoff`, so there is no window between "it exists" and "I hold a reference". Deleted chunks go to a soft-delete area for some days before physical deletion, and a monthly mark-and-sweep compares counts with the real set of referenced hashes.
 ::q advanced
 What's the privacy risk of cross-user deduplication, and how do you mitigate it?
 ::a
@@ -1535,7 +1548,7 @@ An attacker calls the upload-planning API with the chunk hashes of a confidentia
 - [ ] Per-namespace journals.
 > Limit the client-visible answer to the user's own data and dedupe across users server-side, or use per-user chunk ids.
 ::q single
-A company of 400 engineers wants a web-only document repository with folders and sharing, no desktop sync. Which design is appropriate?
+A company of 400 employees wants a web-only document repository with folders and sharing, no desktop sync. Which design is appropriate?
 - [ ] Chunking, a chunk index, a sharded journal and a notification gateway.
 - [x] One blob per file version, metadata in one PostgreSQL database, permissions via a recursive query.
 - [ ] Peer-to-peer sync with CRDTs.

@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 70
 prerequisites: [m01-oop-pillars, m01-interfaces-abstract, m04-ocp]
-related: [m04-isp, m04-composition-inheritance, m06-decorator, m07-encapsulation-invariants, m04-testability]
+related: [m04-solid-in-practice, m04-isp, m04-composition-inheritance, m06-decorator, m07-encapsulation-invariants, m04-testability]
 tags: [solid, inheritance, contracts, polymorphism]
 patterns: []
 summary: A subtype must keep every promise its base type makes, so code written against the base type keeps working when handed any subtype — no type checks, no surprise exceptions, no broken assumptions.
@@ -97,6 +97,14 @@ void Stretch(Rectangle r) { r.Width = 5; r.Height = 4; Debug.Assert(r.Area == 20
 
 `Rectangle`'s implicit contract says "setting Height doesn't change Width". `Square` breaks it. The real-world relationship "is a" is about *what things are*. LSP is about *what objects promise to do*. A mutable square can't promise what a mutable rectangle promises. (An *immutable* square and rectangle are fine. Without setters, there is no promise to break. Immutability removes a whole class of LSP problems.)
 
+Which rule does `Square` break? The **postcondition** of the `Height` setter ("afterwards Height is the new value and Width is unchanged") is weakened. You can also see it as an **invariant** clash: `Square` adds the invariant `Width == Height`, and the only way to keep it is to break the base type's promise. Adding invariants is allowed only when the base type's operations can't break them.
+
+The other classic interview example is the bird and the penguin: `class Bird { virtual void Fly() }` and `class Penguin : Bird` whose `Fly()` throws. The fix is the same as in this lesson's bank example: flying is a *capability* (`IFlyingBird`), not something every bird promises.
+
+### The history rule in one example
+
+The history constraint (from Liskov and Wing's paper) is the least known rule: a subtype must not allow state changes that the base type's methods could never make. Suppose `FixedRateLoan` promises "the interest rate is set at disbursement and never changes", and the EMI calculator caches the monthly instalment on that basis. A subclass `PromoLoan : FixedRateLoan` adds a `ResetRate(decimal)` method. No *existing* method was overridden, every signature matches, and yet a caller holding a `FixedRateLoan` can now observe its rate changing. The cached EMI is wrong. Adding new methods is normally fine; adding new methods that mutate state the base type promised was frozen is not.
+
 ### How it shows up in real code
 
 You rarely see squares at work. You see these:
@@ -113,8 +121,9 @@ Each violation forces every caller to know about the special subtype. Callers fi
 
 ### When to be pragmatic
 
-- **Documented optional features.** The .NET base class library sometimes chooses "optional members plus a capability flag". `ICollection<T>.IsReadOnly` tells you whether `Add` will throw. `Stream.CanSeek` tells you whether `Seek` will work. This is LSP-compliant *if* the contract says so and callers check the flag. It is a trade-off: it keeps the type hierarchy small, at the cost of runtime checks.
+- **Documented optional features.** The .NET base class library sometimes chooses "optional members plus a capability flag". `ICollection<T>.IsReadOnly` tells you whether `Add` will throw. `Stream.CanSeek` tells you whether `Seek`, `Position` and `Length` will work; for a `NetworkStream` or a decompression stream they throw `NotSupportedException`. This is LSP-compliant *if* the contract says so and callers check the flag. A correct caller looks like this: `if (!stream.CanSeek) { var copy = new MemoryStream(); await stream.CopyToAsync(copy, ct); copy.Position = 0; stream = copy; }`. It is a trade-off: it keeps the type hierarchy small, at the cost of runtime checks that callers can forget.
 - **Internal code with one caller.** If a base class has two subclasses and one caller you control, a perfect hierarchy can cost more than it saves. Be honest about the contract in a comment, and fix it when a third subtype appears.
+- **No substitution, no problem.** LSP is about code that receives a base type and doesn't know the concrete type. A sealed class, or a subclass only ever used through its own concrete type, has no caller to surprise. Don't redesign a hierarchy nobody substitutes; just stop new callers from depending on the base type.
 
 ### Trade-offs of fixing violations
 
@@ -507,19 +516,19 @@ public class BulkUploadStore : IDocumentStore
 }
 ```
 
-Callers that previously saved 50 MB drawings now fail. Either make the limit part of the base contract (with a `MaxSize` property every caller can read), or don't pretend this is the same kind of store.
+Callers that previously saved 50 MB scanned loan agreements now fail. Either make the limit part of the base contract (with a `MaxSize` property every caller can read), or don't pretend this is the same kind of store.
 
 **Weakened postcondition:**
 
 ```csharp
-public class FastSearchRepository : IProjectRepository
+public class FastSearchRepository : ITransactionRepository
 {
-    // Base contract: returns ALL matching projects. This returns the first 100 "for performance".
-    public IReadOnlyList<Project> Search(string text) => _index.Search(text).Take(100).ToList();
+    // Base contract: returns ALL matching transactions. This returns the first 100 "for performance".
+    public IReadOnlyList<Transaction> Search(string text) => _index.Search(text).Take(100).ToList();
 }
 ```
 
-A report that counts matching projects is now silently wrong. Paging is a fine idea, but it must be visible in the contract (`Search(text, page, size)` returning a total).
+A report that totals a customer's matching UPI payments for a tax statement is now silently wrong. Paging is a fine idea, but it must be visible in the contract (`Search(text, page, size)` returning a total).
 
 **Broken invariant in a decorator:**
 
@@ -652,7 +661,7 @@ Fixes: for 2, add `MaxWeightKg` (or `CanCarry(parcel)`) to the contract so calle
 :::
 
 :::exercise id=m04-lsp-ex2 difficulty=beginner kind=code title="Stop the archive store from lying"
-`ArchiveStore` implements `IDocumentStore` but throws `NotSupportedException` on `Save`, because archived project documents are read-only. The document viewer only reads. Split the interface so the archive store can't be passed where writing is needed, and make `DocumentViewer` depend only on reading.
+`ArchiveStore` implements `IDocumentStore` but throws `NotSupportedException` on `Save`, because archived bank statements (older than the retention cut-off) are read-only by regulation. The statement viewer in the customer app only reads. Split the interface so the archive store can't be passed where writing is needed, and make `DocumentViewer` depend only on reading.
 ::requirements
 - `IDocumentReader` has `bool Exists(string path)` and `string Read(string path)`.
 - `IDocumentStore : IDocumentReader` adds `void Save(string path, string content)`.
@@ -699,7 +708,7 @@ public sealed class InMemoryDocumentStore : IDocumentStore
     public void Save(string path, string content) => throw new NotImplementedException();
 }
 
-/// <summary>Read-only archive of closed projects.</summary>
+/// <summary>Read-only archive of old account statements.</summary>
 public sealed class ArchiveStore : IDocumentReader
 {
     public ArchiveStore(IReadOnlyDictionary<string, string> documents) => throw new NotImplementedException();
@@ -720,10 +729,10 @@ using Xunit;
 
 public class DocumentTests
 {
-    private static ArchiveStore Archive() => new(new Dictionary<string, string> { ["nh48/dpr.txt"] = "Detailed project report" });
+    private static ArchiveStore Archive() => new(new Dictionary<string, string> { ["SB-1001/2019-03.txt"] = "Statement for March 2019" });
 
     [Fact] public void Archive_is_not_writable() => Assert.False(typeof(IDocumentStore).IsAssignableFrom(typeof(ArchiveStore)));
-    [Fact] public void Viewer_reads_archive() => Assert.Equal("Detailed project report", new DocumentViewer(Archive()).Show("nh48/dpr.txt"));
+    [Fact] public void Viewer_reads_archive() => Assert.Equal("Statement for March 2019", new DocumentViewer(Archive()).Show("SB-1001/2019-03.txt"));
     [Fact] public void Viewer_handles_missing() => Assert.Equal("(missing)", new DocumentViewer(Archive()).Show("nope.txt"));
 
     [Fact]
@@ -960,7 +969,7 @@ In production the caching provider should also expire entries (rates change), us
 :::
 
 :::exercise id=m04-lsp-ex4 difficulty=intermediate kind=design title="Fix the fleet hierarchy"
-A construction company's fleet app has `abstract class Vehicle { Refuel(litres); StartEngine(); RecordOdometer(km); }`. Subclasses: `Truck`, `Excavator` (tracks engine hours, not kilometres), `ElectricCar` (no fuel), and `TowedCompressor` (no engine at all). Several subclasses throw `NotSupportedException`. Redesign the types so that no override throws, and so the maintenance scheduler (which plans service by usage) works for all of them.
+A parcel-delivery company's fleet app has `abstract class Vehicle { Refuel(litres); StartEngine(); RecordOdometer(km); }`. Subclasses: `Truck`, `Forklift` (works inside the warehouse and tracks engine hours, not kilometres), `ElectricVan` (no fuel), and `CargoTrailer` (towed behind a truck, no engine at all). Several subclasses throw `NotSupportedException`. Redesign the types so that no override throws, and so the maintenance scheduler (which plans service by usage) works for all of them.
 ::acceptance
 - No subtype throws `NotSupportedException` for a base-type method.
 - Usage is modelled so the scheduler can treat kilometres and engine hours uniformly.
@@ -971,7 +980,7 @@ What does *every* asset have in common? Start the base type there.
 ::hint
 "Usage" can be an abstraction: a meter with a unit (km or hours) and a reading.
 ::hint
-Capabilities: `IFuelled`, `IChargeable`, `IMotorised`. A towed compressor implements none of them.
+Capabilities: `IFuelled`, `IChargeable`, `IMotorised`. A cargo trailer implements none of them.
 ::solution
 ```mermaid
 classDiagram
@@ -983,25 +992,25 @@ classDiagram
     class MaintenanceScheduler { +NextServiceDue(FleetAsset a) decimal }
     FleetAsset *-- UsageMeter
     FleetAsset <|-- Truck
-    FleetAsset <|-- Excavator
-    FleetAsset <|-- ElectricCar
-    FleetAsset <|-- TowedCompressor
+    FleetAsset <|-- Forklift
+    FleetAsset <|-- ElectricVan
+    FleetAsset <|-- CargoTrailer
     IFuelled <|.. Truck
-    IFuelled <|.. Excavator
+    IFuelled <|.. Forklift
     IMotorised <|.. Truck
-    IMotorised <|.. Excavator
-    IMotorised <|.. ElectricCar
-    IChargeable <|.. ElectricCar
+    IMotorised <|.. Forklift
+    IMotorised <|.. ElectricVan
+    IChargeable <|.. ElectricVan
     MaintenanceScheduler --> FleetAsset
 ```
 
-- `FleetAsset` promises only what every asset has: an ID and a usage meter. The meter's unit is `km` for trucks and cars and `hours` for excavators and compressors (compressor hours come from its hour counter, not an engine).
+- `FleetAsset` promises only what every asset has: an ID and a usage meter. The meter's unit is `km` for trucks, vans and trailers (a trailer's comes from a hub odometer on its axle, not an engine) and `hours` for forklifts.
 - The scheduler compares `Meter.Reading` against a service interval stored per asset type, in the same unit. It never asks "what kind of vehicle is this?"
-- Fuelling, charging and starting are capabilities. The fuel-log screen takes `IFuelled`. The charging-session screen takes `IChargeable`.
+- Fuelling, charging and starting are capabilities. The fuel-log screen takes `IFuelled`. The charging-session screen takes `IChargeable`. Tyre and brake checks for the trailer are driven by its meter like everything else.
 - `RecordOdometer(km)` is gone. It assumed every asset counts kilometres, a precondition half the fleet couldn't meet.
 ::mistakes
 - Adding `bool HasEngine` and `bool UsesFuel` flags to `Vehicle` and checking them everywhere. It's the same problem with booleans instead of exceptions.
-- Making `Excavator.RecordOdometer` convert hours to "equivalent km". That invents a meaningless number to satisfy a bad contract.
+- Making `Forklift.RecordOdometer` convert hours to "equivalent km". That invents a meaningless number to satisfy a bad contract.
 :::
 
 :::exercise id=m04-lsp-ex5 difficulty=advanced kind=code title="A retry decorator that keeps the idempotency promise"
@@ -1297,6 +1306,7 @@ A decorator implements the same interface, so it is a subtype and must keep ever
 - Fixes: split capabilities into interfaces, make the base contract honest (results or flags), or use composition.
 - Decorators are subtypes too and must keep invisible promises like idempotency and freshness.
 - Contract tests make the contract executable for every implementation.
+- See LSP working with the other four principles on one real feature in [SOLID in practice](#/lesson/m04-solid-in-practice).
 
 **Terminology**: subtype, contract, precondition, postcondition, invariant, history constraint, covariance, contravariance, capability interface, contract test.
 
@@ -1309,6 +1319,8 @@ Q: Can a subtype promise less than its base?
 A: No. Weakening a postcondition (e.g. "may return null" when the base says never null) is a violation.
 Q: Why does Square : Rectangle violate LSP?
 A: Setting Square's height also changes its width, breaking Rectangle's implicit promise that dimensions are independent.
+Q: What is the history constraint?
+A: A subtype must not allow state changes the base type's methods could never make, e.g. adding a setter to a type whose contract says it is immutable.
 Q: What does a type check like `if (x is FixedDepositAccount)` in a caller usually indicate?
 A: That the caller can't trust the base type's contract — an LSP violation.
 Q: What is a contract test?

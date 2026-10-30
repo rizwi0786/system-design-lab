@@ -199,7 +199,7 @@ flowchart LR
     Notifications --> Shared
 ```
 
-This is a construction-material procurement app with five modules. Each arrow means "depends on". Count the arrows: **Ce** is arrows leaving a box, **Ca** is arrows arriving. `Orders` has 4 outgoing and 0 incoming, so I = 4 ÷ (0 + 4) = 1.00. `Vendors` has 2 incoming (from Orders and Pricing) and 1 outgoing, so I = 1 ÷ 3 ≈ 0.33. `Shared` only receives arrows, so I = 0. Notice every arrow points from a higher I to a lower I. That means this graph follows the Stable Dependencies Principle. If someone added `Shared --> Orders`, that arrow would point from I = 0 to I = 1, a violation, and it would also create a cycle.
+This is an online grocery marketplace (many sellers, one storefront) with five modules. Each arrow means "depends on". Count the arrows: **Ce** is arrows leaving a box, **Ca** is arrows arriving. `Orders` has 4 outgoing and 0 incoming, so I = 4 ÷ (0 + 4) = 1.00. `Vendors` has 2 incoming (from Orders and Pricing) and 1 outgoing, so I = 1 ÷ 3 ≈ 0.33. `Shared` only receives arrows, so I = 0. Notice every arrow points from a higher I to a lower I. That means this graph follows the Stable Dependencies Principle. If someone added `Shared --> Orders`, that arrow would point from I = 0 to I = 1, a violation, and it would also create a cycle.
 
 ### A low-cohesion class and its split
 
@@ -213,7 +213,7 @@ classDiagram
         +UpdateRating(string vendorId, decimal score)
         +SendReminder(string vendorId)
         +FormatReminder(string vendorId) string
-        +LatestCementPrice(string city) decimal
+        +LatestOnionPrice(string city) decimal
     }
     class VendorRatings {
         -Dictionary~string, decimal~ ratings
@@ -225,13 +225,13 @@ classDiagram
         +SendReminder(string vendorId)
         +FormatReminder(string vendorId) string
     }
-    class MaterialPrices {
+    class WholesalePrices {
         -IPriceFeed feed
-        +LatestCementPrice(string city) decimal
+        +LatestOnionPrice(string city) decimal
     }
     VendorService ..> VendorRatings : split into
     VendorService ..> VendorReminders : split into
-    VendorService ..> MaterialPrices : split into
+    VendorService ..> WholesalePrices : split into
 ```
 
 `VendorService` on the left has three fields, and each field is used by a different group of methods. Ratings methods only touch `ratings`. Reminder methods only touch `sms`. The price method only touches `feed`. LCOM4 = 3. The dotted arrows show the refactoring: three classes, each with LCOM4 = 1. Callers that only need ratings no longer depend on an SMS gateway, so coupling drops too. That's the link between cohesion and coupling in one picture.
@@ -249,7 +249,7 @@ sequenceDiagram
     V-->>O: list of addresses
     O->>V: GetGstRegistration(id)
     V-->>O: GSTIN record
-    O->>O: decide if vendor can supply to site state
+    O->>O: decide if vendor can deliver to customer's state
     Note over O,V: Narrow, asks one question
     O->>V: CanSupplyTo(vendorId, stateCode)
     V-->>O: true
@@ -259,7 +259,7 @@ The top half shows stamp and content-like coupling. `OrderPlacement` pulls three
 
 ## Step-by-step example
 
-Let's compute the metrics for the procurement app by hand, then see what they tell us.
+Let's compute the metrics for the marketplace app by hand, then see what they tell us.
 
 ### Step 1 — list the dependencies
 
@@ -315,7 +315,7 @@ ArchMetrics/
   Metrics/ReflectionModuleScanner.cs
   Metrics/Lcom4.cs
   Metrics/CouplingReport.cs
-  Sample/Procurement.cs        tiny sample modules so the scanner has something to measure
+  Sample/Marketplace.cs        tiny sample modules so the scanner has something to measure
 ```
 
 ```csharp file=Metrics/ModuleGraph.cs
@@ -374,7 +374,7 @@ public sealed class ModuleGraph
 }
 ```
 
-The scanner maps each type to a module by its namespace. With root `ArchMetrics.Sample.Procurement` and depth 1, the type `ArchMetrics.Sample.Procurement.Orders.PlaceOrder` belongs to module `Orders`. Types outside the root (BCL, ASP.NET Core) are ignored, so framework references don't inflate the numbers.
+The scanner maps each type to a module by its namespace. With root `ArchMetrics.Sample.Marketplace` and depth 1, the type `ArchMetrics.Sample.Marketplace.Orders.PlaceOrder` belongs to module `Orders`. Types outside the root (BCL, ASP.NET Core) are ignored, so framework references don't inflate the numbers.
 
 ```csharp file=Metrics/ReflectionModuleScanner.cs
 using System.Reflection;
@@ -482,54 +482,54 @@ public static class Lcom4
 
 The LCOM4 calculator uses union-find, a structure that tracks which items are in the same group. With a few hundred methods it doesn't matter, but union-find handles large classes in near-linear time.
 
-Now some sample modules for the scanner to measure. They mirror the procurement diagram: `Orders` depends on `Pricing`, `Vendors`, `Notifications` and `Shared`.
+Now some sample modules for the scanner to measure. They mirror the marketplace diagram: `Orders` depends on `Pricing`, `Vendors`, `Notifications` and `Shared`.
 
-```csharp file=Sample/Procurement.cs
-namespace ArchMetrics.Sample.Procurement.Shared
+```csharp file=Sample/Marketplace.cs
+namespace ArchMetrics.Sample.Marketplace.Shared
 {
     public readonly record struct Money(decimal Amount, string Currency);
     public readonly record struct Gstin(string Value);
     public interface IClock { DateTimeOffset Now { get; } }
 }
 
-namespace ArchMetrics.Sample.Procurement.Vendors
+namespace ArchMetrics.Sample.Marketplace.Vendors
 {
-    using ArchMetrics.Sample.Procurement.Shared;
+    using ArchMetrics.Sample.Marketplace.Shared;
     public sealed record Vendor(string Id, string Name, Gstin Gstin, IReadOnlyList<string> StatesServed);
     public interface IVendorDirectory { bool CanSupplyTo(string vendorId, string stateCode); Vendor? Find(string vendorId); }
 }
 
-namespace ArchMetrics.Sample.Procurement.Pricing
+namespace ArchMetrics.Sample.Marketplace.Pricing
 {
-    using ArchMetrics.Sample.Procurement.Shared;
-    using ArchMetrics.Sample.Procurement.Vendors;
-    public interface IPriceList { Money UnitPrice(Vendor vendor, string materialCode); }
+    using ArchMetrics.Sample.Marketplace.Shared;
+    using ArchMetrics.Sample.Marketplace.Vendors;
+    public interface IPriceList { Money UnitPrice(Vendor vendor, string sku); }
 }
 
-namespace ArchMetrics.Sample.Procurement.Notifications
+namespace ArchMetrics.Sample.Marketplace.Notifications
 {
-    using ArchMetrics.Sample.Procurement.Shared;
+    using ArchMetrics.Sample.Marketplace.Shared;
     public interface INotifier { Task NotifyAsync(string recipient, string message, Money? amount, CancellationToken ct); }
 }
 
-namespace ArchMetrics.Sample.Procurement.Orders
+namespace ArchMetrics.Sample.Marketplace.Orders
 {
-    using ArchMetrics.Sample.Procurement.Notifications;
-    using ArchMetrics.Sample.Procurement.Pricing;
-    using ArchMetrics.Sample.Procurement.Shared;
-    using ArchMetrics.Sample.Procurement.Vendors;
+    using ArchMetrics.Sample.Marketplace.Notifications;
+    using ArchMetrics.Sample.Marketplace.Pricing;
+    using ArchMetrics.Sample.Marketplace.Shared;
+    using ArchMetrics.Sample.Marketplace.Vendors;
 
-    public sealed record PurchaseOrder(string VendorId, string MaterialCode, int Quantity, Money Total);
+    public sealed record CustomerOrder(string VendorId, string Sku, int Quantity, Money Total);
 
     public sealed class PlaceOrder(IVendorDirectory vendors, IPriceList prices, INotifier notifier, IClock clock)
     {
-        public async Task<PurchaseOrder> HandleAsync(string vendorId, string material, int qty, string siteState, CancellationToken ct)
+        public async Task<CustomerOrder> HandleAsync(string vendorId, string sku, int qty, string deliveryState, CancellationToken ct)
         {
-            if (!vendors.CanSupplyTo(vendorId, siteState)) throw new InvalidOperationException("Vendor does not serve this state.");
+            if (!vendors.CanSupplyTo(vendorId, deliveryState)) throw new InvalidOperationException("Vendor does not serve this state.");
             var vendor = vendors.Find(vendorId)!;
-            var unit = prices.UnitPrice(vendor, material);
-            var order = new PurchaseOrder(vendorId, material, qty, new Money(unit.Amount * qty, unit.Currency));
-            await notifier.NotifyAsync(vendor.Name, $"PO for {qty} x {material} at {clock.Now:yyyy-MM-dd}", order.Total, ct);
+            var unit = prices.UnitPrice(vendor, sku);
+            var order = new CustomerOrder(vendorId, sku, qty, new Money(unit.Amount * qty, unit.Currency));
+            await notifier.NotifyAsync(vendor.Name, $"Order for {qty} x {sku} at {clock.Now:yyyy-MM-dd}", order.Total, ct);
             return order;
         }
     }
@@ -563,7 +563,7 @@ using ArchMetrics.Metrics;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddSingleton(new ReflectionModuleScanner("ArchMetrics.Sample.Procurement", depth: 1));
+builder.Services.AddSingleton(new ReflectionModuleScanner("ArchMetrics.Sample.Marketplace", depth: 1));
 builder.Services.AddSingleton(sp => new CouplingReport(typeof(ModuleGraph).Assembly, sp.GetRequiredService<ReflectionModuleScanner>()));
 
 var app = builder.Build();
@@ -583,12 +583,12 @@ Calling `GET /architecture/metrics` returns the module table. For the sample, `O
 **Bad: control coupling, stamp coupling and low cohesion in one class.**
 
 ```csharp
-public static class ProcurementHelper
+public static class MarketplaceHelper
 {
     public static object Run(Order order, int mode, bool sendSms, bool isFinal)
     {
         if (mode == 1) return order.Lines.Sum(l => l.Qty * l.Rate) * (order.Vendor.State == "HR" ? 1.18m : 1.18m);
-        if (mode == 2) { if (sendSms) Sms.Send(order.Vendor.Phone, "PO raised"); return true; }
+        if (mode == 2) { if (sendSms) Sms.Send(order.Vendor.Phone, "Order placed"); return true; }
         if (mode == 3) { AppState.LastOrder = order; return isFinal ? Pdf.Render(order) : null; }
         return null;
     }
@@ -607,8 +607,8 @@ What's wrong:
 
 ```csharp
 public sealed class GstCalculator { public decimal TotalWithGst(decimal taxable, decimal ratePercent) => taxable * (1 + ratePercent / 100m); }
-public interface IPoNotifier { Task NotifyRaisedAsync(string phone, string poNumber, CancellationToken ct); }
-public interface IPoDocumentRenderer { byte[] RenderFinal(PurchaseOrderDocument doc); }
+public interface IOrderNotifier { Task NotifyPlacedAsync(string phone, string orderNumber, CancellationToken ct); }
+public interface IInvoiceRenderer { byte[] RenderFinal(InvoiceDocument doc); }
 ```
 
 Each class does one job (functional cohesion). Callers pass only the data needed (data coupling). Behaviour is chosen by calling a different method or class, not a flag. There is no global state.
@@ -670,7 +670,7 @@ Implement `CouplingCalculator.Compute` for a list of dependency edges between mo
 - `Instability = Ce / (Ca + Ce)`, rounded to 2 decimals. A module with no edges after filtering has instability 0.
 - Return results sorted by module name (ordinal).
 ::acceptance
-- For the procurement graph in this lesson, `Orders` has Ca 0, Ce 4, I 1.00 and `Vendors` has Ca 2, Ce 1, I 0.33.
+- For the marketplace graph in this lesson, `Orders` has Ca 0, Ce 4, I 1.00 and `Vendors` has Ca 2, Ce 1, I 0.33.
 - Duplicates and self-edges don't change any count.
 - A module that only appears in a self-edge is reported with zeros.
 ::hint
@@ -704,16 +704,16 @@ using Xunit;
 
 public class CouplingCalculatorTests
 {
-    private static readonly (string, string)[] Procurement =
+    private static readonly (string, string)[] Marketplace =
     {
         ("Orders", "Pricing"), ("Orders", "Vendors"), ("Orders", "Notifications"), ("Orders", "Shared"),
         ("Pricing", "Vendors"), ("Pricing", "Shared"), ("Vendors", "Shared"), ("Notifications", "Shared"),
     };
 
     [Fact]
-    public void Procurement_graph()
+    public void Marketplace_graph()
     {
-        var r = CouplingCalculator.Compute(Procurement).ToDictionary(m => m.Module);
+        var r = CouplingCalculator.Compute(Marketplace).ToDictionary(m => m.Module);
         Assert.Equal(new ModuleCoupling("Orders", 0, 4, 1.0), r["Orders"]);
         Assert.Equal(new ModuleCoupling("Vendors", 2, 1, 0.33), r["Vendors"]);
         Assert.Equal(new ModuleCoupling("Shared", 4, 0, 0.0), r["Shared"]);
@@ -723,7 +723,7 @@ public class CouplingCalculatorTests
     [Fact]
     public void Sorted_by_name() =>
         Assert.Equal(new[] { "Notifications", "Orders", "Pricing", "Shared", "Vendors" },
-                     CouplingCalculator.Compute(Procurement).Select(m => m.Module).ToArray());
+                     CouplingCalculator.Compute(Marketplace).Select(m => m.Module).ToArray());
 
     [Fact]
     public void Ignores_duplicates_and_self_edges()
@@ -779,9 +779,9 @@ For each snippet, name the **main** coupling or cohesion type and suggest one co
 1. `void Export(Report r, int format) // 1 = PDF, 2 = Excel, 3 = CSV`
 2. `class StartupTasks { LoadConfig(); WarmCache(); EmailAdmin(); SeedDemoData(); }`
 3. `decimal Gst(Invoice invoice) => invoice.Taxable * 0.18m;` where `Invoice` has 25 properties.
-4. `public static class Globals { public static User? CurrentUser; public static string? CurrentProject; }` used by 40 classes.
+4. `public static class Globals { public static User? CurrentUser; public static string? CurrentTenant; }` used by 40 classes.
 5. `class GstCalculator { decimal Cgst(decimal t, decimal r); decimal Sgst(decimal t, decimal r); decimal Igst(decimal t, decimal r); }`
-6. `class StringUtils { Slugify(); ParseChainage(); HashPassword(); ToIndianCurrency(); }`
+6. `class StringUtils { Slugify(); ParsePincode(); HashPassword(); ToIndianCurrency(); }`
 ::acceptance
 - All six are named correctly or with a well-argued alternative.
 - Each improvement is concrete (a signature, a class split or an injected dependency).
@@ -798,9 +798,9 @@ Two of these are about cohesion (what's inside a class), and one of them is actu
 1. **Control coupling** (and logical cohesion inside `Export`). Improve: one exporter per format behind `IReportExporter`, chosen by the caller or by a resolver. `Export(report)` on `PdfReportExporter`.
 2. **Temporal cohesion**. These run at startup but have nothing else in common. Improve: separate `IHostedService` implementations (`CacheWarmer`, `DemoDataSeeder`, `AdminStartupNotifier`), each registered in DI. Config loading belongs to the host builder.
 3. **Stamp coupling**. Improve: `decimal Gst(decimal taxable, decimal ratePercent)`. Rate is a parameter too, since GST rates vary by HSN code. Acceptable if `Gst` is a method *on* `Invoice` itself.
-4. **Common (global) coupling**. Improve: inject a scoped `ICurrentUser` and `IProjectContext` (backed by `HttpContext` claims) into the classes that need them. Tests can then pass fakes, and two concurrent requests can't overwrite each other.
+4. **Common (global) coupling**. Improve: inject a scoped `ICurrentUser` and `ITenantContext` (backed by `HttpContext` claims) into the classes that need them. Tests can then pass fakes, and two concurrent requests can't overwrite each other.
 5. **Functional cohesion**: all three compute parts of GST for a line. This is good. Leave it.
-6. **Coincidental cohesion**. Improve: move each method next to its concept: `Slug` value object, `Chainage.Parse`, `IPasswordHasher` (use ASP.NET Core Identity's `PasswordHasher<T>`, never hand-rolled hashing), `IndianCurrencyFormatter`.
+6. **Coincidental cohesion**. Improve: move each method next to its concept: `Slug` value object, `Pincode.Parse`, `IPasswordHasher` (use ASP.NET Core Identity's `PasswordHasher<T>`, never hand-rolled hashing), `IndianCurrencyFormatter`.
 ::mistakes
 - Calling #5 low cohesion because it has several methods. Several methods serving one purpose is the goal.
 - Fixing #4 by making `Globals` thread-static. It hides the problem and breaks with `async` code.
@@ -860,13 +860,13 @@ public class CohesionAnalyzerTests
         {
             M("GetRating", new[] { "_ratings" }), M("UpdateRating", new[] { "_ratings" }),
             M("SendReminder", new[] { "_sms" }, "FormatReminder", "Send"), M("FormatReminder", None),
-            M("LatestCementPrice", new[] { "_feed" }),
+            M("LatestOnionPrice", new[] { "_feed" }),
         };
         Assert.Equal(3, CohesionAnalyzer.Lcom4(methods));
         var groups = CohesionAnalyzer.Groups(methods);
         Assert.Equal(new[] { "FormatReminder", "SendReminder" }, groups[0].ToArray());
         Assert.Equal(new[] { "GetRating", "UpdateRating" }, groups[1].ToArray());
-        Assert.Equal(new[] { "LatestCementPrice" }, groups[2].ToArray());
+        Assert.Equal(new[] { "LatestOnionPrice" }, groups[2].ToArray());
     }
 
     [Fact]
@@ -936,101 +936,101 @@ Linking each field's users as a star (first user to every other) instead of ever
 Exclude constructors and simple property getters, which tend to touch every field and hide low cohesion. Then compute LCOM4 for real classes with reflection plus a Roslyn syntax walker that finds field accesses.
 :::
 
-:::exercise id=m02-coupling-cohesion-ex4 difficulty=intermediate kind=design title="Decouple a measurement-book module"
-A site measurement-book module has this class:
+:::exercise id=m02-coupling-cohesion-ex4 difficulty=intermediate kind=design title="Decouple a timesheet module"
+A time-tracking SaaS (the kind agencies use to bill clients by the hour) has this class in its timesheet module:
 
 ```csharp
-public class MeasurementManager
+public class TimesheetManager
 {
     private readonly AppDbContext _db;
     private readonly SmtpClient _smtp;
     private readonly ExcelWriter _excel;
-    public void AddEntry(MeasurementEntry e, bool notifyEngineer, bool recalcBill) { ... }
-    public void Approve(int entryId, string engineer, bool lockForBilling) { ... }
-    public byte[] ExportAbstract(int projectId, bool includeRates, bool asPdf) { ... }
-    public decimal QuantityToDate(int boqItemId) { ... }
-    public void RecalculateBill(int billId) { ... }
+    public void AddEntry(TimeEntry e, bool notifyManager, bool recalcInvoice) { ... }
+    public void Approve(int entryId, string manager, bool lockForInvoicing) { ... }
+    public byte[] ExportSummary(int projectId, bool includeRates, bool asPdf) { ... }
+    public decimal HoursToDate(int taskId) { ... }
+    public void RecalculateInvoice(int invoiceId) { ... }
 }
 ```
 
-The billing module calls `RecalculateBill` and `QuantityToDate`. The reports module calls `ExportAbstract`. Site engineers' API calls `AddEntry` and `Approve`.
+The billing module calls `RecalculateInvoice` and `HoursToDate`. The reports module calls `ExportSummary`. The employees' timesheet API calls `AddEntry` and `Approve`.
 
 Propose a new design. Identify each coupling and cohesion problem, then give a class diagram and say which module each class belongs to.
 ::acceptance
 - At least three problems named with their type (control flags, low cohesion, concrete infrastructure dependencies, misplaced responsibility).
 - Boolean flags replaced by separate operations or events.
-- Billing logic is owned by the billing module, not the measurement module.
+- Billing logic is owned by the billing module, not the timesheet module.
 - Infrastructure (SMTP, Excel) sits behind interfaces owned by the consumer.
 ::hint
 Count the boolean parameters. Each one is control coupling.
 ::hint
-`RecalculateBill` is about bills, not measurements. Which module should own it?
+`RecalculateInvoice` is about invoices, not timesheets. Which module should own it?
 ::hint
-Instead of `AddEntry(..., recalcBill: true)`, could the measurement module announce "an entry was approved" and let billing react?
+Instead of `AddEntry(..., recalcInvoice: true)`, could the timesheet module announce "an entry was approved" and let billing react?
 ::hint
-Shape: `MeasurementBook` (add, approve), `IMeasurementQueries` (quantity to date, used by billing), `MeasurementAbstractExporter` (reports), plus an `EntryApproved` event.
+Shape: `Timesheet` (add, approve), `ITimesheetQueries` (hours to date, used by billing), `TimesheetSummaryExporter` (reports), plus an `EntryApproved` event.
 ::solution
 **Problems:**
 
-- **Control coupling**: `notifyEngineer`, `recalcBill`, `lockForBilling`, `includeRates`, `asPdf`.
-- **Low (logical and coincidental) cohesion**: data entry, approval workflow, bill calculation, exporting and email in one class.
-- **Misplaced responsibility**: `RecalculateBill` is billing logic living in measurements. Billing and measurements now change together.
+- **Control coupling**: `notifyManager`, `recalcInvoice`, `lockForInvoicing`, `includeRates`, `asPdf`.
+- **Low (logical and coincidental) cohesion**: time entry, approval workflow, invoice calculation, exporting and email in one class.
+- **Misplaced responsibility**: `RecalculateInvoice` is billing logic living in timesheets. Billing and timesheets now change together.
 - **Concrete infrastructure coupling**: `SmtpClient` and `ExcelWriter` are hard-wired, so you can't test without them.
 
 **New design:**
 
 ```mermaid
 classDiagram
-    class MeasurementBook {
-        +AddEntry(MeasurementEntry e) int
-        +Approve(int entryId, string engineer)
+    class Timesheet {
+        +AddEntry(TimeEntry e) int
+        +Approve(int entryId, string manager)
     }
-    class IMeasurementQueries {
+    class ITimesheetQueries {
         <<interface>>
-        +QuantityToDate(int boqItemId) decimal
+        +HoursToDate(int taskId) decimal
     }
     class EntryApproved {
         +int EntryId
-        +int BoqItemId
-        +decimal Quantity
+        +int TaskId
+        +decimal Hours
     }
     class IEventPublisher {
         <<interface>>
         +Publish(EntryApproved e)
     }
-    class BillRecalculator {
+    class InvoiceRecalculator {
         +On(EntryApproved e)
     }
-    class EngineerNotifier {
+    class ManagerNotifier {
         +On(EntryApproved e)
     }
     class INotifier {
         <<interface>>
     }
-    class AbstractExporter {
+    class SummaryExporter {
         +ExportPdf(int projectId) byte[]
         +ExportExcel(int projectId, RateVisibility rates) byte[]
     }
-    MeasurementBook --> IEventPublisher
-    MeasurementBook ..> EntryApproved : raises
-    BillRecalculator ..> EntryApproved : handles
-    BillRecalculator --> IMeasurementQueries
-    EngineerNotifier ..> EntryApproved : handles
-    EngineerNotifier --> INotifier
+    Timesheet --> IEventPublisher
+    Timesheet ..> EntryApproved : raises
+    InvoiceRecalculator ..> EntryApproved : handles
+    InvoiceRecalculator --> ITimesheetQueries
+    ManagerNotifier ..> EntryApproved : handles
+    ManagerNotifier --> INotifier
 ```
 
 | Class | Module | Why |
 |---|---|---|
-| `MeasurementBook`, `EntryApproved`, `IMeasurementQueries` | Measurements | Owns entries and their workflow. Publishes a fact and a small read interface |
-| `BillRecalculator` | Billing | Billing rules live with billing. It reacts to `EntryApproved` and reads quantities through the narrow interface |
-| `EngineerNotifier`, `INotifier` | Notifications | Email is one implementation of `INotifier` |
-| `AbstractExporter` | Reports | Export formats are separate methods. `RateVisibility` is an enum, clearer than a bool |
+| `Timesheet`, `EntryApproved`, `ITimesheetQueries` | Timesheets | Owns entries and their workflow. Publishes a fact and a small read interface |
+| `InvoiceRecalculator` | Billing | Billing rules live with billing. It reacts to `EntryApproved` and reads hours through the narrow interface |
+| `ManagerNotifier`, `INotifier` | Notifications | Email is one implementation of `INotifier` |
+| `SummaryExporter` | Reports | Export formats are separate methods. `RateVisibility` is an enum, clearer than a bool |
 
-Measurements no longer knows billing exists, so its Ce drops. Billing depends on one narrow interface plus one event type (data coupling). "Lock for billing" becomes billing's own decision when it handles the event.
+Timesheets no longer knows billing exists, so its Ce drops. Billing depends on one narrow interface plus one event type (data coupling). "Lock for invoicing" becomes billing's own decision when it handles the event.
 ::alternatives
-If an in-process event feels heavy for a small app, billing can call `IMeasurementQueries` when it builds a bill, with no events at all. That's simpler, at the cost of billing pulling data instead of being told about changes.
+If an in-process event feels heavy for a small app, billing can call `ITimesheetQueries` when it builds an invoice, with no events at all. That's simpler, at the cost of billing pulling data instead of being told about changes.
 ::mistakes
-- Keeping `RecalculateBill` in measurements behind an interface. The dependency direction is still wrong.
+- Keeping `RecalculateInvoice` in timesheets behind an interface. The dependency direction is still wrong.
 - Replacing five bools with one `Options` object full of bools. That's still control coupling.
 :::
 
@@ -1043,7 +1043,7 @@ Implement `PackageAnalyzer`, which computes I, A and D per module, lists Stable 
 - **Zone of pain**: `I <= 0.3`, `A <= 0.3` and `Ca >= 2`. The thresholds are passed in a settings record so teams can tune them.
 - Return everything sorted by name (violations by From, then To).
 ::acceptance
-- For the procurement graph with `Shared` at 1 abstract of 10 types, `Shared` is in the zone of pain with D = 0.9.
+- For the marketplace graph with `Shared` at 1 abstract of 10 types, `Shared` is in the zone of pain with D = 0.9.
 - Adding `Shared -> Orders` produces a violation `Shared -> Orders`.
 - Unknown edge targets and self-edges are ignored.
 - Custom thresholds change the zone-of-pain result.
@@ -1181,7 +1181,7 @@ Add cycle detection (Tarjan's strongly connected components) and report every mo
 
 Metrics code is pure logic, so it's easy to test:
 
-- **Golden graphs**: keep a few small graphs with hand-computed answers (like the procurement example) and assert exact values.
+- **Golden graphs**: keep a few small graphs with hand-computed answers (like the marketplace example) and assert exact values.
 - **Property-style checks**: for any graph, the total of Ca across modules equals the total of Ce (every edge is counted once at each end). Every I is between 0 and 1.
 
 ```csharp
@@ -1196,7 +1196,7 @@ public void Total_afferent_equals_total_efferent()
 }
 ```
 
-- **Scanner tests**: create sample types in a test-only namespace (as `Sample/Procurement.cs` does) and assert that `Orders` depends on exactly `Pricing`, `Vendors`, `Notifications` and `Shared`.
+- **Scanner tests**: create sample types in a test-only namespace (as `Sample/Marketplace.cs` does) and assert that `Orders` depends on exactly `Pricing`, `Vendors`, `Notifications` and `Shared`.
 - **Architecture fitness tests in CI**: run the scanner on your real assembly and fail the build when a *new* stability violation or cycle appears. Compare against a checked-in baseline so the team can fix legacy issues gradually, rather than being blocked on day one.
 
 ## Real-world application
@@ -1204,7 +1204,7 @@ public void Total_afferent_equals_total_efferent()
 - **Modular monoliths** use exactly these ideas: modules with high cohesion, talking through narrow public interfaces, with architecture tests enforcing the direction of dependencies. See [Modular monolith architecture](#/lesson/m02-modular-monolith).
 - **Microservices** are coupling decisions at network scale. Two services that share a database have content coupling. Two services that must deploy together have deployment coupling. Services that call each other synchronously in long chains have temporal coupling.
 - **Code reviews**: "this PR adds a dependency from `Shared` to `Billing`" is a crisp, objective review comment once the team knows the vocabulary.
-- **Legacy modernisation**: on an old infrastructure-project ERP, computing Ca for each module shows which ones are risky to touch (high Ca, concrete). Those get characterisation tests before anyone refactors them.
+- **Legacy modernisation**: on an old hospital-management or retail ERP, computing Ca for each module shows which ones are risky to touch (high Ca, concrete). Those get characterisation tests before anyone refactors them.
 - **Tooling**: Visual Studio's code metrics give class coupling and maintainability index per type. NDepend (commercial) and open-source architecture-test libraries (NetArchTest, ArchUnitNET) let you express dependency rules as unit tests.
 
 ## Interview questions

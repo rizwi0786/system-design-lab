@@ -22,7 +22,7 @@ references:
     url: https://github.com/CoreWCF/CoreWCF
 ---
 
-Service-oriented architecture (SOA) is how most large companies first tried to stop their systems from being islands. It is older than microservices, it is often misunderstood, and a lot of it is still running in banks, insurers, telecoms, governments and large engineering firms. If you join such a company, you will integrate with SOA services in your first month. This lesson explains what SOA is, what an enterprise service bus does, why contracts matter so much, and how all of this differs from microservices.
+Service-oriented architecture (SOA) is how most large companies first tried to stop their systems from being islands. It is older than microservices, it is often misunderstood, and a lot of it is still running in banks, insurers, telecoms, airlines, retailers and governments. If you join such a company, you will integrate with SOA services in your first month. This lesson explains what SOA is, what an enterprise service bus does, why contracts matter so much, and how all of this differs from microservices.
 
 ## Learning objectives
 
@@ -44,13 +44,13 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Imagine a large infrastructure group with 12,000 employees. Over 20 years it has bought or built many separate systems:
+Imagine a large retail group with 12,000 employees: supermarkets, warehouses and a head office. Over 20 years it has bought or built many separate systems:
 
 - An HR system where employees are hired and their details are kept.
 - A payroll package (bought from a vendor) that pays salaries.
 - A directory (like Active Directory) that creates login accounts and email.
-- An attendance system at project sites that reads biometric devices.
-- A finance system that books salary costs to projects.
+- An attendance system in the stores and warehouses that reads biometric devices.
+- A finance system that books salary costs to each store.
 
 When someone joins, **all five** need to know. In the early days, each pair of systems was connected by its own custom script: HR exported a CSV every night for payroll, someone emailed a spreadsheet to IT, attendance copied data from a shared folder. With 5 systems that can be 10 point-to-point links. With 20 systems it can be 190. Each link has its own format, its own bugs and its own owner, who left the company in 2014.
 
@@ -110,7 +110,7 @@ A typical SOA landscape has these parts:
 - **Orchestration**: run a multi-step process ("onboard employee": call HR, then directory, then payroll, compensate on failure).
 - **Cross-cutting concerns**: security, logging, monitoring, retries, dead-letter handling.
 
-Examples of ESB-style products include Microsoft BizTalk Server, MuleSoft, IBM App Connect (formerly Integration Bus), Oracle Service Bus and WSO2. Their capabilities overlap. Pick by organisational fit, not by brand.
+Examples of ESB-style products include MuleSoft, IBM App Connect (formerly Integration Bus), Oracle Service Bus, WSO2 and Microsoft BizTalk Server (whose 2020 release is the last; Microsoft points new work to Azure Logic Apps). Cloud integration platforms (iPaaS) such as Azure Integration Services (Logic Apps, Service Bus, API Management) now fill much of the same role without a server to run. Their capabilities overlap. Pick by organisational fit, not by brand.
 
 **4. The canonical data model.** Instead of translating every format to every other format (n × n translators), each system translates **to and from one shared enterprise format** (2 × n translators). For 10 systems that is 20 translators instead of up to 90.
 
@@ -161,8 +161,8 @@ flowchart LR
     end
     R -- "fixed-width file" --> Payroll["Payroll package (vendor)"]
     R -- "LDAP adapter" --> Dir["Directory service (accounts and email)"]
-    R -- "queue message" --> Att["Site attendance system"]
-    R -- "SOAP" --> Fin["Finance (cost allocation)"]
+    R -- "queue message" --> Att["Store attendance system"]
+    R -- "SOAP" --> Fin["Finance (salary cost per store)"]
     Registry["Service registry and contract catalogue"] -.-> ESB
 ```
 
@@ -202,7 +202,7 @@ The HR system writes a nightly file `joiners_YYYYMMDD.txt` to a shared folder:
 
 ```text
 EMP|E1023|ASHA RAO|asha.rao@example.com|FIN|01-10-2026|A
-EMP|E1024|RAVI KUMAR|ravi.kumar@example.com|PRJ|01-10-2026|A
+EMP|E1024|RAVI KUMAR|ravi.kumar@example.com|STR|01-10-2026|A
 ```
 
 A payroll script reads it at 2 a.m. An IT script reads the same file at 3 a.m. and creates accounts. A third script built by the finance team reads it at 4 a.m. If the HR team adds a column, all three break, and nobody notices until salaries are wrong.
@@ -230,7 +230,7 @@ The canonical `Employee` is the enterprise-wide shape of an employee as it trave
 
 - One **inbound translator**: legacy pipe-delimited record → canonical employee.
 - One **outbound translator per destination**: canonical → payroll fixed-width, canonical → directory call.
-- **Routes**: "status Active → payroll, directory, attendance". "Department PRJ → also attendance at site". "No route matched → dead-letter".
+- **Routes**: "status Active → payroll, directory, attendance". "Department STR (store staff) → also store attendance". "No route matched → dead-letter".
 
 ### Step 5 — operate it
 
@@ -450,7 +450,7 @@ public sealed class IntegrationBus(
 }
 ```
 
-The bus knows **where** messages go and **how** to deliver them. It does not know payroll rules or who approves what. A real deployment would also wait between retries (exponential backoff) and persist the message before acknowledging, so a crash does not lose it.
+The bus knows **where** messages go and **how** to deliver them. It does not know payroll rules or who approves what. A real deployment would also wait between retries (exponential backoff with jitter) and persist the message before acknowledging, so a crash does not lose it. Retries also mean a destination can receive the same message twice (the first attempt may have succeeded but timed out on the way back), so every adapter must be **idempotent**: remember the correlation id and message type it has already applied, and ignore repeats.
 
 ### Destination adapters and the host
 
@@ -603,7 +603,7 @@ They share ideas: services, contracts, loose coupling. You can think of microser
 
 ## Practical playground
 
-Run the program: it translates two legacy records and routes them. Then add a route that sends employees in department `PRJ` to a new `attendance` endpoint, and a third record whose status is `Z`. Watch what happens to each message.
+Run the program: it translates two legacy records and routes them. Then add a route that sends employees in department `STR` to a new `attendance` endpoint, and a third record whose status is `Z`. Watch what happens to each message.
 
 :::playground type=csharp title="A tiny service bus"
 ```csharp file=Program.cs
@@ -636,7 +636,7 @@ public static class Program
         string[] inbound =
         {
             "EMP|E1023|ASHA RAO|asha.rao@example.com|FIN|01-10-2026|A",
-            "EMP|E0871|SUNIL MEHTA|sunil.mehta@example.com|PRJ|15-03-2019|X",
+            "EMP|E0871|SUNIL MEHTA|sunil.mehta@example.com|STR|15-03-2019|X",
         };
 
         foreach (var line in inbound)
@@ -719,7 +719,7 @@ public class LegacyTranslatorTests
 
     [Fact]
     public void Exited_status_is_mapped() =>
-        Assert.Equal(EmploymentStatus.Exited, LegacyTranslator.Translate("EMP|E0871|SUNIL MEHTA|s@example.com|PRJ|15-03-2019|X").Status);
+        Assert.Equal(EmploymentStatus.Exited, LegacyTranslator.Translate("EMP|E0871|SUNIL MEHTA|s@example.com|STR|15-03-2019|X").Status);
 
     [Fact]
     public void Wrong_field_count_throws() =>
@@ -823,7 +823,7 @@ Implement `ContentBasedRouter`. It holds an ordered list of routes (name, predic
 - No match: record `DeadLetter(message.Id, "no route")` and return an empty list.
 - A predicate that throws: record `DeadLetter(message.Id, "route '<name>' failed: <exception message>")`, skip that route, and continue with the others.
 ::acceptance
-- An active employee in `PRJ` goes to `payroll`, `directory` and `attendance`.
+- An active employee in `STR` goes to `payroll`, `directory` and `attendance`.
 - Two routes to the same endpoint produce it once.
 - An unmatched message ends up in `DeadLetters` with reason `no route`.
 - A throwing predicate does not stop the other routes.
@@ -868,14 +868,14 @@ public class ContentBasedRouterTests
         var r = new ContentBasedRouter();
         r.AddRoute("active-payroll", m => m.Status == "Active", "payroll");
         r.AddRoute("active-directory", m => m.Status == "Active", "directory");
-        r.AddRoute("site-staff", m => m.Department == "PRJ", "attendance");
+        r.AddRoute("store-staff", m => m.Department == "STR", "attendance");
         r.AddRoute("exits", m => m.Status == "Exited", "payroll");
         return r;
     }
 
     [Fact]
-    public void Active_project_employee_goes_to_three_endpoints() =>
-        Assert.Equal(new[] { "payroll", "directory", "attendance" }, Standard().Route(new Message("m1", "EmployeeChanged", "PRJ", "Active")));
+    public void Active_store_employee_goes_to_three_endpoints() =>
+        Assert.Equal(new[] { "payroll", "directory", "attendance" }, Standard().Route(new Message("m1", "EmployeeChanged", "STR", "Active")));
 
     [Fact]
     public void Duplicate_endpoints_are_removed()
@@ -1212,7 +1212,7 @@ Integration layers are notoriously under-tested because the logic hides in confi
 
 **1. Translators** are pure functions: fixture input in, canonical model out. Keep a folder of real (anonymised) sample messages from each system and run every one through the translator in a `[Theory]`.
 
-**2. Routing rules** are tested with small envelopes: "an active PRJ employee goes to payroll, directory and attendance". Routing tables change often, so these tests catch accidental breakage.
+**2. Routing rules** are tested with small envelopes: "an active STR employee goes to payroll, directory and attendance". Routing tables change often, so these tests catch accidental breakage.
 
 **3. Contract tests.** Check every published contract change with a diff tool (exercise 4) and fail CI on an unversioned breaking change. For consumer-provider pairs, use **consumer-driven contract tests**: each consumer publishes the fields and examples it relies on, and the provider's build verifies them. Pact is a well-known tool for this.
 
@@ -1252,7 +1252,7 @@ Also run a small number of end-to-end tests against test instances of the vendor
 
 - **Banking and insurance.** Core banking systems, often decades old, expose services such as "get account balance" or "post transaction" through a service layer, and channels (branch, internet banking, mobile, partner APIs) reuse them. Integration platforms translate between modern JSON APIs and older message formats.
 - **Government platforms.** Many e-governance systems integrate departments (land records, tax, identity, payments) through service gateways with formal contracts, because each department runs its own system and changes on its own schedule.
-- **Large engineering and infrastructure groups.** HR, payroll, finance, procurement and project-control systems are often bought packages. An integration platform keeps employee, vendor and project master data in sync and feeds cost allocations from payroll to project accounts.
+- **Large retail and airline groups.** HR, payroll, finance, procurement and point-of-sale or crew-rostering systems are often bought packages. An integration platform keeps employee, supplier and store master data in sync and feeds salary costs from payroll to each store's or route's accounts.
 - **Hybrid landscapes.** A company may build a new product as microservices and still use its SOA or integration platform to talk to ERP and payroll. An [anti-corruption layer](#/lesson/m16-strangler-acl) often sits between the two worlds.
 - **Modern successors.** API gateways, event brokers (Kafka, RabbitMQ) and integration-platform-as-a-service products took over many ESB jobs. The patterns (translator, router, dead-letter channel, canonical model) are the same, which is why Enterprise Integration Patterns is still a standard reference.
 

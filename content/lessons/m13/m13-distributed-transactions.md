@@ -59,12 +59,12 @@ Two-phase commit is the same ceremony for databases:
 
 Now the uncomfortable part. Suppose both partners have said "I do", and the officiant faints before making the announcement. Are they married? Neither partner can decide alone. If one walks off assuming "no", while the officiant later wakes up and writes "yes" in the register, the two records disagree. So both must stand at the altar and wait. In databases this waiting is called **blocking**, and it is the central weakness of 2PC: participants hold locks on rows while they wait, and other work queues up behind them.
 
-A concrete example we will use all lesson. A cement supply platform takes an order from a contractor in Pune: **200 bags at ₹390 = ₹78,000**. Two things must happen together:
+A concrete example we will use all lesson. During a festival sale, an online electronics store takes an order from a customer in Pune: **2 phones at ₹39,000 = ₹78,000**, paid with the store's pay-later credit line. Two things must happen together:
 
-1. The warehouse database reserves 200 bags.
-2. The credit wallet database debits ₹78,000 from the contractor's credit line.
+1. The warehouse database reserves 2 phones.
+2. The credit wallet database debits ₹78,000 from the customer's pay-later credit line.
 
-If only the first happens, stock is stuck for an order nobody paid for. If only the second happens, the contractor paid for cement that will never ship. We need "both or neither" across two databases.
+If only the first happens, stock is stuck for an order nobody paid for. If only the second happens, the customer paid for phones that will never ship. We need "both or neither" across two databases.
 
 ## First-principles explanation
 
@@ -90,7 +90,7 @@ The first commit is permanent. The second never happens. You cannot "un-commit" 
 
 ### The protocol, step by step
 
-**Phase 0 — do the work.** The coordinator runs the normal statements on each participant inside a local transaction: `UPDATE stock SET available = available - 200 ...` on the warehouse and `UPDATE credit SET balance = balance - 78000 ...` on the wallet. Row locks are taken as usual. Nothing is committed.
+**Phase 0 — do the work.** The coordinator runs the normal statements on each participant inside a local transaction: `UPDATE stock SET available = available - 2 ...` on the warehouse and `UPDATE credit SET balance = balance - 78000 ...` on the wallet. Row locks are taken as usual. Nothing is committed.
 
 **Phase 1 — prepare (voting).** The coordinator sends `PREPARE` to every participant. Each participant:
 
@@ -116,7 +116,7 @@ Look at each participant's states:
 
 If the coordinator crashes after the participants voted YES and before they hear the decision, they are **in doubt**. They cannot commit (maybe the coordinator decided abort because a third participant voted no). They cannot abort (maybe the coordinator logged commit and another participant already committed). They can only wait for the coordinator to come back, or for a human to look at the coordinator's log and resolve it.
 
-While they wait, the 200 bags of cement in the warehouse row are locked. Every other order for that SKU in that warehouse blocks behind the lock. If the coordinator's machine is gone for 20 minutes, the warehouse is partially frozen for 20 minutes. This is the **blocking problem**.
+While they wait, the stock row for that phone model in the Pune warehouse is locked. Every other order for that SKU in that warehouse blocks behind the lock. If the coordinator's machine is gone for 20 minutes, the warehouse is partially frozen for 20 minutes. This is the **blocking problem**.
 
 :::callout type=warning title="Participants asking each other does not fully fix it"
 A cooperative termination protocol lets an in-doubt participant ask the others: "Did you get a decision?" If any one of them knows, everyone learns it. If any one of them never voted, it can safely abort. But if *all* reachable participants are prepared and none knows the decision, they are still stuck. Only the coordinator's log knows.
@@ -142,7 +142,7 @@ PostgreSQL exposes the participant side of 2PC directly in SQL:
 
 ```sql
 BEGIN;
-UPDATE stock SET available = available - 200 WHERE warehouse = 'PUN-1' AND sku = 'OPC53';
+UPDATE stock SET available = available - 2 WHERE warehouse = 'PUN-1' AND sku = 'PH-128';
 PREPARE TRANSACTION 'order-7f3a-inventory';   -- phase 1: durable, survives restart, keeps locks
 
 -- later, from any session:
@@ -156,6 +156,7 @@ SELECT gid, prepared, owner FROM pg_prepared_xacts;
 
 Important facts from the PostgreSQL documentation:
 
+- PostgreSQL implements only the participant side; it does not speak the XA protocol itself. Java's JDBC driver maps XA calls onto these commands (`PGXADataSource`); Npgsql offers no XA transaction manager.
 - `max_prepared_transactions` defaults to **0**, which disables `PREPARE TRANSACTION`. You must set it (and restart) on purpose.
 - PostgreSQL does **not** include a coordinator. Something outside must remember the decision and call `COMMIT PREPARED`.
 - A prepared transaction keeps its locks and also holds back the "oldest running transaction" horizon, so `VACUUM` cannot clean up dead rows behind it. A forgotten prepared transaction slowly bloats tables. The docs recommend not leaving them open for long.
@@ -202,7 +203,7 @@ In a service-oriented system, each service owns its data ([see microservices](#/
 4. **Operational burden.** Someone must run a highly available coordinator, monitor in-doubt transactions, and know how to resolve them by hand at 3 a.m.
 5. **Platform support.** As above, .NET on Linux does not escalate `TransactionScope`. Many managed cloud databases restrict or discourage prepared transactions.
 
-A **saga** replaces one big atomic transaction with a sequence of local transactions, each committed immediately, plus a **compensating** action for each step that can undo it semantically ("release the 200 bags", "refund ₹78,000"). Each step publishes an event or command reliably using the [transactional outbox](#/lesson/m12-outbox). Each consumer is [idempotent](#/lesson/m12-idempotent-consumers). Nothing holds locks across services, and a service that is down simply processes its messages later.
+A **saga** replaces one big atomic transaction with a sequence of local transactions, each committed immediately, plus a **compensating** action for each step that can undo it semantically ("release the 2 phones", "refund ₹78,000"). Each step publishes an event or command reliably using the [transactional outbox](#/lesson/m12-outbox). Each consumer is [idempotent](#/lesson/m12-idempotent-consumers). Nothing holds locks across services, and a service that is down simply processes its messages later.
 
 The price you pay with sagas:
 
@@ -232,7 +233,7 @@ Before reaching for either 2PC or a saga, ask whether the two tables really need
 
 ```mermaid
 flowchart LR
-    C["Contractor app"] -->|"POST /orders"| API["Order API (2PC coordinator)"]
+    C["Shopping app"] -->|"POST /orders"| API["Order API (2PC coordinator)"]
     API -->|"write decision, fsync"| LOG[("Coordinator log")]
     API -->|"1. work + PREPARE"| INV[("Warehouse DB (Pune)")]
     API -->|"1. work + PREPARE"| WAL[("Credit wallet DB")]
@@ -243,7 +244,7 @@ flowchart LR
     REC -.->|"re-send decision"| WAL
 ```
 
-How to read it. The contractor's app sends one order request to the Order API, which acts as the coordinator. The solid arrows to the two databases are phase 1: run the work and ask each one to prepare. The arrow to the coordinator log is the single most important write in the diagram: the decision is flushed there **before** any phase-2 message goes out. The dotted arrows are phase 2: the decision is delivered to each database, and retried until acknowledged. The recovery loop is a background worker that reads decisions that were never fully delivered (for example because the API process crashed half-way) and sends them again. If the coordinator log is lost, in-doubt participants can never be resolved automatically, which is why it must be durable and ideally replicated.
+How to read it. The customer's shopping app sends one order request to the Order API, which acts as the coordinator. The solid arrows to the two databases are phase 1: run the work and ask each one to prepare. The arrow to the coordinator log is the single most important write in the diagram: the decision is flushed there **before** any phase-2 message goes out. The dotted arrows are phase 2: the decision is delivered to each database, and retried until acknowledged. The recovery loop is a background worker that reads decisions that were never fully delivered (for example because the API process crashed half-way) and sends them again. If the coordinator log is lost, in-doubt participants can never be resolved automatically, which is why it must be durable and ideally replicated.
 
 ### The happy path and the blocking window
 
@@ -253,7 +254,7 @@ sequenceDiagram
     participant L as Coordinator log
     participant W as Warehouse DB
     participant P as Wallet DB
-    O->>W: reserve 200 bags (locks row)
+    O->>W: reserve 2 phones (locks row)
     O->>P: debit 78000 (locks row)
     par phase 1
         O->>W: PREPARE tx-7f3a
@@ -294,12 +295,12 @@ The only way out of **Prepared** is a message from the coordinator. There is no 
 
 ## Step-by-step example
 
-Let us trace the cement order through four scenarios, using the numbers from the beginner section.
+Let us trace the phone order through four scenarios, using the numbers from the beginner section.
 
 ### Scenario 1 — everything works
 
 1. Order API generates `txId = 7f3a…`.
-2. Warehouse: `UPDATE stock SET available = available - 200 WHERE sku = 'OPC53' AND warehouse = 'PUN-1' AND available >= 200` affects 1 row. Wallet: `UPDATE credit SET balance = balance - 78000 WHERE contractor = 'C-881' AND balance >= 78000` affects 1 row.
+2. Warehouse: `UPDATE stock SET available = available - 2 WHERE sku = 'PH-128' AND warehouse = 'PUN-1' AND available >= 2` affects 1 row. Wallet: `UPDATE credit SET balance = balance - 78000 WHERE customer = 'U-881' AND balance >= 78000` affects 1 row.
 3. `PREPARE TRANSACTION 'tx-7f3a-wh'` and `PREPARE TRANSACTION 'tx-7f3a-wal'` both succeed. Two YES votes.
 4. Coordinator log: insert `(7f3a, COMMIT, [warehouse, wallet])` and flush.
 5. `COMMIT PREPARED` on both. Both acknowledge. Mark complete.
@@ -308,14 +309,14 @@ Total: about 8 ms of commit overhead (estimate), and the stock row was locked fr
 
 ### Scenario 2 — the wallet says no
 
-The contractor's credit balance is only ₹60,000. The wallet's `UPDATE` affects 0 rows, so the wallet participant votes NO. The coordinator decides ABORT. With presumed abort, it may skip force-flushing the abort record. It sends ABORT to the warehouse, which runs `ROLLBACK PREPARED` (or a plain rollback if it was not prepared yet). Stock is untouched. The user sees "insufficient credit". This is the easy case: **2PC handles "no" votes cleanly.**
+The customer's remaining pay-later limit is only ₹60,000. The wallet's `UPDATE` affects 0 rows, so the wallet participant votes NO. The coordinator decides ABORT. With presumed abort, it may skip force-flushing the abort record. It sends ABORT to the warehouse, which runs `ROLLBACK PREPARED` (or a plain rollback if it was not prepared yet). Stock is untouched. The user sees "insufficient credit". This is the easy case: **2PC handles "no" votes cleanly.**
 
 ### Scenario 3 — the coordinator crashes after deciding
 
 Both voted YES. The coordinator flushed COMMIT to its log and crashed before sending anything. Now:
 
 - Both databases show the transaction in `pg_prepared_xacts`. Rows are locked.
-- Another order for OPC53 in Pune blocks on the stock row. Its HTTP request times out after 5 s.
+- Another order for PH-128 in Pune blocks on the stock row. Its HTTP request times out after 5 s.
 - The Order API restarts after 40 s (a pod reschedule). The recovery loop reads the log, finds `7f3a: COMMIT, not complete`, and sends `COMMIT PREPARED` to both. Locks release.
 
 The data is correct, but the warehouse row was frozen for 40 seconds. If the coordinator's disk had been lost, an operator would have to decide by hand, using business evidence, whether to commit or roll back.
@@ -327,18 +328,18 @@ Both voted YES, but the coordinator crashed *before* flushing a decision. On res
 ### What the same order looks like as a saga
 
 1. **Order service** (local tx): insert order `PENDING`, insert `ReserveStock` command into outbox. Commit.
-2. **Warehouse service** (local tx): reserve 200 bags with status `HELD`, outbox `StockReserved`. Commit.
+2. **Warehouse service** (local tx): reserve 2 phones with status `HELD`, outbox `StockReserved`. Commit.
 3. **Wallet service** (local tx): debit ₹78,000, outbox `CreditDebited`. Commit. *(Pivot: from here we only go forward.)*
 4. **Order service**: mark order `CONFIRMED`; warehouse marks the hold `ALLOCATED`.
 
-If step 3 fails with "insufficient credit", the wallet publishes `CreditDebitFailed`; the warehouse runs the compensation **release 200 bags**; the order becomes `REJECTED`. No row was ever locked for longer than one local transaction (a few milliseconds). The cost: for a second or two, a stock report shows 200 bags "held" for an order that will be rejected. Most businesses are comfortable with that; they already deal with it in the physical world.
+If step 3 fails with "insufficient credit", the wallet publishes `CreditDebitFailed`; the warehouse runs the compensation **release 2 phones**; the order becomes `REJECTED`. No row was ever locked for longer than one local transaction (a few milliseconds). The cost: for a second or two, a stock report shows 2 phones "held" for an order that will be rejected. Most businesses are comfortable with that; they already deal with it in the physical world.
 
 ## Production-style C# implementation
 
 Production systems should not hand-roll a 2PC coordinator. But building a small, honest model is the best way to understand what a real one must do: parallel prepare with timeouts, a durable decision **before** phase 2, idempotent and retried phase 2, presumed abort, and a recovery loop. The participants here are in-memory fakes behind an interface; a real participant would wrap `PREPARE TRANSACTION` and `COMMIT PREPARED` on a PostgreSQL connection.
 
 ```text
-Cement.Api/
+Shop.Api/
   Program.cs
   TwoPhase/Contracts.cs
   TwoPhase/InMemoryCoordinatorLog.cs
@@ -349,7 +350,7 @@ Cement.Api/
 ```
 
 ```csharp file=TwoPhase/Contracts.cs
-namespace Cement.TwoPhase;
+namespace Shop.TwoPhase;
 
 public enum Vote { Yes, No }
 
@@ -394,7 +395,7 @@ public sealed class TwoPhaseCommitOptions
 ```csharp file=TwoPhase/InMemoryCoordinatorLog.cs
 using System.Collections.Concurrent;
 
-namespace Cement.TwoPhase;
+namespace Shop.TwoPhase;
 
 /// <summary>Stand-in for a durable table such as
 /// coordinator_log(tx_id uuid primary key, decision text, participants text[], decided_at timestamptz, completed bool).</summary>
@@ -430,7 +431,7 @@ public sealed class InMemoryCoordinatorLog(TimeProvider clock) : ICoordinatorLog
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace Cement.TwoPhase;
+namespace Shop.TwoPhase;
 
 public sealed class TwoPhaseCommitCoordinator(
     IEnumerable<ITwoPhaseParticipant> registered,
@@ -520,7 +521,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace Cement.TwoPhase;
+namespace Shop.TwoPhase;
 
 /// <summary>Re-drives decisions that were logged but not acknowledged by every participant,
 /// for example after the coordinator process crashed between the log write and phase 2.</summary>
@@ -555,31 +556,31 @@ public sealed class CoordinatorRecoveryService(
 ```
 
 ```csharp file=Participants/InMemoryStockParticipant.cs
-using Cement.TwoPhase;
+using Shop.TwoPhase;
 
-namespace Cement.Participants;
+namespace Shop.Participants;
 
 /// <summary>Models a warehouse database. Stage = phase-0 work (takes the "lock" by moving stock aside),
 /// Prepare = durable promise, Commit/Abort = idempotent completion.</summary>
 public sealed class InMemoryStockParticipant : ITwoPhaseParticipant
 {
     private readonly object _gate = new();
-    private readonly Dictionary<string, int> _available = new(StringComparer.Ordinal) { ["PUN-1:OPC53"] = 1_000 };
-    private readonly Dictionary<Guid, (string Key, int Bags, bool Prepared)> _pending = new();
+    private readonly Dictionary<string, int> _available = new(StringComparer.Ordinal) { ["PUN-1:PH-128"] = 1_000 };
+    private readonly Dictionary<Guid, (string Key, int Quantity, bool Prepared)> _pending = new();
     private readonly HashSet<Guid> _finished = new();
 
     public string Name => "warehouse";
 
     public int Available(string key) { lock (_gate) return _available.GetValueOrDefault(key); }
 
-    public bool Stage(Guid txId, string warehouse, string sku, int bags)
+    public bool Stage(Guid txId, string warehouse, string sku, int quantity)
     {
         var key = $"{warehouse}:{sku}";
         lock (_gate)
         {
-            if (_available.GetValueOrDefault(key) < bags) return false;
-            _available[key] -= bags;                 // held aside, like a row lock plus a pending update
-            _pending[txId] = (key, bags, false);
+            if (_available.GetValueOrDefault(key) < quantity) return false;
+            _available[key] -= quantity;               // held aside, like a row lock plus a pending update
+            _pending[txId] = (key, quantity, false);
             return true;
         }
     }
@@ -610,7 +611,7 @@ public sealed class InMemoryStockParticipant : ITwoPhaseParticipant
         lock (_gate)
         {
             if (_finished.Contains(txId)) return Task.CompletedTask;
-            if (_pending.Remove(txId, out var p)) _available[p.Key] += p.Bags;   // give the stock back
+            if (_pending.Remove(txId, out var p)) _available[p.Key] += p.Quantity;   // give the stock back
             _finished.Add(txId);
         }
         return Task.CompletedTask;
@@ -619,28 +620,28 @@ public sealed class InMemoryStockParticipant : ITwoPhaseParticipant
 ```
 
 ```csharp file=Participants/InMemoryWalletParticipant.cs
-using Cement.TwoPhase;
+using Shop.TwoPhase;
 
-namespace Cement.Participants;
+namespace Shop.Participants;
 
 public sealed class InMemoryWalletParticipant : ITwoPhaseParticipant
 {
     private readonly object _gate = new();
-    private readonly Dictionary<string, decimal> _balance = new(StringComparer.Ordinal) { ["C-881"] = 250_000m };
-    private readonly Dictionary<Guid, (string Contractor, decimal Amount)> _pending = new();
+    private readonly Dictionary<string, decimal> _balance = new(StringComparer.Ordinal) { ["U-881"] = 100_000m };
+    private readonly Dictionary<Guid, (string Customer, decimal Amount)> _pending = new();
     private readonly HashSet<Guid> _finished = new();
 
     public string Name => "wallet";
 
-    public decimal Balance(string contractor) { lock (_gate) return _balance.GetValueOrDefault(contractor); }
+    public decimal Balance(string customer) { lock (_gate) return _balance.GetValueOrDefault(customer); }
 
-    public bool Stage(Guid txId, string contractor, decimal amount)
+    public bool Stage(Guid txId, string customer, decimal amount)
     {
         lock (_gate)
         {
-            if (_balance.GetValueOrDefault(contractor) < amount) return false;
-            _balance[contractor] -= amount;
-            _pending[txId] = (contractor, amount);
+            if (_balance.GetValueOrDefault(customer) < amount) return false;
+            _balance[customer] -= amount;
+            _pending[txId] = (customer, amount);
             return true;
         }
     }
@@ -661,7 +662,7 @@ public sealed class InMemoryWalletParticipant : ITwoPhaseParticipant
         lock (_gate)
         {
             if (!_finished.Add(txId)) return Task.CompletedTask;
-            if (_pending.Remove(txId, out var p)) _balance[p.Contractor] += p.Amount;
+            if (_pending.Remove(txId, out var p)) _balance[p.Customer] += p.Amount;
         }
         return Task.CompletedTask;
     }
@@ -669,8 +670,8 @@ public sealed class InMemoryWalletParticipant : ITwoPhaseParticipant
 ```
 
 ```csharp file=Program.cs
-using Cement.Participants;
-using Cement.TwoPhase;
+using Shop.Participants;
+using Shop.TwoPhase;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -690,11 +691,11 @@ app.MapPost("/orders", async (PlaceOrder cmd, InMemoryStockParticipant stock, In
                               TwoPhaseCommitCoordinator coordinator, CancellationToken ct) =>
 {
     var txId = Guid.NewGuid();
-    var amount = cmd.Bags * cmd.PricePerBag;
+    var amount = cmd.Quantity * cmd.UnitPrice;
 
     // Phase 0: do the work on each participant. A failed stage simply leads to a NO vote.
-    stock.Stage(txId, cmd.Warehouse, cmd.Sku, cmd.Bags);
-    wallet.Stage(txId, cmd.ContractorId, amount);
+    stock.Stage(txId, cmd.Warehouse, cmd.Sku, cmd.Quantity);
+    wallet.Stage(txId, cmd.CustomerId, amount);
 
     var decision = await coordinator.ExecuteAsync(txId, new[] { "warehouse", "wallet" }, ct);
     return decision == Decision.Commit
@@ -704,7 +705,7 @@ app.MapPost("/orders", async (PlaceOrder cmd, InMemoryStockParticipant stock, In
 
 app.Run();
 
-public sealed record PlaceOrder(string ContractorId, string Warehouse, string Sku, int Bags, decimal PricePerBag);
+public sealed record PlaceOrder(string CustomerId, string Warehouse, string Sku, int Quantity, decimal UnitPrice);
 ```
 
 **What a real participant would look like.** With Npgsql (not compiled here), each participant wraps one connection:
@@ -712,7 +713,7 @@ public sealed record PlaceOrder(string ContractorId, string Warehouse, string Sk
 ```csharp
 // Phase 0 + 1 on the warehouse database
 await using var conn = await dataSource.OpenConnectionAsync(ct);
-await using (var cmd = new NpgsqlCommand("BEGIN; UPDATE stock SET available = available - @bags WHERE ...;", conn)) { /* ... */ }
+await using (var cmd = new NpgsqlCommand("BEGIN; UPDATE stock SET available = available - @qty WHERE ...;", conn)) { /* ... */ }
 await new NpgsqlCommand($"PREPARE TRANSACTION 'tx-{txId:N}-wh'", conn).ExecuteNonQueryAsync(ct);
 
 // Phase 2, from any connection, even after a restart
@@ -741,7 +742,7 @@ There is a window, every single time, where one side is committed and the other 
 **Good, option C: 2PC inside a platform that owns it.** A sharded database (for example Citus) that runs 2PC across its own shards with built-in recovery, or Kafka transactions inside one cluster. You get the atomicity without operating the coordinator.
 
 :::callout type=tradeoff title="Isolation is the real thing you give up"
-People often say sagas give up atomicity. They don't, eventually: every saga ends fully done or fully compensated. What they give up is **isolation**. For a few seconds, others can see "200 bags held" before the payment result is known. Decide, per flow, whether that visible intermediate state is acceptable. For cement stock, yes. For a bank's internal ledger postings, usually not, which is why ledgers keep both sides of a posting in one database.
+People often say sagas give up atomicity. They don't, eventually: every saga ends fully done or fully compensated. What they give up is **isolation**. For a few seconds, others can see "2 phones held" before the payment result is known. Decide, per flow, whether that visible intermediate state is acceptable. For phone stock in an online store, yes. For a bank's internal ledger postings, usually not, which is why ledgers keep both sides of a posting in one database.
 :::
 
 ## Practical playground
@@ -756,7 +757,7 @@ The canvas below starts with a 2PC design across three services: Order, Warehous
 ```json
 {
   "nodes": [
-    { "id": "app", "type": "client", "label": "Contractor app", "props": { "rps": 40 } },
+    { "id": "app", "type": "client", "label": "Shopping app", "props": { "rps": 40 } },
     { "id": "gw", "type": "api-gateway", "label": "API gateway" },
     { "id": "order", "type": "app-server", "label": "Order service (2PC coordinator)", "props": { "instances": 3 } },
     { "id": "orderdb", "type": "database", "label": "Orders DB + coordinator log", "props": { "multiAz": true } },
@@ -1306,7 +1307,7 @@ Expected rows: `tx-101 / wallet`, `tx-101 / warehouse`, `tx-105 / wallet`, `tx-1
 :::
 
 :::exercise id=m13-distributed-transactions-ex5 difficulty=advanced kind=hld title="Replace cross-service 2PC with a saga"
-A tiles-and-sanitaryware marketplace places about 300 orders per minute at peak (5 per second) across Orders, Inventory and Payments services, each with its own PostgreSQL database. Today the Orders service drives 2PC over all three. Incidents: when Payments deploys, orders fail; once a coordinator crash froze a best-selling SKU for 11 minutes. Redesign it as a saga.
+A furniture and home-decor marketplace places about 300 orders per minute at peak (5 per second) across Orders, Inventory and Payments services, each with its own PostgreSQL database. Today the Orders service drives 2PC over all three. Incidents: when Payments deploys, orders fail; once a coordinator crash froze a best-selling SKU for 11 minutes. Redesign it as a saga.
 ::acceptance
 - Each step is a local transaction with a named compensation (or marked as the pivot).
 - Messages are published with a transactional outbox, and every consumer is idempotent.
@@ -1445,7 +1446,7 @@ Test cases worth having:
 - **Kafka exactly-once.** Kafka's transactional producer uses a transaction coordinator and a two-phase protocol (with transaction markers written to partitions) so that a consume-transform-produce step is atomic inside one cluster.
 - **Enterprise integration.** Java EE and .NET Framework applications on Windows used XA or MSDTC between a relational database and a message queue (for example IBM MQ or MSMQ). Many of these still run in banks and government systems.
 - **Microservice platforms.** Payments, ride-hailing, food-delivery and e-commerce systems publicly describe sagas, outboxes and idempotency keys rather than cross-service 2PC. A system like an online travel booking site, which must book a flight, a hotel and a cab from three different suppliers' APIs, has no choice: none of the suppliers will "prepare" for it.
-- **Infrastructure project platforms.** A contract-management system that releases a contractor payment (finance) and updates the measurement book (engineering) across two departments' systems typically uses a saga with an approval state ("payment initiated", "measurement locked") rather than 2PC, because the finance system is often an ERP with only an HTTP API.
+- **Hospital billing and insurance.** A hospital system that settles a cashless insurance claim (the insurer's system) and closes the patient's bill (the hospital's own database) typically uses a saga with explicit states ("claim submitted", "bill on hold", "claim approved") rather than 2PC, because the insurer exposes only an HTTP API and approvals can take hours.
 
 ## Interview questions
 
@@ -1548,7 +1549,7 @@ A team's ASP.NET Core service runs on Linux and uses `TransactionScope` around t
 - [ ] Both connections silently use separate local transactions with no error.
 > Distributed transactions in `System.Transactions` require MSDTC, which is Windows-only. PostgreSQL provides participant commands but no built-in cross-server coordinator.
 ::q single
-A cement order saga reserves stock, then charges credit. Credit fails. What is the correct next step?
+A phone order saga reserves stock, then charges credit. Credit fails. What is the correct next step?
 - [ ] Roll back the stock reservation's database transaction.
 - [x] Run the compensation: release the held stock in a new local transaction.
 - [ ] Leave the stock held; it will be used by the next order.

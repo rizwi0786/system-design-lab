@@ -86,7 +86,7 @@ Two consequences follow directly:
 
 ### The thread pool and why blocking is poison
 
-The .NET thread pool starts with roughly one thread per CPU core (so 4 on a 4-core container) and grows slowly, about one or two new threads per second, when queued work waits. That growth rate is deliberate: adding threads blindly hurts more than it helps.
+The .NET thread pool starts with roughly one thread per CPU core (so 4 on a 4-core container) and grows slowly, about one or two new threads per second, when queued work waits. That growth rate is deliberate: adding threads blindly hurts more than it helps. Since .NET 6 the pool injects threads faster when it sees a pool thread blocked in `Task.Wait` or `.Result`, which softens the problem below but does not remove it: every blocked thread still costs a stack and context switches, and injection still lags a sudden burst.
 
 Now the arithmetic for a service doing 200 requests/second where each request spends 50 ms waiting on PostgreSQL:
 
@@ -197,7 +197,7 @@ The loop on the right is the starvation spiral: blocked threads mean queued requ
 
 ## Step-by-step example
 
-We will build a small GST invoice reconciliation endpoint. Given a list of invoice ids, it loads each invoice, looks up the tax rate for its HSN code (a product classification code), and returns totals. Each step fixes a real problem.
+We will build a small GST invoice reconciliation endpoint for an online store that sells phones, clothes, groceries and toiletries. Given a list of invoice ids, it loads each invoice, looks up the tax rate for its HSN code (the product classification code printed on every GST invoice, such as 8517 for mobile phones), and returns totals. Each step fixes a real problem.
 
 ### Step 1 — the blocking version
 
@@ -232,7 +232,7 @@ The endpoint receives 50 ids. Serial awaits would take 50 × 50 ms = 2.5 s. We s
 
 ### Step 4 — a ValueTask cache for rates
 
-There are only a few dozen GST rate slabs. After the first lookup, `GetRateAsync` answers from a dictionary synchronously. Returning `ValueTask<decimal>` avoids allocating a `Task` for each of the thousands of cache hits per second.
+An online store sells products from a few hundred HSN codes, and GST has only a handful of rate slabs that change a few times a year. After the first lookup for a code, `GetRateAsync` answers from a dictionary synchronously. Returning `ValueTask<decimal>` avoids allocating a `Task` for each of the thousands of cache hits per second.
 
 ### Step 5 — stream the results
 
@@ -271,7 +271,7 @@ public interface IInvoiceRepository
 /// <summary>Stand-in for a PostgreSQL repository. Simulates ~20 ms of I/O without holding a thread.</summary>
 public sealed class FakeInvoiceRepository : IInvoiceRepository
 {
-    private static readonly string[] HsnCodes = ["2523", "7214", "8544", "9954"];
+    private static readonly string[] HsnCodes = ["8517", "6109", "2202", "3305"];   // phones, T-shirts, soft drinks, shampoo
 
     public async Task<Invoice?> LoadAsync(int id, CancellationToken ct)
     {
@@ -299,7 +299,7 @@ public sealed class FakeTaxRateSource : ITaxRateSource
     {
         Interlocked.Increment(ref Calls);
         await Task.Delay(30, ct);
-        return hsn switch { "2523" => 0.28m, "7214" => 0.18m, "8544" => 0.18m, "9954" => 0.12m, _ => 0.18m };
+        return hsn switch { "8517" => 0.18m, "6109" => 0.05m, "2202" => 0.40m, "3305" => 0.05m, _ => 0.18m };   // illustrative rates
     }
 }
 ```
@@ -455,7 +455,7 @@ public class InvoiceController : ControllerBase
 
 1. `.Result` blocks a pool thread per call: starvation under load.
 2. `Task.Run` adds a *second* thread to do the blocking on. Doubling the damage is not a fix.
-3. Serial `foreach`: 50 ids × 50 ms = 2.5 s for work that could take 100–200 ms.
+3. Serial `foreach`: 50 ids × 50 ms = 2.5 s for work that takes about 350 ms with 8 in flight (⌈50 ÷ 8⌉ = 7 waves × 50 ms).
 4. The discarded audit task: if it throws, nobody knows; if the request ends, nothing guarantees it finished.
 5. `async void`: an exception inside it tears down the process.
 
@@ -1015,7 +1015,7 @@ public sealed class CountingRateSource : IRateSource
     {
         Interlocked.Increment(ref Calls);
         await Task.Yield();
-        return hsn == "2523" ? 0.28m : 0.18m;
+        return hsn == "2202" ? 0.40m : 0.18m;
     }
 }
 ```
@@ -1033,13 +1033,13 @@ public class RateCacheTests
         var source = new CountingRateSource();
         var cache = new RateCache(source);
 
-        var first = await cache.GetAsync("2523", CancellationToken.None);
-        Assert.Equal(0.28m, first);
+        var first = await cache.GetAsync("2202", CancellationToken.None);
+        Assert.Equal(0.40m, first);
         Assert.Equal(1, source.Calls);
 
-        var second = cache.GetAsync("2523", CancellationToken.None);
+        var second = cache.GetAsync("2202", CancellationToken.None);
         Assert.True(second.IsCompletedSuccessfully);
-        Assert.Equal(0.28m, await second);
+        Assert.Equal(0.40m, await second);
         Assert.Equal(1, source.Calls);
     }
 
@@ -1048,8 +1048,8 @@ public class RateCacheTests
     {
         var source = new CountingRateSource();
         var cache = new RateCache(source);
-        Assert.Equal(0.28m, await cache.GetAsync("2523", CancellationToken.None));
-        Assert.Equal(0.18m, await cache.GetAsync("7214", CancellationToken.None));
+        Assert.Equal(0.40m, await cache.GetAsync("2202", CancellationToken.None));
+        Assert.Equal(0.18m, await cache.GetAsync("8517", CancellationToken.None));
         Assert.Equal(2, source.Calls);
     }
 }
@@ -1093,14 +1093,14 @@ public sealed class CountingRateSource : IRateSource
     {
         Interlocked.Increment(ref Calls);
         await Task.Yield();
-        return hsn == "2523" ? 0.28m : 0.18m;
+        return hsn == "2202" ? 0.40m : 0.18m;
     }
 }
 ```
 
 Two concurrent misses for the same key will both fetch here. The production implementation above coalesces them with an in-flight dictionary; that is a good extension.
 ::alternatives
-If the method were marked `async ValueTask<decimal>` and simply awaited everything, it would still work, but the compiler builds a state machine on every call, and the cache hit still avoids the heap allocation only because of pooling internals. The explicit split keeps the hot path trivially cheap and obviously correct.
+If the method were marked `async ValueTask<decimal>` and simply awaited everything, it would still work, and a synchronous cache hit would not allocate either (the builder stores the result straight in the `ValueTask`). But every call would still run the state-machine setup and the try/catch it generates. The explicit split keeps the hot path trivially cheap and makes the fast path obvious to the next reader.
 ::mistakes
 - Awaiting the returned `ValueTask` twice in a caller. Convert with `.AsTask()` if you must.
 - Capturing `ct` in a cached fetch shared by several callers (first caller cancels, everyone gets `OperationCanceledException`).
@@ -1155,9 +1155,9 @@ A smoke test worth having in every web project: resolve the endpoint's dependenc
 ## Real-world application
 
 - **Web APIs.** Every controller action and minimal API handler that touches a database or another service should be async. ASP.NET Core itself is built on this: Kestrel's request handling, middleware, model binding and JSON serialisation are all asynchronous, so one blocking call in your handler is the only thread-waster in the chain.
-- **Fan-out aggregation.** A dashboard page in an infrastructure-monitoring system that needs project progress, pending RFIs and weather data calls three services concurrently and responds in the time of the slowest one. Bound the fan-out when the number of calls depends on user input.
-- **Bulk imports.** Processing a 50,000-row Excel of toll transactions: stream rows with `IAsyncEnumerable`, process in bounded batches, and never hold the whole file in memory. [Background services](#/lesson/m03-background-services) moves such work off the request entirely.
-- **Client SDKs.** A reusable NuGet library (say, a client for a government portal API) should expose only async methods, use `ConfigureAwait(false)`, accept a `CancellationToken` everywhere, and never offer synchronous wrappers that call `.Result`.
+- **Fan-out aggregation.** A food-delivery home screen that needs nearby restaurants, active offers and the user's recent orders calls three services concurrently and responds in the time of the slowest one. Bound the fan-out when the number of calls depends on user input.
+- **Bulk imports.** Processing a 50,000-row bank settlement file of UPI transactions: stream rows with `IAsyncEnumerable`, process in bounded batches, and never hold the whole file in memory. [Background services](#/lesson/m03-background-services) moves such work off the request entirely.
+- **Client SDKs.** A reusable NuGet library (say, a client for a payment gateway or the GST portal API) should expose only async methods, use `ConfigureAwait(false)`, accept a `CancellationToken` everywhere, and never offer synchronous wrappers that call `.Result`.
 - **Thread-pool tuning is a last resort.** Teams sometimes raise `SetMinThreads` to 500 to survive a starvation incident. It works, and it hides the bug that will return at the next traffic level. Find the blocking call.
 
 ## Interview questions

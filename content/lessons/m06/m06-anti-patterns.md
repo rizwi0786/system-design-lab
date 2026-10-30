@@ -80,19 +80,19 @@ The fourteen anti-patterns, grouped by scale. Each has a symptom, a cause, a fix
 
 #### 1. God object
 
-- **Symptom:** one class with thousands of lines, dozens of dependencies, and a vague name (`ProjectManager`, `CommonService`). It's in most pull requests.
+- **Symptom:** one class with thousands of lines, dozens of dependencies, and a vague name (`OrderManager`, `CommonService`). It's in most pull requests.
 - **Cause:** "It's already got the database connection, I'll add it here." Convenience, repeated.
 - **Fix:** list the actors who change it ([SRP](#/lesson/m04-srp)), extract cohesive classes one at a time behind characterization tests, and leave a thin coordinator ([see Refactoring large classes](#/lesson/m07-refactoring-large-classes)).
 
 ```csharp
 // Symptom: 14 dependencies, unrelated methods.
-public class ProjectManager(AppDbContext db, ISmtp smtp, IPdf pdf, IGstApi gst, ISms sms, IStorage files /* ...8 more */)
+public class OrderManager(AppDbContext db, ISmtp smtp, IPdf pdf, IGstApi gst, ISms sms, IStorage files /* ...8 more */)
 {
-    public void CreateProject(...) { }
-    public decimal CalculateRaBill(...) { }
-    public byte[] PrintMpr(...) { }
+    public void PlaceOrder(...) { }
+    public decimal CalculateDeliveryFee(...) { }
+    public byte[] PrintInvoice(...) { }
     public void SendDelayAlerts(...) { }
-    public void ImportSurveyCsv(...) { }
+    public void ImportMenuCsv(...) { }
     // ... 60 more methods
 }
 ```
@@ -105,9 +105,9 @@ public class ProjectManager(AppDbContext db, ISmtp smtp, IPdf pdf, IGstApi gst, 
 
 ```csharp
 // Anemic: nothing stops an invalid state.
-public class PurchaseOrder { public string Status { get; set; } = "Draft"; public decimal Total { get; set; } public List<Line> Lines { get; set; } = new(); }
-service.Approve(po);      // the rule lives here...
-po.Status = "Approved";   // ...and this line elsewhere bypasses it.
+public class RefundRequest { public string Status { get; set; } = "Draft"; public decimal Total { get; set; } public List<Line> Lines { get; set; } = new(); }
+service.Approve(refund);      // the rule lives here...
+refund.Status = "Approved";   // ...and this line elsewhere bypasses it.
 ```
 
 **When it's fine.** Fowler calls the anemic model an anti-pattern *when you claim to be doing domain modelling*. It's a perfectly good choice when there's little behaviour to protect:
@@ -126,9 +126,9 @@ The test: are there invariants (rules that must *always* hold) that several code
 
 ```csharp
 // Golden hammer: a message broker for an in-process, synchronous lookup.
-var reply = await bus.RequestAsync<GetProjectName, ProjectNameReply>(new GetProjectName(id));   // 2 hops, a timeout and a broker for a dictionary lookup
+var reply = await bus.RequestAsync<GetRestaurantName, RestaurantNameReply>(new GetRestaurantName(id));   // 2 hops, a timeout and a broker for a dictionary lookup
 // Simpler and correct here:
-var name = projectNames.Get(id);
+var name = restaurantNames.Get(id);
 ```
 
 #### 4. Spaghetti code
@@ -139,13 +139,13 @@ var name = projectNames.Get(id);
 
 ```csharp
 // Spaghetti
-if (bill != null) { if (bill.Lines.Count > 0) { if (!isLocked || isAdmin) { if (mode == 2) { ... } else { if (retry) { ... } } } } }
+if (cart != null) { if (cart.Items.Count > 0) { if (!isLocked || isAdmin) { if (mode == 2) { ... } else { if (retry) { ... } } } } }
 
 // Guard clauses: each condition handled once, the main path is not indented.
-if (bill is null) throw new ArgumentNullException(nameof(bill));
-if (bill.Lines.Count == 0) return Result.Fail("Empty bill");
-if (isLocked && !isAdmin) return Result.Fail("Bill is locked");
-return mode == BillMode.Final ? Finalise(bill) : SaveDraft(bill, retry);
+if (cart is null) throw new ArgumentNullException(nameof(cart));
+if (cart.Items.Count == 0) return Result.Fail("Cart is empty");
+if (isLocked && !isAdmin) return Result.Fail("Cart is locked for payment");
+return mode == CheckoutMode.PlaceOrder ? PlaceOrder(cart) : SaveCart(cart, retry);
 ```
 
 #### 5. Lava flow
@@ -155,13 +155,13 @@ return mode == BillMode.Final ? Finalise(bill) : SaveDraft(bill, retry);
 - **Fix:** find what's really unused (code coverage in production-like tests, IDE "find references", logs or metrics on suspected paths), delete it in small pull requests, and rely on version control to bring it back if needed. Remove feature flags as soon as rollout finishes.
 
 ```csharp
-public decimal Calculate(Bill b)
+public decimal DeliveryFee(Order o)
 {
-    // var result = LegacyCalc(b);   // keep just in case
-    // if (useNewEngine) ...
-    return _engine.Calculate(b);
+    // var fee = LegacyFee(o);   // keep just in case
+    // if (useNewSurgeEngine) ...
+    return _feeEngine.Calculate(o);
 }
-[Obsolete] private decimal LegacyCalc(Bill b) { /* 300 lines, no callers */ return 0; }
+[Obsolete] private decimal LegacyFee(Order o) { /* 300 lines, no callers */ return 0; }
 ```
 
 #### 6. Copy-paste programming
@@ -171,28 +171,28 @@ public decimal Calculate(Bill b)
 - **Fix:** extract the *knowledge* into one place. But duplicated *code* that represents *different* rules may diverge, so don't merge it blindly ([see DRY, KISS and YAGNI](#/lesson/m04-dry-kiss-yagni)). The "rule of three" is a good trigger: refactor when the third copy appears.
 
 ```csharp
-// In BillingService
-var gst = Math.Round(amount * 0.18m, 2);
+// In CheckoutService (restaurant food is taxed at 5 % GST in India)
+var gst = Math.Round(amount * 0.05m, 2);
 // In InvoicePdf
-var gst = Math.Round(amount * 18 / 100, 2, MidpointRounding.AwayFromZero);   // different rounding!
+var gst = Math.Round(amount * 5 / 100, 2, MidpointRounding.AwayFromZero);    // different rounding!
 // In ExportCsv
-var gst = amount * 0.18m;                                                    // no rounding at all
+var gst = amount * 0.05m;                                                    // no rounding at all
 // Fix: one GstCalculator used by all three.
 ```
 
 #### 7. Magic numbers and strings
 
-- **Symptom:** unexplained literals: `if (status == 3)`, `amount * 0.05m`, `if (role == "PMC_ADMIN")`, `Task.Delay(86400000)`.
+- **Symptom:** unexplained literals: `if (status == 3)`, `amount * 0.05m`, `if (role == "OPS_ADMIN")`, `Task.Delay(86400000)`.
 - **Cause:** "I know what it means." The next person doesn't, and the literal gets copied.
 - **Fix:** named constants for true constants (days in a week); **enums** for closed sets; **options** (configuration) for business values that may change; **value objects** for concepts.
 
 ```csharp
 // Magic
-if (order.Status == 3 && order.Total > 500000) RequireSecondApproval();
+if (refund.Status == 3 && refund.Total > 5000) RequireSecondApproval();
 await Task.Delay(86400000);
 
 // Named
-if (order.Status == OrderStatus.Submitted && order.Total > _policy.SecondApprovalThreshold) RequireSecondApproval();
+if (refund.Status == RefundStatus.Submitted && refund.Total > _policy.SecondApprovalThreshold) RequireSecondApproval();
 await Task.Delay(TimeSpan.FromDays(1));
 ```
 
@@ -200,15 +200,15 @@ await Task.Delay(TimeSpan.FromDays(1));
 
 - **Symptom:** domain concepts passed around as `string`, `int` and `decimal`: `void Transfer(string from, string to, decimal amount, string currency)`. Arguments get swapped, validation is repeated everywhere.
 - **Cause:** primitives are quick to type; creating a type feels like overhead.
-- **Fix:** small **value objects** (often `readonly record struct`) that validate once on creation: `Money`, `Gstin`, `PinCode`, `ProjectCode`. The compiler then catches swapped arguments.
+- **Fix:** small **value objects** (often `readonly record struct`) that validate once on creation: `Money`, `Gstin`, `PinCode`, `OrderNumber`. The compiler then catches swapped arguments.
 
 ```csharp
-// Primitive obsession: which string is the GSTIN? Is the amount in rupees or paise?
-public void RegisterVendor(string name, string gstin, string pan, string pin, decimal creditLimit) { ... }
-RegisterVendor("Shree Traders", "560001", "27ABCDE1234F1Z5", "ABCDE1234F", 500000);   // compiles; three arguments swapped
+// Primitive obsession: which string is the GSTIN? Is the fee in rupees or paise?
+public void RegisterRestaurant(string name, string gstin, string fssaiLicence, string pin, decimal packagingFee) { ... }
+RegisterRestaurant("Meghana Biryani", "560034", "29ABCDE1234F1Z5", "11224333000123", 25);   // compiles; three arguments swapped
 
 // Value objects: swapping no longer compiles.
-public void RegisterVendor(string name, Gstin gstin, PinCode pin, Money creditLimit) { ... }
+public void RegisterRestaurant(string name, Gstin gstin, FssaiLicence fssai, PinCode pin, Money packagingFee) { ... }
 ```
 
 #### 9. Singleton abuse
@@ -230,7 +230,7 @@ builder.Services.AddSingleton(TimeProvider.System);
 
 - **Symptom:** classes asking a global container for what they need: `var repo = ServiceLocator.Get<IRepo>();` or `_provider.GetService<IEmailSender>()` deep inside business code. The constructor lies about the class's dependencies.
 - **Cause:** retrofitting DI into legacy code; avoiding "long constructors"; framework habits.
-- **Fix:** constructor injection. A long constructor is a *useful* warning (maybe a god object). Resolving from `IServiceProvider` is fine in the **composition root**, in framework integration points (factories, middleware), and for keyed choices made at runtime — kept in one small, testable resolver ([see DI versus service locator](#/lesson/m04-di-vs-service-locator)).
+- **Fix:** constructor injection. A long constructor is a *useful* warning (maybe a god object). Resolving from `IServiceProvider` is fine in the **composition root**, in framework integration points (factories, middleware), and for choices made at runtime — kept in one small, testable resolver. Since .NET 8, keyed services (`AddKeyedScoped`, `[FromKeyedServices("upi")]`) remove many of those runtime lookups too ([see DI versus service locator](#/lesson/m04-di-vs-service-locator)).
 
 ```csharp
 // Hidden dependencies: the test has to know to register IClock, IMailer and IInvoiceRepo globally.
@@ -256,7 +256,7 @@ public class ReminderJob
 ```csharp
 // Premature: a hand-rolled string cache to "save allocations" in an endpoint that then makes 50 SQL round trips.
 private static readonly ConcurrentDictionary<int, string> _labelCache = new();
-foreach (var id in ids) { var p = await db.Projects.FindAsync(id); ... }   // the real cost: N+1 queries
+foreach (var id in ids) { var r = await db.Restaurants.FindAsync(id); ... }   // the real cost: N+1 queries
 ```
 
 #### 12. Cargo cult programming
@@ -267,10 +267,10 @@ foreach (var id in ids) { var p = await db.Projects.FindAsync(id); ... }   // th
 
 ```csharp
 // Cargo cult: interface + factory + mediator for a single, never-replaced class.
-public interface IProjectNameFormatter { string Format(Project p); }
-public class ProjectNameFormatter : IProjectNameFormatter { public string Format(Project p) => p.Code + " " + p.Name; }
-public interface IProjectNameFormatterFactory { IProjectNameFormatter Create(); }
-// A static method or an extension method would do: p.DisplayName()
+public interface IRestaurantNameFormatter { string Format(Restaurant r); }
+public class RestaurantNameFormatter : IRestaurantNameFormatter { public string Format(Restaurant r) => r.Name + ", " + r.Area; }
+public interface IRestaurantNameFormatterFactory { IRestaurantNameFormatter Create(); }
+// A static method or an extension method would do: r.DisplayName()
 ```
 
 #### 13. Big ball of mud
@@ -280,11 +280,11 @@ public interface IProjectNameFormatterFactory { IProjectNameFormatter Create(); 
 - **Fix:** don't rewrite it all. Draw the current dependency graph, pick module boundaries along business capabilities, enforce them (separate projects, internal types, architecture tests), and move features one by one — the strangler approach ([see Refactoring legacy code](#/lesson/m04-refactoring-legacy) and [Modular monolith](#/lesson/m02-modular-monolith)).
 
 ```csharp
-// Mud: the billing endpoint reaches straight into survey and HR tables.
-var hours = db.SurveyCrewAttendance.Where(...).Sum(a => a.Hours);   // billing depends on HR's table layout
-var rate  = db.SurveyRates.First(...);                               // and on survey's
-// Boundary: billing asks the HR module's public interface instead.
-var hours = await hrModule.GetBillableHoursAsync(crewId, month, ct);
+// Mud: the rider-payouts endpoint reaches straight into the shifts and incentives tables of other features.
+var hours = db.RiderShifts.Where(...).Sum(s => s.Hours);     // payouts depends on the rostering feature's table layout
+var bonus = db.ZoneIncentives.First(...);                    // and on the marketing team's
+// Boundary: payouts asks the riders module's public interface instead.
+var hours = await ridersModule.GetPayableHoursAsync(riderId, week, ct);
 ```
 
 #### 14. Distributed monolith
@@ -295,10 +295,10 @@ var hours = await hrModule.GetBillableHoursAsync(crewId, month, ct);
 
 ```csharp
 // Distributed monolith: a synchronous chain where any one failure fails the whole request.
-var project  = await projectApi.GetAsync(id);            // service A
-var budget   = await budgetApi.GetAsync(project.Id);     // service B, needs A's result
-var progress = await progressApi.GetAsync(project.Id);   // service C
-var risk     = await riskApi.ScoreAsync(budget, progress);   // service D, needs B and C
+var order   = await orderApi.GetAsync(id);                          // service A
+var kitchen = await restaurantApi.GetPrepStatusAsync(order.Id);      // service B, needs A's result
+var rider   = await riderApi.GetLocationAsync(order.RiderId);        // service C
+var eta     = await etaApi.EstimateAsync(kitchen, rider);            // service D, needs B and C
 ```
 
 ---
@@ -350,83 +350,83 @@ Read the arrows as "tends to lead to". Small, code-level habits on the left (mag
 
 ```mermaid
 classDiagram
-    class ProjectManager {
-        +CreateProject()
-        +CalculateRaBill()
-        +PrintMpr()
+    class OrderManager {
+        +PlaceOrder()
+        +CalculateDeliveryFee()
+        +PrintInvoice()
         +SendDelayAlerts()
-        +ImportSurveyCsv()
-        +ApprovePurchaseOrder()
+        +ImportMenuCsv()
+        +ApproveRefund()
     }
-    class ProjectRegistry {
-        +CreateProject()
+    class OrderPlacement {
+        +Place()
     }
-    class RaBillCalculator {
+    class DeliveryFeeCalculator {
         +Calculate()
     }
-    class MprRenderer {
+    class InvoiceRenderer {
         +Render()
     }
     class DelayAlertJob {
         +RunAsync()
     }
-    class SurveyImporter {
+    class MenuImporter {
         +ImportAsync()
     }
-    class PurchaseOrder {
+    class RefundRequest {
         +Approve(approver)
     }
-    ProjectManager ..> ProjectRegistry : becomes
-    ProjectManager ..> RaBillCalculator : becomes
-    ProjectManager ..> MprRenderer : becomes
-    ProjectManager ..> DelayAlertJob : becomes
-    ProjectManager ..> SurveyImporter : becomes
-    ProjectManager ..> PurchaseOrder : rule moves into entity
+    OrderManager ..> OrderPlacement : becomes
+    OrderManager ..> DeliveryFeeCalculator : becomes
+    OrderManager ..> InvoiceRenderer : becomes
+    OrderManager ..> DelayAlertJob : becomes
+    OrderManager ..> MenuImporter : becomes
+    OrderManager ..> RefundRequest : rule moves into entity
 ```
 
-The god object on the left is split by *who changes what*. Most methods become their own focused classes. One case is different: the purchase-order approval rule doesn't become another service. It moves *into* the `PurchaseOrder` entity, because it protects the entity's own consistency. That one arrow fixes an anemic model at the same time as the god object.
+The god object on the left is split by *who changes what*. Most methods become their own focused classes. One case is different: the refund approval rule doesn't become another service. It moves *into* the `RefundRequest` entity, because it protects the entity's own consistency. That one arrow fixes an anemic model at the same time as the god object.
 
 ### Distributed monolith at runtime
 
 ```mermaid
 sequenceDiagram
-    participant UI as Dashboard
-    participant A as Project service
-    participant B as Budget service
-    participant C as Progress service
-    participant D as Risk service
-    UI->>A: GET /projects/42/summary
-    A->>B: GET /budgets/42
+    participant UI as Order tracking page
+    participant A as Order service
+    participant B as Restaurant service
+    participant C as Rider service
+    participant D as ETA service
+    UI->>A: GET /orders/42/tracking
+    A->>B: GET /restaurants/7/prep-status/42
     B-->>A: 200 (180 ms)
-    A->>C: GET /progress/42
+    A->>C: GET /riders/19/location
     C-->>A: 200 (220 ms)
-    A->>D: POST /risk/score
+    A->>D: POST /eta/estimate
     D--xA: timeout after 2 s
     A-->>UI: 500 Internal Server Error
 ```
 
-One page load depends on four services being up *at the same time*, and the latencies add up. If each service is independently available 99.5 % of the time (an illustrative figure), the chance that all four are up together is roughly 0.995⁴ ≈ 98 %, which is worse than any single service. A failure in the risk service, which the dashboard could live without, breaks the whole page. The fixes: show the summary without the risk score when it's unavailable, precompute the summary asynchronously from events, or merge services that always change together.
+One look at "where is my food?" depends on four services being up *at the same time*, and the latencies add up. If each service is independently available 99.5 % of the time (an illustrative figure), the chance that all four are up together is roughly 0.995⁴ ≈ 98 %, which is worse than any single service. A failure in the ETA service, which the page could live without (it could show the last estimate, or "arriving soon"), breaks the whole page. The fixes: call independent services in parallel with timeouts, show the page without the ETA when it's unavailable, precompute the tracking view asynchronously from order and rider events, or merge services that always change together.
 
 ## Step-by-step example
 
-Here is a small piece of procurement code that contains six anti-patterns at once. We'll fix it in safe steps.
+Here is a small piece of code from a food-delivery support tool. A support agent raises a refund for a customer ("the paneer tikka never arrived"), and a second person approves it. The code contains six anti-patterns at once. We'll fix it in safe steps.
 
 ```csharp
 // BEFORE: magic numbers, primitive obsession, singleton abuse, service locator, anemic model, copy-paste.
-public class PoHelper
+public class RefundHelper
 {
-    public string Approve(int poId, string userId)
+    public string Approve(int refundId, string userId)
     {
         var db = Db.Instance;                                     // singleton abuse
-        var po = db.PurchaseOrders.Find(poId);
-        if (po.Status != 1) return "ERR1";                        // magic number + magic string
-        if (po.CreatedBy == userId) return "ERR2";
-        var limit = userId.StartsWith("PM") ? 5000000 : 500000;   // magic numbers, role encoded in an id string
-        if (po.Total > limit) return "ERR3";
-        po.Status = 2;                                            // anemic: anyone can set this
-        po.ApprovedOn = DateTime.Now;                             // hidden clock
+        var r = db.Refunds.Find(refundId);
+        if (r.Status != 1) return "ERR1";                         // magic number + magic string
+        if (r.CreatedBy == userId) return "ERR2";
+        var limit = userId.StartsWith("TL") ? 5000 : 500;         // magic numbers, role encoded in an id string
+        if (r.Total > limit) return "ERR3";
+        r.Status = 2;                                             // anemic: anyone can set this
+        r.ApprovedOn = DateTime.Now;                              // hidden clock
         var mailer = ServiceLocator.Get<IMailer>();               // service locator
-        mailer.Send(po.CreatedBy, "PO " + poId + " approved");
+        mailer.Send(r.CreatedBy, "Refund " + refundId + " approved");
         db.SaveChanges();
         return "OK";
     }
@@ -435,47 +435,47 @@ public class PoHelper
 
 ### Step 1 — pin current behaviour with tests
 
-Before changing anything, write **characterization tests** (tests that record what the code does today, right or wrong). Here: a draft PO returns "ERR1", self-approval returns "ERR2", ₹6,00,000 approved by a non-PM returns "ERR3", and the happy path returns "OK". Since `Db.Instance` and `ServiceLocator` are global, these tests are awkward to write, which is itself evidence of the problem. A common first move is to add a seam: an internal constructor that accepts the database and mailer, while the old parameterless path still uses the globals.
+Before changing anything, write **characterization tests** (tests that record what the code does today, right or wrong). Here: a draft refund returns "ERR1", self-approval returns "ERR2", a ₹600 refund approved by a support agent (limit ₹500) returns "ERR3", and the happy path returns "OK". Since `Db.Instance` and `ServiceLocator` are global, these tests are awkward to write, which is itself evidence of the problem. A common first move is to add a seam: an internal constructor that accepts the database and mailer, while the old parameterless path still uses the globals.
 
 ### Step 2 — name the magic
 
-Replace `1` and `2` with an enum (`PoStatus.Submitted`, `PoStatus.Approved`). Replace the limits with an options class (`ApprovalPolicy` with per-role limits) because finance will change them. Replace "ERR1"... with a result type that carries a reason.
+Replace `1` and `2` with an enum (`RefundStatus.Submitted`, `RefundStatus.Approved`). Replace the limits with an options class (`RefundPolicyOptions` with per-role limits) because operations will change them, for example raising them during a festival-week surge. Replace "ERR1"... with a result type that carries a reason.
 
 ### Step 3 — make concepts types
 
-The role hidden in `userId.StartsWith("PM")` becomes an `Approver` record with a `Role` and a limit. Amounts become `Money`. Now the compiler stops "amount in paise" and "amount in rupees" from mixing.
+The role hidden in `userId.StartsWith("TL")` becomes an `Approver` record with a `Role` and a limit. Amounts become `Money`. Now the compiler stops "amount in paise" and "amount in rupees" from mixing.
 
 ### Step 4 — move the rules into the entity
 
-`PurchaseOrder.Approve(approver, now)` enforces: must be Submitted, approver isn't the creator, total within the approver's limit. The `Status` setter becomes private. Now *no other code path* can approve without these checks. That's the anemic-model fix.
+`RefundRequest.Approve(approver, now)` enforces: must be Submitted, approver isn't the requester, total within the approver's limit. The `Status` setter becomes private. Now *no other code path* can approve without these checks. That's the anemic-model fix.
 
 ### Step 5 — inject dependencies
 
-`Db.Instance`, `DateTime.Now` and `ServiceLocator.Get` become constructor parameters: a repository, a `TimeProvider` and a mailer. The application service shrinks to: load, call `po.Approve(...)`, save, notify.
+`Db.Instance`, `DateTime.Now` and `ServiceLocator.Get` become constructor parameters: a repository, a `TimeProvider` and a mailer. The application service shrinks to: load, call `refund.Approve(...)`, save, notify.
 
 ### Step 6 — delete the old path
 
-Once callers use the new service, delete `PoHelper`. Don't leave it "just in case": that's how lava flows start.
+Once callers use the new service, delete `RefundHelper`. Don't leave it "just in case": that's how lava flows start.
 
 ## Production-style C# implementation
 
 The result of the refactoring, as a small ASP.NET Core feature.
 
 ```text
-Procurement.Api/
+Refunds.Api/
   Program.cs
-  Procurement/
-    ValueObjects.cs          Money, Gstin
-    PurchaseOrder.cs         rich entity with invariants
+  Refunds/
+    ValueObjects.cs          Money, OrderNumber
+    RefundRequest.cs         rich entity with invariants
     ApprovalPolicy.cs        options instead of magic numbers
-    PurchaseOrderStore.cs    repository (in-memory stand-in)
-    ApprovePurchaseOrder.cs  thin application service
+    RefundStore.cs           repository (in-memory stand-in) and notifier
+    ApproveRefund.cs         thin application service
 ```
 
-```csharp file=Procurement/ValueObjects.cs
+```csharp file=Refunds/ValueObjects.cs
 using System.Text.RegularExpressions;
 
-namespace Procurement.Domain;
+namespace Refunds.Domain;
 
 /// <summary>Rupee amount. Fixes primitive obsession: amounts can't be confused with quantities or paise.</summary>
 public readonly record struct Money : IComparable<Money>
@@ -497,37 +497,37 @@ public readonly record struct Money : IComparable<Money>
     public override string ToString() => $"₹{Rupees:N2}";
 }
 
-/// <summary>GST identification number. Validates structure only (2-digit state code, PAN, entity, 'Z', check char);
-/// the check-character algorithm is out of scope here.</summary>
-public sealed partial record Gstin
+/// <summary>Order number such as ORD-20260412. Validated once, so no code downstream re-checks the format.</summary>
+public sealed partial record OrderNumber
 {
     public string Value { get; }
 
-    private Gstin(string value) => Value = value;
+    private OrderNumber(string value) => Value = value;
 
-    public static bool TryParse(string? text, out Gstin? gstin)
+    public static bool TryParse(string? text, out OrderNumber? orderNumber)
     {
         var v = text?.Trim().ToUpperInvariant() ?? "";
-        gstin = Pattern().IsMatch(v) ? new Gstin(v) : null;
-        return gstin is not null;
+        orderNumber = Pattern().IsMatch(v) ? new OrderNumber(v) : null;
+        return orderNumber is not null;
     }
 
-    public static Gstin Parse(string text) =>
-        TryParse(text, out var g) ? g! : throw new FormatException($"'{text}' is not a valid GSTIN format.");
+    public static OrderNumber Parse(string text) =>
+        TryParse(text, out var o) ? o! : throw new FormatException($"'{text}' is not a valid order number.");
 
     public override string ToString() => Value;
 
-    [GeneratedRegex("^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$")]
+    [GeneratedRegex("^ORD-[0-9]{8}$")]
     private static partial Regex Pattern();
 }
 ```
 
-```csharp file=Procurement/PurchaseOrder.cs
-namespace Procurement.Domain;
+```csharp file=Refunds/RefundRequest.cs
+namespace Refunds.Domain;
 
-public enum PoStatus { Draft, Submitted, Approved, Cancelled }
+public enum RefundStatus { Draft, Submitted, Approved, Rejected }
 
-public sealed record PoLine(string ItemCode, decimal Quantity, Money UnitPrice)
+/// <summary>One refunded item, for example 1 × Paneer tikka at ₹280 that never arrived.</summary>
+public sealed record RefundLine(string ItemCode, decimal Quantity, Money UnitPrice)
 {
     public Money Total => UnitPrice * Quantity;
 }
@@ -536,34 +536,36 @@ public sealed record Approver(string UserId, string Role, Money Limit);
 
 public sealed record DomainResult(bool Succeeded, string? Error)
 {
+    public bool IsNotFound { get; init; }
     public static readonly DomainResult Ok = new(true, null);
     public static DomainResult Fail(string error) => new(false, error);
+    public static DomainResult NotFound(string error) => new(false, error) { IsNotFound = true };
 }
 
 /// <summary>Rich entity: every state change goes through a method that enforces the invariants.</summary>
-public sealed class PurchaseOrder
+public sealed class RefundRequest
 {
-    private readonly List<PoLine> _lines = new();
+    private readonly List<RefundLine> _lines = new();
 
-    public PurchaseOrder(Guid id, string createdBy, Gstin vendor)
+    public RefundRequest(Guid id, string requestedBy, OrderNumber order)
     {
         Id = id;
-        CreatedBy = string.IsNullOrWhiteSpace(createdBy) ? throw new ArgumentException("Creator required.", nameof(createdBy)) : createdBy;
-        Vendor = vendor;
+        RequestedBy = string.IsNullOrWhiteSpace(requestedBy) ? throw new ArgumentException("Requester required.", nameof(requestedBy)) : requestedBy;
+        Order = order;
     }
 
     public Guid Id { get; }
-    public string CreatedBy { get; }
-    public Gstin Vendor { get; }
-    public PoStatus Status { get; private set; } = PoStatus.Draft;
+    public string RequestedBy { get; }
+    public OrderNumber Order { get; }
+    public RefundStatus Status { get; private set; } = RefundStatus.Draft;
     public string? ApprovedBy { get; private set; }
     public DateTimeOffset? ApprovedAt { get; private set; }
-    public IReadOnlyList<PoLine> Lines => _lines;
+    public IReadOnlyList<RefundLine> Lines => _lines;
     public Money Total => _lines.Aggregate(Money.Zero, (sum, l) => sum + l.Total);
 
-    public DomainResult AddLine(PoLine line)
+    public DomainResult AddLine(RefundLine line)
     {
-        if (Status != PoStatus.Draft) return DomainResult.Fail("Lines can only be added to a draft order.");
+        if (Status != RefundStatus.Draft) return DomainResult.Fail("Lines can only be added to a draft refund.");
         if (line.Quantity <= 0) return DomainResult.Fail("Quantity must be positive.");
         _lines.Add(line);
         return DomainResult.Ok;
@@ -571,18 +573,18 @@ public sealed class PurchaseOrder
 
     public DomainResult Submit()
     {
-        if (Status != PoStatus.Draft) return DomainResult.Fail($"Cannot submit an order that is {Status}.");
-        if (_lines.Count == 0) return DomainResult.Fail("An order needs at least one line.");
-        Status = PoStatus.Submitted;
+        if (Status != RefundStatus.Draft) return DomainResult.Fail($"Cannot submit a refund that is {Status}.");
+        if (_lines.Count == 0) return DomainResult.Fail("A refund needs at least one line.");
+        Status = RefundStatus.Submitted;
         return DomainResult.Ok;
     }
 
     public DomainResult Approve(Approver approver, DateTimeOffset now)
     {
-        if (Status != PoStatus.Submitted) return DomainResult.Fail($"Cannot approve an order that is {Status}.");
-        if (string.Equals(approver.UserId, CreatedBy, StringComparison.OrdinalIgnoreCase)) return DomainResult.Fail("You cannot approve your own order.");
-        if (Total > approver.Limit) return DomainResult.Fail($"Total {Total} exceeds {approver.Role} limit {approver.Limit}.");
-        Status = PoStatus.Approved;
+        if (Status != RefundStatus.Submitted) return DomainResult.Fail($"Cannot approve a refund that is {Status}.");
+        if (string.Equals(approver.UserId, RequestedBy, StringComparison.OrdinalIgnoreCase)) return DomainResult.Fail("You cannot approve a refund you requested.");
+        if (Total > approver.Limit) return DomainResult.Fail($"Total {Total} exceeds the {approver.Role} limit of {approver.Limit}.");
+        Status = RefundStatus.Approved;
         ApprovedBy = approver.UserId;
         ApprovedAt = now;
         return DomainResult.Ok;
@@ -590,19 +592,19 @@ public sealed class PurchaseOrder
 }
 ```
 
-```csharp file=Procurement/ApprovalPolicy.cs
-using Procurement.Domain;
+```csharp file=Refunds/ApprovalPolicy.cs
+using Refunds.Domain;
 
-namespace Procurement.Application;
+namespace Refunds.Application;
 
-/// <summary>Replaces magic numbers. Finance edits these in configuration, not in code.</summary>
-public sealed class ApprovalPolicyOptions
+/// <summary>Replaces magic numbers. Operations edits these in configuration, not in code.</summary>
+public sealed class RefundPolicyOptions
 {
     public Dictionary<string, decimal> LimitsByRole { get; set; } = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["SiteEngineer"] = 5_00_000m,
-        ["ProjectManager"] = 50_00_000m,
-        ["RegionalHead"] = 5_00_00_000m,
+        ["SupportAgent"] = 500m,
+        ["TeamLead"] = 5_000m,
+        ["OpsManager"] = 50_000m,
     };
 }
 
@@ -617,116 +619,128 @@ public sealed class InMemoryUserDirectory(Dictionary<string, string> roles) : IU
 }
 ```
 
-```csharp file=Procurement/PurchaseOrderStore.cs
+```csharp file=Refunds/RefundStore.cs
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
-using Procurement.Domain;
+using Refunds.Domain;
 
-namespace Procurement.Application;
+namespace Refunds.Application;
 
-public interface IPurchaseOrderStore
+public interface IRefundStore
 {
-    Task<PurchaseOrder?> FindAsync(Guid id, CancellationToken ct);
-    Task SaveAsync(PurchaseOrder order, CancellationToken ct);
+    Task<RefundRequest?> FindAsync(Guid id, CancellationToken ct);
+    Task SaveAsync(RefundRequest refund, CancellationToken ct);
 }
 
-/// <summary>Stand-in. A PostgreSQL version would map PurchaseOrder through EF Core with private-setter support.</summary>
-public sealed class InMemoryPurchaseOrderStore : IPurchaseOrderStore
+/// <summary>Stand-in. A PostgreSQL version would map RefundRequest through EF Core (private setters, a backing
+/// field for lines) and use a concurrency token so two approvers clicking at once can't both succeed.</summary>
+public sealed class InMemoryRefundStore : IRefundStore
 {
-    private readonly ConcurrentDictionary<Guid, PurchaseOrder> _orders = new();
-    public Task<PurchaseOrder?> FindAsync(Guid id, CancellationToken ct) => Task.FromResult(_orders.TryGetValue(id, out var o) ? o : null);
-    public Task SaveAsync(PurchaseOrder order, CancellationToken ct) { _orders[order.Id] = order; return Task.CompletedTask; }
+    private readonly ConcurrentDictionary<Guid, RefundRequest> _refunds = new();
+    public Task<RefundRequest?> FindAsync(Guid id, CancellationToken ct) => Task.FromResult(_refunds.TryGetValue(id, out var r) ? r : null);
+    public Task SaveAsync(RefundRequest refund, CancellationToken ct) { _refunds[refund.Id] = refund; return Task.CompletedTask; }
 }
 
-public interface IApprovalNotifier
+public interface IRefundNotifier
 {
-    Task OrderApprovedAsync(PurchaseOrder order, CancellationToken ct);
+    Task RefundApprovedAsync(RefundRequest refund, CancellationToken ct);
 }
 
-public sealed class LoggingApprovalNotifier(ILogger<LoggingApprovalNotifier> logger) : IApprovalNotifier
+public sealed class LoggingRefundNotifier(ILogger<LoggingRefundNotifier> logger) : IRefundNotifier
 {
-    public Task OrderApprovedAsync(PurchaseOrder order, CancellationToken ct)
+    public Task RefundApprovedAsync(RefundRequest refund, CancellationToken ct)
     {
-        logger.LogInformation("PO {Id} approved by {User}; notify {Creator}", order.Id, order.ApprovedBy, order.CreatedBy);
+        logger.LogInformation("Refund {Id} for {Order} approved by {User}; notify {Requester}",
+            refund.Id, refund.Order, refund.ApprovedBy, refund.RequestedBy);
         return Task.CompletedTask;
     }
 }
 ```
 
-```csharp file=Procurement/ApprovePurchaseOrder.cs
+```csharp file=Refunds/ApproveRefund.cs
 using Microsoft.Extensions.Options;
-using Procurement.Domain;
+using Refunds.Domain;
 
-namespace Procurement.Application;
+namespace Refunds.Application;
 
 /// <summary>Thin application service: load, delegate to the entity, save, notify. Every dependency is visible.</summary>
-public sealed class ApprovePurchaseOrder(
-    IPurchaseOrderStore store,
+public sealed class ApproveRefund(
+    IRefundStore store,
     IUserDirectory users,
-    IOptions<ApprovalPolicyOptions> policy,
+    IOptions<RefundPolicyOptions> policy,
     TimeProvider clock,
-    IApprovalNotifier notifier)
+    IRefundNotifier notifier)
 {
-    public async Task<DomainResult> HandleAsync(Guid orderId, string approverUserId, CancellationToken ct)
+    public async Task<DomainResult> HandleAsync(Guid refundId, string approverUserId, CancellationToken ct)
     {
-        var order = await store.FindAsync(orderId, ct);
-        if (order is null) return DomainResult.Fail("Order not found.");
+        var refund = await store.FindAsync(refundId, ct);
+        if (refund is null) return DomainResult.NotFound("Refund not found.");
 
         var role = users.RoleOf(approverUserId);
         if (role is null || !policy.Value.LimitsByRole.TryGetValue(role, out var limit))
             return DomainResult.Fail("You are not an approver.");
 
-        var result = order.Approve(new Approver(approverUserId, role, new Money(limit)), clock.GetUtcNow());
+        var result = refund.Approve(new Approver(approverUserId, role, new Money(limit)), clock.GetUtcNow());
         if (!result.Succeeded) return result;
 
-        await store.SaveAsync(order, ct);
-        await notifier.OrderApprovedAsync(order, ct);
+        await store.SaveAsync(refund, ct);
+        await notifier.RefundApprovedAsync(refund, ct);
         return result;
     }
 }
 ```
 
 ```csharp file=Program.cs
-using Procurement.Application;
+using Refunds.Application;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.Configure<ApprovalPolicyOptions>(builder.Configuration.GetSection("Procurement:Approval"));
+builder.Services.Configure<RefundPolicyOptions>(builder.Configuration.GetSection("Refunds:Approval"));
 builder.Services.AddSingleton(TimeProvider.System);   // one instance, injected — not a static singleton
-builder.Services.AddSingleton<IPurchaseOrderStore, InMemoryPurchaseOrderStore>();
+builder.Services.AddSingleton<IRefundStore, InMemoryRefundStore>();
 builder.Services.AddSingleton<IUserDirectory>(new InMemoryUserDirectory(new Dictionary<string, string>
 {
-    ["anita"] = "SiteEngineer",
-    ["rahul"] = "ProjectManager",
+    ["anita"] = "SupportAgent",
+    ["rahul"] = "TeamLead",
 }));
-builder.Services.AddSingleton<IApprovalNotifier, LoggingApprovalNotifier>();
-builder.Services.AddScoped<ApprovePurchaseOrder>();
+builder.Services.AddSingleton<IRefundNotifier, LoggingRefundNotifier>();
+builder.Services.AddScoped<ApproveRefund>();
 
 var app = builder.Build();
 
-app.MapPost("/purchase-orders/{id:guid}/approve", async (Guid id, ApproveRequest req, ApprovePurchaseOrder handler, CancellationToken ct) =>
+app.MapPost("/refunds/{id:guid}/approve", async (Guid id, ApproveRefundRequest req, ApproveRefund handler, CancellationToken ct) =>
 {
+    // In a real app the approver comes from the authenticated user (HttpContext.User), never from the request body.
     var result = await handler.HandleAsync(id, req.ApproverUserId, ct);
-    return result.Succeeded ? Results.NoContent() : Results.Problem(result.Error, statusCode: StatusCodes.Status422UnprocessableEntity);
+    if (result.Succeeded) return Results.NoContent();
+    return result.IsNotFound
+        ? Results.NotFound()
+        : Results.Problem(result.Error, statusCode: StatusCodes.Status422UnprocessableEntity);
 });
 
 app.Run();
 
-public sealed record ApproveRequest(string ApproverUserId);
+public sealed record ApproveRefundRequest(string ApproverUserId);
 ```
 
 How each anti-pattern was removed:
 
 | Anti-pattern | Where it went |
 |---|---|
-| Magic numbers/strings | `PoStatus` enum; `ApprovalPolicyOptions` from configuration; `DomainResult` with readable errors |
-| Primitive obsession | `Money`, `Gstin`, `Approver` |
-| Anemic model | `PurchaseOrder` methods enforce invariants; private setters |
+| Magic numbers/strings | `RefundStatus` enum; `RefundPolicyOptions` from configuration; `DomainResult` with readable errors |
+| Primitive obsession | `Money`, `OrderNumber`, `Approver` |
+| Anemic model | `RefundRequest` methods enforce invariants; private setters |
 | Singleton abuse | `TimeProvider` and the store are DI singletons, injected |
-| Service locator | Every dependency is a constructor parameter of `ApprovePurchaseOrder` |
-| God object | `PoHelper` replaced by an entity plus one small use-case class |
+| Service locator | Every dependency is a constructor parameter of `ApproveRefund` |
+| God object | `RefundHelper` replaced by an entity plus one small use-case class |
 
 Note that `Approve` takes `now` as a parameter instead of a `TimeProvider`. Entities stay free of infrastructure; the application service supplies the time.
+
+What a senior reviewer would still ask before this ships:
+
+- **Concurrency.** Two team leads clicking "approve" at the same moment both load a `Submitted` refund. With PostgreSQL, map a concurrency token (for example the `xmin` system column, or a `version` column) so the second save fails with a conflict instead of approving twice.
+- **Reliable notification.** If the process dies between `SaveAsync` and `RefundApprovedAsync`, the customer is never told. Write the notification to an outbox table in the same transaction and send it from a background worker.
+- **Identity.** The approver must come from the signed-in user's claims, not from the request body, or anyone can approve as anyone.
 
 ## Bad design vs good design
 
@@ -746,7 +760,7 @@ Taking a shortcut on purpose, with a ticket and a date to fix it, is a business 
 
 ## Practical playground
 
-The playground shows primitive obsession causing a real bug: the vendor's PIN code and GSTIN are swapped, and the compiler can't help. Run it, then change `RegisterVendor` to take the `PinCode` value object (already written) and watch the swapped call stop compiling.
+The playground shows primitive obsession causing a real bug: a restaurant's PIN code and GSTIN are swapped while onboarding it, so the delivery-area check later uses a GSTIN as a PIN code, and the compiler can't help. Run it, then change `RegisterRestaurant` to take the `PinCode` value object (already written) and watch the swapped call stop compiling.
 
 :::playground type=csharp title="Primitive obsession: let the compiler catch swapped arguments"
 ```csharp file=Program.cs
@@ -765,13 +779,13 @@ public readonly record struct PinCode
     public override string ToString() => Value;
 }
 
-public static class VendorRegistry
+public static class RestaurantRegistry
 {
     // Primitive obsession: three strings in a row.
-    public static string RegisterVendor(string name, string gstin, string pinCode) =>
+    public static string RegisterRestaurant(string name, string gstin, string pinCode) =>
         $"{name} | GSTIN {gstin} | PIN {pinCode}";
 
-    // TODO: change to RegisterVendor(string name, string gstin, PinCode pinCode)
+    // TODO: change to RegisterRestaurant(string name, string gstin, PinCode pinCode)
 }
 
 public static class Program
@@ -779,7 +793,7 @@ public static class Program
     public static void Main()
     {
         // Bug: arguments swapped. It compiles and runs.
-        Console.WriteLine(VendorRegistry.RegisterVendor("Shree Cement Traders", "122001", "06ABCDE1234F1Z5"));
+        Console.WriteLine(RestaurantRegistry.RegisterRestaurant("Sharma Dhaba", "122001", "06ABCDE1234F1Z5"));
 
         // Value objects validate once, at the edge.
         try { _ = new PinCode("06ABCDE1234F1Z5"); }
@@ -794,99 +808,101 @@ public static class Program
 ## Exercises
 
 :::exercise id=m06-anti-patterns-ex1 difficulty=beginner kind=code title="Replace magic numbers with a policy"
-A delay-penalty method on a construction contract reads `return Math.Min(value * 0.005m * weeks, value * 0.10m);`. Nobody remembers what 0.005 and 0.10 mean, and different contracts use different values. Implement `DelayPenaltyCalculator` using a `PenaltyPolicy` instead of literals.
+A food-delivery app compensates customers when an order arrives late. The method reads `return Math.Min(orderValue * 0.10m * blocks, orderValue * 0.50m);`. Nobody remembers what 0.10 and 0.50 mean, and different cities and restaurant tiers use different values. Implement `LateDeliveryCompensationCalculator` using a `CompensationPolicy` instead of literals.
 
-Example clause (illustrative): liquidated damages of 0.5 % of the contract value per week of delay, capped at 10 % of the contract value. Part weeks count as full weeks.
+Example promise (illustrative): if the order arrives after the promised time, the customer gets wallet credit of 10 % of the order value for every started 10 minutes of delay, capped at 50 % of the order value. Part blocks count as full blocks.
 ::requirements
-- `PenaltyPolicy(decimal PercentPerWeek, decimal CapPercent)` with a static `Standard` policy of 0.5 % and 10 %.
-- `Calculate(contractValue, daysLate)` rounds part weeks up, applies the cap, and rounds to 2 decimals.
-- 0 or negative days late gives 0. Negative contract value throws `ArgumentOutOfRangeException`.
+- `CompensationPolicy(decimal PercentPerBlock, decimal CapPercent)` with a static `Standard` policy of 10 % and 50 %.
+- `Calculate(orderValue, minutesLate)` rounds part blocks up, applies the cap, and rounds to 2 decimals.
+- 0 or negative minutes late gives 0. A negative order value throws `ArgumentOutOfRangeException`.
 ::acceptance
-- ₹1,00,00,000 contract, 10 days late (2 weeks) under the standard policy: ₹1,00,000.
-- 200 days late is capped at ₹10,00,000.
-- A policy of 1 % per week with a 5 % cap gives ₹5,00,000 for 70 days late.
+- ₹600 order, 15 minutes late (2 blocks) under the standard policy: ₹120.
+- 1 minute late counts as a full block: ₹60.
+- 200 minutes late is capped at ₹300.
+- A policy of 5 % per block with a 20 % cap gives ₹120 for 70 minutes late (7 blocks would be 35 %, so the cap applies).
 - No unexplained literals remain in the calculation.
 ::hint
-The numbers belong to the *contract*, so they're data, not constants in the method.
+The numbers belong to the *promise the customer was shown*, so they're data, not constants in the method.
 ::hint
-Weeks: `(int)Math.Ceiling(daysLate / 7m)`.
+Blocks: `(int)Math.Ceiling(minutesLate / 10m)`.
 ::hint
-Percentages: divide by 100 once, in one place, so 0.5 means "0.5 %".
+Percentages: divide by 100 once, in one place, so 10 means "10 %".
 ::hint
 ```csharp
-var raw = contractValue * policy.PercentPerWeek / 100m * weeks;
-var cap = contractValue * policy.CapPercent / 100m;
+var raw = orderValue * policy.PercentPerBlock / 100m * blocks;
+var cap = orderValue * policy.CapPercent / 100m;
 return Math.Round(Math.Min(raw, cap), 2, MidpointRounding.AwayFromZero);
 ```
 ::starter
-```csharp file=DelayPenalty.cs
+```csharp file=LateDelivery.cs
 using System;
 
-public sealed record PenaltyPolicy(decimal PercentPerWeek, decimal CapPercent)
+public sealed record CompensationPolicy(decimal PercentPerBlock, decimal CapPercent)
 {
-    public static readonly PenaltyPolicy Standard = new(0.5m, 10m);
+    public static readonly CompensationPolicy Standard = new(10m, 50m);
 }
 
-public sealed class DelayPenaltyCalculator(PenaltyPolicy policy)
+public sealed class LateDeliveryCompensationCalculator(CompensationPolicy policy)
 {
-    public const int DaysPerWeek = 7;
+    public const int MinutesPerBlock = 10;
 
-    public decimal Calculate(decimal contractValue, int daysLate) => throw new NotImplementedException();
+    public decimal Calculate(decimal orderValue, int minutesLate) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=DelayPenaltyTests.cs
+```csharp file=LateDeliveryTests.cs
 using System;
 using Xunit;
 
-public class DelayPenaltyTests
+public class LateDeliveryTests
 {
-    private static readonly DelayPenaltyCalculator Standard = new(PenaltyPolicy.Standard);
+    private static readonly LateDeliveryCompensationCalculator Standard = new(CompensationPolicy.Standard);
 
-    [Fact] public void Two_weeks_standard() => Assert.Equal(100_000m, Standard.Calculate(10_000_000m, 10));
-    [Fact] public void Part_week_counts_as_full() => Assert.Equal(50_000m, Standard.Calculate(10_000_000m, 1));
-    [Fact] public void Capped() => Assert.Equal(1_000_000m, Standard.Calculate(10_000_000m, 200));
-    [Fact] public void Other_policy() => Assert.Equal(500_000m, new DelayPenaltyCalculator(new PenaltyPolicy(1m, 5m)).Calculate(10_000_000m, 70));
-    [Fact] public void Not_late() => Assert.Equal(0m, Standard.Calculate(10_000_000m, 0));
+    [Fact] public void Two_blocks_standard() => Assert.Equal(120m, Standard.Calculate(600m, 15));
+    [Fact] public void Part_block_counts_as_full() => Assert.Equal(60m, Standard.Calculate(600m, 1));
+    [Fact] public void Capped() => Assert.Equal(300m, Standard.Calculate(600m, 200));
+    [Fact] public void Other_policy() => Assert.Equal(120m, new LateDeliveryCompensationCalculator(new CompensationPolicy(5m, 20m)).Calculate(600m, 70));
+    [Fact] public void Rounds_to_paise() => Assert.Equal(43.75m, Standard.Calculate(437.50m, 4));
+    [Fact] public void Not_late() => Assert.Equal(0m, Standard.Calculate(600m, 0));
     [Fact] public void Negative_value_rejected() => Assert.Throws<ArgumentOutOfRangeException>(() => Standard.Calculate(-1m, 5));
 }
 ```
 ::solution
-```csharp file=DelayPenalty.cs
+```csharp file=LateDelivery.cs
 using System;
 
-public sealed record PenaltyPolicy(decimal PercentPerWeek, decimal CapPercent)
+public sealed record CompensationPolicy(decimal PercentPerBlock, decimal CapPercent)
 {
-    public static readonly PenaltyPolicy Standard = new(0.5m, 10m);
+    public static readonly CompensationPolicy Standard = new(10m, 50m);
 }
 
-public sealed class DelayPenaltyCalculator(PenaltyPolicy policy)
+public sealed class LateDeliveryCompensationCalculator(CompensationPolicy policy)
 {
-    public const int DaysPerWeek = 7;
+    public const int MinutesPerBlock = 10;
     private const decimal PercentDivisor = 100m;
 
-    public decimal Calculate(decimal contractValue, int daysLate)
+    public decimal Calculate(decimal orderValue, int minutesLate)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(contractValue);
-        if (daysLate <= 0) return 0m;
+        ArgumentOutOfRangeException.ThrowIfNegative(orderValue);
+        if (minutesLate <= 0) return 0m;
 
-        var weeksLate = (int)Math.Ceiling(daysLate / (decimal)DaysPerWeek);
-        var raw = contractValue * policy.PercentPerWeek / PercentDivisor * weeksLate;
-        var cap = contractValue * policy.CapPercent / PercentDivisor;
+        var blocksLate = (int)Math.Ceiling(minutesLate / (decimal)MinutesPerBlock);
+        var raw = orderValue * policy.PercentPerBlock / PercentDivisor * blocksLate;
+        var cap = orderValue * policy.CapPercent / PercentDivisor;
         return Math.Round(Math.Min(raw, cap), 2, MidpointRounding.AwayFromZero);
     }
 }
 ```
 
-In an ASP.NET Core app, each contract's `PenaltyPolicy` would come from the contract record in the database, because the clause is part of the contract.
+In an ASP.NET Core app, the policy would come from configuration per city or restaurant tier. Store the policy that applied *when the customer placed the order* alongside the order: if operations changes the numbers at 8 pm, an order placed at 7:55 pm still gets the promise it was shown.
 ::mistakes
-- Replacing `0.005m` with `const decimal PointZeroZeroFive = 0.005m`. A name that repeats the value explains nothing; name the *meaning*.
-- Integer division `daysLate / 7`, which rounds 10 days down to 1 week.
-- Storing 0.005 in one place and "0.5 %" in another. Pick one representation and convert once.
+- Replacing `0.10m` with `const decimal PointOne = 0.10m`. A name that repeats the value explains nothing; name the *meaning*.
+- Integer division `minutesLate / 10`, which rounds 15 minutes down to 1 block.
+- Storing 0.10 in one place and "10 %" in another. Pick one representation and convert once.
 :::
 
 :::exercise id=m06-anti-patterns-ex2 difficulty=beginner kind=code title="A PinCode value object"
-Vendor and site addresses pass PIN codes around as `string`, and the same validation is copied into five places (one of them accepts 5 digits). Implement `PinCode` as a value object.
+The delivery app decides whether it can serve an address by its PIN code ("Sorry, we don't deliver to 400705 yet"). Customer addresses, restaurant addresses and the serviceability check all pass PIN codes around as `string`, and the same validation is copied into five places (one of them accepts 5 digits). Implement `PinCode` as a value object.
 ::requirements
 - Exactly 6 ASCII digits; the first digit is not 0. Surrounding spaces are trimmed.
 - `PinCode.TryParse(string?, out PinCode)` returns false instead of throwing.
@@ -998,7 +1014,7 @@ One caveat: `default(PinCode)` exists for any struct and has a null `Value`. If 
 :::
 
 :::exercise id=m06-anti-patterns-ex3 difficulty=intermediate kind=code title="From service locator to constructor injection"
-`OverdueInvoiceReminder` pulls its dependencies from a static `ServiceLocator`. Its tests are flaky because they share global registrations. Rewrite it with constructor injection and test it with fakes.
+Companies order office lunches through the delivery app on credit and pay one invoice a month. `OverdueInvoiceReminder` emails the ones that are late, and pulls its dependencies from a static `ServiceLocator`. Its tests are flaky because they share global registrations. Rewrite it with constructor injection and test it with fakes.
 ::requirements
 - Constructor takes `TimeProvider`, `IInvoiceSource` and `IReminderSender`.
 - `RunAsync` sends one reminder per unpaid invoice that is **more than** `OverdueAfterDays` (30) days past its due date, and returns the number sent.
@@ -1156,11 +1172,11 @@ The constructor now tells the truth about what the class needs, and the tests ne
 :::
 
 :::exercise id=m06-anti-patterns-ex4 difficulty=intermediate kind=written title="Diagnose the distributed monolith"
-A team split their project-monitoring system into seven services two years ago. Today they report:
+A food-delivery team split their order system into seven services two years ago. Today they report:
 
-- Releasing a new field on the progress screen needs coordinated deployments of 4 services.
-- The "Projects" and "Progress" services read and write the same PostgreSQL tables.
-- The dashboard endpoint makes 6 synchronous HTTP calls; p95 latency is about 2.5 s, and any one service being down returns a 500.
+- Releasing a new field on the order-tracking screen needs coordinated deployments of 4 services.
+- The "Orders" and "Delivery" services read and write the same PostgreSQL tables.
+- The tracking endpoint makes 6 synchronous HTTP calls; p95 latency is about 2.5 s, and any one service being down returns a 500.
 - There's a "Validation service" that every other service calls before saving.
 - Each service has its own repository but they share a "Common.Models" NuGet package that changes weekly.
 
@@ -1182,63 +1198,63 @@ Consider merging before splitting differently. A modular monolith is a legitimat
 **Diagnosis.** A distributed monolith: services that can't be deployed or run independently. Contributing anti-patterns:
 
 - **Split by technical layer** (the Validation service): every write path depends on it, so it's coupled to every model.
-- **Shared database**: Projects and Progress are coupled through table layouts; neither can change a column alone.
+- **Shared database**: Orders and Delivery are coupled through table layouts; neither can change a column alone.
 - **Shared, frequently changing model package**: compile-time coupling. Every change ripples to every service.
 - Likely **cargo cult** origins: microservices adopted without a team or deployment reason.
 
-**Why the symptoms follow.** Coordinated releases come from the shared models and shared tables. 2.5 s p95 and cascading 500s come from synchronous chains, where latencies add and availabilities multiply.
+**Why the symptoms follow.** Coordinated releases come from the shared models and shared tables. 2.5 s p95 and cascading 500s on a screen customers refresh every few seconds come from synchronous chains, where latencies add and availabilities multiply.
 
 **Plan.**
 
-1. **Merge Projects and Progress** (they share tables and change together) into one service with internal modules. This removes the shared-database coupling and one hop of the dashboard chain. Fold validation rules back into the services that own each model.
-2. **Make the dashboard resilient and fast:** call dependencies in parallel with timeouts, render partial results when an optional section fails, and move to a read model precomputed from events for the heaviest parts.
+1. **Merge Orders and Delivery** (they share tables and change together) into one service with internal modules. This removes the shared-database coupling and one hop of the dashboard chain. Fold validation rules back into the services that own each model.
+2. **Make the tracking page resilient and fast:** call dependencies in parallel with timeouts, render partial results when an optional section fails, and move to a read model precomputed from events for the heaviest parts.
 3. **Retire `Common.Models`:** each service owns its contracts. Share only versioned API contracts (OpenAPI), and add contract tests between consumers and providers.
 
-**Signals of success:** the number of services touched per feature (target: 1 for most changes), independent deploy frequency, dashboard p95 latency and error rate when one dependency is down.
+**Signals of success:** the number of services touched per feature (target: 1 for most changes), independent deploy frequency, tracking-page p95 latency and error rate when one dependency is down.
 ::mistakes
 - Proposing to split into even more services. More boundaries in the wrong places add more coupling.
 - Proposing a full rewrite. Incremental merges are lower risk and deliver value sooner.
 :::
 
 :::exercise id=m06-anti-patterns-ex5 difficulty=advanced kind=code title="Cure an anemic model"
-A `WorkOrder` (a job for a maintenance crew on a highway stretch) is a bag of public setters, and rules live in three different services. Two production bugs: a work order was closed without any recorded hours, and a cancelled order was later "completed". Implement `WorkOrder` as a rich entity.
+A `Delivery` (one rider taking one order from a restaurant to a customer) is a bag of public setters, and its rules live in three different services. Two production bugs: a delivery was marked delivered with no distance recorded, so the rider was paid ₹0 for the trip, and a cancelled delivery was later marked "delivered". Implement `Delivery` as a rich entity.
 ::requirements
-States: `Open → Assigned → InProgress → Completed`, and `Cancelled` from Open or Assigned only.
-- `Assign(crewId)`: only from Open; crew id required.
-- `Start(at)`: only from Assigned; records the start time.
-- `LogHours(hours)`: only while InProgress; hours > 0 and ≤ 24 per entry.
-- `Complete(at)`: only from InProgress; requires at least one hours entry; `at` must not be before the start time.
+States: `Open → Assigned → PickedUp → Delivered`, and `Cancelled` from Open or Assigned only.
+- `Assign(riderId)`: only from Open; rider id required.
+- `PickUp(at)`: only from Assigned; records the pickup time.
+- `LogDistance(km)`: only while PickedUp; km > 0 and ≤ 50 per entry (one GPS segment).
+- `Deliver(at)`: only from PickedUp; requires at least one distance entry; `at` must not be before the pickup time.
 - `Cancel(reason)`: only from Open or Assigned; reason required.
-- Every illegal action returns a failed `Result` with a clear message and leaves the order unchanged. No public setters.
+- Every illegal action returns a failed `Result` with a clear message and leaves the delivery unchanged. No public setters.
 ::acceptance
-- The happy path ends in Completed with total hours recorded.
-- Completing without hours fails, and the status stays InProgress.
-- A cancelled order can't be started or completed.
-- `LogHours(25)` and `LogHours(0)` fail.
-- Completing before the start time fails.
+- The happy path ends in Delivered with the total distance recorded.
+- Delivering without any distance fails, and the status stays PickedUp.
+- A cancelled delivery can't be picked up or delivered.
+- `LogDistance(51)` and `LogDistance(0)` fail.
+- Delivering before the pickup time fails.
 ::hint
-Each rule that protects the order's consistency is an *invariant*. Put it in the method that could break it.
+Each rule that protects the delivery's consistency is an *invariant*. Put it in the method that could break it.
 ::hint
 Check all conditions *before* changing any field, so a failed call leaves the object unchanged.
 ::hint
 Return `Result.Fail("...")` for business rule violations; throw only for programming errors like a null argument.
 ::hint
 ```csharp
-public Result Complete(DateTimeOffset at)
+public Result Deliver(DateTimeOffset at)
 {
-    if (Status != WorkOrderStatus.InProgress) return Result.Fail($"Cannot complete a work order that is {Status}.");
-    if (_hours.Count == 0) return Result.Fail("Log hours before completing.");
-    if (at < StartedAt) return Result.Fail("Completion cannot be before start.");
-    Status = WorkOrderStatus.Completed; CompletedAt = at; return Result.Ok;
+    if (Status != DeliveryStatus.PickedUp) return Result.Fail($"Cannot deliver a delivery that is {Status}.");
+    if (_segments.Count == 0) return Result.Fail("Log the distance before marking it delivered.");
+    if (at < PickedUpAt) return Result.Fail("Delivery cannot be before pickup.");
+    Status = DeliveryStatus.Delivered; DeliveredAt = at; return Result.Ok;
 }
 ```
 ::starter
-```csharp file=WorkOrder.cs
+```csharp file=Delivery.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public enum WorkOrderStatus { Open, Assigned, InProgress, Completed, Cancelled }
+public enum DeliveryStatus { Open, Assigned, PickedUp, Delivered, Cancelled }
 
 public sealed record Result(bool Succeeded, string? Error)
 {
@@ -1246,104 +1262,104 @@ public sealed record Result(bool Succeeded, string? Error)
     public static Result Fail(string error) => new(false, error);
 }
 
-public sealed class WorkOrder
+public sealed class Delivery
 {
-    public WorkOrder(string number, string chainage) => throw new NotImplementedException();
+    public Delivery(string orderNumber, string dropPinCode) => throw new NotImplementedException();
 
-    public string Number => throw new NotImplementedException();
-    public string Chainage => throw new NotImplementedException();
-    public WorkOrderStatus Status => throw new NotImplementedException();
-    public string? CrewId => throw new NotImplementedException();
-    public DateTimeOffset? StartedAt => throw new NotImplementedException();
-    public DateTimeOffset? CompletedAt => throw new NotImplementedException();
-    public decimal TotalHours => throw new NotImplementedException();
+    public string OrderNumber => throw new NotImplementedException();
+    public string DropPinCode => throw new NotImplementedException();
+    public DeliveryStatus Status => throw new NotImplementedException();
+    public string? RiderId => throw new NotImplementedException();
+    public DateTimeOffset? PickedUpAt => throw new NotImplementedException();
+    public DateTimeOffset? DeliveredAt => throw new NotImplementedException();
+    public decimal TotalKm => throw new NotImplementedException();
     public string? CancelReason => throw new NotImplementedException();
 
-    public Result Assign(string crewId) => throw new NotImplementedException();
-    public Result Start(DateTimeOffset at) => throw new NotImplementedException();
-    public Result LogHours(decimal hours) => throw new NotImplementedException();
-    public Result Complete(DateTimeOffset at) => throw new NotImplementedException();
+    public Result Assign(string riderId) => throw new NotImplementedException();
+    public Result PickUp(DateTimeOffset at) => throw new NotImplementedException();
+    public Result LogDistance(decimal km) => throw new NotImplementedException();
+    public Result Deliver(DateTimeOffset at) => throw new NotImplementedException();
     public Result Cancel(string reason) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=WorkOrderTests.cs
+```csharp file=DeliveryTests.cs
 using System;
 using Xunit;
 
-public class WorkOrderTests
+public class DeliveryTests
 {
-    private static readonly DateTimeOffset T0 = new(2026, 4, 1, 8, 0, 0, TimeSpan.FromHours(5.5));
+    private static readonly DateTimeOffset T0 = new(2026, 4, 1, 19, 30, 0, TimeSpan.FromHours(5.5));
 
-    private static WorkOrder InProgress()
+    private static Delivery PickedUp()
     {
-        var w = new WorkOrder("WO-101", "km 42+300");
-        Assert.True(w.Assign("CREW-7").Succeeded);
-        Assert.True(w.Start(T0).Succeeded);
-        return w;
+        var d = new Delivery("ORD-20260401", "560034");
+        Assert.True(d.Assign("RIDER-7").Succeeded);
+        Assert.True(d.PickUp(T0).Succeeded);
+        return d;
     }
 
     [Fact]
     public void Happy_path()
     {
-        var w = InProgress();
-        Assert.True(w.LogHours(6m).Succeeded);
-        Assert.True(w.LogHours(2.5m).Succeeded);
-        Assert.True(w.Complete(T0.AddHours(9)).Succeeded);
-        Assert.Equal(WorkOrderStatus.Completed, w.Status);
-        Assert.Equal(8.5m, w.TotalHours);
+        var d = PickedUp();
+        Assert.True(d.LogDistance(3.2m).Succeeded);
+        Assert.True(d.LogDistance(1.8m).Succeeded);
+        Assert.True(d.Deliver(T0.AddMinutes(25)).Succeeded);
+        Assert.Equal(DeliveryStatus.Delivered, d.Status);
+        Assert.Equal(5.0m, d.TotalKm);
     }
 
     [Fact]
-    public void Cannot_complete_without_hours()
+    public void Cannot_deliver_without_distance()
     {
-        var w = InProgress();
-        var r = w.Complete(T0.AddHours(1));
+        var d = PickedUp();
+        var r = d.Deliver(T0.AddMinutes(20));
         Assert.False(r.Succeeded);
-        Assert.Equal(WorkOrderStatus.InProgress, w.Status);
+        Assert.Equal(DeliveryStatus.PickedUp, d.Status);
     }
 
     [Fact]
-    public void Cancelled_order_cannot_start_or_complete()
+    public void Cancelled_delivery_cannot_be_picked_up_or_delivered()
     {
-        var w = new WorkOrder("WO-102", "km 10+000");
-        Assert.True(w.Cancel("duplicate").Succeeded);
-        Assert.False(w.Start(T0).Succeeded);
-        Assert.False(w.Complete(T0).Succeeded);
-        Assert.Equal(WorkOrderStatus.Cancelled, w.Status);
+        var d = new Delivery("ORD-20260402", "400001");
+        Assert.True(d.Cancel("customer cancelled").Succeeded);
+        Assert.False(d.PickUp(T0).Succeeded);
+        Assert.False(d.Deliver(T0).Succeeded);
+        Assert.Equal(DeliveryStatus.Cancelled, d.Status);
     }
 
     [Fact]
-    public void Cannot_cancel_once_in_progress() => Assert.False(InProgress().Cancel("changed mind").Succeeded);
+    public void Cannot_cancel_once_picked_up() => Assert.False(PickedUp().Cancel("changed mind").Succeeded);
 
     [Theory]
     [InlineData(0)]
-    [InlineData(25)]
+    [InlineData(51)]
     [InlineData(-1)]
-    public void Hours_must_be_reasonable(int hours) => Assert.False(InProgress().LogHours(hours).Succeeded);
+    public void Distance_must_be_reasonable(int km) => Assert.False(PickedUp().LogDistance(km).Succeeded);
 
     [Fact]
-    public void Cannot_complete_before_start()
+    public void Cannot_deliver_before_pickup()
     {
-        var w = InProgress();
-        w.LogHours(1m);
-        Assert.False(w.Complete(T0.AddMinutes(-5)).Succeeded);
+        var d = PickedUp();
+        d.LogDistance(1m);
+        Assert.False(d.Deliver(T0.AddMinutes(-5)).Succeeded);
     }
 
-    [Fact] public void Assign_needs_crew() => Assert.False(new WorkOrder("WO-103", "km 1+000").Assign(" ").Succeeded);
-    [Fact] public void Cancel_needs_reason() => Assert.False(new WorkOrder("WO-104", "km 1+000").Cancel("").Succeeded);
-    [Fact] public void Cannot_log_hours_before_start() => Assert.False(new WorkOrder("WO-105", "km 1+000").LogHours(2m).Succeeded);
+    [Fact] public void Assign_needs_rider() => Assert.False(new Delivery("ORD-20260403", "110001").Assign(" ").Succeeded);
+    [Fact] public void Cancel_needs_reason() => Assert.False(new Delivery("ORD-20260404", "110001").Cancel("").Succeeded);
+    [Fact] public void Cannot_log_distance_before_pickup() => Assert.False(new Delivery("ORD-20260405", "110001").LogDistance(2m).Succeeded);
 }
 ```
 ::solution
 Every rule sits in the method that could break it, and each method checks everything before changing anything.
 
-```csharp file=WorkOrder.cs
+```csharp file=Delivery.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public enum WorkOrderStatus { Open, Assigned, InProgress, Completed, Cancelled }
+public enum DeliveryStatus { Open, Assigned, PickedUp, Delivered, Cancelled }
 
 public sealed record Result(bool Succeeded, string? Error)
 {
@@ -1351,83 +1367,83 @@ public sealed record Result(bool Succeeded, string? Error)
     public static Result Fail(string error) => new(false, error);
 }
 
-public sealed class WorkOrder
+public sealed class Delivery
 {
-    public const decimal MaxHoursPerEntry = 24m;
-    private readonly List<decimal> _hours = new();
+    public const decimal MaxKmPerSegment = 50m;
+    private readonly List<decimal> _segments = new();
 
-    public WorkOrder(string number, string chainage)
+    public Delivery(string orderNumber, string dropPinCode)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(number);
-        ArgumentException.ThrowIfNullOrWhiteSpace(chainage);
-        Number = number;
-        Chainage = chainage;
+        ArgumentException.ThrowIfNullOrWhiteSpace(orderNumber);
+        ArgumentException.ThrowIfNullOrWhiteSpace(dropPinCode);
+        OrderNumber = orderNumber;
+        DropPinCode = dropPinCode;
     }
 
-    public string Number { get; }
-    public string Chainage { get; }
-    public WorkOrderStatus Status { get; private set; } = WorkOrderStatus.Open;
-    public string? CrewId { get; private set; }
-    public DateTimeOffset? StartedAt { get; private set; }
-    public DateTimeOffset? CompletedAt { get; private set; }
-    public decimal TotalHours => _hours.Sum();
+    public string OrderNumber { get; }
+    public string DropPinCode { get; }
+    public DeliveryStatus Status { get; private set; } = DeliveryStatus.Open;
+    public string? RiderId { get; private set; }
+    public DateTimeOffset? PickedUpAt { get; private set; }
+    public DateTimeOffset? DeliveredAt { get; private set; }
+    public decimal TotalKm => _segments.Sum();
     public string? CancelReason { get; private set; }
 
-    public Result Assign(string crewId)
+    public Result Assign(string riderId)
     {
-        if (Status != WorkOrderStatus.Open) return Fail("assign");
-        if (string.IsNullOrWhiteSpace(crewId)) return Result.Fail("A crew is required.");
-        CrewId = crewId.Trim();
-        Status = WorkOrderStatus.Assigned;
+        if (Status != DeliveryStatus.Open) return Fail("assign");
+        if (string.IsNullOrWhiteSpace(riderId)) return Result.Fail("A rider is required.");
+        RiderId = riderId.Trim();
+        Status = DeliveryStatus.Assigned;
         return Result.Ok;
     }
 
-    public Result Start(DateTimeOffset at)
+    public Result PickUp(DateTimeOffset at)
     {
-        if (Status != WorkOrderStatus.Assigned) return Fail("start");
-        StartedAt = at;
-        Status = WorkOrderStatus.InProgress;
+        if (Status != DeliveryStatus.Assigned) return Fail("pick up");
+        PickedUpAt = at;
+        Status = DeliveryStatus.PickedUp;
         return Result.Ok;
     }
 
-    public Result LogHours(decimal hours)
+    public Result LogDistance(decimal km)
     {
-        if (Status != WorkOrderStatus.InProgress) return Fail("log hours on");
-        if (hours <= 0 || hours > MaxHoursPerEntry) return Result.Fail($"Hours must be between 0 and {MaxHoursPerEntry}.");
-        _hours.Add(hours);
+        if (Status != DeliveryStatus.PickedUp) return Fail("log distance on");
+        if (km <= 0 || km > MaxKmPerSegment) return Result.Fail($"Distance must be between 0 and {MaxKmPerSegment} km.");
+        _segments.Add(km);
         return Result.Ok;
     }
 
-    public Result Complete(DateTimeOffset at)
+    public Result Deliver(DateTimeOffset at)
     {
-        if (Status != WorkOrderStatus.InProgress) return Fail("complete");
-        if (_hours.Count == 0) return Result.Fail("Log hours before completing.");
-        if (at < StartedAt) return Result.Fail("Completion cannot be before the start time.");
-        CompletedAt = at;
-        Status = WorkOrderStatus.Completed;
+        if (Status != DeliveryStatus.PickedUp) return Fail("deliver");
+        if (_segments.Count == 0) return Result.Fail("Log the distance before marking it delivered.");
+        if (at < PickedUpAt) return Result.Fail("Delivery cannot be before the pickup time.");
+        DeliveredAt = at;
+        Status = DeliveryStatus.Delivered;
         return Result.Ok;
     }
 
     public Result Cancel(string reason)
     {
-        if (Status is not (WorkOrderStatus.Open or WorkOrderStatus.Assigned)) return Fail("cancel");
+        if (Status is not (DeliveryStatus.Open or DeliveryStatus.Assigned)) return Fail("cancel");
         if (string.IsNullOrWhiteSpace(reason)) return Result.Fail("A cancellation reason is required.");
         CancelReason = reason.Trim();
-        Status = WorkOrderStatus.Cancelled;
+        Status = DeliveryStatus.Cancelled;
         return Result.Ok;
     }
 
-    private Result Fail(string action) => Result.Fail($"Cannot {action} a work order that is {Status}.");
+    private Result Fail(string action) => Result.Fail($"Cannot {action} a delivery that is {Status}.");
 }
 ```
 
-The three services that used to hold these rules shrink to "load, call the method, save". Both production bugs are now impossible: there's no setter to bypass `Complete`, and `Cancelled` has no outgoing transitions.
+The three services that used to hold these rules shrink to "load, call the method, save". Both production bugs are now impossible: there's no setter to bypass `Deliver`, and `Cancelled` has no outgoing transitions.
 ::alternatives
-With more states and transitions, the [State pattern](#/lesson/m06-state) or a transition table keeps the methods smaller. EF Core can map this entity with private setters and a backing field for `_hours`, so persistence doesn't force public setters back in.
+With more states and transitions, the [State pattern](#/lesson/m06-state) or a transition table keeps the methods smaller. EF Core can map this entity with private setters and a backing field for `_segments`, so persistence doesn't force public setters back in.
 ::mistakes
 - Setting `Status` first and validating afterwards, leaving a half-changed object on failure.
-- Throwing exceptions for ordinary rule violations that the UI must show to users. Results are clearer for expected failures.
-- Exposing `List<decimal> Hours` publicly, so callers can `Add` without the checks.
+- Throwing exceptions for ordinary rule violations that the rider app must show to users. Results are clearer for expected failures.
+- Exposing `List<decimal> Segments` publicly, so callers can `Add` without the checks.
 :::
 
 ## Automated testing
@@ -1447,18 +1463,18 @@ Tests are both the **detector** and the **safety net** for anti-patterns.
 **Characterization tests as a safety net.** Before refactoring legacy code, record current behaviour:
 
 ```csharp
-public class PoHelperCharacterizationTests
+public class RefundHelperCharacterizationTests
 {
     // Records what the legacy code does TODAY, including odd outputs, so a refactor can't change them by accident.
     [Theory]
-    [InlineData(1, "anita", "rahul", 300000, "OK")]
-    [InlineData(0, "anita", "rahul", 300000, "ERR1")]     // draft
-    [InlineData(1, "rahul", "rahul", 300000, "ERR2")]     // self-approval
-    [InlineData(1, "anita", "suresh", 600000, "ERR3")]    // non-PM over 5 lakh
+    [InlineData(1, "anita", "TL-rahul", 300, "OK")]
+    [InlineData(0, "anita", "TL-rahul", 300, "ERR1")]     // draft
+    [InlineData(1, "TL-rahul", "TL-rahul", 300, "ERR2")]  // self-approval
+    [InlineData(1, "anita", "suresh", 600, "ERR3")]       // support agent over the ₹500 limit
     public void Approve_behaviour(int status, string createdBy, string approver, int total, string expected)
     {
-        var legacy = LegacyHarness.WithPurchaseOrder(status, createdBy, total);   // seam added in step 1
-        Assert.Equal(expected, legacy.Approve(poId: 1, userId: approver));
+        var legacy = LegacyHarness.WithRefund(status, createdBy, total);   // seam added in step 1
+        Assert.Equal(expected, legacy.Approve(refundId: 1, userId: approver));
     }
 }
 ```
@@ -1469,7 +1485,7 @@ public class PoHelperCharacterizationTests
 [Fact]
 public void No_public_static_mutable_fields_outside_composition_root()
 {
-    var offenders = typeof(PurchaseOrder).Assembly.GetTypes()
+    var offenders = typeof(RefundRequest).Assembly.GetTypes()
         .SelectMany(t => t.GetFields(BindingFlags.Public | BindingFlags.Static))
         .Where(f => !f.IsInitOnly && !f.IsLiteral)
         .Select(f => $"{f.DeclaringType!.Name}.{f.Name}")
@@ -1481,7 +1497,7 @@ public void No_public_static_mutable_fields_outside_composition_root()
 ## Real-world application
 
 - **ASP.NET Core's own guidance** discourages service-locator usage and static access to services, and recommends constructor injection ([Microsoft Learn — DI guidelines](https://learn.microsoft.com/dotnet/core/extensions/dependency-injection-guidelines)). `TimeProvider` (.NET 8+) exists largely to remove the `DateTime.Now` hidden dependency.
-- **Legacy enterprise systems** — ERPs, government portals, long-lived project-management platforms — often contain several of these at once: god-object "managers", magic status codes stored as integers, and shared databases between modules. Incremental fixes (value objects at the edges, boundaries enforced module by module) are the realistic path.
+- **Legacy enterprise systems** — ERPs, government portals, long-lived order-management and billing platforms — often contain several of these at once: god-object "managers", magic status codes stored as integers, and shared databases between modules. Incremental fixes (value objects at the edges, boundaries enforced module by module) are the realistic path.
 - **Microservice migrations.** Many teams publicly describe consolidating services back into fewer deployables after hitting distributed-monolith problems. The common lesson is "find boundaries first, split second".
 - **Code review checklists** in mature teams explicitly list magic numbers, new static state, new `GetService` calls and copy-pasted rules as items to flag.
 
@@ -1495,7 +1511,7 @@ A bug produces wrong behaviour. An anti-pattern is a common, plausible-looking *
 ::q beginner
 What are magic numbers, and how do you fix them?
 ::a
-Unexplained literal values in code, like `status == 3` or `amount * 0.05m`. They hide meaning, get copied, and drift apart. Fix them with an enum for closed sets (statuses), a named constant for true constants, configuration via the options pattern for business values that change, and value objects for concepts. The name should describe the *meaning* ("RetentionPercent"), not repeat the value.
+Unexplained literal values in code, like `status == 3` or `amount * 0.05m`. They hide meaning, get copied, and drift apart. Fix them with an enum for closed sets (statuses), a named constant for true constants, configuration via the options pattern for business values that change, and value objects for concepts. The name should describe the *meaning* ("CommissionPercent"), not repeat the value.
 ::q intermediate
 Is an anemic domain model always an anti-pattern?
 ::a
@@ -1570,7 +1586,7 @@ Tests for `InvoiceService` pass when run alone but fail when the whole suite run
 - [ ] Validate all four strings inside the method.
 > Value objects make the swap a compile error and centralise validation. Comments and named arguments rely on discipline.
 ::q single
-An admin screen edits a lookup table of material units (name, abbreviation). The model has only properties with public setters. Is this an anemic-model anti-pattern?
+An admin screen edits a lookup table of cuisine types (name, icon). The model has only properties with public setters. Is this an anemic-model anti-pattern?
 - [ ] Yes, all models need behaviour.
 - [x] No, there are no meaningful invariants, so a simple data model is appropriate.
 - [ ] Yes, it should use event sourcing.
@@ -1598,7 +1614,7 @@ Which use of `IServiceProvider` is generally acceptable?
 - [ ] Resolving dependencies in every controller action instead of the constructor.
 > Resolution confined to the composition root or a small, testable resolver is fine. Scattering it through business code hides dependencies.
 ::q single
-Your team finds a 4,000-line `ProjectManager` class that is changed in most pull requests. What should you do first?
+Your team finds a 4,000-line `OrderManager` class that is changed in most pull requests. What should you do first?
 - [ ] Rewrite the module from scratch over the next quarter.
 - [x] Add characterization tests around the most-changed methods, then extract one cohesive class at a time.
 - [ ] Split it into one class per method immediately.

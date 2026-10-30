@@ -128,7 +128,7 @@ Software encoding cost depends heavily on codec, preset and hardware. Use a roug
 
 ```http
 POST /v1/uploads
-{ "title": "Bridge load test, span 4", "sizeBytes": 2147483648, "contentType": "video/mp4" }
+{ "title": "Mumbai street food tour, part 4", "sizeBytes": 2147483648, "contentType": "video/mp4" }
 201 Created
 { "videoId": "v_8KQ2xY", "uploadId": "u_51c…", "partSizeBytes": 16777216,
   "partUrls": [ { "part": 1, "url": "https://storage…?sig=…" }, … ], "expiresAt": "2026-10-19T14:00:00Z" }
@@ -437,8 +437,10 @@ public sealed class TranscodeProgress
 {
     private readonly ConcurrentDictionary<long, (HashSet<TranscodeTask> Pending, Lock Gate)> _videos = new();
 
-    public void Register(long videoId, IEnumerable<TranscodeTask> tasks) =>
-        _videos[videoId] = (new HashSet<TranscodeTask>(tasks), new Lock());
+    /// <summary>Registers a video's tasks once. A duplicate "upload complete" event (at-least-once delivery) returns
+    /// false instead of resetting the pending set, which would re-run the pipeline and publish the video twice.</summary>
+    public bool Register(long videoId, IEnumerable<TranscodeTask> tasks) =>
+        _videos.TryAdd(videoId, (new HashSet<TranscodeTask>(tasks), new Lock()));
 
     /// <summary>Returns true exactly once: when the last pending task of the video completes.</summary>
     public bool Complete(TranscodeTask task)
@@ -556,7 +558,7 @@ public sealed class ViewCounter(TimeProvider clock, ViewCountingOptions options)
         if (watchedSeconds < needed) return false;
 
         var now = clock.GetUtcNow();
-        lock (_dedupeGate)   // stand-in for Redis SET key 1 NX EX 3600
+        lock (_dedupeGate)   // stand-in for Redis SET key 1 NX EX 3600 (whose expiry also bounds memory; this demo map is never pruned)
         {
             if (_lastCounted.TryGetValue((videoId, viewerKey), out var last) && now - last < options.DedupeWindow)
                 return false;
@@ -722,7 +724,7 @@ And the factory and delivery metrics:
 
 ### When a simpler design is enough
 
-An e-learning portal with 2,000 recorded lectures and 20,000 students, or a company storing drone survey videos of construction sites, doesn't need a custom pipeline. Use a managed video service, or a managed encoding job per upload writing HLS to object storage, behind a standard CDN with signed URLs. Run the encode with a single queue and a few workers; count views with a simple `INSERT` into an events table and a nightly aggregate. 20,000 students watching 1 hour a day at 1.5 Mbit/s is under 1,000 concurrent streams at peak (estimate), which any CDN handles without special engineering.
+An e-learning portal with 2,000 recorded lectures and 20,000 students, or a gym chain hosting 300 workout videos for its members, doesn't need a custom pipeline. Use a managed video service, or a managed encoding job per upload writing HLS to object storage, behind a standard CDN with signed URLs. Run the encode with a single queue and a few workers; count views with a simple `INSERT` into an events table and a nightly aggregate. 20,000 students watching 1 hour a day is 20,000 ÷ 24 ≈ 830 concurrent streams on average; even if the evening peak is 3× that, about 2,500 streams × 1.5 Mbit/s ≈ 3.75 Gbit/s (estimate), which any CDN handles without special engineering.
 
 ## Alternatives and trade-offs
 
@@ -773,9 +775,11 @@ app.MapPost("/v1/uploads/{videoId:long}/complete", async (long videoId, Complete
     if (video is null) return Results.NotFound();
 
     var duration = TimeSpan.FromSeconds(body.DurationSeconds);
-    catalog.Update(video with { Status = VideoStatus.Processing, SourceHeight = body.SourceHeight, Duration = duration });
     var tasks = planner.Plan(videoId, body.SourceHeight, duration, TimeSpan.FromSeconds(10));
-    progress.Register(videoId, tasks);
+    // Idempotent: a retried "complete" (or a duplicate storage event) must not start a second pipeline.
+    // In PostgreSQL: UPDATE video SET status = 'PROCESSING' ... WHERE video_id = $1 AND status = 'UPLOADING'.
+    if (!progress.Register(videoId, tasks)) return Results.Accepted($"/v1/videos/{videoId}", new { tasks = tasks.Count });
+    catalog.Update(video with { Status = VideoStatus.Processing, SourceHeight = body.SourceHeight, Duration = duration });
     foreach (var task in tasks) await queue.EnqueueAsync(task, ct);
     return Results.Accepted($"/v1/videos/{videoId}", new { tasks = tasks.Count });
 });
@@ -832,7 +836,7 @@ The starting graph is a naive platform: uploads and playback both go through the
 
 ## Exercises
 
-:::exercise id=m17-video-streaming-ex1 difficulty=beginner kind=written title="Egress for an IPL highlights app"
+:::exercise id=m17-video-streaming-ex1 difficulty=beginner kind=written title="Egress for a cricket highlights app"
 A sports app expects 6 M concurrent viewers during the last over of a big match. The audience mix is 70 % mobile at an average 1.5 Mbit/s, 20 % web at 3 Mbit/s and 10 % smart TVs at 6 Mbit/s. Segments are 4 seconds long.
 
 1. Compute peak egress in Tbit/s.

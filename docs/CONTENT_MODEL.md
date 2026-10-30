@@ -177,6 +177,51 @@ Model answer in Markdown.
 `type` = `csharp` | `sql` | `lld` | `hld` | `sim`. For `sql`, put a ```sql block with setup statements;
 for `sim`, add `sim=cache|queue|retry|ratelimit|replication|circuit|scaling|partition`.
 
+### Visual blocks (use them to replace text, not to decorate it)
+
+Every lesson should have 3+ of these (the validator warns below 2). Pick the one that teaches the idea faster than prose.
+
+**`:::flow`** — an animated request path. Learners press play and watch a packet hop between components; a
+2D/3D toggle tilts the board into an isometric view. Use it for "what happens when a user clicks Pay", read/write
+paths, retries, cache misses. Nodes: `id | Label | role`; roles: `user client cdn lb gateway service worker cache db
+queue storage search external`. Steps run in order (2–14 steps, 2–10 nodes).
+```
+:::flow title="Placing an order" view=2d
+app | Mobile app | client
+api | Orders API | service
+db | PostgreSQL | db
+q | RabbitMQ | queue
+---
+app -> api | POST /orders with Idempotency-Key
+api -> db | INSERT order + outbox row in one transaction
+db -> api | committed
+api -> app | 201 Created
+api -> q | relay publishes OrderPlaced
+:::
+```
+
+**`:::steps`** — a step-through walkthrough (one step on screen at a time, "Show all" for reading). Use it for
+procedures, refactorings, request lifecycles, incident timelines.
+```
+:::steps title="Splitting the class"
+::step List the reasons to change
+Ask "who would ask me to change this?" for each method.
+::step Extract the pure parts first
+...
+:::
+```
+
+**`:::compare`** — side-by-side cards. Parts: `::bad`, `::good` (red / green) or `::left`, `::right`, `::option`
+(neutral). 2 or 3 parts. Use it for bad-vs-good design, option A vs B, before/after.
+
+**`:::stats`** — big numbers that count up when scrolled into view. One `Label | Value | note` per line, 2–6
+lines. Use it for capacity estimates, latency budgets, costs. Keep the arithmetic in prose or a table nearby.
+
+**`:::tldr`** — a short accent card ("In short") with 2–4 bullets. Put one at the top of long sections.
+
+Mermaid diagrams also animate automatically (edges draw in on scroll) and sequence diagrams get a
+"Step through N messages" player, so prefer `sequenceDiagram` for request/response interactions.
+
 ## 5. Writing standards
 
 - Start every concept with a plain-English explanation and a real-world analogy, then give the technical

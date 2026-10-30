@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 70
 prerequisites: [m07-entities-values-services, m07-encapsulation-invariants]
-related: [m07-domain-modeling, m07-lifecycle-state, m07-validation-rules, m06-prototype, m06-flyweight]
+related: [m07-domain-modeling, m07-lifecycle-state, m07-validation-rules]
 tags: [lld, immutability, records, concurrency, notifications, csharp]
 patterns: [Immutable object, Value object, Copy-on-write snapshot]
 summary: Objects that never change after creation are safe to share, cache and pass between threads. Learn records, init, with-expressions, immutable collections and the traps — shallow immutability, with bypassing validation, and broken equality.
@@ -78,7 +78,7 @@ Immutability is also different from **read-only access**. `IReadOnlyList<T>` mea
 3. **Validity forever.** Validate once in the constructor and the object stays valid. Nothing can later push it into an invalid state.
 4. **Safe hash keys and caching.** A mutable object used as a `Dictionary` key can change its hash code after insertion and become unfindable. Immutable keys can't.
 5. **Easy reasoning and testing.** Methods on immutable objects behave like functions: same inputs, same outputs.
-6. **History and undo.** Each change produces a new version; keep the old ones and you have an audit trail or undo stack (compare [Memento](#/lesson/m06-memento)).
+6. **History and undo.** Each change produces a new version; keep the old ones and you have an audit trail or undo stack (compare Memento).
 
 ### The costs
 

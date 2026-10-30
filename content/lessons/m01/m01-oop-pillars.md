@@ -10,7 +10,7 @@ prerequisites: [m01-classes-objects, m01-constructors]
 related: [m01-interfaces-abstract, m04-composition-inheritance, m04-lsp, m06-strategy, m07-encapsulation-invariants]
 tags: [oop, csharp-basics, inheritance, polymorphism, access-modifiers]
 patterns: []
-summary: The four ideas behind object-oriented design, explained with a highway toll plaza. Hide data behind rules, hide complexity behind simple contracts, share behaviour through inheritance, and let one call do the right thing for many types.
+summary: The four ideas behind object-oriented design, explained with an expressway toll plaza where cars pay by FASTag or cash. Hide data behind rules, hide complexity behind simple contracts, share behaviour through inheritance, and let one call do the right thing for many types.
 references:
   - title: Microsoft Learn — Object-oriented programming (C#)
     url: https://learn.microsoft.com/dotnet/csharp/fundamentals/tutorials/oop
@@ -22,7 +22,7 @@ references:
     url: https://learn.microsoft.com/dotnet/csharp/fundamentals/object-oriented/inheritance
 ---
 
-Object-oriented programming (OOP) is often introduced as "four pillars". The names sound academic, but each one answers a practical question you will face every week: *Who is allowed to change this data? What does the caller really need to know? Where does shared behaviour live? How do I handle many kinds of thing without a giant `if`?* This lesson answers all four with one running example: a highway toll plaza.
+Object-oriented programming (OOP) is often introduced as "four pillars". The names sound academic, but each one answers a practical question you will face every week: *Who is allowed to change this data? What does the caller really need to know? Where does shared behaviour live? How do I handle many kinds of thing without a giant `if`?* This lesson answers all four with one running example: an expressway toll plaza, the kind every driver with a FASTag passes through.
 
 ## Learning objectives
 
@@ -387,12 +387,16 @@ namespace Toll.Api.Tolling;
 /// Abstract: there is no such thing as "just a vehicle" at the plaza.</summary>
 public abstract class Vehicle
 {
-    protected Vehicle(string registrationNumber)
+    protected Vehicle(string registrationNumber) => RegistrationNumber = NormaliseRegistration(registrationNumber);
+
+    /// <summary>"mh 12 ab-1234" and "MH12AB1234" are the same vehicle. Every part of the system
+    /// (vehicles, wallets, lookups) must use this one rule, or lookups silently miss.</summary>
+    public static string NormaliseRegistration(string? registrationNumber)
     {
         var normalised = new string((registrationNumber ?? "").Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant();
         if (normalised.Length is < 6 or > 11)
             throw new ArgumentException($"'{registrationNumber}' is not a valid registration number.", nameof(registrationNumber));
-        RegistrationNumber = normalised;
+        return normalised;
     }
 
     public string RegistrationNumber { get; }
@@ -482,9 +486,8 @@ public sealed class FastagWallet
 
     public FastagWallet(string registrationNumber, decimal openingBalance = 0m)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(registrationNumber);
         ArgumentOutOfRangeException.ThrowIfNegative(openingBalance);
-        RegistrationNumber = registrationNumber;
+        RegistrationNumber = Vehicle.NormaliseRegistration(registrationNumber);
         _balance = openingBalance;
     }
 
@@ -625,9 +628,13 @@ var app = builder.Build();
 
 app.MapPost("/fastag", (CreateWalletRequest req, IFastagWalletStore store) =>
 {
-    var wallet = new FastagWallet(req.RegistrationNumber.ToUpperInvariant(), req.OpeningBalance);
-    store.Add(wallet);
-    return Results.Created($"/fastag/{wallet.RegistrationNumber}", new { wallet.RegistrationNumber, wallet.Balance });
+    try
+    {
+        var wallet = new FastagWallet(req.RegistrationNumber, req.OpeningBalance);
+        store.Add(wallet);
+        return Results.Created($"/fastag/{wallet.RegistrationNumber}", new { wallet.RegistrationNumber, wallet.Balance });
+    }
+    catch (ArgumentException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status400BadRequest); }
 });
 
 app.MapPost("/crossings", (CrossingRequest req, TollPlaza plaza) =>
@@ -653,7 +660,12 @@ What to notice:
 - **There is still one `switch`**, in `VehicleFactory`. Text arriving from the outside world must be turned into a class somewhere. Keep that in one place, at the edge.
 - **`ArgumentOutOfRangeException` from `Truck`'s constructor** is an `ArgumentException`, so the endpoint's single `catch` turns all input problems into a 400 response.
 - **`FastagWallet` locks its own state.** Two lanes could read the same tag at nearly the same moment. The wallet, which owns the balance, also owns the thread safety.
+- **One normalisation rule for registration numbers.** The wallet and the vehicle both call `Vehicle.NormaliseRegistration`, so "MH 12 AB 1234" typed at recharge time still matches the tag read at the lane. Two slightly different clean-up rules in two classes is a classic "lookup silently returns null" bug.
 - **Most classes are `sealed`.** Only `Vehicle` is designed for inheritance. Everything else is closed by default.
+
+:::callout type=warning title="What this sample leaves out"
+Real tag readers often report the same vehicle twice within a second. A production plaza would give every read a unique id and ignore repeats (idempotency), so one crossing is never debited twice. Wallets would live in a database, not in memory, and the debit would be a single conditional `UPDATE ... SET balance = balance - @toll WHERE balance >= @toll`, so two lanes on two servers can't both spend the same rupees. The OOP shape stays the same; only the classes behind the interfaces change.
+:::
 
 ## Bad design vs good design
 
@@ -1509,7 +1521,7 @@ sealed class AlwaysFails : ITollPayment
 - **ASP.NET Core** is full of all four. `ControllerBase` is a base class your controllers inherit from. Middleware, authentication handlers and logging providers are interfaces with many implementations (abstraction plus polymorphism). `HttpContext` hides the details of Kestrel's connection handling (abstraction) and keeps its internals private (encapsulation).
 - **.NET streams**: `Stream` is an abstract base class. `FileStream`, `MemoryStream` and `NetworkStream` override `Read` and `Write`. Code that compresses or hashes "a stream" works with all of them.
 - **Payments and notifications**: a checkout uses `IPaymentGateway` for cards, UPI and net banking; a notification service uses `INotificationChannel` for SMS, email and WhatsApp. New providers are new classes.
-- **Infrastructure project systems**: progress measurement often differs by work type (earthwork by cubic metres, bridges by span, pavements by lane-kilometres). A base `WorkItem` with an overridden `ProgressPercent()` keeps the dashboard free of type checks.
+- **Ride-hailing and food delivery pricing**: a bike taxi, an auto and a cab each compute their fare differently (per-km rate, minimum fare, waiting charges, surge). A base `RideType` with an overridden `Fare(trip)` keeps the booking screen free of type checks. When only the numbers differ between types, a rate table is the simpler choice.
 
 ## Interview questions
 
@@ -1628,10 +1640,10 @@ Which is the best reason to make a class `sealed`?
 - [ ] Sealed classes can't implement interfaces.
 > Seal by default. Unseal deliberately when you design for extension, and then document the virtual members.
 ::q single
-A `TollPlaza` must log every crossing and also, for one highway, send a copy to a government feed. The team proposes `class GovFeedTollPlaza : TollPlaza`. What is a better design?
+A `TollPlaza` must log every crossing and also, at one plaza only, send a copy to a government feed. The team proposes `class GovFeedTollPlaza : TollPlaza`. What is a better design?
 - [ ] Copy `TollPlaza` and edit the copy.
-- [x] Keep one `TollPlaza` and give it an injected list of `ICrossingListener` (logger, gov feed); each highway configures its listeners.
-- [ ] Add `if (highway == "X")` inside `TollPlaza`.
+- [x] Keep one `TollPlaza` and give it an injected list of `ICrossingListener` (logger, gov feed); each plaza's configuration chooses its listeners.
+- [ ] Add `if (plazaId == "X")` inside `TollPlaza`.
 - [ ] Make every method `virtual` so anyone can override anything.
 > Composition with an interface lets you add behaviours without new subclasses or conditionals, and combine them freely.
 :::

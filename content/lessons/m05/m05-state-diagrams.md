@@ -22,7 +22,7 @@ references:
     url: https://learn.microsoft.com/aspnet/core/fundamentals/host/hosted-services
 ---
 
-Most business bugs are not crashes. They are things that should have been impossible: an order shipped after it was cancelled, a refund paid twice, a permit used after it expired. Each of these is an object in a state where an action should not have been allowed. A state machine diagram (UML calls it a *state machine*; many people say *state diagram* or *statechart*) lists every state an object can be in and every legal way to move between them. Drawn first and enforced in code, it makes those "impossible" bugs actually impossible.
+Most business bugs are not crashes. They are things that should have been impossible: an order shipped after it was cancelled, a refund paid twice, a temporary access pass used after it expired. Each of these is an object in a state where an action should not have been allowed. A state machine diagram (UML calls it a *state machine*; many people say *state diagram* or *statechart*) lists every state an object can be in and every legal way to move between them. Drawn first and enforced in code, it makes those "impossible" bugs actually impossible.
 
 ## Learning objectives
 
@@ -57,17 +57,17 @@ Three words to hold on to:
 - An **event** is something that happens at a point in time ("chart prepared", "passenger cancels").
 - A **transition** is the arrow: "when this event happens in this state, and this condition holds, move to that state and do this".
 
-### Our example: a permit to work on a construction site
+### Our example: a temporary access pass to production
 
-Dangerous work on a construction or plant site, such as welding near a fuel line or entering a confined tank, needs a **permit to work**. A simplified lifecycle:
+Think of the visitor pass you get at an office reception: you ask for it, someone approves it, it works for one day, and security can cancel it at once. Software companies do the same for their live (production) systems. At a payments company in Bengaluru, engineers have no permanent access to the production database. When they need it, say to investigate a stuck UPI refund, they request an **access grant** (often called *just-in-time access*). A simplified lifecycle:
 
-- The supervisor creates a **Draft** and **submits** it.
-- The safety officer **approves** it only if the gas test has passed and the equipment is isolated. Otherwise they **reject** it back to draft.
-- Once approved, the permit is valid for 12 hours. The crew **starts** work. While **Active**, work can be **paused** for a shift change and **resumed**.
-- If something unsafe happens, the permit is **suspended** at once, whatever the crew was doing. It can be **reinstated** after a re-inspection.
-- The permit is **closed** only when every worker has signed out. If 12 hours pass first, it **expires**.
+- The engineer creates a **Draft** request and **submits** it.
+- The on-call lead (never the requester themselves) **approves** it only if an incident ticket is linked and the engineer has passed multi-factor authentication (MFA). Otherwise they **reject** it back to draft.
+- Once approved, the grant is valid for 8 hours, one working shift. The engineer **starts** a session. While **Active**, work can be **paused** while the incident is handed over to the next on-call engineer, and **resumed**.
+- If the security system spots something unusual, such as a bulk export of customer data, the grant is **suspended** at once, whatever the engineer was doing. It can be **reinstated** after a security review.
+- The grant is **closed** only when every database session has ended. If 8 hours pass first, it **expires**.
 
-Getting this wrong has real consequences: a crew working on an expired permit, or a permit closed while someone is still inside a tank. That's why this is a good place for a state machine.
+Getting this wrong has real consequences: an engineer still connected to the payments database after their access expired, or a grant marked closed while a session is still open and running queries. Auditors (and regulators such as the RBI for payment companies) ask exactly these questions. That's why this is a good place for a state machine.
 
 ## First-principles explanation
 
@@ -88,8 +88,8 @@ A **transition** is an arrow from one state to another. Its full label is:
 event [guard] / action
 ```
 
-- **Event (trigger)**: what happens. Usually a command or a message ("Approve"), a time event ("after 12 h", or "at 23:59"), or a change event ("when gas level > 10 % LEL").
-- **Guard**: a condition in square brackets that must be true **at the moment the event arrives**, or the transition doesn't fire: `[gas test passed]`.
+- **Event (trigger)**: what happens. Usually a command or a message ("Approve"), a time event ("after 8 h", or "at 23:59"), or a change event ("when rows read per minute > 10,000").
+- **Guard**: a condition in square brackets that must be true **at the moment the event arrives**, or the transition doesn't fire: `[ticket linked]`.
 - **Action**: what the system does *during* the transition, after the `/`: `/ notify requester`. Actions should be quick and should not fail; long work belongs inside a state.
 
 All three parts are optional. A transition with no event (a *completion transition*) fires as soon as the source state's work is done. A transition with no guard always fires when its event arrives.
@@ -100,16 +100,16 @@ All three parts are optional. A transition with no event (a *completion transiti
 
 Sometimes an action belongs to a **state**, not to one arrow:
 
-- `entry / action` runs every time the object enters the state, whichever arrow it came in on. `Approved: entry / start 12 h validity timer`.
-- `exit / action` runs every time it leaves, whichever arrow it leaves on. `Active: exit / record sign-out time`.
-- `do / activity` is ongoing work while in the state (for example, "monitor gas readings"), stopped when the state is left.
-- An **internal transition**, `event / action` written *inside* the state, handles an event without leaving the state, so entry and exit don't run. `Active: gas reading / log reading`.
+- `entry / action` runs every time the object enters the state, whichever arrow it came in on. `Approved: entry / start 8 h validity timer`.
+- `exit / action` runs every time it leaves, whichever arrow it leaves on. `Active: exit / record time access ended`.
+- `do / activity` is ongoing work while in the state (for example, "watch the session for unusual queries"), stopped when the state is left.
+- An **internal transition**, `event / action` written *inside* the state, handles an event without leaving the state, so entry and exit don't run. `Active: query run / log query`.
 
-**Order of execution** when a transition fires from state A to state B: the exit action of A, then the transition's action, then the entry action of B. A **self-transition** (an arrow from A back to A) *does* run exit and entry again; an internal transition does not. This difference matters: a self-transition on `Approved` would restart the 12-hour timer, an internal one wouldn't.
+**Order of execution** when a transition fires from state A to state B: the exit action of A, then the transition's action, then the entry action of B. A **self-transition** (an arrow from A back to A) *does* run exit and entry again; an internal transition does not. This difference matters: a self-transition on `Approved` would restart the 8-hour timer, an internal one wouldn't.
 
 ### Composite states (nested states)
 
-As states multiply, arrows multiply faster. The permit can be suspended whether the crew is working or paused, so you'd need two "Suspend" arrows. With ten substates you'd need ten. A **composite state** groups substates inside a bigger state. An arrow leaving the composite state's border applies to **every** substate inside. One "Suspend" arrow from `Active` replaces many.
+As states multiply, arrows multiply faster. The grant can be suspended whether the engineer is working or paused, so you'd need two "Suspend" arrows. With ten substates you'd need ten. A **composite state** groups substates inside a bigger state. An arrow leaving the composite state's border applies to **every** substate inside. One "Suspend" arrow from `Active` replaces many.
 
 Rules for composite states:
 
@@ -123,14 +123,14 @@ David Harel invented this nesting (his *statecharts*), and it is what makes stat
 ### Choice, fork, join and concurrent regions
 
 - A **choice** pseudo-state (a small diamond) lets one event lead to different targets depending on guards evaluated at that moment: `Submitted → ◇ → [risk high] Senior review | [else] Approved`. Like activity-diagram decisions, its guards must be complete and exclusive.
-- **Concurrent regions**: a composite state can be split by dashed lines into regions that are active **at the same time**. While `Active`, one region tracks the work (`Working`/`Paused`) and another tracks gas monitoring (`Normal`/`Alarm`). The object is in one substate of *each* region at once.
+- **Concurrent regions**: a composite state can be split by dashed lines into regions that are active **at the same time**. While `Active`, one region tracks the work (`Working`/`Paused`) and another tracks activity monitoring (`Normal`/`Alert`). The object is in one substate of *each* region at once.
 - **Fork** and **join** pseudo-states (bars) enter several regions at once and wait for all of them to finish, just as in activity diagrams.
 
-Concurrent regions are powerful but hard to implement correctly. Before you use them, ask whether the second region is really a separate object with its own lifecycle (here, a `GasMonitor`). Often it is.
+Concurrent regions are powerful but hard to implement correctly. Before you use them, ask whether the second region is really a separate object with its own lifecycle (here, an `ActivityMonitor`). Often it is.
 
 ### State diagram, activity diagram or State pattern?
 
-- An **activity diagram** models a **process** (steps across people). A **state diagram** models **one object's lifecycle** (states and events). An RA bill *process* is an activity; the RA bill *document* has a state machine. Each status change in the activity must be a legal transition in the state machine.
+- An **activity diagram** models a **process** (steps across people). A **state diagram** models **one object's lifecycle** (states and events). An expense-claim *process* (employee submits, manager approves, finance pays) is an activity; the expense claim *document* has a state machine. Each status change in the activity must be a legal transition in the state machine.
 - The **State pattern** ([lesson](#/lesson/m06-state)) is one way to *implement* a state machine in code, with one class per state. A transition table is another. The diagram doesn't care which you choose.
 
 ### Writing state diagrams in Mermaid
@@ -151,26 +151,26 @@ stateDiagram-v2
 
 ```text
 Draft --> Submitted : Submit
-Submitted --> Approved : Approve [gas test passed] / notify crew
+Submitted --> Approved : Approve [ticket linked] / notify requester
 ```
 
 **State descriptions, entry and exit actions.** A line `StateName : text` adds a line of text inside the state box. Use it for entry, exit, do and internal actions:
 
 ```text
-Approved : entry / start 12 h validity timer
-Suspended : exit / clear incident banner
+Approved : entry / start 8 h validity timer
+Suspended : exit / clear security alert banner
 ```
 
 Mermaid allows these description lines only on **simple** states. On a composite state (one with braces), a single description line *replaces its title*, and two lines are a syntax error. For entry and exit actions on a composite, use a note:
 
 ```text
-note left of Active : exit / record time crew left
+note left of Active : exit / record time access ended
 ```
 
 **Names with spaces.** State ids can't contain spaces. Give a display name with `as`:
 
 ```text
-state "Awaiting re-inspection" as Reinspection
+state "Awaiting security review" as SecurityReview
 ```
 
 **Composite states.** Put substates in braces, each with its own `[*]`:
@@ -205,8 +205,8 @@ state Active {
     [*] --> Working
     Working --> Paused : Pause
     --
-    [*] --> GasNormal
-    GasNormal --> GasAlarm : reading above limit
+    [*] --> ActivityNormal
+    ActivityNormal --> ActivityAlert : unusual query volume
 }
 ```
 
@@ -214,7 +214,7 @@ state Active {
 
 ```text
 note right of Approved
-    Valid for 12 hours from approval
+    Valid for 8 hours from approval
 end note
 classDef danger fill:#fde2e2,stroke:#c0392b
 class Suspended danger
@@ -227,47 +227,47 @@ class Suspended danger
 | Diagram | C# |
 |---|---|
 | State | an `enum` value, or a class per state (State pattern) |
-| Current state | a property with a **private** setter: `public PermitState State { get; private set; }` |
+| Current state | a property with a **private** setter: `public GrantState State { get; private set; }` |
 | Event | a public method (`Approve(...)`), or a `Fire(trigger)` call on a generic machine |
 | Transition | a row in a transition table, or a `case` in a `switch` |
 | Guard | a condition checked before changing state; failure throws or returns an error |
 | Transition action | code that runs between leaving and entering |
 | Entry / exit action | an `OnEnter(state)` / `OnExit(state)` method called on every change |
 | Composite state | a "parent" lookup: transitions defined on `Active` apply when the current state's parent is `Active` |
-| Time event (`after 12 h`) | a stored deadline plus a `BackgroundService` (or scheduled job) that fires the event |
+| Time event (`after 8 h`) | a stored deadline plus a `BackgroundService` (or scheduled job) that fires the event |
 | No matching transition | `InvalidOperationException` (or a `Result` error) naming the state and event |
 | Final state | a state with no outgoing rows; every event is rejected |
 
-One rule matters more than all the others: **nothing outside the class can set the state directly.** If any code can write `permit.State = Closed`, the diagram is only a suggestion. In the database, the same rule becomes a `CHECK` constraint on the status column and an `UPDATE ... WHERE status = 'Active'` (or a version column) so that two requests can't both move the permit from the same state.
+One rule matters more than all the others: **nothing outside the class can set the state directly.** If any code can write `grant.State = Closed`, the diagram is only a suggestion. In the database, the same rule becomes a `CHECK` constraint on the status column and an `UPDATE ... WHERE status = 'Active'` (or a version column) so that two requests can't both move the grant from the same state.
 
 ## Visual explanation
 
-### The permit lifecycle
+### The access grant lifecycle
 
 ```mermaid
 stateDiagram-v2
     [*] --> Draft
     Draft --> Submitted : Submit
-    Submitted --> Approved : Approve [gas test passed and isolation done]
-    Submitted --> Draft : Reject / notify supervisor
+    Submitted --> Approved : Approve [ticket linked and MFA verified]
+    Submitted --> Draft : Reject / notify requester
     Approved --> Active : Start
     state Active {
         [*] --> Working
         Working --> Paused : Pause
         Paused --> Working : Resume
     }
-    Active --> Suspended : Suspend / sound stop-work alarm
-    Suspended --> Active : Reinstate [re-inspection passed]
-    Active --> Closed : Close [all workers signed out]
-    Approved --> Expired : after 12 h
-    Active --> Expired : after 12 h
-    Suspended --> Expired : after 12 h
+    Active --> Suspended : Suspend / kill open sessions
+    Suspended --> Active : Reinstate [security review passed]
+    Active --> Closed : Close [all sessions ended]
+    Approved --> Expired : after 8 h
+    Active --> Expired : after 8 h
+    Suspended --> Expired : after 8 h
     Draft --> Cancelled : Cancel
     Submitted --> Cancelled : Cancel
     Approved --> Cancelled : Cancel
-    Approved : entry / start 12 h validity timer
-    Suspended : entry / record incident
-    note left of Active : exit / record time crew left
+    Approved : entry / start 8 h validity timer
+    Suspended : entry / record security alert
+    note left of Active : exit / record time access ended
     Closed --> [*]
     Expired --> [*]
     Cancelled --> [*]
@@ -275,16 +275,16 @@ stateDiagram-v2
 
 Read it from the top:
 
-- A permit starts in **Draft**. `Submit` moves it to **Submitted**. From there, `Approve` only succeeds if the guard is true: if the gas test failed, the event is rejected and the permit stays Submitted. `Reject` sends it back to Draft and notifies the supervisor (a transition action).
+- A grant starts in **Draft**. `Submit` moves it to **Submitted**. From there, `Approve` only succeeds if the guard is true: if no ticket is linked or MFA failed, the event is rejected and the grant stays Submitted. `Reject` sends it back to Draft and notifies the requester (a transition action).
 - Entering **Approved** starts the validity timer (an entry action). It runs on entry, so any future arrow into Approved would restart it too.
-- **Active** is a composite state. `Start` enters it, and its initial pseudo-state puts the permit in **Working**. `Pause` and `Resume` move between the substates.
-- The `Suspend` arrow leaves Active's **border**, so it works from Working or Paused. Exit actions run inside-out: exit Working (or Paused), then Active's exit action records when the crew left.
-- `Reinstate` targets the composite, so the permit re-enters at Working, not Paused. If the business wanted "back to wherever it was", that would be a history state, and should be written as a note.
-- `Close` has a guard that protects lives: all workers signed out.
-- `after 12 h` is a **time event**. It applies from Approved, Active and Suspended. A suspended permit still expires.
-- **Closed**, **Expired** and **Cancelled** lead to the final state. Nothing leaves them, so a closed permit can never be reopened. To do more work, you raise a new permit. That's a business rule, visible in the drawing.
+- **Active** is a composite state. `Start` enters it, and its initial pseudo-state puts the grant in **Working**. `Pause` and `Resume` move between the substates.
+- The `Suspend` arrow leaves Active's **border**, so it works from Working or Paused. Exit actions run inside-out: exit Working (or Paused), then Active's exit action records when access ended. The transition action kills any open database sessions, so a suspended grant is not just a label.
+- `Reinstate` targets the composite, so the grant re-enters at Working, not Paused. If the business wanted "back to wherever it was", that would be a history state, and should be written as a note.
+- `Close` has a guard that protects the audit trail: every session has ended, so nobody is still connected when the grant says "closed".
+- `after 8 h` is a **time event**. It applies from Approved, Active and Suspended. A suspended grant still expires.
+- **Closed**, **Expired** and **Cancelled** lead to the final state. Nothing leaves them, so a closed grant can never be reopened. To do more work, you request a new grant. That's a business rule, visible in the drawing.
 
-Count what's *not* there, because those gaps are rules too: you can't cancel an Active permit (you must close or suspend it), and you can't approve a Draft.
+Count what's *not* there, because those gaps are rules too: you can't cancel an Active grant (you must close or suspend it), and you can't approve a Draft.
 
 ### Choice and concurrent regions
 
@@ -293,7 +293,7 @@ stateDiagram-v2
     state riskCheck <<choice>>
     [*] --> Submitted
     Submitted --> riskCheck : Approve
-    riskCheck --> SeniorReview : [confined space or hot work]
+    riskCheck --> SeniorReview : [production database or payments system]
     riskCheck --> Approved : [else]
     SeniorReview --> Approved : Countersign
     Approved --> Active : Start
@@ -302,36 +302,36 @@ stateDiagram-v2
         Working --> Paused : Pause
         Paused --> Working : Resume
         --
-        [*] --> GasNormal
-        GasNormal --> GasAlarm : reading above 10% LEL
-        GasAlarm --> GasNormal : reading normal for 15 min
+        [*] --> ActivityNormal
+        ActivityNormal --> ActivityAlert : over 10000 rows read per minute
+        ActivityAlert --> ActivityNormal : normal for 15 min
     }
     Active --> [*] : Close
     note right of SeniorReview
-        Site manager must countersign
-        high-risk permits
+        Security lead must countersign
+        high-risk grants
     end note
 ```
 
-This diagram shows two more advanced tools. The **choice** diamond evaluates its guards when `Approve` arrives: high-risk permits (confined space or hot work) go to `SeniorReview`, everything else is approved directly. `[else]` keeps the guards complete. Inside `Active`, the `--` line splits the state into two **concurrent regions**. At any moment the permit is in one work substate *and* one gas substate, for example "Paused and GasAlarm". (LEL is the lower explosive limit of a gas.) In code, that second region would usually become its own `GasMonitor` object, with an event "gas alarm raised" that the permit reacts to by suspending itself.
+This diagram shows two more advanced tools. The **choice** diamond evaluates its guards when `Approve` arrives: high-risk grants (the production database or the payments system) go to `SeniorReview`, everything else, such as read-only access to logs, is approved directly. `[else]` keeps the guards complete. Inside `Active`, the `--` line splits the state into two **concurrent regions**. At any moment the grant is in one work substate *and* one activity substate, for example "Paused and ActivityAlert". In code, that second region would usually become its own `ActivityMonitor` object, with an event "anomaly detected" that the grant reacts to by suspending itself.
 
 ## Step-by-step example
 
-How do you get from a conversation about permits to the diagram and code? Six steps.
+How do you get from a conversation about access grants to the diagram and code? Six steps.
 
 ### Step 1 — list the states, as adjectives
 
-Ask "what can someone say about a permit at any moment?": it's a draft, it's submitted, approved, being worked on, paused, suspended, closed, expired, cancelled. Each is a state candidate. Merge synonyms. Drop things that are data, not states: "high risk" is an attribute that affects a guard, not a separate lifecycle.
+Ask "what can someone say about a grant at any moment?": it's a draft, it's submitted, approved, being worked on, paused, suspended, closed, expired, cancelled. Each is a state candidate. Merge synonyms. Drop things that are data, not states: "high risk" is an attribute that affects a guard, not a separate lifecycle.
 
 ### Step 2 — list the events, as verbs
 
-Submit, approve, reject, start, pause, resume, suspend, reinstate, close, cancel, and one time event: 12 hours pass. Ask who or what raises each one: a person (approve), the system (expire), a device (gas alarm).
+Submit, approve, reject, start, pause, resume, suspend, reinstate, close, cancel, and one time event: 8 hours pass. Ask who or what raises each one: a person (approve), the system (expire), a monitor (anomaly alert).
 
 ### Step 3 — fill a state × event table
 
 Before drawing, make a grid with states as rows and events as columns. In each cell, write the target state, or "not allowed". This forces you to think about every combination. A 9 × 11 grid has 99 cells; most will say "not allowed", and each of those is a decision you made deliberately rather than by accident.
 
-| State \ Event | Submit | Approve | Start | Suspend | Close | Cancel | after 12 h |
+| State \ Event | Submit | Approve | Start | Suspend | Close | Cancel | after 8 h |
 |---|---|---|---|---|---|---|---|
 | Draft | Submitted | – | – | – | – | Cancelled | – |
 | Submitted | – | Approved [guard] | – | – | – | Cancelled | – |
@@ -351,25 +351,25 @@ For each allowed cell, ask "only if?" (a guard) and "and then what happens?" (an
 
 ### Step 6 — write the Mermaid, then the code and one test per arrow
 
-The diagram goes in the repository next to the code. Then write the class so that each arrow is one allowed transition, and write a test for each arrow and a few for important "not allowed" cells (close a draft, start an expired permit).
+The diagram goes in the repository next to the code. Then write the class so that each arrow is one allowed transition, and write a test for each arrow and a few for important "not allowed" cells (close a draft, start an expired grant).
 
 ## Production-style C# implementation
 
-The permit becomes a class whose state can only change through its event methods. Transitions live in one table, so the code reads like the diagram. Composite states are handled with a parent lookup, entry and exit actions run on every change, and expiry is a time event fired by a background worker.
+The grant becomes a class whose state can only change through its event methods. Transitions live in one table, so the code reads like the diagram. Composite states are handled with a parent lookup, entry and exit actions run on every change, and expiry is a time event fired by a background worker.
 
 ```text
-Permits.Api/
+AccessGrants.Api/
   Program.cs
-  Domain/PermitStates.cs        // enums + parent (composite) mapping
-  Domain/WorkPermit.cs          // the state machine
-  Application/PermitStore.cs    // repository (in memory here)
-  Application/PermitExpiryWorker.cs // fires the "after 12 h" time event
+  Domain/GrantStates.cs         // enums + parent (composite) mapping
+  Domain/AccessGrant.cs         // the state machine
+  Application/GrantStore.cs     // repository (in memory here)
+  Application/GrantExpiryWorker.cs // fires the "after 8 h" time event
 ```
 
-```csharp file=Domain/PermitStates.cs
-namespace Permits.Api.Domain;
+```csharp file=Domain/GrantStates.cs
+namespace AccessGrants.Api.Domain;
 
-public enum PermitState
+public enum GrantState
 {
     Draft, Submitted, Approved,
     Active,          // composite: never the current state itself
@@ -377,237 +377,241 @@ public enum PermitState
     Suspended, Closed, Expired, Cancelled,
 }
 
-public enum PermitTrigger { Submit, Approve, Reject, Start, Pause, Resume, Suspend, Reinstate, Close, Cancel, Expire }
+public enum GrantTrigger { Submit, Approve, Reject, Start, Pause, Resume, Suspend, Reinstate, Close, Cancel, Expire }
 
-public static class PermitStates
+public static class GrantStates
 {
     /// <summary>Composite state membership: Working and Paused are inside Active.</summary>
-    public static PermitState? ParentOf(PermitState s) => s is PermitState.Working or PermitState.Paused ? PermitState.Active : null;
+    public static GrantState? ParentOf(GrantState s) => s is GrantState.Working or GrantState.Paused ? GrantState.Active : null;
 
     /// <summary>Initial substate of each composite state.</summary>
-    public static PermitState Resolve(PermitState target) => target == PermitState.Active ? PermitState.Working : target;
+    public static GrantState Resolve(GrantState target) => target == GrantState.Active ? GrantState.Working : target;
 
-    public static bool IsFinal(PermitState s) => s is PermitState.Closed or PermitState.Expired or PermitState.Cancelled;
+    public static bool IsFinal(GrantState s) => s is GrantState.Closed or GrantState.Expired or GrantState.Cancelled;
 
-    /// <summary>"Is the permit in this state?" also answers true for the composite parent.</summary>
-    public static bool IsIn(PermitState current, PermitState state) => current == state || ParentOf(current) == state;
+    /// <summary>"Is the grant in this state?" also answers true for the composite parent.</summary>
+    public static bool IsIn(GrantState current, GrantState state) => current == state || ParentOf(current) == state;
 }
 
-public sealed record PermitEvent(DateTimeOffset At, PermitState From, PermitTrigger Trigger, PermitState To, string? Note);
+public sealed record GrantEvent(DateTimeOffset At, GrantState From, GrantTrigger Trigger, GrantState To, string? Note);
 
-public sealed class IllegalTransitionException(PermitState state, PermitTrigger trigger, string? reason = null)
+public sealed class IllegalTransitionException(GrantState state, GrantTrigger trigger, string? reason = null)
     : InvalidOperationException(reason is null
-        ? $"'{trigger}' is not allowed while the permit is {state}."
-        : $"'{trigger}' is not allowed while the permit is {state}: {reason}.")
+        ? $"'{trigger}' is not allowed while the grant is {state}."
+        : $"'{trigger}' is not allowed while the grant is {state}: {reason}.")
 {
-    public PermitState State { get; } = state;
-    public PermitTrigger Trigger { get; } = trigger;
+    public GrantState State { get; } = state;
+    public GrantTrigger Trigger { get; } = trigger;
 }
 ```
 
-```csharp file=Domain/WorkPermit.cs
-namespace Permits.Api.Domain;
+```csharp file=Domain/AccessGrant.cs
+namespace AccessGrants.Api.Domain;
 
-/// <summary>The permit-to-work state machine. Each table row is one arrow on the diagram.</summary>
-public sealed class WorkPermit
+/// <summary>The access-grant state machine. Each table row is one arrow on the diagram.</summary>
+public sealed class AccessGrant
 {
-    public static readonly TimeSpan Validity = TimeSpan.FromHours(12);
+    public static readonly TimeSpan Validity = TimeSpan.FromHours(8);
 
-    private sealed record Transition(PermitState From, PermitTrigger Trigger, PermitState To);
+    private sealed record Transition(GrantState From, GrantTrigger Trigger, GrantState To);
 
     private static readonly Transition[] Table =
     [
-        new(PermitState.Draft,     PermitTrigger.Submit,    PermitState.Submitted),
-        new(PermitState.Draft,     PermitTrigger.Cancel,    PermitState.Cancelled),
-        new(PermitState.Submitted, PermitTrigger.Approve,   PermitState.Approved),
-        new(PermitState.Submitted, PermitTrigger.Reject,    PermitState.Draft),
-        new(PermitState.Submitted, PermitTrigger.Cancel,    PermitState.Cancelled),
-        new(PermitState.Approved,  PermitTrigger.Start,     PermitState.Active),
-        new(PermitState.Approved,  PermitTrigger.Cancel,    PermitState.Cancelled),
-        new(PermitState.Approved,  PermitTrigger.Expire,    PermitState.Expired),
-        new(PermitState.Working,   PermitTrigger.Pause,     PermitState.Paused),
-        new(PermitState.Paused,    PermitTrigger.Resume,    PermitState.Working),
-        new(PermitState.Active,    PermitTrigger.Suspend,   PermitState.Suspended),   // from the composite's border
-        new(PermitState.Active,    PermitTrigger.Close,     PermitState.Closed),
-        new(PermitState.Active,    PermitTrigger.Expire,    PermitState.Expired),
-        new(PermitState.Suspended, PermitTrigger.Reinstate, PermitState.Active),      // re-enters at Working
-        new(PermitState.Suspended, PermitTrigger.Expire,    PermitState.Expired),
+        new(GrantState.Draft,     GrantTrigger.Submit,    GrantState.Submitted),
+        new(GrantState.Draft,     GrantTrigger.Cancel,    GrantState.Cancelled),
+        new(GrantState.Submitted, GrantTrigger.Approve,   GrantState.Approved),
+        new(GrantState.Submitted, GrantTrigger.Reject,    GrantState.Draft),
+        new(GrantState.Submitted, GrantTrigger.Cancel,    GrantState.Cancelled),
+        new(GrantState.Approved,  GrantTrigger.Start,     GrantState.Active),
+        new(GrantState.Approved,  GrantTrigger.Cancel,    GrantState.Cancelled),
+        new(GrantState.Approved,  GrantTrigger.Expire,    GrantState.Expired),
+        new(GrantState.Working,   GrantTrigger.Pause,     GrantState.Paused),
+        new(GrantState.Paused,    GrantTrigger.Resume,    GrantState.Working),
+        new(GrantState.Active,    GrantTrigger.Suspend,   GrantState.Suspended),   // from the composite's border
+        new(GrantState.Active,    GrantTrigger.Close,     GrantState.Closed),
+        new(GrantState.Active,    GrantTrigger.Expire,    GrantState.Expired),
+        new(GrantState.Suspended, GrantTrigger.Reinstate, GrantState.Active),      // re-enters at Working
+        new(GrantState.Suspended, GrantTrigger.Expire,    GrantState.Expired),
     ];
 
     private readonly TimeProvider _clock;
-    private readonly List<PermitEvent> _history = new();
+    private readonly List<GrantEvent> _history = new();
 
-    public WorkPermit(Guid id, string location, string workType, TimeProvider clock)
+    public AccessGrant(Guid id, string requester, string targetSystem, TimeProvider clock)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(location);
-        ArgumentException.ThrowIfNullOrWhiteSpace(workType);
+        ArgumentException.ThrowIfNullOrWhiteSpace(requester);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetSystem);
         Id = id;
-        Location = location;
-        WorkType = workType;
+        Requester = requester;
+        TargetSystem = targetSystem;
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
     public Guid Id { get; }
-    public string Location { get; }
-    public string WorkType { get; }
-    public PermitState State { get; private set; } = PermitState.Draft;   // initial pseudo-state -> Draft
+    public string Requester { get; }
+    public string TargetSystem { get; }
+    public GrantState State { get; private set; } = GrantState.Draft;   // initial pseudo-state -> Draft
     public DateTimeOffset? ValidUntil { get; private set; }
-    public DateTimeOffset? CrewLeftAt { get; private set; }
-    public string? LastIncident { get; private set; }
-    public IReadOnlyList<PermitEvent> History => _history;
+    public DateTimeOffset? AccessEndedAt { get; private set; }
+    public string? LastAlert { get; private set; }
+    public IReadOnlyList<GrantEvent> History => _history;
 
-    public bool IsIn(PermitState state) => PermitStates.IsIn(State, state);
+    public bool IsIn(GrantState state) => GrantStates.IsIn(State, state);
 
     /// <summary>Triggers allowed from the current state, ignoring guards. Useful for UI buttons.</summary>
-    public IReadOnlyList<PermitTrigger> PermittedTriggers() =>
-        Table.Where(t => t.From == State || t.From == PermitStates.ParentOf(State)).Select(t => t.Trigger).Distinct().ToList();
+    public IReadOnlyList<GrantTrigger> PermittedTriggers() =>
+        Table.Where(t => t.From == State || t.From == GrantStates.ParentOf(State)).Select(t => t.Trigger).Distinct().ToList();
 
     // ----- Events: one public method per trigger. Guards are checked before Fire. -----
 
-    public void Submit() => Fire(PermitTrigger.Submit);
+    public void Submit() => Fire(GrantTrigger.Submit);
 
-    public void Approve(string officer, bool gasTestPassed, bool isolationDone)
+    public void Approve(string approver, bool ticketLinked, bool mfaVerified)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(officer);
-        if (!gasTestPassed || !isolationDone)
-            throw new IllegalTransitionException(State, PermitTrigger.Approve, "guard [gas test passed and isolation done] is false");
-        Fire(PermitTrigger.Approve, $"approved by {officer}");
+        ArgumentException.ThrowIfNullOrWhiteSpace(approver);
+        if (string.Equals(approver, Requester, StringComparison.OrdinalIgnoreCase))
+            throw new IllegalTransitionException(State, GrantTrigger.Approve, "nobody can approve their own access");
+        if (!ticketLinked || !mfaVerified)
+            throw new IllegalTransitionException(State, GrantTrigger.Approve, "guard [ticket linked and MFA verified] is false");
+        Fire(GrantTrigger.Approve, $"approved by {approver}");
     }
 
     public void Reject(string reason)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);
-        Fire(PermitTrigger.Reject, reason);   // transition action: notify supervisor (see note in History)
+        Fire(GrantTrigger.Reject, reason);   // transition action: notify requester (see note in History)
     }
 
-    public void Start() => Fire(PermitTrigger.Start);
-    public void Pause() => Fire(PermitTrigger.Pause);
-    public void Resume() => Fire(PermitTrigger.Resume);
+    public void Start() => Fire(GrantTrigger.Start);
+    public void Pause() => Fire(GrantTrigger.Pause);
+    public void Resume() => Fire(GrantTrigger.Resume);
 
-    public void Suspend(string incident)
+    /// <summary>The transition action "kill open sessions" belongs to the infrastructure (for example,
+    /// revoking the short-lived database credentials); the domain records why.</summary>
+    public void Suspend(string alert)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(incident);
-        LastIncident = incident;
-        Fire(PermitTrigger.Suspend, incident);
+        ArgumentException.ThrowIfNullOrWhiteSpace(alert);
+        LastAlert = alert;
+        Fire(GrantTrigger.Suspend, alert);
     }
 
-    public void Reinstate(bool reinspectionPassed)
+    public void Reinstate(bool securityReviewPassed)
     {
-        if (!reinspectionPassed)
-            throw new IllegalTransitionException(State, PermitTrigger.Reinstate, "guard [re-inspection passed] is false");
-        Fire(PermitTrigger.Reinstate);
+        if (!securityReviewPassed)
+            throw new IllegalTransitionException(State, GrantTrigger.Reinstate, "guard [security review passed] is false");
+        Fire(GrantTrigger.Reinstate);
     }
 
-    public void Close(int workersStillInside)
+    public void Close(int openSessions)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(workersStillInside);
-        if (IsIn(PermitState.Active) && workersStillInside > 0)
-            throw new IllegalTransitionException(State, PermitTrigger.Close, $"{workersStillInside} worker(s) not signed out");
-        Fire(PermitTrigger.Close);
+        ArgumentOutOfRangeException.ThrowIfNegative(openSessions);
+        if (IsIn(GrantState.Active) && openSessions > 0)
+            throw new IllegalTransitionException(State, GrantTrigger.Close, $"{openSessions} session(s) still open");
+        Fire(GrantTrigger.Close);
     }
 
-    public void Cancel() => Fire(PermitTrigger.Cancel);
+    public void Cancel() => Fire(GrantTrigger.Cancel);
 
-    /// <summary>Time event "after 12 h". Safe to call repeatedly; returns true if it expired the permit.</summary>
+    /// <summary>Time event "after 8 h". Safe to call repeatedly; returns true if it expired the grant.</summary>
     public bool ExpireIfDue()
     {
-        if (ValidUntil is null || _clock.GetUtcNow() < ValidUntil || PermitStates.IsFinal(State)) return false;
-        Fire(PermitTrigger.Expire, $"validity ended {ValidUntil:yyyy-MM-dd HH:mm}");
+        if (ValidUntil is null || _clock.GetUtcNow() < ValidUntil || GrantStates.IsFinal(State)) return false;
+        Fire(GrantTrigger.Expire, $"validity ended {ValidUntil:yyyy-MM-dd HH:mm}");
         return true;
     }
 
     // ----- The engine -----
 
-    private void Fire(PermitTrigger trigger, string? note = null)
+    private void Fire(GrantTrigger trigger, string? note = null)
     {
         // Look for a row on the current state first, then on its composite parent.
         var row = Table.FirstOrDefault(t => t.From == State && t.Trigger == trigger)
-                  ?? Table.FirstOrDefault(t => t.From == PermitStates.ParentOf(State) && t.Trigger == trigger)
+                  ?? Table.FirstOrDefault(t => t.From == GrantStates.ParentOf(State) && t.Trigger == trigger)
                   ?? throw new IllegalTransitionException(State, trigger);
 
         var from = State;
-        var to = PermitStates.Resolve(row.To);
+        var to = GrantStates.Resolve(row.To);
 
         // Exit actions run inside-out. Leaving the composite only if the target is outside it.
         OnExit(from);
-        var fromParent = PermitStates.ParentOf(from);
-        if (fromParent is not null && PermitStates.ParentOf(to) != fromParent) OnExit(fromParent.Value);
+        var fromParent = GrantStates.ParentOf(from);
+        if (fromParent is not null && GrantStates.ParentOf(to) != fromParent) OnExit(fromParent.Value);
 
         State = to;
 
         // Entry actions run outside-in.
-        var toParent = PermitStates.ParentOf(to);
+        var toParent = GrantStates.ParentOf(to);
         if (toParent is not null && toParent != fromParent) OnEnter(toParent.Value);
         OnEnter(to);
 
-        _history.Add(new PermitEvent(_clock.GetUtcNow(), from, trigger, to, note));
+        _history.Add(new GrantEvent(_clock.GetUtcNow(), from, trigger, to, note));
     }
 
-    private void OnEnter(PermitState state)
+    private void OnEnter(GrantState state)
     {
         switch (state)
         {
-            case PermitState.Approved:
-                ValidUntil = _clock.GetUtcNow() + Validity;   // entry / start 12 h validity timer
+            case GrantState.Approved:
+                ValidUntil = _clock.GetUtcNow() + Validity;   // entry / start 8 h validity timer
                 break;
-            case PermitState.Active:
-                CrewLeftAt = null;
+            case GrantState.Active:
+                AccessEndedAt = null;
                 break;
         }
     }
 
-    private void OnExit(PermitState state)
+    private void OnExit(GrantState state)
     {
-        if (state == PermitState.Active) CrewLeftAt = _clock.GetUtcNow();   // exit / record time crew left
+        if (state == GrantState.Active) AccessEndedAt = _clock.GetUtcNow();   // exit / record time access ended
     }
 }
 ```
 
-```csharp file=Application/PermitStore.cs
+```csharp file=Application/GrantStore.cs
 using System.Collections.Concurrent;
-using Permits.Api.Domain;
+using AccessGrants.Api.Domain;
 
-namespace Permits.Api.Application;
+namespace AccessGrants.Api.Application;
 
-public interface IPermitStore
+public interface IGrantStore
 {
-    void Add(WorkPermit permit);
-    WorkPermit? Find(Guid id);
-    IReadOnlyList<WorkPermit> All();
+    void Add(AccessGrant grant);
+    AccessGrant? Find(Guid id);
+    IReadOnlyList<AccessGrant> All();
 }
 
 /// <summary>In-memory store. In PostgreSQL, saving would be
-/// UPDATE permits SET state = @new, version = version + 1 WHERE id = @id AND version = @expected,
-/// so two requests can't both move the permit out of the same state.</summary>
-public sealed class InMemoryPermitStore : IPermitStore
+/// UPDATE access_grants SET state = @new, version = version + 1 WHERE id = @id AND version = @expected,
+/// so two requests can't both move the grant out of the same state.</summary>
+public sealed class InMemoryGrantStore : IGrantStore
 {
-    private readonly ConcurrentDictionary<Guid, WorkPermit> _items = new();
-    public void Add(WorkPermit permit) => _items[permit.Id] = permit;
-    public WorkPermit? Find(Guid id) => _items.GetValueOrDefault(id);
-    public IReadOnlyList<WorkPermit> All() => _items.Values.ToList();
+    private readonly ConcurrentDictionary<Guid, AccessGrant> _items = new();
+    public void Add(AccessGrant grant) => _items[grant.Id] = grant;
+    public AccessGrant? Find(Guid id) => _items.GetValueOrDefault(id);
+    public IReadOnlyList<AccessGrant> All() => _items.Values.ToList();
 }
 ```
 
-```csharp file=Application/PermitExpiryWorker.cs
-using Permits.Api.Domain;
+```csharp file=Application/GrantExpiryWorker.cs
+using AccessGrants.Api.Domain;
 
-namespace Permits.Api.Application;
+namespace AccessGrants.Api.Application;
 
-/// <summary>Fires the "after 12 h" time event. Runs every minute, so a permit expires at most
+/// <summary>Fires the "after 8 h" time event. Runs every minute, so a grant expires at most
 /// about a minute late; the API also calls ExpireIfDue before every action to close that gap.</summary>
-public sealed class PermitExpiryWorker(IPermitStore store, TimeProvider clock, ILogger<PermitExpiryWorker> logger) : BackgroundService
+public sealed class GrantExpiryWorker(IGrantStore store, TimeProvider clock, ILogger<GrantExpiryWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1), clock);
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
-            foreach (var permit in store.All())
+            foreach (var grant in store.All())
             {
-                lock (permit)
+                lock (grant)
                 {
-                    if (permit.ExpireIfDue())
-                        logger.LogWarning("Permit {PermitId} at {Location} expired", permit.Id, permit.Location);
+                    if (grant.ExpireIfDue())
+                        logger.LogWarning("Access grant {GrantId} for {TargetSystem} expired", grant.Id, grant.TargetSystem);
                 }
             }
         }
@@ -616,28 +620,28 @@ public sealed class PermitExpiryWorker(IPermitStore store, TimeProvider clock, I
 ```
 
 ```csharp file=Program.cs
-using Permits.Api.Application;
-using Permits.Api.Domain;
+using AccessGrants.Api.Application;
+using AccessGrants.Api.Domain;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<IPermitStore, InMemoryPermitStore>();
-builder.Services.AddHostedService<PermitExpiryWorker>();
+builder.Services.AddSingleton<IGrantStore, InMemoryGrantStore>();
+builder.Services.AddHostedService<GrantExpiryWorker>();
 
 var app = builder.Build();
 
-app.MapPost("/permits", (NewPermit req, IPermitStore store, TimeProvider clock) =>
+app.MapPost("/access-grants", (NewGrant req, IGrantStore store, TimeProvider clock) =>
 {
-    var permit = new WorkPermit(Guid.NewGuid(), req.Location, req.WorkType, clock);
-    store.Add(permit);
-    return Results.Created($"/permits/{permit.Id}", Describe(permit));
+    var grant = new AccessGrant(Guid.NewGuid(), req.Requester, req.TargetSystem, clock);
+    store.Add(grant);
+    return Results.Created($"/access-grants/{grant.Id}", Describe(grant));
 });
 
-app.MapGet("/permits/{id:guid}", (Guid id, IPermitStore store) =>
+app.MapGet("/access-grants/{id:guid}", (Guid id, IGrantStore store) =>
     store.Find(id) is { } p ? Results.Ok(Describe(p)) : Results.NotFound());
 
 // One endpoint per event keeps the API aligned with the diagram's arrows.
-app.MapPost("/permits/{id:guid}/{action}", (Guid id, string action, PermitCommand cmd, IPermitStore store) =>
+app.MapPost("/access-grants/{id:guid}/{action}", (Guid id, string action, GrantCommand cmd, IGrantStore store) =>
 {
     if (store.Find(id) is not { } p) return Results.NotFound();
     try
@@ -648,14 +652,14 @@ app.MapPost("/permits/{id:guid}/{action}", (Guid id, string action, PermitComman
             switch (action.ToLowerInvariant())
             {
                 case "submit": p.Submit(); break;
-                case "approve": p.Approve(cmd.By ?? "", cmd.GasTestPassed, cmd.IsolationDone); break;
+                case "approve": p.Approve(cmd.By ?? "", cmd.TicketLinked, cmd.MfaVerified); break;
                 case "reject": p.Reject(cmd.Reason ?? ""); break;
                 case "start": p.Start(); break;
                 case "pause": p.Pause(); break;
                 case "resume": p.Resume(); break;
                 case "suspend": p.Suspend(cmd.Reason ?? ""); break;
-                case "reinstate": p.Reinstate(cmd.ReinspectionPassed); break;
-                case "close": p.Close(cmd.WorkersInside); break;
+                case "reinstate": p.Reinstate(cmd.SecurityReviewPassed); break;
+                case "close": p.Close(cmd.OpenSessions); break;
                 case "cancel": p.Cancel(); break;
                 default: return Results.NotFound($"Unknown action '{action}'.");
             }
@@ -668,22 +672,24 @@ app.MapPost("/permits/{id:guid}/{action}", (Guid id, string action, PermitComman
 
 app.Run();
 
-static object Describe(WorkPermit p) => new { p.Id, p.Location, State = p.State.ToString(), p.ValidUntil, Allowed = p.PermittedTriggers() };
+static object Describe(AccessGrant p) => new { p.Id, p.Requester, p.TargetSystem, State = p.State.ToString(), p.ValidUntil, Allowed = p.PermittedTriggers() };
 
-public sealed record NewPermit(string Location, string WorkType);
+// In a real system the approver comes from the authenticated user (HttpContext.User), never from the request body.
+public sealed record NewGrant(string Requester, string TargetSystem);
 
-public sealed record PermitCommand(string? By, string? Reason, bool GasTestPassed, bool IsolationDone,
-    bool ReinspectionPassed, int WorkersInside);
+public sealed record GrantCommand(string? By, string? Reason, bool TicketLinked, bool MfaVerified,
+    bool SecurityReviewPassed, int OpenSessions);
 ```
 
 How the code mirrors the diagram:
 
-- **The table is the diagram.** Fifteen rows, fifteen arrows (counting each `after 12 h` arrow separately). A reviewer can put them side by side and tick them off.
+- **The table is the diagram.** Fifteen rows, fifteen arrows (counting each `after 8 h` arrow separately). A reviewer can put them side by side and tick them off.
 - **The composite is a parent lookup.** Rows on `Active` apply when the state is `Working` or `Paused`. `Resolve(Active)` returns `Working`, which is Active's initial substate.
-- **Entry and exit run on every change**, whichever event caused it. Suspending from `Paused` runs exit Paused (nothing), then exit Active (records `CrewLeftAt`). Pausing doesn't exit Active, because the target is still inside it.
+- **Entry and exit run on every change**, whichever event caused it. Suspending from `Paused` runs exit Paused (nothing), then exit Active (records `AccessEndedAt`). Pausing doesn't exit Active, because the target is still inside it.
 - **Guards are explicit and named in errors.** A failed guard throws `IllegalTransitionException` with the guard's text, which the API turns into `409 Conflict`. The caller learns exactly why.
-- **Time events need infrastructure.** Nothing in .NET fires "after 12 h" for you. The `PermitExpiryWorker` checks every minute, and every command first applies any pending expiry, so a crew can't start work on a permit that expired 30 seconds ago but hasn't been swept yet.
-- **The state has a private setter.** There is no way to "just set" a permit to `Closed`.
+- **Time events need infrastructure.** Nothing in .NET fires "after 8 h" for you. The `GrantExpiryWorker` checks every minute, and every command first applies any pending expiry, so an engineer can't start a session on a grant that expired 30 seconds ago but hasn't been swept yet.
+- **Defence in depth for time.** A real access system doesn't rely only on the sweeper: it issues short-lived database credentials whose lifetime equals the grant's validity, so the database itself refuses a login after 8 hours even if the worker is down. The state machine is the record; the credential is the enforcement.
+- **The state has a private setter.** There is no way to "just set" a grant to `Closed`.
 
 :::callout type=tip title="Libraries"
 For larger machines, a library such as **Stateless** (open source, on NuGet) gives you a fluent `Configure(state).Permit(trigger, target)` API, substates, guards, entry/exit actions and even DOT/Mermaid export. Exercise 3 asks you to build a small version of it, so you understand what such a library does before you depend on one.
@@ -694,7 +700,7 @@ For larger machines, a library such as **Stateless** (open source, on NuGet) giv
 ### Status as a free-for-all
 
 ```csharp
-public class Permit
+public class AccessGrant
 {
     public string Status { get; set; } = "draft";      // any string, any time
     public bool IsApproved { get; set; }
@@ -704,34 +710,34 @@ public class Permit
 }
 
 // Somewhere in a controller...
-permit.Status = "closed";
-permit.IsActive = false;
+grant.Status = "closed";
+grant.IsActive = false;
 ```
 
 Why this hurts:
 
 - **Any value, any time.** `"Closed"`, `"closed "` and `"clsoed"` are all accepted. Nothing stops "closed" being set on a draft.
 - **Boolean soup.** Four flags allow 16 combinations, but only a handful make sense. `IsApproved = false, IsActive = true, IsSuspended = true` is representable, so one day it will exist in your database.
-- **Rules are scattered.** The "all workers signed out" check lives in one controller. A second endpoint, a batch job or a support script forgets it.
-- **Expiry is passive.** `ExpiresAt` is stored, but nothing compares it with the clock before work starts.
+- **Rules are scattered.** The "all sessions ended" check lives in one controller. A second endpoint, a batch job or a support script forgets it.
+- **Expiry is passive.** `ExpiresAt` is stored, but nothing compares it with the clock before a session starts.
 
 ### The good version
 
-The `WorkPermit` class above: one enum, a private setter, every change through an event method, guards checked in one place, a history of every transition, and an active time event. The illegal combinations are not just "not allowed"; they can't be represented.
+The `AccessGrant` class above: one enum, a private setter, every change through an event method, guards checked in one place, a history of every transition, and an active time event. The illegal combinations are not just "not allowed"; they can't be represented.
 
 ### Is a state machine always worth it?
 
 No. If an object has two states and one transition (a newsletter subscription: subscribed or not), a boolean and one method is clearer. Reach for an explicit state machine when there are **three or more states with rules about which moves are legal**, when **time events** exist, or when mistakes are expensive (money, safety, compliance). A useful smell: if you see `if (status == X || status == Y)` in more than two places, the rules want to live in one table.
 
 :::callout type=mistake title="Drawing the process instead of the states"
-A common beginner diagram has states named "Check gas", "Approve", "Send email". Those are actions, so the result is an activity diagram drawn with state-diagram symbols. Ask: "can the object *sit* in this state for a while, waiting for something?" If not, it's an action on a transition, or a step in an activity diagram.
+A common beginner diagram has states named "Check MFA", "Approve", "Send email". Those are actions, so the result is an activity diagram drawn with state-diagram symbols. Ask: "can the object *sit* in this state for a while, waiting for something?" If not, it's an action on a transition, or a step in an activity diagram.
 :::
 
 ## Practical playground
 
-Run the lifecycle of one permit, then try to break it: close it while two workers are still inside, start it after expiry, reinstate it without a re-inspection. Every illegal attempt prints the reason. Then add a new rule: a `Suspended` permit can also be `Cancel`led. Add one row, and watch the new path work.
+Run the lifecycle of one access grant, then try to break it: close it while two sessions are still open, start it after expiry, reinstate it without a security review. Every illegal attempt prints the reason. Then add a new rule: a `Suspended` grant can also be `Cancel`led. Add one row, and watch the new path work.
 
-:::playground type=csharp title="Drive a permit through its lifecycle"
+:::playground type=csharp title="Drive an access grant through its lifecycle"
 ```csharp file=Program.cs
 using System;
 using System.Collections.Generic;
@@ -740,7 +746,7 @@ using System.Linq;
 public enum S { Draft, Submitted, Approved, Active, Working, Paused, Suspended, Closed, Expired, Cancelled }
 public enum T { Submit, Approve, Start, Pause, Resume, Suspend, Reinstate, Close, Cancel, Expire }
 
-public sealed class Permit
+public sealed class Grant
 {
     private static readonly (S From, T Trigger, S To)[] Table =
     {
@@ -768,9 +774,9 @@ public static class Program
 {
     public static void Main()
     {
-        var p = new Permit();
-        int workersInside = 2;
-        bool reinspected = false;
+        var p = new Grant();
+        int openSessions = 2;
+        bool reviewed = false;
 
         p.Fire(T.Start);                                   // illegal: still a draft
         p.Fire(T.Submit);
@@ -778,12 +784,12 @@ public static class Program
         p.Fire(T.Start);
         p.Fire(T.Pause);
         p.Fire(T.Suspend);                                 // works from Paused via the composite
-        p.Fire(T.Reinstate, () => reinspected, "re-inspection passed");
-        reinspected = true;
-        p.Fire(T.Reinstate, () => reinspected, "re-inspection passed");
-        p.Fire(T.Close, () => workersInside == 0, "all workers signed out");
-        workersInside = 0;
-        p.Fire(T.Close, () => workersInside == 0, "all workers signed out");
+        p.Fire(T.Reinstate, () => reviewed, "security review passed");
+        reviewed = true;
+        p.Fire(T.Reinstate, () => reviewed, "security review passed");
+        p.Fire(T.Close, () => openSessions == 0, "all sessions ended");
+        openSessions = 0;
+        p.Fire(T.Close, () => openSessions == 0, "all sessions ended");
         p.Fire(T.Resume);                                  // illegal: closed is final
         Console.WriteLine($"Final state: {p.State}");
     }
@@ -1304,7 +1310,7 @@ public sealed class StateMachine<TState, TTrigger> where TState : notnull where 
 
 The machine is a dictionary from state to configuration. `Fire` finds the transitions for the trigger whose guards pass, insists on exactly one, then runs the UML order: exit, change, entry. Internal transitions short-circuit before exit. Because `CanFire` and `PermittedTriggers` reuse the same matching logic, the UI and the engine can never disagree about what is allowed.
 ::alternatives
-Real libraries add substates (`SubstateOf`), async entry/exit actions, parameters on triggers (`Fire(approve, officerName)`), and export to DOT or Mermaid. Another design is to model each state as a class (the [State pattern](#/lesson/m06-state)), which is better when each state has a lot of distinct behaviour, not just different allowed transitions.
+Real libraries add substates (`SubstateOf`), async entry/exit actions, parameters on triggers (`Fire(approve, approverName)`), and export to DOT or Mermaid. Another design is to model each state as a class (the [State pattern](#/lesson/m06-state)), which is better when each state has a lot of distinct behaviour, not just different allowed transitions.
 ::mistakes
 - Running entry before exit, or setting `State` before exit actions, so exit actions see the wrong state.
 - Treating a self-transition like an internal one.
@@ -1455,7 +1461,7 @@ using Xunit;
 
 public class HierarchicalMachineTests
 {
-    private static HierarchicalMachine Permit()
+    private static HierarchicalMachine Grant()
     {
         var m = new HierarchicalMachine();
         m.AddState("Approved");
@@ -1477,7 +1483,7 @@ public class HierarchicalMachineTests
     [Fact]
     public void Start_enters_initial_child()
     {
-        var m = Permit();
+        var m = Grant();
         m.Start("Approved");
         Assert.True(m.Fire("start"));
         Assert.Equal("Working", m.Current);
@@ -1487,7 +1493,7 @@ public class HierarchicalMachineTests
     [Fact]
     public void Transition_inside_composite_does_not_exit_it()
     {
-        var m = Permit();
+        var m = Grant();
         m.Start("Working");
         var n = m.Log.Count;
         m.Fire("pause");
@@ -1498,7 +1504,7 @@ public class HierarchicalMachineTests
     [Fact]
     public void Transition_from_composite_border_exits_inside_out()
     {
-        var m = Permit();
+        var m = Grant();
         m.Start("Working");
         m.Fire("pause");
         var n = m.Log.Count;
@@ -1510,7 +1516,7 @@ public class HierarchicalMachineTests
     [Fact]
     public void Reentering_composite_goes_to_initial_child()
     {
-        var m = Permit();
+        var m = Grant();
         m.Start("Suspended");
         var n = m.Log.Count;
         m.Fire("reinstate");
@@ -1520,7 +1526,7 @@ public class HierarchicalMachineTests
     [Fact]
     public void Self_transition_on_composite_reenters_it()
     {
-        var m = Permit();
+        var m = Grant();
         m.Start("Paused");
         Assert.Equal(new[] { "enter Active", "enter Paused" }, m.Log);
         var n = m.Log.Count;
@@ -1730,7 +1736,7 @@ A state diagram gives you a complete test plan for free.
 **1. One test per arrow.** For each transition, put the object in the source state, fire the event, and assert the target state and the side effects (entry, exit, transition actions):
 
 ```csharp
-public class WorkPermitTests
+public class AccessGrantTests
 {
     private sealed class FakeClock(DateTimeOffset now) : TimeProvider
     {
@@ -1738,12 +1744,12 @@ public class WorkPermitTests
         public override DateTimeOffset GetUtcNow() => Now;
     }
 
-    private static (WorkPermit Permit, FakeClock Clock) Active()
+    private static (AccessGrant Grant, FakeClock Clock) Active()
     {
         var clock = new FakeClock(new DateTimeOffset(2026, 5, 4, 2, 30, 0, TimeSpan.Zero));
-        var p = new WorkPermit(Guid.NewGuid(), "Tank T-3, Paradip", "Confined space", clock);
+        var p = new AccessGrant(Guid.NewGuid(), "asha.k", "payments-db (production)", clock);
         p.Submit();
-        p.Approve("R. Mohanty", gasTestPassed: true, isolationDone: true);
+        p.Approve("vikram.lead", ticketLinked: true, mfaVerified: true);
         p.Start();
         return (p, clock);
     }
@@ -1753,19 +1759,19 @@ public class WorkPermitTests
     {
         var (p, _) = Active();
         p.Pause();
-        p.Suspend("Gas alarm in adjacent tank");
-        Assert.Equal(PermitState.Suspended, p.State);
-        Assert.NotNull(p.CrewLeftAt);                 // Active's exit action ran
+        p.Suspend("Bulk export of 40,000 customer rows");
+        Assert.Equal(GrantState.Suspended, p.State);
+        Assert.NotNull(p.AccessEndedAt);              // Active's exit action ran
     }
 
     [Fact]
-    public void Expires_after_twelve_hours_even_when_paused()
+    public void Expires_after_eight_hours_even_when_paused()
     {
         var (p, clock) = Active();
         p.Pause();
-        clock.Now += TimeSpan.FromHours(12);
+        clock.Now += TimeSpan.FromHours(8);
         Assert.True(p.ExpireIfDue());
-        Assert.Equal(PermitState.Expired, p.State);
+        Assert.Equal(GrantState.Expired, p.State);
         Assert.Throws<IllegalTransitionException>(() => p.Resume());
     }
 }
@@ -1773,16 +1779,16 @@ public class WorkPermitTests
 
 **2. Test important "not allowed" cells.** You can't test all 99 cells of the state × event grid by hand, but you can generate them: loop over every state and every trigger, and assert that `PermittedTriggers()` matches a hand-written expected table. One data-driven test then protects the whole grid.
 
-**3. Test guards at their boundaries.** For the 12-hour validity, test 11:59:59 (still valid) and 12:00:00 (expired). Use a fake `TimeProvider`, never real time.
+**3. Test guards at their boundaries.** For the 8-hour validity, test 7:59:59 after approval (still valid) and exactly 8:00:00 (expired). Use a fake `TimeProvider`, never real time.
 
 **4. Test concurrency where the database enforces it.** An integration test against PostgreSQL can run two "disburse" updates in parallel and assert exactly one row-count of 1. That's the only kind of test that catches the lost-update bug from exercise 6.
 
-**5. Keep diagram and code in sync.** If the transition table is data (as in `WorkPermit`), a test can generate Mermaid from it and compare it with the committed diagram, failing when they drift.
+**5. Keep diagram and code in sync.** If the transition table is data (as in `AccessGrant`), a test can generate Mermaid from it and compare it with the committed diagram, failing when they drift.
 
 ## Real-world application
 
 - **Orders and payments.** Every serious e-commerce or payments system has an order state machine (Placed, Paid, Packed, Shipped, Delivered, Returned, Refunded) and a payment one (Created, Authorised, Captured, Failed, Refunded). Gateways like UPI or card networks send callbacks out of order and more than once, and the state machine is what makes duplicates harmless.
-- **Approvals and documents.** Bills, permits, tenders, change orders and leave requests all have lifecycles. The diagram becomes the status column's `CHECK` constraint, the API's endpoints, the UI's enabled buttons (`PermittedTriggers`), and the audit table.
+- **Approvals and documents.** Expense claims, access requests, purchase orders, insurance claims and leave requests all have lifecycles. The diagram becomes the status column's `CHECK` constraint, the API's endpoints, the UI's enabled buttons (`PermittedTriggers`), and the audit table.
 - **Devices and protocols.** EV chargers (OCPP), TCP connections and payment terminals are specified as state machines. Reading those specifications is much easier once you know the notation.
 - **Background workflows.** A long process ([activity diagram](#/lesson/m05-activity-diagrams)) often stores its progress as a state machine on its main document, moved forward by `BackgroundService` workers and time events.
 - **UI.** Wizard steps, upload widgets (Idle, Uploading, Paused, Failed, Done) and form submission flows are state machines; front-end libraries such as XState use statecharts directly.
@@ -1793,11 +1799,11 @@ public class WorkPermitTests
 ::q beginner
 What is the difference between a state, an event and a transition?
 ::a
-A **state** is a condition an object stays in for some time, such as `Approved`. An **event** is something that happens at a moment, such as "Approve clicked" or "12 hours passed". A **transition** is the rule connecting them: "in state A, when event E happens and guard G is true, do action X and move to state B". It's written on the diagram as `E [G] / X`. States are named as conditions (adjectives), events as verbs.
+A **state** is a condition an object stays in for some time, such as `Approved`. An **event** is something that happens at a moment, such as "Approve clicked" or "8 hours passed". A **transition** is the rule connecting them: "in state A, when event E happens and guard G is true, do action X and move to state B". It's written on the diagram as `E [G] / X`. States are named as conditions (adjectives), events as verbs.
 ::q beginner
 What do entry and exit actions do, and why use them instead of transition actions?
 ::a
-An entry action runs every time the object enters a state, and an exit action every time it leaves, whichever transition is used. They avoid repeating the same action on several arrows. For example, "start the 12-hour validity timer" belongs on entry to `Approved`, so any route into Approved starts it. The order on a transition is: exit of the source, the transition's action, entry of the target.
+An entry action runs every time the object enters a state, and an exit action every time it leaves, whichever transition is used. They avoid repeating the same action on several arrows. For example, "start the 8-hour validity timer" belongs on entry to `Approved`, so any route into Approved starts it. The order on a transition is: exit of the source, the transition's action, entry of the target.
 ::q intermediate
 What is the difference between a self-transition and an internal transition?
 ::a
@@ -1849,7 +1855,7 @@ Q: How do you separate concurrent regions in Mermaid?
 A: A line containing only `--` inside the composite state's braces.
 Q: How do you stop two requests performing the same transition in PostgreSQL?
 A: Conditional update: `WHERE id = @id AND status = @expected` (or a version column), then check the affected row count.
-Q: How is a time event like "after 12 h" implemented in .NET?
+Q: How is a time event like "after 8 h" implemented in .NET?
 A: Store the deadline; a BackgroundService (or scheduler) fires the event when due, and commands re-check it.
 :::
 

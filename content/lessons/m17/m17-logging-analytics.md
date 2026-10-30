@@ -104,7 +104,7 @@ All figures are **estimates** for illustration.
 
 - Producers compress batches. Logs are repetitive, so a compression ratio of around 4–5× is a reasonable planning assumption (measure with your data and codec). 600 MB/s ÷ 5 ≈ **120 MB/s** of compressed data on average, ~240 MB/s peak.
 - Replication factor 3 → the cluster writes 3 × 120 = **360 MB/s** to disk on average.
-- Retention of 3 days (time to recover from a downstream outage or replay after a bug): 120 MB/s × 86,400 × 3 days × 3 replicas ≈ **93 TB** of Kafka disk. A 7-day retention would be ~220 TB: retention is a direct cost lever.
+- Retention of 3 days (time to recover from a downstream outage or replay after a bug): 120 MB/s × 86,400 × 3 days × 3 replicas ≈ **93 TB** of Kafka disk. A 7-day retention would be ~220 TB: retention is a direct cost lever. The `*.clean` topics written by the stream processors need disk too: at a similar compressed rate and 1-day retention they add about 120 MB/s × 86,400 × 3 replicas ≈ **31 TB**, so plan for roughly **125 TB** in total.
 - Partitions: if one partition comfortably handles around 10 MB/s of compressed writes on your hardware (an assumption to benchmark), 240 MB/s peak needs ≥ 24 partitions for logs. Consumer parallelism also needs partitions, so choose **128 partitions** for the log topic and 48 for events, leaving room to grow.
 
 ### Storage tiers
@@ -230,7 +230,7 @@ Design notes:
 - **Low-cardinality encoding** for `service`, `level`, `env`: dictionary-encoded, compresses extremely well and makes filters fast.
 - **Promote hot attributes to columns**: filtering on `attrs['http_status']` in a map is much slower than on a real column. Watch query logs and promote keys that appear in many queries.
 - **Avoid unbounded cardinality in sort keys**: putting `trace_id` or `user_id` first in the sort key ruins compression and locality for every other query. Use a secondary index (a bloom-filter skip index on `trace_id`) instead.
-- **Rollups on insert**: the materialized view keeps per-minute counts as data arrives, so dashboards read thousands of rows instead of billions.
+- **Rollups on insert**: the materialized view keeps per-minute counts as data arrives, so dashboards read thousands of rows instead of billions. A `SummingMergeTree` collapses rows with the same key only when background merges run, so queries must still aggregate (`SELECT service, minute, sum(requests) … GROUP BY service, minute`); reading the rows as if they were already final double-counts.
 - **Free-text search**: columnar stores scan `message` quickly but don't have a full inverted index by default; token bloom-filter indexes help. If heavy free-text search is the main use case, a search engine (an inverted index, see [search architecture](#/lesson/m16-search-architecture)) is the alternative, at higher storage cost.
 
 ### Cold tier
@@ -290,7 +290,7 @@ sequenceDiagram
     A->>A: batch 1,000 lines or 1 s, gzip
     A->>G: POST /v1/logs (batch)
     G->>G: auth, quota, validate
-    G->>K: produce (key = service), acks=all
+    G->>K: produce (key = pod), acks=all
     K-->>G: ack
     G-->>A: 202 accepted
     K--)P: consume batch
@@ -519,7 +519,7 @@ public sealed class LogIngestor(IngestQueue queue, SamplingPolicy sampling, Time
         foreach (var line in ndjsonLines)
         {
             if (string.IsNullOrWhiteSpace(line)) continue;
-            if (line.Length > MaxRecordBytes) { rejected++; continue; }
+            if (System.Text.Encoding.UTF8.GetByteCount(line) > MaxRecordBytes) { rejected++; continue; }   // bytes, not UTF-16 chars
 
             LogRecordDto? dto;
             try { dto = JsonSerializer.Deserialize<LogRecordDto>(line, Json); }
@@ -561,7 +561,7 @@ public sealed class BatchingPublisher(IngestQueue queue, IEventSink sink, TimePr
                 if (reader.TryRead(out var record))
                 {
                     var value = JsonSerializer.SerializeToUtf8Bytes(record);
-                    batch.Add(new EventEnvelope("logs.raw", record.Service, value));
+                    batch.Add(new EventEnvelope("logs.raw", record.Service, value));   // production: key by pod or host (deep dive 1)
                     bytes += value.Length;
                     continue;
                 }
@@ -594,14 +594,21 @@ public sealed class BatchingPublisher(IngestQueue queue, IEventSink sink, TimePr
                 await sink.PublishAsync(batch.ToList(), ct);
                 return;
             }
-            catch (Exception ex) when (ex is not OperationCanceledException && attempt < 5)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                if (attempt == 5)
+                {
+                    // Never let the exception escape: an unhandled BackgroundService exception stops the whole host
+                    // (the default since .NET 6), which would take the gateway down with the broker.
+                    // Logs tolerate loss; production spills the batch to local disk and replays it later.
+                    log.LogError(ex, "Dropping {Count} records after {Attempts} failed publishes", batch.Count, attempt);
+                    return;
+                }
                 var delay = TimeSpan.FromMilliseconds(100 * Math.Pow(2, attempt - 1) * (0.5 + Random.Shared.NextDouble()));
                 log.LogWarning(ex, "Publish failed (attempt {Attempt}); retrying in {Delay}", attempt, delay);
                 await Task.Delay(delay, clock, ct);
             }
         }
-        // After 5 failures the exception propagates; production spills the batch to local disk instead of losing it.
     }
 }
 ```
@@ -620,8 +627,10 @@ builder.Services.AddSingleton(new SamplingPolicy(new Dictionary<string, double>
 builder.Services.AddSingleton<LogIngestor>();
 builder.Services.AddSingleton<IEventSink, InMemoryEventSink>(); // production: Kafka producer, acks=all, compression on
 builder.Services.AddHostedService<BatchingPublisher>();
+builder.Services.AddRequestDecompression();   // agents send Content-Encoding: gzip
 
 var app = builder.Build();
+app.UseRequestDecompression();                // bounded by Kestrel's MaxRequestBodySize after decompression
 
 app.MapPost("/v1/logs", async (HttpRequest request, LogIngestor ingestor, CancellationToken ct) =>
 {
@@ -655,6 +664,9 @@ What the code demonstrates:
 
 - **The bounded channel is the backpressure point.** When downstream is slow, the channel fills, `TryEnqueue` fails, and the gateway returns `503` with `Retry-After`. Memory stays bounded and agents keep the unsent data on their disks.
 - **Poison records are counted, not fatal.** One malformed JSON line in a batch of 1,000 doesn't reject the other 999.
+- **Gzip bodies need the request decompression middleware.** ASP.NET Core does not decompress request bodies by default; `UseRequestDecompression` does, and Kestrel's request-size limit then applies to the decompressed bytes, which is the defence against gzip bombs.
+- **A `503` mid-batch means partial acceptance.** Records before the overload point are already queued; the agent resends the whole batch, so a few lines may arrive twice. That is acceptable for logs, and it is why product and audit events carry an `event_id`.
+- **A broker outage never crashes the gateway.** After five failed publishes the batch is dropped and counted (production spills it to disk), because an exception escaping a `BackgroundService` stops the host.
 - **The service name comes from the caller's identity**, not the payload, which is the basis for per-team access control and quotas.
 - **Sampling records its rate**, so counts can be scaled back up at query time.
 - **The publisher batches by count, bytes and time**: under load, full batches go out immediately; when quiet, a lone record waits at most 200 ms.

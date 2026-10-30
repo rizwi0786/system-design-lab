@@ -47,27 +47,27 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Think of the register at the gate of a large construction site. Every truck that enters is written on the next line: line 1, line 2, line 3, and so on. Nobody tears pages out after reading them.
+Think of the register at the gate of a large parcel-sorting hub. Every delivery truck that enters is written on the next line: line 1, line 2, line 3, and so on. Nobody tears pages out after reading them.
 
 Different people read the same register for different reasons:
 
-- The **security officer** reads every line to check vehicle permits.
-- The **stores manager** reads it to know which materials arrived.
-- The **accounts clerk** reads it at the end of each day to pay transporters.
+- The **security officer** reads every line to check that each truck is expected.
+- The **dock manager** reads it to know which parcel loads have arrived for sorting.
+- The **accounts clerk** reads it at the end of each day to pay the transport partners per trip.
 
 Each of them keeps a **bookmark**: "I have read up to line 4,512". The security officer may be up to date while the clerk is 900 lines behind. That is fine; the register still has every line. If the clerk makes a mistake, they move their bookmark back to line 3,000 and read again.
 
-The site is so busy that one register is too slow, so the gate has **12 registers**, one per lane. A rule decides the lane: all entries for one truck number always go in the same register, so each truck's entries stay in time order.
+The hub is so busy that one register is too slow, so the gate has **12 registers**, one per lane. A rule decides the lane: all entries for one truck number always go in the same register, so each truck's entries stay in time order.
 
 In Kafka terms:
 
 - The set of 12 registers is a **topic** (`vehicle.positions`), and each register is a **partition**.
 - A line number is an **offset**.
 - The truck number is the **key** that decides the partition.
-- Each reader (security, stores, accounts) is a **consumer group**, and the bookmark is its **committed offset**.
+- Each reader (security, dock, accounts) is a **consumer group**, and the bookmark is its **committed offset**.
 - Old pages are thrown away after a week: that is **retention**.
 
-If the stores team hires three people, they split the 12 registers between them, 4 each. A thirteenth person would have no register to read.
+If the dock team hires three people, they split the 12 registers between them, 4 each. A thirteenth person would have no register to read.
 
 ## First-principles explanation
 
@@ -111,7 +111,7 @@ Kafka guarantees that records in **one partition** are stored and read in the or
 
 For vehicle positions, the key is the vehicle id: each truck's pings stay in order, while different trucks are processed in parallel. For bank transfers on an account, the key is the account number. A key that is too coarse (city) creates **hot partitions**: Mumbai traffic overloads one partition while others sit idle. A key that is too fine (a random id) gives perfect balance but no useful ordering.
 
-Producer retries can also reorder records. With the **idempotent producer** (`enable.idempotence = true`, the default since Kafka 3.0 together with `acks = all`), each producer gets an id and numbers its records per partition; the broker discards duplicates from retries and keeps order with up to 5 in-flight requests. Leave it on.
+Producer retries can also reorder records. With the **idempotent producer** (`enable.idempotence = true`, the default since Kafka 3.0 together with `acks = all`), each producer gets an id and numbers its records per partition; the broker discards duplicates from retries and keeps order with up to 5 in-flight requests. Leave it on. Note that this default belongs to the Java client: librdkafka, which Confluent's .NET client wraps, still defaults to `enable.idempotence = false`, so set `EnableIdempotence = true` explicitly in .NET (the snippet below does). The idempotent producer only removes duplicates from *its own retries*; an application that restarts and re-sends the same business event still creates a second record, so consumers must stay idempotent.
 
 ### Consumer groups
 
@@ -209,7 +209,7 @@ Partitions: suppose one consumer instance of the heaviest group can process abou
 | Throughput sweet spot | Very high, sustained streams (telemetry, clickstreams, CDC) | Moderate to high task and event traffic with routing needs |
 | Consumer bookkeeping | Consumer commits offsets | Broker tracks each message |
 
-Choose **Kafka** when you need replay, many independent readers, very high sustained throughput, per-key ordering at scale, or stream processing (Kafka Streams, Flink). Choose **RabbitMQ** (or a managed queue) for task distribution, complex routing, per-message retries and TTLs, request-reply, and moderate volumes where operating a Kafka cluster would be overkill. Many companies run both.
+Choose **Kafka** when you need replay, many independent readers, very high sustained throughput, per-key ordering at scale, or stream processing (Kafka Streams, Flink). Choose **RabbitMQ** (or a managed queue) for task distribution, complex routing, per-message retries and TTLs, request-reply, and moderate volumes where operating a Kafka cluster would be overkill. Many companies run both. One newer option blurs the line: **share groups** (KIP-932, "queues for Kafka"), introduced as early access in Kafka 4.0, let several consumers share one partition with per-record acknowledgement and redelivery, like a work queue. Check that your Kafka version and client library treat them as production-ready before designing around them.
 
 ### When Kafka is the wrong tool
 

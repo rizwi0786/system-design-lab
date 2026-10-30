@@ -274,10 +274,10 @@ Why it matters: rate limiting per IP, audit logs ("who filed this complaint?"), 
 
 The **forwarded headers middleware** (`UseForwardedHeaders`) reads these headers and updates `HttpContext.Connection.RemoteIpAddress`, `Request.Scheme` and `Request.Host`. Its safety rules:
 
-- It only applies headers when the request came from a **known proxy** or **known network**. By default only loopback (`127.0.0.1`, `::1`) is trusted. Add your proxies' addresses in `KnownProxies` or ranges in `KnownIPNetworks` (named `KnownNetworks` in versions before .NET 10).
+- It only applies headers when the request came from a **known proxy** or **known network**. By default only loopback (`127.0.0.1`, `::1`) is trusted. Add your proxies' addresses in `KnownProxies` or CIDR ranges in `KnownIPNetworks`. In .NET 10 `KnownIPNetworks` (a list of `System.Net.IPNetwork`) replaces the older `KnownNetworks` property, which is now obsolete; code written for .NET 8 or 9 still compiles but shows a warning.
 - `ForwardLimit` (default 1) is how many proxy hops to process, reading `X-Forwarded-For` **from the right**, because the rightmost entries were added by your proxies and the leftmost could be anything a client typed.
 - It must run **first** in the pipeline, before authentication, HTTPS redirection, rate limiting and logging that read the IP or scheme.
-- `AllowedHosts` restricts which values `X-Forwarded-Host` may set, to prevent host-header injection into generated links.
+- `ForwardedHeadersOptions.AllowedHosts` restricts which values `X-Forwarded-Host` may set, to prevent host-header injection into generated links. (It is separate from the `AllowedHosts` setting in `appsettings.json`, which filters the `Host` header itself; use both.)
 
 In containers behind a platform ingress whose addresses you can't know in advance, setting the environment variable `ASPNETCORE_FORWARDEDHEADERS_ENABLED=true` enables the middleware for `X-Forwarded-For` and `X-Forwarded-Proto` and **clears** the known proxy lists, trusting any sender. That is only safe if the app is unreachable except through the ingress.
 
@@ -292,7 +292,7 @@ An upload passes through several limits; the smallest wins, and each fails diffe
 | ASP.NET Core server (Kestrel or IIS in-process) | `MaxRequestBodySize` | 30,000,000 bytes |
 | Multipart forms | `FormOptions.MultipartBodyLengthLimit` | 128 MB |
 
-Jan Samadhan allows photos up to 10 MB each and three per complaint, so set every layer to 15 MB in one place in configuration, and return a friendly 413 with a message, not a blank page. Do the same for timeouts: the proxy's read timeout must be longer than the slowest legitimate request, or citizens see 504 while the app is still working.
+Jan Samadhan allows up to three photos per complaint and at most 15 MB per request in total (the mobile app resizes photos before upload; a single unresized 12 MB photo from the website must still fit), so set every layer to 15 MB in one place in configuration, and return a friendly 413 with a message, not a blank page. Do the same for timeouts: the proxy's read timeout must be longer than the slowest legitimate request, or citizens see 504 while the app is still working.
 
 ### Several instances need shared Data Protection keys
 
@@ -404,10 +404,13 @@ using Microsoft.AspNetCore.HttpOverrides;
 namespace JanSamadhan.Hosting;
 
 /// <summary>Bound from the "Proxy" section, for example
-/// Proxy__TrustedProxies__0=10.20.1.21, Proxy__ForwardLimit=2, Proxy__AllowedHosts__0=grievance.example.gov.in</summary>
+/// Proxy__TrustedProxies__0=10.20.1.21, Proxy__TrustedNetworks__0=10.20.1.0/28,
+/// Proxy__ForwardLimit=2, Proxy__AllowedHosts__0=grievance.example.gov.in</summary>
 public sealed class ProxyTrustOptions
 {
     public List<string> TrustedProxies { get; set; } = [];
+    /// <summary>CIDR ranges, for proxies whose individual addresses change (a scale set, a load balancer pair).</summary>
+    public List<string> TrustedNetworks { get; set; } = [];
     public int ForwardLimit { get; set; } = 1;
     public List<string> AllowedHosts { get; set; } = [];
     public bool ForwardHost { get; set; }
@@ -436,6 +439,14 @@ public static class ProxyTrustExtensions
                 if (!IPAddress.TryParse(p, out var ip))
                     throw new InvalidOperationException($"Proxy:TrustedProxies contains an invalid IP address '{p}'.");
                 o.KnownProxies.Add(ip);
+            }
+            // .NET 10: KnownIPNetworks takes System.Net.IPNetwork. The older KnownNetworks property
+            // (Microsoft.AspNetCore.HttpOverrides.IPNetwork) is obsolete.
+            foreach (var n in trust.TrustedNetworks)
+            {
+                if (!System.Net.IPNetwork.TryParse(n, out var network))
+                    throw new InvalidOperationException($"Proxy:TrustedNetworks contains an invalid CIDR range '{n}'.");
+                o.KnownIPNetworks.Add(network);
             }
         });
         return services;
@@ -566,7 +577,7 @@ app.Run();
 # deploy/compose.proxy-lab.yaml
 services:
   nginx:
-    image: nginx:1.27-alpine
+    image: nginx:1.28-alpine
     ports: ["8443:443"]
     volumes:
       - ./nginx/jansamadhan.conf:/etc/nginx/conf.d/default.conf:ro
@@ -1361,7 +1372,7 @@ After reactivation, one failure doesn't immediately eject the destination again,
 :::
 
 :::exercise id=m15-reverse-proxy-iis-ex6 difficulty=intermediate kind=hld title="Two IIS servers for Jan Samadhan"
-The portal must survive the loss of one server and patch Windows monthly without downtime. Expected load: 2.4 lakh complaints a month, peaking in the monsoon at about 3 times the average, with photo uploads up to 10 MB each. Design the hosting: load balancer, IIS servers, settings that must match, Data Protection, uploads storage, patching procedure and monitoring.
+The portal must survive the loss of one server and patch Windows monthly without downtime. Expected load: 2.4 lakh complaints a month, peaking in the monsoon at about 3 times the average, with up to three photos and at most 15 MB of uploads per complaint. Design the hosting: load balancer, IIS servers, settings that must match, Data Protection, uploads storage, patching procedure and monitoring.
 ::acceptance
 - Two (or more) IIS servers behind a load balancer that terminates TLS and health-checks `/health/ready`.
 - Forwarded headers trust exactly the load balancer's addresses.
@@ -1408,7 +1419,7 @@ Draining: take server 1 out of the load balancer pool, wait for in-flight upload
     { "from": "dns", "to": "lb", "kind": "sync" },
     { "from": "lb", "to": "iis", "kind": "sync", "label": "X-Forwarded-For and Proto" },
     { "from": "iis", "to": "pg", "kind": "sync" },
-    { "from": "iis", "to": "files", "kind": "sync", "label": "photos up to 10 MB" },
+    { "from": "iis", "to": "files", "kind": "sync", "label": "photos, up to 15 MB per complaint" },
     { "from": "iis", "to": "keys", "kind": "sync" },
     { "from": "iis", "to": "sms", "kind": "async", "label": "tracking link (https)" },
     { "from": "mon", "to": "lb", "kind": "sync" },
@@ -1417,7 +1428,7 @@ Draining: take server 1 out of the load balancer pool, wait for in-flight upload
 }
 ```
 
-**Load.** 2,40,000 complaints a month ÷ 30 days ≈ 8,000 a day. Spread over roughly 12 active hours: 8,000 ÷ 43,200 s ≈ 0.19 complaints per second; monsoon peak ×3 ≈ 0.6 per second. Page views and tracking lookups are perhaps 10 times that (estimate), so about 5 requests per second at peak. Two servers are about **availability**, not capacity. Uploads matter more than request count: 0.6 complaints per second × up to 3 photos × 10 MB worst case ≈ 18 MB/s of inbound upload at peak, which the load balancer and servers must buffer; size the network and the proxy timeouts accordingly.
+**Load.** 2,40,000 complaints a month ÷ 30 days ≈ 8,000 a day. Spread over roughly 12 active hours: 8,000 ÷ 43,200 s ≈ 0.19 complaints per second; monsoon peak ×3 ≈ 0.6 per second. Page views and tracking lookups are perhaps 10 times that (estimate), so about 5 requests per second at peak. Two servers are about **availability**, not capacity. Uploads matter more than request count: 0.6 complaints per second × 15 MB worst case ≈ 9 MB/s (about 72 Mbit/s) of inbound upload at peak, which the load balancer and servers must buffer; size the network and the proxy timeouts accordingly. A citizen on a 2 Mbit/s mobile uplink needs about a minute to send 15 MB, so check every layer's timeout for slow uploads (load balancer idle timeouts, and ANCM's `requestTimeout` of 2 minutes in out-of-process mode), not just its size limit.
 
 **Front door.** A load balancer pair terminates TLS and probes `/health/ready`. Its internal addresses are the only entries in `Proxy:TrustedProxies`. No server is reachable directly from the internet.
 

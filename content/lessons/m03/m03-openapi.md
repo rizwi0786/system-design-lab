@@ -113,15 +113,18 @@ The practical consequence: **anything the generator does not know, it cannot doc
 
 ### Built-in generation in .NET 9 and 10
 
-Until .NET 8, templates used the third-party Swashbuckle package. From .NET 9 the templates use the Microsoft package `Microsoft.AspNetCore.OpenApi`, which has two calls:
+Until .NET 8, templates used the third-party Swashbuckle package. From .NET 9 the `webapi` template no longer includes Swashbuckle and uses the Microsoft package `Microsoft.AspNetCore.OpenApi` instead, which has two calls:
 
 ```csharp
 builder.Services.AddOpenApi();   // registers the generator and a document named "v1"
 // ...
-app.MapOpenApi();                // serves GET /openapi/v1.json (and /openapi/v1.yaml in .NET 10)
+app.MapOpenApi();                // serves GET /openapi/v1.json
+// app.MapOpenApi("/openapi/{documentName}.yaml");   // .NET 10: a .yaml/.yml route serves YAML instead
 ```
 
-What .NET 10 adds on top of .NET 9, in brief: OpenAPI 3.1 output by default (3.0 remains selectable), YAML output, XML documentation comments flowing into the document through a build-time source generator, response descriptions on `[ProducesResponseType]`, better schema generation for records and nullable types, and `IOpenApiDocumentProvider` for generating the document at build or startup without a request. The older `.WithOpenApi(...)` endpoint extension is being phased out in favour of transformers.
+What .NET 10 adds on top of .NET 9, in brief: OpenAPI 3.1 output by default (set `options.OpenApiVersion` to get 3.0 for older tools), YAML output when the `MapOpenApi` route ends in `.yaml`, XML documentation comments flowing into the document through a build-time source generator, response descriptions on `[ProducesResponseType]`, better schema generation for records and nullable types, and `IOpenApiDocumentProvider` for fetching a document from DI in code (tests, tools) without an HTTP request. The older `.WithOpenApi(...)` endpoint extension is deprecated in .NET 10 in favour of the `With...` metadata methods and transformers.
+
+Existing projects on Swashbuckle do not have to migrate in a hurry: it still works on .NET 10. Move when you touch the OpenAPI setup anyway, mainly to get 3.1 output and the build-time XML-comment support without extra packages. Swashbuckle's `IOperationFilter`/`IDocumentFilter` map closely to operation and document transformers.
 
 The package does **not** ship a UI. That is deliberate: the document is the product, and you choose a viewer.
 
@@ -220,7 +223,7 @@ We take the employee API from the previous lesson and document it in five steps.
 
 ### Step 1 — turn it on
 
-Add the package and two lines:
+A project created with `dotnet new webapi` on .NET 9 or 10 already contains these lines. For an existing project, add the package and two lines:
 
 ```bash
 dotnet add package Microsoft.AspNetCore.OpenApi
@@ -656,7 +659,7 @@ builder.Services.AddOpenApi("v2", options => options.AddDocumentTransformer<ApiK
 // ...
 if (app.Environment.IsDevelopment())
 {
-    app.MapOpenApi();                                 // /openapi/v1.json, /openapi/v2.json (+ .yaml)
+    app.MapOpenApi();                                 // /openapi/v1.json, /openapi/v2.json
     app.MapScalarApiReference(o => o.AddDocument("v1", "Employee API v1").AddDocument("v2", "Employee API v2"));
     // Swagger UI alternative:
     // app.UseSwaggerUI(o => { o.SwaggerEndpoint("/openapi/v1.json", "v1"); o.SwaggerEndpoint("/openapi/v2.json", "v2"); });
@@ -691,11 +694,10 @@ Build-time generation for CI, so the pipeline can diff documents without running
 </PackageReference>
 <PropertyGroup>
   <OpenApiDocumentsDirectory>$(MSBuildProjectDirectory)/openapi</OpenApiDocumentsDirectory>
-  <OpenApiGenerateDocumentsOptions>--document-name v1 --document-name v2</OpenApiGenerateDocumentsOptions>
 </PropertyGroup>
 ```
 
-With that, `dotnet build` writes `openapi/EmployeeDocs.Api_v1.json` and `_v2.json`. Commit them. In CI, run a diff tool (for example `oasdiff breaking old.json new.json`) and fail the build on breaking changes to a published version.
+With that, `dotnet build` starts the app's service container (without listening for requests) and writes one file per registered document: `openapi/EmployeeDocs.Api.json` for the default `v1` document and `openapi/EmployeeDocs.Api_v2.json` for `v2`. Use `OpenApiGenerateDocumentsOptions` (for example `--file-name` or `--document-name`) to rename the files or generate only one document. Because `Program.cs` really runs at build time, code that connects to a database or Key Vault on startup must be skipped in this mode; check `Assembly.GetEntryAssembly()?.GetName().Name == "GetDocument.Insider"` and return early. Commit the files. In CI, run a diff tool (for example `oasdiff breaking old.json new.json`) and fail the build on breaking changes to a published version.
 
 ## Bad design vs good design
 
@@ -958,7 +960,9 @@ Your CI pipeline compares yesterday's and today's `EmployeeResponse` schema. Imp
 ::requirements
 - A removed property is **breaking**.
 - A property whose type changes is **breaking**.
-- A property that becomes required (was optional) is **breaking** for request schemas and safe for response schemas; this exercise treats all schemas as responses, so it is **safe**... except that a new *required* property on a response is safe and a newly *required* property on a request is breaking. Implement the parameter `isRequestSchema` to decide.
+- The parameter `isRequestSchema` says which side of the wire the schema is on: `true` for a body clients *send*, `false` for a body clients *read*.
+- A property that becomes required (was optional) is **breaking** for a request schema (old clients do not send it) and **safe** for a response schema (readers now always get it).
+- A property that becomes optional (was required) is the mirror image: **safe** for a request schema, **breaking** for a response schema (readers may now get null or nothing).
 - An added optional property is **safe**.
 - An added required property is **breaking** when `isRequestSchema` is true, otherwise **safe**.
 - Return changes ordered by property name.
@@ -1377,7 +1381,7 @@ Unit-test the transformers directly as well: construct an `OpenApiDocument` with
 - **Partner integrations**: payment providers, logistics APIs and government portals publish OpenAPI documents so thousands of integrators can generate clients instead of hand-writing HTTP calls. If you have used a payments SDK, it was probably generated from such a document.
 - **API gateways**: Azure API Management, Kong and AWS API Gateway import OpenAPI to configure routes, validate requests against schemas before they reach your service, and render developer portals. See [Azure API Management](#/lesson/m15-apim).
 - **Microsoft's own tooling**: Kiota generates typed clients for C#, TypeScript, Java, Go and more from an OpenAPI document; Visual Studio's "Add Service Reference" and `dotnet-openapi` do the same for .NET.
-- **Infrastructure platforms**: a project-monitoring system exposing progress, inspection and drone-survey endpoints to several contractors benefits from one versioned document per external audience, with internal reporting endpoints kept in a separate internal document.
+- **Healthcare platforms**: a hospital chain's appointment-booking API (`GET /api/v1/doctors/{id}/slots`, `POST /api/v1/appointments`, `POST /api/v1/appointments/{id}/cancellation`) serves its own patient app, partner telemedicine apps and insurance desks. Each external audience gets one versioned, public-safe document with realistic but fake examples (never a real patient's name or phone number), while the front-desk and reporting endpoints (daily OPD census, doctor rosters) live in a separate internal document served only on the hospital network.
 - **Testing**: tools such as Schemathesis read the document and fuzz every operation with generated inputs, catching 500s that your hand-written tests missed.
 
 ## Interview questions
@@ -1414,7 +1418,7 @@ Separate the document from the viewer and from the environment. Partners need th
 **Key takeaways**
 
 - An OpenAPI document is the machine-readable contract of your HTTP API: paths, operations, schemas, responses, security. Generate it; never hand-write it.
-- In .NET 9 and 10, `AddOpenApi()` plus `MapOpenApi()` from `Microsoft.AspNetCore.OpenApi` produce `/openapi/v1.json` (and YAML in .NET 10). No UI is included; add Scalar or Swagger UI.
+- In .NET 9 and 10, `AddOpenApi()` plus `MapOpenApi()` from `Microsoft.AspNetCore.OpenApi` produce `/openapi/v1.json` (OpenAPI 3.1 by default in .NET 10; YAML if the route ends in `.yaml`). No UI is included; add Scalar or Swagger UI.
 - The generator reads endpoint metadata. Declare every response (`Produces`, `ProducesProblem`, `[ProducesResponseType]`), name operations (`WithName`), and use typed route constraints.
 - XML comments (with `GenerateDocumentationFile`) and `[Description]` make the document readable; `<example>` tags make it usable.
 - Transformers apply cross-cutting policy: security schemes, servers, standard errors, schema formats.

@@ -24,7 +24,7 @@ references:
     url: https://learn.microsoft.com/aspnet/core/test/integration-tests
 ---
 
-Every web API you will build, from a payroll service to a toll-plaza data feed, is a conversation over HTTP. REST is the set of manners for that conversation. Status codes are the tone of voice. Get them right and other teams can use your API without reading your source code; get them wrong and every integration becomes a support ticket. This lesson also introduces the module project: a complete employee management API that the next three lessons extend.
+Every web API you will build, from a payroll service to a library's book-loan and holds system, is a conversation over HTTP. REST is the set of manners for that conversation. Status codes are the tone of voice. Get them right and other teams can use your API without reading your source code; get them wrong and every integration becomes a support ticket. This lesson also introduces the module project: a complete employee management API that the next three lessons extend.
 
 ## Learning objectives
 
@@ -120,6 +120,7 @@ The table below is the working set for an employee API. Pin it above your desk.
 | 405 | Method Not Allowed | `DELETE /api/employees` on a collection you do not allow deleting | `Allow` header |
 | 409 | Conflict | The request clashes with current state: duplicate email, deleting a department with staff | Problem Details explaining the clash |
 | 412 | Precondition Failed | `If-Match` ETag does not match; someone else changed the resource | Problem Details with the current version |
+| 413 | Content Too Large | The body exceeds the server's limit (a 50 MB photo upload; Kestrel's default request body limit is about 30 MB) | Problem Details |
 | 415 | Unsupported Media Type | Client sent XML to a JSON-only API | Problem Details |
 | 422 | Unprocessable Content | Well-formed but semantically invalid (join date in the future). Many teams just use 400 | Problem Details |
 | 428 | Precondition Required | You require `If-Match` on updates and the client did not send it | Problem Details |
@@ -139,16 +140,16 @@ Nothing frustrates API consumers more than five different error formats. RFC 945
 
 ```json
 {
-  "type": "https://httpstatuses.io/409",
+  "type": "https://tools.ietf.org/html/rfc9110#section-15.5.10",
   "title": "Duplicate email",
   "status": 409,
-  "detail": "An employee with email priya@rodic.example already exists.",
+  "detail": "An employee with email priya@example.com already exists.",
   "instance": "/api/employees",
   "traceId": "00-6f1c3a...-01"
 }
 ```
 
-`type` is a URL that identifies the *kind* of problem, `title` is a short human summary, `detail` is specific to this occurrence, and you may add extension members such as `traceId` or `errors`. Validation failures use the `ValidationProblemDetails` subtype with an `errors` dictionary keyed by field name. Once clients know this shape, one error-handling function serves your whole API.
+`type` is a URI that identifies the *kind* of problem (ASP.NET Core fills in the RFC 9110 section for the status code; your own API can point at a page documenting the error, and when it is omitted it means `about:blank`, "nothing beyond the status code"), `title` is a short human summary, `detail` is specific to this occurrence, and you may add extension members such as `traceId` or `errors`. Validation failures use the `ValidationProblemDetails` subtype with an `errors` dictionary keyed by field name. Once clients know this shape, one error-handling function serves your whole API.
 
 ### Resource naming rules of thumb
 
@@ -620,6 +621,7 @@ public sealed class GlobalExceptionHandler(IProblemDetailsService problemDetails
                 Status = 400, Title = v.Title,
             },
             ApiException api => new ProblemDetails { Status = api.StatusCode, Title = api.Title, Detail = api.Message },
+            // 499 is an nginx convention, not an RFC 9110 code: the client has gone, so this is only for logs and metrics.
             OperationCanceledException when http.RequestAborted.IsCancellationRequested =>
                 new ProblemDetails { Status = 499, Title = "Client closed request" },
             _ => new ProblemDetails { Status = 500, Title = "An unexpected error occurred", Detail = "Quote the traceId when reporting this." },
@@ -1698,7 +1700,7 @@ public class EmployeeServiceTests
     public EmployeeServiceTests() =>
         _service = new EmployeeService(new InMemoryEmployeeRepository(), _clock, NullLogger<EmployeeService>.Instance);
 
-    private static CreateEmployeeRequest Priya(string email = "priya@rodic.example") => new()
+    private static CreateEmployeeRequest Priya(string email = "priya@example.com") => new()
     {
         FullName = "Priya Nair", Email = email, Department = "Design", MonthlySalary = 85_000m, JoinedOn = new DateOnly(2026, 10, 1),
     };
@@ -1708,7 +1710,7 @@ public class EmployeeServiceTests
     {
         var created = await _service.CreateAsync(Priya(), CancellationToken.None);
         var fetched = await _service.GetAsync(created.Id, CancellationToken.None);
-        Assert.Equal("priya@rodic.example", fetched.Email);
+        Assert.Equal("priya@example.com", fetched.Email);
         Assert.Equal(1, fetched.Version);
     }
 
@@ -1716,7 +1718,7 @@ public class EmployeeServiceTests
     public async Task Duplicate_email_is_a_conflict()
     {
         await _service.CreateAsync(Priya(), CancellationToken.None);
-        await Assert.ThrowsAsync<ConflictException>(() => _service.CreateAsync(Priya("PRIYA@rodic.example"), CancellationToken.None));
+        await Assert.ThrowsAsync<ConflictException>(() => _service.CreateAsync(Priya("PRIYA@example.com"), CancellationToken.None));
     }
 
     [Fact]
@@ -1780,7 +1782,7 @@ public class EmployeesApiTests : IClassFixture<WebApplicationFactory<Program>>
     {
         var response = await _client.PostAsJsonAsync("/api/employees", new
         {
-            fullName = "Arjun Mehta", email = "arjun@rodic.example", department = "Finance", monthlySalary = 72000, joinedOn = "2026-10-01",
+            fullName = "Arjun Mehta", email = "arjun@example.com", department = "Finance", monthlySalary = 72000, joinedOn = "2026-10-01",
         });
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         Assert.StartsWith("/api/employees/", response.Headers.Location!.PathAndQuery);
@@ -1800,7 +1802,7 @@ public class EmployeesApiTests : IClassFixture<WebApplicationFactory<Program>>
     public async Task Put_without_if_match_is_428()
     {
         var created = await (await _client.PostAsJsonAsync("/api/employees", new
-            { fullName = "Sara Khan", email = "sara@rodic.example", department = "Legal", monthlySalary = 95000, joinedOn = "2026-09-15" }))
+            { fullName = "Sara Khan", email = "sara@example.com", department = "Legal", monthlySalary = 95000, joinedOn = "2026-09-15" }))
             .Content.ReadFromJsonAsync<EmployeeApi.Employees.EmployeeResponse>();
         var response = await _client.PutAsJsonAsync($"/api/employees/{created!.Id}", new
             { fullName = "Sara K.", department = "Legal", monthlySalary = 99000, status = "Active" });
@@ -1822,8 +1824,8 @@ What to cover at each level: business rules and edge cases in unit tests (fast, 
 ## Real-world application
 
 - **Payment gateways** such as UPI switches or card processors live or die by idempotent POSTs. A duplicate debit is a regulatory incident, which is why every serious payment API documents an idempotency key and a 409 for in-progress duplicates.
-- **Government data portals** (tender feeds, GST returns, land records) expose read-heavy REST APIs where correct 304/ETag handling saves real bandwidth: a client polling every minute for changes downloads nothing until something changes.
-- **Infrastructure project platforms** that track progress across hundreds of sites typically model progress reports, inspections and RFIs as resources with explicit state transitions, and use 409 to stop a second inspector closing an already-closed RFI.
+- **Government data portals** (GST returns, land records, exam results) expose read-heavy REST APIs where correct 304/ETag handling saves real bandwidth: a client polling every minute for changes downloads nothing until something changes.
+- **Library systems** (a city library or a college library app) model loans and holds as resources with explicit state transitions: `POST /loans` checks a copy out (201), `POST /loans/{id}/renewals` extends it, and `POST /holds` queues a member for a title. They use 409 when a librarian tries to check out a copy that is already on loan or a member places a second hold on the same title, and 412 when two branch staff edit the same hold at once.
 - **ASP.NET Core itself** follows these conventions: `[ApiController]` emits `ValidationProblemDetails`, `UseStatusCodePages` emits Problem Details for empty 4xx responses, and `Results.Problem`/`TypedResults.Problem` exist precisely so teams do not invent their own error JSON.
 - **Public SaaS APIs** (payments, messaging, cloud providers) are the reference reading. Open any of their docs and you will find the same table of codes as in this lesson. That shared vocabulary is the point.
 

@@ -204,6 +204,8 @@ DNS is an eventually consistent, cached database. "DNS propagation" is really ca
 - Users all in one country, one region nearby: geo and latency routing buy nothing.
 - You already use a CDN or global edge in front of everything: let it do the routing (it is usually anycast). Your DNS just points one name at it.
 
+[Scaling a real system from 100 to 10 million users](#/lesson/m17-scaling-journey) shows this in practice: a grocery app runs on one region and one DNS name for most of its growth, and only reaches for multi-region routing when a measured need appears.
+
 Add DNS routing policies when you have more than one region *and* a reason: users on several continents, a data-residency rule, a disaster-recovery target that one region can't meet, or a migration you want to do gradually.
 
 ## Visual explanation
@@ -276,7 +278,7 @@ Each region on its own must be able to take all 1,100 RPS at peak if the other f
 
 ### Step 2 — choose regions and the data rule
 
-Add a second region in the UAE. Some customers' contracts require Indian shipment data to stay in India, so writes stay **active-passive**: the primary database is in Mumbai, and the UAE serves reads from a replica and forwards writes. Promoting the UAE replica needs legal sign-off; routing can't decide that.
+Add a second region in the UAE. Two regions accepting writes to the same shipment would need conflict resolution, so writes stay **active-passive**: the primary database is in Mumbai, and the UAE serves reads from an asynchronous replica and forwards writes. (The customers' contracts allow an encrypted replica abroad for disaster recovery; if they didn't, Indian users could not fail over to the UAE at all, and you would need a second Indian region instead. That is a business decision, not a routing one.) Promoting the UAE replica is a deliberate operator action, because asynchronous replication may have lost the last few seconds of writes; routing can't decide that.
 
 ### Step 3 — choose the records and policies
 
@@ -463,7 +465,9 @@ builder.Services.AddSingleton(sp => new TrafficPolicy(
         new RegionEndpoint("mumbai", "20.198.10.4", "india", Priority: 1),
         new RegionEndpoint("uae", "20.74.5.9", "gulf", Priority: 1),
     ],
-    new Dictionary<string, string[]> { ["IN"] = ["india"] },   // Indian data stays in India
+    // Residency geofences: country → regions allowed to serve it. Empty for FreightLink, whose contracts allow
+    // failover abroad. A rule such as ["IN"] = ["india"] would keep Indian users on Indian regions even in failover.
+    new Dictionary<string, string[]>(),
     sp.GetRequiredService<IHealthView>()));
 
 var app = builder.Build();
@@ -488,7 +492,7 @@ Design notes:
 - **Liveness and readiness are different questions.** Liveness checks nothing (`Predicate = _ => false` means "200 if the process answers"). Readiness checks the regional database and the drain flag. Pointing DNS at liveness is the classic shallow-check mistake.
 - **The drain switch** turns readiness red on purpose. DNS stops sending new users within detection + TTL, and existing connections finish. Do it before maintenance, and before deploying a risky change to one region.
 - **Fail open** is implemented in `TrafficPolicy`: if every endpoint is unhealthy, return them all instead of an empty answer.
-- **Geofence before health.** A failed Mumbai must *not* push Indian users to the UAE automatically. The geofence keeps them on Indian candidates, and humans decide.
+- **Geofence before health.** FreightLink has no residency geofence, but many products do. When a rule says "Indian users may only be served from Indian regions", the geofence must run *before* the health filter, so a failed Mumbai can't push those users abroad automatically. If health ran first, a regional outage would silently break a legal rule.
 - **`PooledConnectionLifetime`** is the one-line fix for "we failed over DNS but our services kept calling the dead region".
 
 ## Bad design vs good design
@@ -1047,7 +1051,7 @@ The payment gateway caches DNS too, possibly for longer than you'd like. Can you
 
 DNS behaviour is hard to test end to end, so test each layer you own.
 
-**1. Unit-test the routing model.** `TrafficPolicy` and `HealthTracker` are plain classes. Table tests cover: Indian users are never answered with a Gulf endpoint, a dead primary moves traffic to the secondary, everything dead fails open, and alternating probes don't flap.
+**1. Unit-test the routing model.** `TrafficPolicy` and `HealthTracker` are plain classes. Table tests cover: with a residency rule configured, Indian users are never answered with a Gulf endpoint; a dead primary moves traffic to the secondary, everything dead fails open, and alternating probes don't flap.
 
 ```csharp
 public class TrafficPolicyTests

@@ -7,7 +7,7 @@ status: reviewed
 template: hld-case
 minutes: 105
 prerequisites: [m12-message-queues, m12-retries-dlq, m12-idempotent-consumers, m10-rate-limiting]
-related: [m17-chat, m17-news-feed, m17-rate-limiter, m12-outbox, m10-webhooks, m13-backpressure, m12-messaging-patterns, m10-bulkhead]
+related: [m17-chat, m17-news-feed, m17-rate-limiter, m17-job-scheduler, m12-outbox, m10-webhooks, m13-backpressure, m12-messaging-patterns, m10-bulkhead]
 tags: [hld, case-study, fan-out, push, sms, email, preferences, templates, retries, priorities]
 patterns: []
 summary: Design a multi-channel notification platform (push, SMS, email, WhatsApp, in-app) with user preferences and quiet hours, versioned localised templates, frequency caps and provider rate limits, retries with backoff and dead-lettering, and priority lanes that keep OTPs fast during a marketing blast.
@@ -363,8 +363,10 @@ Order of checks for each (user, channel), cheapest and most absolute first:
 2. **Is the category mandatory?** Security alerts and OTPs can't be turned off (but can still only go to channels the user has). Mandatory categories skip steps 3–5.
 3. **Consent**: marketing requires explicit consent. No consent → skip with reason `no_consent`.
 4. **Opt-outs**: (category, channel) opt-out → skip `opted_out`.
-5. **Frequency cap**: at most N per category per rolling 24 h → skip `capped`.
-6. **Quiet hours** in the user's local time zone: transactional messages may be allowed (a delivery update at 22:00 is useful) while marketing is **deferred** to the end of quiet hours. If deferring would push it past the campaign's `endBy`, skip with `quiet_hours_expired`.
+5. **Quiet hours** in the user's local time zone: transactional messages may be allowed (a delivery update at 22:00 is useful) while marketing is **deferred** to the end of quiet hours. If deferring would push it past the campaign's `endBy`, skip with `quiet_hours_expired`.
+6. **Frequency cap**: at most N per category per rolling 24 h → skip `capped`. The cap comes last on purpose: it is the only check that *consumes* something, so it runs only when the message is really about to be queued. If it ran before quiet hours, a deferred message would use up a cap slot at 22:30 and again when it is re-evaluated at 09:00.
+
+Quiet hours need the user's **time zone**, not a fixed offset: an EU user's offset changes twice a year with daylight saving. Store the IANA zone (`Europe/Berlin`, `Asia/Kolkata`) and convert with `TimeZoneInfo.FindSystemTimeZoneById`, which accepts IANA ids on all platforms in .NET 6 and later. The sketch below uses a fixed `UtcOffset` only to stay short.
 
 Every skip is logged with its reason. "Why didn't I get the offer?" is a common support question, and "targeted 30 M, skipped 6.2 M (opted out 3.1 M, no consent 2.4 M, capped 0.7 M)" is the first thing marketing asks after a campaign.
 
@@ -440,7 +442,7 @@ public enum Verdict { Send, Skip, Defer }
 public sealed record PolicyDecision(Verdict Verdict, string? Reason = null, DateTimeOffset? DeferUntil = null);
 
 /// <summary>Checks in order: reachable, mandatory, consent, opt-out, quiet hours. Frequency caps are applied by the caller,
-/// because they need shared counters.</summary>
+/// last, because they need shared counters and consume a slot.</summary>
 public static class PreferencePolicy
 {
     private static readonly HashSet<string> Mandatory = new(StringComparer.Ordinal) { "security", "otp" };
@@ -661,7 +663,7 @@ public sealed class FanOutWorker(IntakeQueue intake, IPreferenceStore prefs, IDe
         {
             var p = await prefs.GetAsync(userId, ct);
             if (p is null) { Skip("unknown_user"); continue; }
-            var cappedThisUser = false;
+            var capCharged = false;
 
             foreach (var channel in req.Channels)
             {
@@ -669,14 +671,16 @@ public sealed class FanOutWorker(IntakeQueue intake, IPreferenceStore prefs, IDe
                 if (d.Verdict == Verdict.Skip) { Skip(d.Reason!); continue; }
                 if (d.Verdict == Verdict.Defer) { Skip("deferred_" + d.Reason); continue; } // production: hand to the scheduler
 
-                if (PreferencePolicy.IsMarketing(req.Category) && !cappedThisUser
-                    && !guard.TryConsumeCap(userId, req.Category, now, MarketingPerDay))
-                { Skip("capped"); break; }
-                cappedThisUser = true; // one cap unit per user per notification, not per channel
-
                 var task = new DeliveryTask($"{req.NotificationId}:{userId}:{channel}", req.NotificationId, userId, channel,
                                             req.Priority, req.TemplateId, p.Locale, req.Data, 1, req.ExpiresAt);
+                // Dedupe before the cap: a redelivered request must not consume a second cap slot.
                 if (!guard.TryMarkOnce(task.DedupeKey)) { Skip("duplicate"); continue; }
+
+                if (PreferencePolicy.IsMarketing(req.Category) && !capCharged)
+                {
+                    if (!guard.TryConsumeCap(userId, req.Category, now, MarketingPerDay)) { Skip("capped"); break; }
+                    capCharged = true; // one cap unit per user per notification, not per channel
+                }
                 await lanes.EnqueueAsync(task, ct);
             }
         }
@@ -786,7 +790,7 @@ public sealed record SendRequest(IReadOnlyList<string> UserIds, string TemplateI
                                  DateTimeOffset? ExpiresAt);
 ```
 
-The notification id is derived deterministically from (producer, idempotency key), so a producer's retry produces the same id and the fan-out dedupe keys (`id:user:channel`) collide, even in this in-memory sketch. Production replaces the in-process lanes with a broker, the in-process retry timer with durable delayed messages, and the guard with Redis.
+The notification id is derived deterministically from (producer, idempotency key), so a producer's retry produces the same id and the fan-out dedupe keys (`id:user:channel`) collide, even in this in-memory sketch. Note the order inside the loop: the dedupe key is claimed before the frequency cap is charged, so a redelivered batch is skipped without using up a second cap slot. One gap remains in the sketch: if a worker crashes after claiming the key but before enqueueing, that delivery is lost. Production closes it by writing the `delivery` row (the unique constraint is the dedupe) and an outbox row in one transaction. Production replaces the in-process lanes with a broker, the in-process retry timer with durable delayed messages, and the guard with Redis.
 
 ## Caching, queues and scaling
 
@@ -806,7 +810,7 @@ Unsubscribes must take effect within minutes, so preference updates write throug
 
 - **Intake topics** by priority (a log such as Kafka, or a broker such as RabbitMQ or Azure Service Bus). Partition by user id so one user's notifications are processed in order.
 - **Channel lanes** by channel × priority. Fifteen queues sounds like a lot, but it's what gives isolation.
-- **Delay queue** for retries, quiet-hour deferrals and scheduled sends: broker-native scheduled messages, or a Redis sorted set scored by due time polled by the scheduler.
+- **Delay queue** for retries, quiet-hour deferrals and scheduled sends: broker-native scheduled messages, or a Redis sorted set scored by due time polled by the scheduler (the [job scheduler](#/lesson/m17-job-scheduler) case study designs this component in depth).
 - **Dead-letter queue** per lane, with tooling to inspect and replay.
 
 ### Scaling
@@ -831,6 +835,7 @@ Unsubscribes must take effect within minutes, so preference updates write throug
 | Template bug (missing variable) | Rendering fails | Validated at accept time; anything that slips through dead-letters as permanent and alerts; campaign auto-pauses above an error threshold |
 | Campaign overruns its window | Stale offers delivered late | Message expiry; dispatchers drop expired bulk tasks |
 | Duplicate request from producer | Same notification twice | `UNIQUE (producer, idempotency_key)` returns the original id |
+| Duplicate or out-of-order provider callbacks | "Delivered" overwritten by a late "sent" | Callbacks are at-least-once and unordered: dedupe on (provider, message id, status) and only move status forward (queued → sent → delivered or failed), never backwards |
 | Region outage | Platform unavailable in region | Active-passive second region for intake; producers buffer locally (or use their own outbox) and retry |
 
 ## Security
@@ -1673,7 +1678,7 @@ Exponential backoff with full jitter so retries spread out; a circuit breaker pe
 - A notification platform is **intake → fan-out with policy → channel lanes → dispatch → status**, all asynchronous after a durable `202`.
 - Numbers: 300 M/day ≈ 3,500/s average; OTP peak 600/s; a 30 M campaign is 8,300/s per channel, but SMS at 2,000/s takes over 4 hours; 300 GB/day of delivery log; 20 GB of preferences.
 - **Isolation**: separate queues, pools and provider capacity per priority. A priority *field* in one queue isn't enough.
-- **Policy order**: reachable → mandatory → consent → opt-out → frequency cap → quiet hours (defer, don't drop). Re-check at send time.
+- **Policy order**: reachable → mandatory → consent → opt-out → quiet hours (defer, don't drop) → frequency cap (last, because it consumes a slot). Re-check at send time.
 - **Templates**: per channel, versioned, approved, localised with fallback, variables validated at accept time; SMS segment length is a cost and capacity issue.
 - **Rate limits** at producer, user and provider level.
 - **Retries**: classify outcomes; exponential backoff with full jitter; critical failover; durable delays; DLQ. Exactly-once to a phone isn't possible; dedupe at every hop and decide per category on unknown outcomes.
@@ -1687,7 +1692,7 @@ A: Separate queues, worker pools and channel lanes per priority, plus reserved p
 Q: What is full jitter?
 A: delay = random(0, min(cap, base × 2^(attempt−1))) — spreads retries so they don't arrive in synchronised waves.
 Q: Order of preference checks?
-A: Reachable channel → mandatory category → consent → opt-out → frequency cap → quiet hours (defer).
+A: Reachable channel → mandatory category → consent → opt-out → quiet hours (defer) → frequency cap (last, because it consumes a slot).
 Q: Why re-check preferences at send time?
 A: Paced campaigns send hours after segment export; users may have unsubscribed since.
 Q: How many characters in an SMS segment?

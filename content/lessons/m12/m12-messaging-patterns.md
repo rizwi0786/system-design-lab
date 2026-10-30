@@ -184,7 +184,7 @@ A driver uploads a 6 MB proof-of-delivery photo. The upload service stores it in
 
 **What.** Urgent messages are processed before ordinary ones. There are two common implementations:
 
-- **Broker-level priority.** RabbitMQ classic queues support a per-queue maximum priority (`x-max-priority`) and per-message priority. Kafka, SQS and Service Bus do not reorder by priority inside one queue.
+- **Broker-level priority.** RabbitMQ classic queues support a per-queue maximum priority (`x-max-priority`) and per-message priority; since RabbitMQ 4.0, quorum queues support two levels (messages with priority above 4 count as high, the rest as normal) without any queue argument. Kafka, SQS and Service Bus do not reorder by priority inside one queue.
 - **Separate queues per priority** (portable and easier to reason about): `bookings.express` and `bookings.standard`, either with **more consumers on the express queue** or with consumers that **poll express first**.
 
 ```mermaid
@@ -1600,7 +1600,7 @@ public async Task Reply_with_matching_correlation_id_completes_the_request()
 - **Ride-hailing and food delivery.** A system like a ride-hailing platform uses pub/sub for trip events, competing consumers for location updates, and a form of scatter-gather when offering a trip to several nearby drivers and taking the first acceptance.
 - **Travel and insurance aggregators.** Flight, hotel and insurance comparison sites are scatter-gather systems with strict deadlines, heavy caching and late-result streaming.
 - **Banking and payments.** UPI-style payment flows use request-reply semantics between banks over messaging infrastructure, with correlation by transaction reference, and timeouts that trigger status-check requests rather than blind retries.
-- **Document-heavy workflows.** Government and infrastructure platforms that move drawings, inspection photos and tender documents use claim checks with object storage almost by default; the message says "drawing rev C for bridge P-14 is ready" and carries a link.
+- **Document-heavy workflows.** Insurance-claim apps, hospital systems moving scan reports, and loan platforms collecting KYC documents use claim checks with object storage almost by default; the message says "MRI report for patient visit V-2291 is ready" and carries a link, never the 40 MB file.
 - **Notification platforms.** OTP versus promotional SMS is the textbook priority-queue case; most providers expose separate routes or priorities for transactional and promotional traffic.
 - **Batch imports.** Uploading a spreadsheet of 10,000 rows and validating them in parallel is a splitter, fan-out to workers and an aggregator producing a summary report.
 

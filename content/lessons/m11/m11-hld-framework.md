@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 75
 prerequisites: [m02-what-is-system-design, m02-requirements]
-related: [m11-clarifying-requirements, m11-nfrs, m11-capacity-estimation, m11-latency-numbers, m11-trade-offs, m17-url-shortener]
+related: [m11-clarifying-requirements, m11-nfrs, m11-capacity-estimation, m11-latency-numbers, m11-trade-offs, m17-url-shortener, m17-scaling-journey]
 tags: [hld, interview, method, framework, system-design]
 patterns: []
 summary: A repeatable 12-step method for any high-level design problem, from clarifying questions to a closing summary, with a worked visitor-pass example and a minute-by-minute budget for a 45-minute interview.
@@ -43,19 +43,19 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Imagine a family asks a civil engineer to "build us a house". A good engineer does not start pouring concrete. They ask: how many people will live here? Do you need a parking space? What is the budget? Is the plot in an earthquake zone? Only then do they draw a floor plan, check it against the budget and the soil report, and decide where the extra steel goes.
+Imagine a family asks a caterer to "do the food for our wedding". A good caterer does not start chopping onions. They ask: how many guests? How many vegetarian, how many Jain? What is the budget per plate? Is dinner served at 8 pm sharp, when 600 people will arrive at the buffet at once? Only then do they plan the menu and the counters, check the plan against the budget and the venue's kitchen, and decide where to put the extra staff.
 
 Designing software systems works the same way:
 
 1. **Ask questions** until you know who uses the system and what it must do (clarify requirements).
 2. **Write down what you are not building** and what you are assuming (scope and assumptions).
 3. **Do rough maths** on how many users, requests and gigabytes (capacity estimation).
-4. **Agree the doors and windows**: how the outside world talks to the system (API design).
-5. **Decide what you store and how** (data model).
-6. **Draw the simplest floor plan that works** (initial architecture).
-7. **Ask "where will this crack first?"** (bottlenecks).
-8. **Strengthen those spots** (scaling and reliability).
-9. **Add locks and make sure two people cannot book the same room** (security and consistency).
+4. **Agree how orders come in and plates go out**: how the outside world talks to the system (API design).
+5. **Decide what goes in the store room and how it is labelled** (data model).
+6. **Sketch the simplest kitchen and counter layout that works** (initial architecture).
+7. **Ask "where will the queue form first?"** (bottlenecks).
+8. **Add a second counter or a backup cook there** (scaling and reliability).
+9. **Lock the store room, and make sure two waiters cannot both promise the last tray of sweets** (security and consistency).
 10. **Explain what you gave up for what you gained** (trade-offs).
 11. **Walk through disasters**: what happens when a part fails (failure scenarios).
 12. **Summarise the design in one minute** (summary).
@@ -202,6 +202,7 @@ Interviewers often steer you into one deep dive (for example, "how would you sto
 - **Data-heavy problem** (analytics, logging): spend longer on steps 3 and 5.
 - **Correctness-heavy problem** (payments, booking): spend longer on step 9.
 - **Real design review at work:** the same steps become sections of a design document, and step 11 grows into a proper failure-mode analysis.
+- **A system that grows over time:** in real life you rarely run the 12 steps once. You run steps 3 and 7 again at every growth stage, because the bottleneck moves. [Scaling a real system from 100 to 10 million users](#/lesson/m17-scaling-journey) shows one grocery app going through that loop five times, adding each component only when a measured number forced it.
 
 A simpler design that meets the numbers is always the better answer. The framework exists to *prove* when a simple design is enough, not to justify a complex one.
 
@@ -381,7 +382,7 @@ This is the architecture diagram above: load balancer, stateless API, PostgreSQL
 |---|---|---|
 | Push provider down | Resident not notified | Worker falls back to SMS after 30 s; guard can call the flat |
 | Society's internet drops | Guard tablet offline | Tablet queues visits locally and syncs later; pre-approved codes verified offline with a signed list |
-| PostgreSQL primary fails | Writes fail for about 30–60 s | Automatic failover to standby; tablet retries with the same idempotency key |
+| PostgreSQL primary fails | Writes fail for about 1–2 minutes (estimate for a managed service) | Automatic failover to standby; tablet retries with the same idempotency key |
 | Resident and spouse decide at once | Conflicting decisions | Conditional update: first wins, second gets 409 |
 | Tablet retries a create 3 times | Duplicate visits | Idempotency key stored with the visit |
 
@@ -613,7 +614,7 @@ public sealed record DecisionRequest(bool Approve, Guid ResidentId);
 
 Points worth defending in a review:
 
-1. **The idempotency key is required, not optional.** Guard tablets live on patchy mobile data and *will* retry. Making the header mandatory turns "we might get duplicates" into "we never do".
+1. **The idempotency key is required, not optional.** Guard tablets live on patchy mobile data and *will* retry. Making the header mandatory turns "we might get duplicates" into "we never do". In production, also scope keys per device (so two tablets cannot collide), store a hash of the request body so a reused key with a *different* body is rejected with 422, and expire keys after about 24 hours. See [Idempotency](#/lesson/m10-idempotency).
 2. **409 Conflict for a second decision.** It tells the second resident the truth ("someone already decided") instead of silently overwriting the first decision.
 3. **`TimeProvider` is injected.** Tests can control `CreatedAt` and `DecidedAt` without sleeping.
 4. **The repository interface documents its SQL.** The in-memory lock and the `WHERE status = 'Pending'` clause provide the same guarantee: one winner.
@@ -894,7 +895,7 @@ Add instances and `multiAz`, a database standby, a read replica for history, a q
     { "id": "guard", "type": "client", "label": "Guard tablets", "props": { "rps": 3000 } },
     { "id": "res", "type": "client", "label": "Resident apps", "props": { "rps": 3700 } },
     { "id": "lb", "type": "load-balancer", "label": "Zone-redundant load balancer", "props": { "multiAz": true } },
-    { "id": "api", "type": "app-server", "label": "Visitor API (stateless)", "props": { "instances": 6, "multiAz": true } },
+    { "id": "api", "type": "app-server", "label": "Visitor API (stateless, 5 per zone)", "props": { "instances": 10, "multiAz": true } },
     { "id": "db", "type": "database", "label": "PostgreSQL primary + standby", "props": { "replicas": 1, "multiAz": true } },
     { "id": "rr", "type": "read-replica", "label": "Read replica (history)", "props": { "replicas": 1 } },
     { "id": "os", "type": "object-storage", "label": "Visitor photos (90-day lifecycle)" },
@@ -920,7 +921,7 @@ Add instances and `multiAz`, a database standby, a read replica for history, a q
 }
 ```
 
-**Reasoning.** About 38 MB/s of photos now goes straight from the tablets to object storage, so the API only stores a `photo_key`. Notifications are queued: if the push provider is slow, the guard still gets a 201 in milliseconds. Six API instances across two zones (an estimate: assume about 1,500 RPS per instance at the peak's 6,700 RPS, plus headroom to lose a zone) remove the single instance. The database has a standby in another zone; history reads go to a replica.
+**Reasoning.** About 38 MB/s of photos now goes straight from the tablets to object storage, so the API only stores a `photo_key`. Notifications are queued: if the push provider is slow, the guard still gets a 201 in milliseconds. Ten API instances across two zones remove the single instance. The arithmetic (an estimate: assume about 1,500 RPS per instance): the peak is 3,000 + 3,700 = 6,700 RPS, so 6,700 ÷ 1,500 ≈ 4.5, rounded up to 5 instances. To survive losing a whole zone, *each* zone must hold 5, so 10 in total. Six instances split 3 + 3 would leave only 4,500 RPS of capacity after a zone failure. The database has a standby in another zone; history reads go to a replica.
 
 **Failure table.** Object storage unavailable → tablet keeps the photo locally and retries; the visit is still created. Queue down → API writes events to an outbox table and a relay publishes later. Worker crash → message is redelivered; the worker deduplicates by `visitId`. Push provider down → SMS after 30 s. Replica lag → history may be a second behind; the decision path always reads the primary.
 ::mistakes
@@ -1313,10 +1314,11 @@ public void Evening_peak_writes_are_about_three_thousand_per_second()
 ## Real-world application
 
 - **Design documents at work.** Many teams' design-doc templates map almost one to one onto these steps: context and goals (1–2), scale (3), API and data (4–5), architecture (6–8), security and privacy (9), alternatives considered (10), failure modes and rollout (11), summary at the top (12). Using the same order in interviews and at work means you practise one habit.
-- **Architecture review boards** in large organisations, including government and infrastructure clients, often reject proposals for missing exactly the steps candidates skip: no numbers, no failure analysis, no alternatives considered.
+- **Architecture review boards** in large organisations, such as banks and government departments, often reject proposals for missing exactly the steps candidates skip: no numbers, no failure analysis, no alternatives considered.
 - **Cloud provider guidance** such as the Azure Well-Architected Framework organises reviews by pillars (reliability, security, cost, operational excellence, performance). Steps 8, 9 and 11 are where those pillars enter your design.
 - **Google's SRE book** describes "non-abstract large system design": designs must come with concrete numbers and provisioning estimates, not just boxes. Step 3 is that discipline.
 - **Incident post-mortems** frequently trace back to a failure scenario nobody walked through. Step 11 is cheap insurance.
+- **Growing products.** A real system re-runs steps 3, 7 and 8 every time traffic grows by roughly 10×. The [scaling journey case study](#/lesson/m17-scaling-journey) applies the whole framework to a quick-commerce app at five stages, from one VM to 40 cities, and then zooms into the classes behind one box.
 
 ## Interview questions
 

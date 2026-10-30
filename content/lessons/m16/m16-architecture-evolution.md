@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 95
 prerequisites: [m11-cost-estimation, m11-capacity-estimation, m16-monolith-vs-microservices, m15-cost-reliability]
-related: [m16-strangler-acl, m16-service-boundaries, m19-changing-requirements, m19-overengineering, m11-trade-offs, m09-migrations-evolution]
+related: [m16-strangler-acl, m16-service-boundaries, m17-scaling-journey, m19-changing-requirements, m19-overengineering, m11-trade-offs, m09-migrations-evolution]
 tags: [evolutionary-architecture, fitness-functions, adr, cost, migration-roadmap, capacity-planning, headroom]
 patterns: [Fitness Function, Architecture Decision Record, Evolutionary Architecture, Migration Roadmap, Strangler Fig]
 summary: Architecture is not a drawing you finish; it is a set of decisions you keep revisiting as load, team and budget change. Learn to size for the next 10x rather than an imaginary 1000x, to encode the properties you care about as automated fitness functions, to record decisions as ADRs that can be superseded, and to plan migrations as roadmaps with gates instead of big-bang rewrites.
@@ -75,7 +75,7 @@ The 10x rule in numbers. Measure today's peak (say 150 requests/s). Estimate gro
 
 Architects talk about latency, availability and consistency as qualities with numbers. Cost deserves the same treatment, in two forms:
 
-- **Cost per unit of work** (per order, per invoice, per processed sensor reading). Divide the monthly cloud bill attributable to a system by the units processed. A system that processes 4 M toll transactions a month on ₹2.4 lakh of infrastructure costs ₹0.06 per transaction. If a redesign doubles infrastructure "for scale" with no change in volume, the unit cost doubles, and that is a regression you can measure.
+- **Cost per unit of work** (per order, per invoice, per processed sensor reading). Divide the monthly cloud bill attributable to a system by the units processed. A system that processes 4 M fare taps a month on ₹2.4 lakh of infrastructure costs ₹0.06 per transaction. If a redesign doubles infrastructure "for scale" with no change in volume, the unit cost doubles, and that is a regression you can measure.
 - **Cost drivers**: the two or three line items that dominate. In most business systems: the primary database tier (always on, hard to scale down), data egress (billed per GB leaving the cloud), and anything that is idle but provisioned (standby environments, oversized clusters). Logs and metrics are a surprisingly common fourth: verbose logging at 2 KB per request × 100 requests/s ≈ 17 GB a day, with ingestion billed per GB.
 
 Cost-aware design does not mean cheapest. It means every rupee buys a requirement you can name. "We pay ₹80,000 a month for a warm standby because our RTO is 30 minutes" is cost-aware. "We pay ₹80,000 a month for a warm standby" with no RTO anywhere is not.
@@ -88,6 +88,8 @@ Ford, Parsons and Kua's term for an objective, automated check of an architectur
 - **Operational** (checked continuously or in a pipeline stage): p95 latency of key endpoints under a standard load test, error budget consumption, start-up time, memory per instance. Failing one blocks promotion to production.
 - **Cost-based** (checked daily or per release): unit cost against a budget, count of idle resources, egress per transaction. A fitness function that fails when the cost per invoice exceeds ₹0.12 turns "we should watch the bill" into "the pipeline told us on Tuesday".
 
+The book also sorts fitness functions along two useful axes: **atomic vs holistic** (one characteristic in isolation, or several together, such as "p95 under 400 ms *while* the cost per tap stays in budget") and **triggered vs continuous** (run on an event such as a pull request, or watch production all the time). In .NET, structural rules are usually written with NetArchTest or ArchUnitNET inside an ordinary xUnit project; operational ones read OpenTelemetry metrics from the load test or from production; cost ones read the cloud billing export.
+
 A fitness function has a **threshold**, a **measurement** and a **consequence**. Without the consequence (block the build, page someone, open a ticket) it is a dashboard, and dashboards are ignored.
 
 ### ADRs over time
@@ -95,7 +97,7 @@ A fitness function has a **threshold**, a **measurement** and a **consequence**.
 An ADR is short: title, status (proposed, accepted, superseded by ADR-N, deprecated), context, decision, consequences. The value compounds over years because the status field makes the set of ADRs a **history** rather than a snapshot:
 
 - ADR-007 (2024): "Single PostgreSQL database for all modules; schemas per module." Accepted.
-- ADR-019 (2025): "Move toll-event ingestion to a separate database." Accepted; supersedes ADR-007 for the ingestion module only.
+- ADR-019 (2025): "Move tap-event ingestion to a separate database." Accepted; supersedes ADR-007 for the ingestion module only.
 - ADR-031 (2026): "Adopt PostgreSQL logical replication to feed the reporting warehouse." Accepted.
 
 A new engineer reads the sequence and understands not just the current design but why it looks the way it does and which options were considered and rejected. The rule is: never edit an accepted ADR's decision; write a new one that supersedes it. Editing history makes the record useless.
@@ -138,20 +140,20 @@ Signals that the current architecture is still enough, and that a "modernisation
 
 ```mermaid
 flowchart LR
-    subgraph S1["Stage 1: 3 plazas, 15 events/s, cost ~ INR 60k/month"]
-        C1["Plaza gateways"] --> A1["Modular monolith (ingest, tariff, reconcile, dashboard)"]
+    subgraph S1["Stage 1: 3 stations, 15 events/s, cost ~ INR 60k/month"]
+        C1["Station gates"] --> A1["Modular monolith (ingest, tariff, reconcile, dashboard)"]
         A1 --> D1["PostgreSQL (schemas per module)"]
     end
-    subgraph S2["Stage 2: 30 plazas, 150 events/s, cost ~ INR 2.4 lakh/month"]
-        C2["Plaza gateways"] --> Q2["Queue (durable buffer)"]
+    subgraph S2["Stage 2: 30 stations, 150 events/s, cost ~ INR 2.4 lakh/month"]
+        C2["Station gates"] --> Q2["Queue (durable buffer)"]
         Q2 --> W2["Ingest workers"]
         W2 --> D2["PostgreSQL primary (partitioned events)"]
         D2 --> R2["Read replica for dashboards"]
         A2["Monolith (tariff, reconcile, dashboard)"] --> D2
         A2 --> R2
     end
-    subgraph S3["Stage 3: 300 plazas, 1,500 events/s, cost ~ INR 14 lakh/month"]
-        C3["Plaza gateways"] --> ST3["Event stream"]
+    subgraph S3["Stage 3: 300 stations, 1,500 events/s, cost ~ INR 14 lakh/month"]
+        C3["Station gates"] --> ST3["Event stream"]
         ST3 --> I3["Ingestion service + own DB"]
         ST3 --> WH3["Warehouse (reports)"]
         A3["Monolith (tariff, reconcile)"] --> D3["PostgreSQL"]
@@ -161,7 +163,7 @@ flowchart LR
     S2 -- "trigger: peak above 800/s or ingest team splits off" --> S3
 ```
 
-Each stage is a complete, working system, not a half-built step toward the next. Stage 1 is one deployable and one database with a schema per module; the module boundaries are enforced by a fitness function so that stage 2 and 3 are possible. Stage 2 adds a durable buffer (so a slow database does not drop toll events), workers, table partitioning and a read replica for dashboards; the monolith is otherwise unchanged. Stage 3 happens only if the trigger fires: ingestion becomes its own service with its own database and an event stream feeds both it and a reporting warehouse. The arrows between stages carry the measured triggers. The cost labels are estimates for a system of this shape and exist to make the point that each stage costs several times the previous one, so moving early is a real loss.
+Each stage is a complete, working system, not a half-built step toward the next. Stage 1 is one deployable and one database with a schema per module; the module boundaries are enforced by a fitness function so that stage 2 and 3 are possible. Stage 2 adds a durable buffer (so a slow database does not drop toll events), workers, table partitioning and a read replica for dashboards; the monolith is otherwise unchanged. Stage 3 happens only if the trigger fires: ingestion becomes its own service with its own database and an event stream feeds both it and a reporting warehouse. The arrows between stages carry the measured triggers. The cost labels are estimates for a system of this shape and exist to make the point that each stage costs several times the previous one, so moving early is a real loss. The [scaling journey](#/lesson/m17-scaling-journey) case study walks the same idea across a whole product, from one server to multi-region, and shows at which stage each pattern in this module (CQRS, CDC, gateways, multi-level caching) typically earns its place.
 
 ### A fitness-function gate in the pipeline
 
@@ -211,17 +213,17 @@ An ADR never goes back from `Accepted` to `Proposed`, and it is never deleted. A
 
 ## Step-by-step example
 
-**TollTrack** is a platform that collects electronic toll transactions from highway plazas run by concessionaires, applies tariffs, reconciles against bank settlements and shows dashboards to the concessionaire and the authority.
+**FareTrack** is a platform for a city metro. Riders tap a contactless bank card or a metro card at the station gates; FareTrack collects those tap events, applies the fare rules (the tariff), reconciles card payments against bank settlements and shows dashboards to the metro operator and the city transport authority.
 
 ### Step 1 — the honest starting point
 
-Three plazas, each handling about 15,000 vehicles a day: 45,000 events a day ÷ 86,400 s ≈ 0.5 events/s average, perhaps 15/s at the morning peak (toll traffic is very peaky). Dashboards are used by 20 people. A small ASP.NET Core modular monolith with four modules (ingest, tariff, reconcile, dashboard) and one PostgreSQL instance handles this with one modest VM. Estimated cost: ₹60,000 a month including a managed database with automated backups.
+Three stations, each handling about 15,000 card taps a day: 45,000 events a day ÷ 86,400 s ≈ 0.5 events/s average, perhaps 15/s at the morning peak (commuter traffic is very peaky). Dashboards are used by 20 people. A small ASP.NET Core modular monolith with four modules (ingest, tariff, reconcile, dashboard) and one PostgreSQL instance handles this with one modest VM. Estimated cost: ₹60,000 a month including a managed database with automated backups.
 
-The team writes three ADRs on day one: ADR-001 "Modular monolith with one deployable"; ADR-002 "One PostgreSQL database, one schema per module, no cross-schema foreign keys" (so modules can leave later); ADR-003 "Event ids are ULIDs generated at the plaza gateway" (so ids are unique and time-ordered without a central sequence, which matters if ingestion is ever distributed). The third is a foundations-and-staircase decision: nearly free now, very expensive to change at 300 plazas.
+The team writes three ADRs on day one: ADR-001 "Modular monolith with one deployable"; ADR-002 "One PostgreSQL database, one schema per module, no cross-schema foreign keys" (so modules can leave later); ADR-003 "Event ids are ULIDs generated at the station gate" (so ids are unique and roughly time-ordered without a central sequence, which matters if ingestion is ever distributed; gate clocks drift, so the tap timestamp, not the id, decides fare order). See [designing a unique ID generator](#/lesson/m17-unique-id-generator) for the trade-offs between ULIDs, UUIDv7 and Snowflake-style ids. The third is a foundations-and-staircase decision: nearly free now, very expensive to change at 300 stations.
 
 ### Step 2 — size for 10x
 
-Ten times is 30 plazas and about 150 events/s at peak. Can the stage-1 design do it? Writes of 150/s with a 600-byte row are trivial for PostgreSQL. The risk is elsewhere: a slow dashboard query locking the same tables that ingestion writes, and a database restart dropping events sent by gateways that do not retry well. So the 10x plan is: a durable queue between gateways and ingestion; a read replica for dashboards; monthly partitioning of the events table so that old months can be archived cheaply. None of this needs to be built now, but ADR-004 records the plan and the trigger: "begin when sustained peak exceeds 100 events/s or dashboard p95 exceeds 400 ms".
+Ten times is 30 stations and about 150 events/s at peak. Can the stage-1 design do it? Writes of 150/s with a 600-byte row are trivial for PostgreSQL. The risk is elsewhere: a slow dashboard query locking the same tables that ingestion writes, and a database restart dropping taps sent by station gates that do not retry well. So the 10x plan is: a durable queue between station gates and ingestion; a read replica for dashboards; monthly partitioning of the events table so that old months can be archived cheaply. None of this needs to be built now, but ADR-004 records the plan and the trigger: "begin when sustained peak exceeds 100 events/s or dashboard p95 exceeds 400 ms".
 
 ### Step 3 — fitness functions from day one
 
@@ -233,20 +235,20 @@ Three checks go into CI:
 
 ### Step 4 — growth arrives, but sideways
 
-Eighteen months later there are 22 plazas, peak is 95 events/s, and the dashboard p95 is 380 ms. Neither trigger has fired. But something else has: the authority now wants a 90-day replay of raw events for disputes, and two concessionaires want their own reports warehouse. The cost function flags that the events table has grown to 180 GB and the managed database tier was upsized twice: cost per event is ₹0.071 and rising.
+Eighteen months later there are 22 stations, peak is 95 events/s, and the dashboard p95 is 380 ms. Neither trigger has fired. But something else has: the transport authority now wants a 90-day replay of raw taps for fare disputes ("I was charged twice"), and two partner feeder-bus operators want exports into their own reports warehouse. The cost function flags that the events table has grown to 180 GB and the managed database tier was upsized twice: cost per event is ₹0.071 and rising.
 
 This is the moment the ADRs and fitness functions pay off. The team does not jump to stage 3. ADR-011 decides: partition the events table by month now (reversible, cheap), move months older than 90 days to object storage as Parquet files (cuts the database to about 40 GB and drops a tier), and add the read replica. Cost per event falls to ₹0.05. The queue from ADR-004 is still not needed; the plan is adjusted, not abandoned.
 
 ### Step 5 — the trigger fires
 
-At 38 plazas, peak passes 110 events/s for a week and two incidents show dropped events during a database failover. Stage 2 begins as a roadmap with four gated steps: (1) add the outbox and queue behind a feature flag with the old direct path as fallback; (2) move ingestion consumers to a separate worker deployable; (3) switch the flag to the queue path for 10 % of plazas, then all; (4) remove the direct path. Each step has a gate (structural functions green, p95 under budget, cost per event under ₹0.08) and a rollback (the flag). The whole migration takes seven weeks of part-time work, and the system was never down.
+At 38 stations, peak passes 110 events/s for a week and two incidents show dropped events during a database failover. Stage 2 begins as a roadmap with four gated steps: (1) add the outbox and queue behind a feature flag with the old direct path as fallback; (2) move ingestion consumers to a separate worker deployable; (3) switch the flag to the queue path for 10 % of stations, then all; (4) remove the direct path. Each step has a gate (structural functions green, p95 under budget, cost per event under ₹0.08) and a rollback (the flag). The whole migration takes seven weeks of part-time work, and the system was never down.
 
 ## Production-style C# implementation
 
 A small fitness-function framework that runs inside a console command in CI (`dotnet run -- fitness`) or as a scheduled hosted service for the cost checks. Measurements come from interfaces with in-memory implementations here; in production they read compiled assemblies, a metrics store and the cloud billing export.
 
 ```text
-TollTrack.Fitness/
+FareTrack.Fitness/
   Fitness/IFitnessFunction.cs
   Fitness/FitnessRunner.cs
   Fitness/DependencyRuleFitness.cs
@@ -258,7 +260,7 @@ TollTrack.Fitness/
 ```
 
 ```csharp file=Fitness/IFitnessFunction.cs
-namespace TollTrack.Fitness;
+namespace FareTrack.Fitness;
 
 public enum FitnessFamily { Structural, Operational, Cost }
 
@@ -276,7 +278,7 @@ public interface IFitnessFunction
 ```csharp file=Fitness/FitnessRunner.cs
 using Microsoft.Extensions.Logging;
 
-namespace TollTrack.Fitness;
+namespace FareTrack.Fitness;
 
 public sealed record FitnessReport(IReadOnlyList<FitnessResult> Results)
 {
@@ -313,7 +315,7 @@ A function that throws is a failure, not a skip. A fitness function that quietly
 ```csharp file=Fitness/DependencyRuleFitness.cs
 using System.Reflection;
 
-namespace TollTrack.Fitness;
+namespace FareTrack.Fitness;
 
 /// <summary>A reference from one namespace to another, as found in compiled code.</summary>
 public sealed record TypeReference(string FromNamespace, string ToNamespace);
@@ -354,7 +356,7 @@ public sealed class ReflectionTypeReferenceSource(IEnumerable<Assembly> assembli
     }
 }
 
-/// <summary>"Module A may not reference namespace prefix B." Prefix match, so TollTrack.Tariff.Data covers its sub-namespaces.</summary>
+/// <summary>"Module A may not reference namespace prefix B." Prefix match, so FareTrack.Tariff.Data covers its sub-namespaces.</summary>
 public sealed record DependencyRule(string FromPrefix, string ForbiddenPrefix, string AdrReference);
 
 public sealed class DependencyRuleFitness(ITypeReferenceSource source, IReadOnlyList<DependencyRule> rules) : IFitnessFunction
@@ -387,7 +389,7 @@ public sealed class DependencyRuleFitness(ITypeReferenceSource source, IReadOnly
 Reflection over the compiled assemblies is enough for most module-boundary rules; it sees every field, property, parameter and return type. It does not see references that exist only inside method bodies (a `new OtherModule.Data.Repo()` local variable). For those, a Roslyn analyzer or a tool that reads IL gives complete coverage. Start with reflection: it catches the structural leaks that matter most, in 60 lines.
 
 ```csharp file=Fitness/LatencyBudgetFitness.cs
-namespace TollTrack.Fitness;
+namespace FareTrack.Fitness;
 
 public interface ILatencySource
 {
@@ -422,13 +424,13 @@ public sealed class LatencyBudgetFitness(ILatencySource source, IReadOnlyList<La
 "No measurement" is a failure. A latency function that passes because the load test did not run is the dashboard problem again.
 
 ```csharp file=Fitness/UnitCostFitness.cs
-namespace TollTrack.Fitness;
+namespace FareTrack.Fitness;
 
 public interface ISpendSource
 {
     /// <summary>Attributed spend for the system on the given day, in the account currency (here INR).</summary>
     Task<decimal> GetDailySpendAsync(DateOnly day, CancellationToken ct);
-    /// <summary>Units of work processed that day (toll events).</summary>
+    /// <summary>Units of work processed that day (fare taps).</summary>
     Task<long> GetUnitsProcessedAsync(DateOnly day, CancellationToken ct);
 }
 
@@ -458,7 +460,7 @@ public sealed class UnitCostFitness(ISpendSource spend, TimeProvider time, UnitC
 ```
 
 ```csharp file=Fitness/HeadroomPlanner.cs
-namespace TollTrack.Fitness;
+namespace FareTrack.Fitness;
 
 public sealed record HeadroomPlan(double CurrentPeak, double ProjectedPeak, double DesignTarget, double TriggerAt, bool ReArchitectureCheckpoint);
 
@@ -488,7 +490,7 @@ public static class HeadroomPlanner
 The planner encodes a policy: design for the projection with a safety margin, but never below 2x or above 10x of today. When the honest projection exceeds 10x, it does not silently design for it; it raises a checkpoint flag, which means "this needs a conversation and probably a staged roadmap, not a bigger version of the same design".
 
 ```csharp file=Decisions/Adr.cs
-namespace TollTrack.Decisions;
+namespace FareTrack.Decisions;
 
 public enum AdrStatus { Proposed, Accepted, Rejected, Superseded, Deprecated }
 
@@ -553,8 +555,8 @@ In real projects ADRs are Markdown files in the repository (`docs/adr/0012-inges
 
 ```csharp file=Program.cs
 using System.Reflection;
-using TollTrack.Decisions;
-using TollTrack.Fitness;
+using FareTrack.Decisions;
+using FareTrack.Fitness;
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -565,10 +567,10 @@ builder.Services.AddSingleton<ISpendSource, InMemorySpendSource>();
 
 builder.Services.AddSingleton<IFitnessFunction>(sp => new DependencyRuleFitness(sp.GetRequiredService<ITypeReferenceSource>(), new[]
 {
-    new DependencyRule("TollTrack.Ingest", "TollTrack.Tariff.Data", "ADR-002"),
-    new DependencyRule("TollTrack.Ingest", "TollTrack.Reconcile.Data", "ADR-002"),
-    new DependencyRule("TollTrack.Dashboard", "TollTrack.Ingest.Data", "ADR-002"),
-    new DependencyRule("TollTrack.Tariff", "TollTrack.Dashboard", "ADR-002"),
+    new DependencyRule("FareTrack.Ingest", "FareTrack.Tariff.Data", "ADR-002"),
+    new DependencyRule("FareTrack.Ingest", "FareTrack.Reconcile.Data", "ADR-002"),
+    new DependencyRule("FareTrack.Dashboard", "FareTrack.Ingest.Data", "ADR-002"),
+    new DependencyRule("FareTrack.Tariff", "FareTrack.Dashboard", "ADR-002"),
 }));
 builder.Services.AddSingleton<IFitnessFunction>(sp => new LatencyBudgetFitness(sp.GetRequiredService<ILatencySource>(), new[]
 {
@@ -591,9 +593,9 @@ var plan = HeadroomPlanner.Plan(currentPeak: 150, yearlyGrowth: 2.0, horizonYear
 Console.WriteLine($"Design target {plan.DesignTarget:F0}/s, start next roadmap at {plan.TriggerAt:F0}/s, checkpoint: {plan.ReArchitectureCheckpoint}");
 
 var adrs = new AdrLog();
-var a2 = adrs.Propose("One PostgreSQL database, one schema per module", new DateOnly(2024, 3, 1), "Small team, 3 plazas", "Single DB; schemas per module; no cross-schema FKs", "Cheap now; modules can leave later");
+var a2 = adrs.Propose("One PostgreSQL database, one schema per module", new DateOnly(2024, 3, 1), "Small team, 3 stations", "Single DB; schemas per module; no cross-schema FKs", "Cheap now; modules can leave later");
 adrs.Accept(a2.Number);
-var a19 = adrs.Propose("Ingest owns its own database", new DateOnly(2026, 2, 10), "Dropped events during failover at 38 plazas", "Separate DB for ingest; events via queue", "Second DB to operate; no cross-module joins");
+var a19 = adrs.Propose("Ingest owns its own database", new DateOnly(2026, 2, 10), "Dropped events during failover at 38 stations", "Separate DB for ingest; events via queue", "Second DB to operate; no cross-module joins");
 adrs.Accept(a19.Number);
 adrs.Supersede(a2.Number, a19.Number);
 Console.WriteLine($"Decision in force for {a2.Id}: {adrs.Current(a2.Number).Id}");
@@ -621,7 +623,7 @@ public sealed class InMemorySpendSource : ISpendSource
 
 **Bad: the architecture that was never written down.** A ten-year-old monolith with no ADRs. Every quarter someone proposes "let's move to microservices"; every quarter the argument restarts from zero because nobody remembers that the same proposal was examined in 2022 and rejected because the data model has 140 cross-module foreign keys. The team cannot evolve because it does not know where it is.
 
-**Good**: TollTrack as described. One deployable and one database at stage 1, with module boundaries enforced by a build-time fitness function and ids chosen so ingestion can be split later. Three ADRs on day one and a fourth that records the 10x plan and its trigger. Cost per event tracked daily against a budget. When growth came sideways (storage, not throughput), the team chose the reversible, cheap step (partition and archive) and adjusted the plan. When the trigger fired, the migration ran as a four-step roadmap behind a feature flag. The system never had a capability it did not need, and never lacked one when it did.
+**Good**: FareTrack as described. One deployable and one database at stage 1, with module boundaries enforced by a build-time fitness function and ids chosen so ingestion can be split later. Three ADRs on day one and a fourth that records the 10x plan and its trigger. Cost per event tracked daily against a budget. When growth came sideways (storage, not throughput), the team chose the reversible, cheap step (partition and archive) and adjusted the plan. When the trigger fired, the migration ran as a four-step roadmap behind a feature flag. The system never had a capability it did not need, and never lacked one when it did.
 
 :::callout type=tradeoff title="Reversible and irreversible decisions"
 Spend your early design effort on the irreversible decisions: identifiers, the shape of the data model, module and team boundaries, external contracts. Spend almost none on the reversible ones: instance counts, which managed queue, cache sizes. The 10x rule is about the reversible ones. The staircase space is about the irreversible ones.
@@ -633,21 +635,21 @@ A fitness function with a threshold so loose it never fails, or one that runs bu
 
 ## Practical playground
 
-The starting graph is TollTrack at stage 1. Evolve it to stage 2 in the HLD canvas, and keep the cost in mind: every node you add should be justified by a requirement from the lesson.
+The starting graph is FareTrack at stage 1. Evolve it to stage 2 in the HLD canvas, and keep the cost in mind: every node you add should be justified by a requirement from the lesson.
 
-1. Add a `queue` between the plaza gateways and ingestion, and a `worker` that consumes it. Which failure does this remove?
+1. Add a `queue` between the station gates and ingestion, and a `worker` that consumes it. Which failure does this remove?
 2. Add a `read-replica` and point dashboard reads at it. What is the latency budget you are protecting?
 3. Add `object-storage` for archived months. How much does the database shrink, and what does that do to the database tier?
 4. Resist adding a `stream`, a second `database` and a separate ingestion `app-server` unless you can name the trigger that fired. Write the trigger in the node label if you add them.
 5. Estimate: stage 1 cost ≈ ₹60k/month; what does your stage 2 cost, and what is the cost per event at 150/s peak (about 4 M events/month)?
 
-:::playground type=hld title="TollTrack: evolve stage 1 into stage 2 without over-building"
+:::playground type=hld title="FareTrack: evolve stage 1 into stage 2 without over-building"
 ```json
 {
   "nodes": [
-    { "id": "gw", "type": "client", "label": "Plaza gateways (toll events)", "props": { "rps": 150 } },
+    { "id": "gw", "type": "client", "label": "Station gates (card taps)", "props": { "rps": 150 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
-    { "id": "app", "type": "app-server", "label": "TollTrack modular monolith", "props": { "instances": 2 } },
+    { "id": "app", "type": "app-server", "label": "FareTrack modular monolith", "props": { "instances": 2 } },
     { "id": "db", "type": "database", "label": "PostgreSQL (all schemas)", "props": { "replicas": 0 } },
     { "id": "users", "type": "client", "label": "Dashboard users", "props": { "rps": 5 } }
   ],
@@ -664,7 +666,7 @@ The starting graph is TollTrack at stage 1. Evolve it to stage 2 in the HLD canv
 ## Exercises
 
 :::exercise id=m16-architecture-evolution-ex1 difficulty=beginner kind=written title="Write ADR-004 and then supersede it"
-Write ADR-004 for TollTrack: "Plan for 10x: queue-buffered ingestion, read replica and monthly partitioning, to begin when sustained peak exceeds 100 events/s or dashboard p95 exceeds 400 ms." Use the sections Title, Status, Date, Context, Decision, Consequences. Then write ADR-011 (the sideways-growth decision from the step-by-step example: partition now, archive to object storage, add the replica, defer the queue) and show how ADR-004's status changes.
+Write ADR-004 for FareTrack: "Plan for 10x: queue-buffered ingestion, read replica and monthly partitioning, to begin when sustained peak exceeds 100 events/s or dashboard p95 exceeds 400 ms." Use the sections Title, Status, Date, Context, Decision, Consequences. Then write ADR-011 (the sideways-growth decision from the step-by-step example: partition now, archive to object storage, add the replica, defer the queue) and show how ADR-004's status changes.
 ::acceptance
 - Both ADRs have all six sections and fit on one page each.
 - Context states the measured facts (load, cost, p95) that existed at the time, not opinions.
@@ -679,13 +681,13 @@ ADR-011 changes the plan but keeps part of it (the queue is deferred, not cancel
 ::solution
 **ADR-004 — Plan for 10x growth in ingestion and dashboards**
 *Status:* Accepted (2024-04-12). Superseded by ADR-011 (2025-10-03) for the ordering and timing of steps; the trigger thresholds and the queue design remain in force.
-*Context:* 3 plazas; measured peak 15 events/s; dashboard p95 210 ms; cost ₹60k/month (₹0.044 per event). Business plans 10x plazas in three years. Gateways retry for 30 s only; a database restart longer than that drops events.
-*Decision:* When sustained peak exceeds 100 events/s or dashboard p95 exceeds 400 ms, implement in order: (1) durable queue between gateways and ingestion with a worker consumer; (2) read replica for dashboards; (3) monthly partitioning of `ingest.events`. Until then, no change.
-*Consequences:* + Keeps stage 1 cheap; + a written trigger stops premature work. − The team must monitor the trigger metrics; − gateways remain exposed to database restarts until the queue exists.
+*Context:* 3 stations; measured peak 15 events/s; dashboard p95 210 ms; cost ₹60k/month (₹0.044 per event). Business plans 10x stations in three years. Gate controllers retry for 30 s only; a database restart longer than that drops events.
+*Decision:* When sustained peak exceeds 100 events/s or dashboard p95 exceeds 400 ms, implement in order: (1) durable queue between station gates and ingestion with a worker consumer; (2) read replica for dashboards; (3) monthly partitioning of `ingest.events`. Until then, no change.
+*Consequences:* + Keeps stage 1 cheap; + a written trigger stops premature work. − The team must monitor the trigger metrics; − station gates remain exposed to database restarts until the queue exists.
 
 **ADR-011 — Partition and archive events now; defer the queue**
 *Status:* Accepted (2025-10-03). Supersedes ADR-004 in part.
-*Context:* 22 plazas; peak 95 events/s; dashboard p95 380 ms; neither ADR-004 trigger fired. But: `ingest.events` is 180 GB, the database tier was upsized twice, cost per event is ₹0.071 and rising towards the ₹0.08 budget; the authority requires 90-day raw replay; two concessionaires want warehouse exports.
+*Context:* 22 stations; peak 95 events/s; dashboard p95 380 ms; neither ADR-004 trigger fired. But: `ingest.events` is 180 GB, the database tier was upsized twice, cost per event is ₹0.071 and rising towards the ₹0.08 budget; the transport authority requires 90-day raw replay for fare disputes; two partner bus operators want warehouse exports.
 *Decision:* Partition `ingest.events` by month now; move partitions older than 90 days to object storage as Parquet via a nightly job; add the read replica now and route dashboards to it; keep the queue deferred, with ADR-004's 100 events/s trigger unchanged.
 *Consequences:* + Database shrinks to ~40 GB, one tier smaller, cost per event ~₹0.05; + replay and exports served from object storage cheaply. − Two storage systems for one dataset; queries spanning 90 days need a second code path; − archival job is a new thing that can fail silently, so it needs its own alert.
 
@@ -819,13 +821,13 @@ Implement `DependencyRuleChecker.Check` so that, given the references found in c
 - A reference that violates two rules appears twice (once per rule).
 - `Allow` entries override rules: a reference matching an allow entry (same prefix semantics) is never reported.
 ::acceptance
-- `TollTrack.Ingest.Handlers -> TollTrack.Tariff.Data.Repos` violates rule `(TollTrack.Ingest, TollTrack.Tariff.Data, ADR-002)`.
-- `TollTrack.Ingest -> TollTrack.Tariff.Contracts` does not violate that rule.
-- `TollTrack.IngestX -> TollTrack.Tariff.Data` does not violate it (prefix needs a dot boundary).
-- An allow entry `(TollTrack.Ingest.Migrations, TollTrack.Tariff.Data)` suppresses a reference from that namespace.
+- `FareTrack.Ingest.Handlers -> FareTrack.Tariff.Data.Repos` violates rule `(FareTrack.Ingest, FareTrack.Tariff.Data, ADR-002)`.
+- `FareTrack.Ingest -> FareTrack.Tariff.Contracts` does not violate that rule.
+- `FareTrack.IngestX -> FareTrack.Tariff.Data` does not violate it (prefix needs a dot boundary).
+- An allow entry `(FareTrack.Ingest.Migrations, FareTrack.Tariff.Data)` suppresses a reference from that namespace.
 - Output is sorted and duplicate references are reported once per rule.
 ::hint
-Write a small `Matches(ns, prefix)` helper first and test the dot-boundary case in your head: `TollTrack.IngestX` must not match `TollTrack.Ingest`.
+Write a small `Matches(ns, prefix)` helper first and test the dot-boundary case in your head: `FareTrack.IngestX` must not match `FareTrack.Ingest`.
 ::hint
 Distinct the references first, then loop rules × references, then filter out allowed ones, then sort.
 ::hint
@@ -860,31 +862,31 @@ using Xunit;
 
 public class DependencyRuleCheckerTests
 {
-    private static readonly DependencyRule IngestToTariffData = new("TollTrack.Ingest", "TollTrack.Tariff.Data", "ADR-002");
-    private static readonly DependencyRule TariffToDashboard = new("TollTrack.Tariff", "TollTrack.Dashboard", "ADR-002");
+    private static readonly DependencyRule IngestToTariffData = new("FareTrack.Ingest", "FareTrack.Tariff.Data", "ADR-002");
+    private static readonly DependencyRule TariffToDashboard = new("FareTrack.Tariff", "FareTrack.Dashboard", "ADR-002");
     private static readonly List<AllowEntry> NoAllow = new();
 
     [Fact]
     public void Detects_reference_into_forbidden_sub_namespace()
     {
-        var refs = new[] { new TypeReference("TollTrack.Ingest.Handlers", "TollTrack.Tariff.Data.Repos") };
+        var refs = new[] { new TypeReference("FareTrack.Ingest.Handlers", "FareTrack.Tariff.Data.Repos") };
         var v = DependencyRuleChecker.Check(refs, new[] { IngestToTariffData }, NoAllow);
         Assert.Single(v);
         Assert.Equal("ADR-002", v[0].Adr);
-        Assert.Equal("TollTrack.Tariff.Data.Repos", v[0].To);
+        Assert.Equal("FareTrack.Tariff.Data.Repos", v[0].To);
     }
 
     [Fact]
     public void Contracts_namespace_is_allowed()
     {
-        var refs = new[] { new TypeReference("TollTrack.Ingest", "TollTrack.Tariff.Contracts") };
+        var refs = new[] { new TypeReference("FareTrack.Ingest", "FareTrack.Tariff.Contracts") };
         Assert.Empty(DependencyRuleChecker.Check(refs, new[] { IngestToTariffData }, NoAllow));
     }
 
     [Fact]
     public void Prefix_requires_dot_boundary()
     {
-        var refs = new[] { new TypeReference("TollTrack.IngestX", "TollTrack.Tariff.Data"), new TypeReference("TollTrack.Ingest", "TollTrack.Tariff.DataX") };
+        var refs = new[] { new TypeReference("FareTrack.IngestX", "FareTrack.Tariff.Data"), new TypeReference("FareTrack.Ingest", "FareTrack.Tariff.DataX") };
         Assert.Empty(DependencyRuleChecker.Check(refs, new[] { IngestToTariffData }, NoAllow));
     }
 
@@ -893,13 +895,13 @@ public class DependencyRuleCheckerTests
     {
         var refs = new[]
         {
-            new TypeReference("TollTrack.Ingest.Migrations", "TollTrack.Tariff.Data"),
-            new TypeReference("TollTrack.Ingest.Handlers", "TollTrack.Tariff.Data"),
+            new TypeReference("FareTrack.Ingest.Migrations", "FareTrack.Tariff.Data"),
+            new TypeReference("FareTrack.Ingest.Handlers", "FareTrack.Tariff.Data"),
         };
-        var allow = new[] { new AllowEntry("TollTrack.Ingest.Migrations", "TollTrack.Tariff.Data") };
+        var allow = new[] { new AllowEntry("FareTrack.Ingest.Migrations", "FareTrack.Tariff.Data") };
         var v = DependencyRuleChecker.Check(refs, new[] { IngestToTariffData }, allow);
         Assert.Single(v);
-        Assert.Equal("TollTrack.Ingest.Handlers", v[0].From);
+        Assert.Equal("FareTrack.Ingest.Handlers", v[0].From);
     }
 
     [Fact]
@@ -907,23 +909,23 @@ public class DependencyRuleCheckerTests
     {
         var refs = new[]
         {
-            new TypeReference("TollTrack.Tariff.Rules", "TollTrack.Dashboard.Pages"),
-            new TypeReference("TollTrack.Ingest.B", "TollTrack.Tariff.Data"),
-            new TypeReference("TollTrack.Ingest.A", "TollTrack.Tariff.Data"),
-            new TypeReference("TollTrack.Ingest.A", "TollTrack.Tariff.Data"),
+            new TypeReference("FareTrack.Tariff.Rules", "FareTrack.Dashboard.Pages"),
+            new TypeReference("FareTrack.Ingest.B", "FareTrack.Tariff.Data"),
+            new TypeReference("FareTrack.Ingest.A", "FareTrack.Tariff.Data"),
+            new TypeReference("FareTrack.Ingest.A", "FareTrack.Tariff.Data"),
         };
         var v = DependencyRuleChecker.Check(refs, new[] { IngestToTariffData, TariffToDashboard }, NoAllow);
         Assert.Equal(3, v.Count);
-        Assert.Equal("TollTrack.Ingest.A", v[0].From);
-        Assert.Equal("TollTrack.Ingest.B", v[1].From);
-        Assert.Equal("TollTrack.Tariff.Rules", v[2].From);
+        Assert.Equal("FareTrack.Ingest.A", v[0].From);
+        Assert.Equal("FareTrack.Ingest.B", v[1].From);
+        Assert.Equal("FareTrack.Tariff.Rules", v[2].From);
     }
 
     [Fact]
     public void Reference_violating_two_rules_is_reported_twice()
     {
-        var rules = new[] { IngestToTariffData, new DependencyRule("TollTrack.Ingest", "TollTrack.Tariff", "ADR-020") };
-        var refs = new[] { new TypeReference("TollTrack.Ingest", "TollTrack.Tariff.Data") };
+        var rules = new[] { IngestToTariffData, new DependencyRule("FareTrack.Ingest", "FareTrack.Tariff", "ADR-020") };
+        var refs = new[] { new TypeReference("FareTrack.Ingest", "FareTrack.Tariff.Data") };
         var v = DependencyRuleChecker.Check(refs, rules, NoAllow);
         Assert.Equal(2, v.Count);
         Assert.Equal(new[] { "ADR-002", "ADR-020" }, v.Select(x => x.Adr).ToArray());
@@ -970,15 +972,15 @@ The allow list is the pragmatic part. Real codebases have one or two legitimate 
 ::alternatives
 Production tools (NetArchTest, ArchUnitNET) express the same rules fluently and read IL for method-body references. Use one once the hand-rolled version has proved the team wants the rule; the rule set and the ADR references are what carry over.
 ::mistakes
-- `StartsWith(prefix)` without the dot, so `TollTrack.IngestX` matches `TollTrack.Ingest`.
+- `StartsWith(prefix)` without the dot, so `FareTrack.IngestX` matches `FareTrack.Ingest`.
 - Culture-sensitive string comparison in sorting, which gives different order on different build agents.
 - Applying the allow list before deduplication or forgetting that it uses the same prefix semantics.
 :::
 
-:::exercise id=m16-architecture-evolution-ex4 difficulty=intermediate kind=hld title="Stage 2 for TollTrack, with the cost justified"
-Evolve the stage-1 graph (the playground's starter) into stage 2 for 30 plazas and 150 events/s at peak. Every node you add must carry, in its label, the requirement or trigger that justifies it. Do not add anything from stage 3.
+:::exercise id=m16-architecture-evolution-ex4 difficulty=intermediate kind=hld title="Stage 2 for FareTrack, with the cost justified"
+Evolve the stage-1 graph (the playground's starter) into stage 2 for 30 stations and 150 events/s at peak. Every node you add must carry, in its label, the requirement or trigger that justifies it. Do not add anything from stage 3.
 ::acceptance
-- A durable queue and worker between gateways and the database, labelled with the failure it prevents.
+- A durable queue and worker between gates and the database, labelled with the failure it prevents.
 - A read replica serving dashboard queries, labelled with the p95 budget.
 - Object storage for archived months, labelled with the retention requirement.
 - The monolith remains one deployable for tariff, reconcile and dashboard.
@@ -991,14 +993,14 @@ What makes the database tier expensive at 180 GB, and what cheap storage can hol
 ::hint
 Stage 3 components need a trigger that has not fired. If you cannot write the trigger in the label, do not add the node.
 ::hint
-Shape: gateways → queue → workers → DB primary; DB primary → read replica → monolith (dashboards); archiver worker → object storage; monitoring observes all.
+Shape: gates → queue → workers → DB primary; DB primary → read replica → monolith (dashboards); archiver worker → object storage; monitoring observes all.
 ::starter
 ```json
 {
   "nodes": [
-    { "id": "gw", "type": "client", "label": "Plaza gateways (toll events)", "props": { "rps": 150 } },
+    { "id": "gw", "type": "client", "label": "Station gates (card taps)", "props": { "rps": 150 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
-    { "id": "app", "type": "app-server", "label": "TollTrack modular monolith", "props": { "instances": 2 } },
+    { "id": "app", "type": "app-server", "label": "FareTrack modular monolith", "props": { "instances": 2 } },
     { "id": "db", "type": "database", "label": "PostgreSQL (all schemas)", "props": { "replicas": 0 } },
     { "id": "users", "type": "client", "label": "Dashboard users", "props": { "rps": 5 } }
   ],
@@ -1014,7 +1016,7 @@ Shape: gateways → queue → workers → DB primary; DB primary → read replic
 ```json
 {
   "nodes": [
-    { "id": "gw", "type": "client", "label": "Plaza gateways, 30 plazas", "props": { "rps": 150 } },
+    { "id": "gw", "type": "client", "label": "Station gates, 30 stations", "props": { "rps": 150 } },
     { "id": "users", "type": "client", "label": "Dashboard users (200)", "props": { "rps": 20 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
     { "id": "q", "type": "queue", "label": "Durable queue: prevents event loss during DB restarts (incident 2026-01)", "props": { "multiAz": true } },
@@ -1023,7 +1025,7 @@ Shape: gateways → queue → workers → DB primary; DB primary → read replic
     { "id": "db", "type": "database", "label": "PostgreSQL primary, events partitioned by month (ADR-011)", "props": { "multiAz": true } },
     { "id": "rr", "type": "read-replica", "label": "Read replica: dashboard p95 budget 400 ms (ADR-004)" },
     { "id": "arch", "type": "scheduler", "label": "Nightly archiver: partitions older than 90 days" },
-    { "id": "obj", "type": "object-storage", "label": "Parquet archive: 90-day replay + exports (authority requirement)" },
+    { "id": "obj", "type": "object-storage", "label": "Parquet archive: 90-day replay + exports (transport authority requirement)" },
     { "id": "mon", "type": "monitoring", "label": "Fitness: structural (CI), operational (p95), cost (INR/event <= 0.08)" }
   ],
   "edges": [
@@ -1048,7 +1050,7 @@ Shape: gateways → queue → workers → DB primary; DB primary → read replic
 
 Reasoning and cost:
 
-- **Queue + workers** answer the dropped-events incident. The gateway's request is acknowledged once the message is durable, so a 5-minute database failover costs nothing but a backlog. Workers insert in batches, which also lowers database load per event. Idempotency on the ULID means a redelivered message is harmless.
+- **Queue + workers** answer the dropped-events incident. The station gate's request is acknowledged once the message is durable, so a 5-minute database failover costs nothing but a backlog. Workers insert in batches, which also lowers database load per event. Idempotency on the ULID means a redelivered message is harmless.
 - **Read replica** answers the p95 budget. Dashboards never contend with ingestion writes.
 - **Partition + archive** answers both the storage cost trend and the 90-day replay requirement. The primary stays around 40 GB and one tier smaller.
 - **Nothing from stage 3.** No trigger fired for a separate ingestion service or a stream; adding them would roughly double cost and operations for no named requirement.
@@ -1061,7 +1063,7 @@ Reasoning and cost:
 :::
 
 :::exercise id=m16-architecture-evolution-ex5 difficulty=advanced kind=written title="A gated migration roadmap from stage 2 to stage 3"
-TollTrack has reached 120 plazas. Sustained peak is 820 events/s (the ADR-004 stage-3 trigger of 800/s has fired), a dedicated ingestion team of four has formed, and the authority wants near-real-time dashboards for the whole state. Write the roadmap from stage 2 to stage 3 (separate ingestion service with its own database; an event stream feeding ingestion, the monolith and a reporting warehouse). For each stage give: the change, the fitness-function gate that must be green to proceed, the rollback, and the estimated cost delta. Finish with the "stop" criteria that would make you pause the roadmap.
+FareTrack has reached 120 stations. Sustained peak is 820 events/s (the stage-3 trigger of 800/s from the roadmap has fired), a dedicated ingestion team of four has formed, and the transport authority wants near-real-time crowding dashboards for the whole network. Write the roadmap from stage 2 to stage 3 (separate ingestion service with its own database; an event stream feeding ingestion, the monolith and a reporting warehouse). For each stage give: the change, the fitness-function gate that must be green to proceed, the rollback, and the estimated cost delta. Finish with the "stop" criteria that would make you pause the roadmap.
 ::acceptance
 - At least four stages, each leaving the system fully working.
 - Each stage has a measurable gate referencing at least one fitness family and a concrete rollback mechanism.
@@ -1077,19 +1079,19 @@ A ₹0.08 budget at 820/s (about 21 M events a month) allows ₹17 lakh a month.
 ::hint
 Stop criteria: fitness functions red for more than N days; cost per event above budget for a full month; reconciliation mismatches above a threshold; the team's incident rate rising.
 ::solution
-**Target**: ingestion runs as its own deployable with its own PostgreSQL, fed by an event stream; the monolith consumes ingestion events for tariff and reconciliation; the warehouse consumes the same stream for state-wide dashboards with under 60 s lag. Budget: ADR-004's ₹0.08 per event; 21 M events a month allows ₹16.8 lakh.
+**Target**: ingestion runs as its own deployable with its own PostgreSQL, fed by an event stream; the monolith consumes ingestion events for tariff and reconciliation; the warehouse consumes the same stream for city-wide dashboards with under 60 s lag. Budget: ADR-004's ₹0.08 per event; 21 M events a month allows ₹16.8 lakh.
 
 | Stage | Change | Gate (must be green) | Rollback | Cost delta (estimate) |
 |---|---|---|---|---|
 | 1 | Add the event stream. Workers publish each accepted event to the stream **after** writing to the stage-2 database (outbox table + relay so a crash cannot drop or duplicate). No consumer yet. | Structural: no new cross-module references. Operational: ingest p95 unchanged (< 150 ms). Cost: per-event cost rises by at most ₹0.01. Stream lag < 5 s for 7 days. | Disable the relay; stream is unused; nothing else changed. | +₹1.2 lakh/month (stream + relay workers) |
-| 2 | Stand up the ingestion service and its own database as a **shadow consumer** of the stream: it writes to the new DB, serves no traffic. Hourly reconciliation job compares count and checksum of events per plaza per hour between old and new DBs. | Reconciliation mismatch rate < 0.01 % for 14 consecutive days. Structural: the new service references only `Ingest.Contracts` and `Shared`. Cost: within +₹0.015. | Stop the shadow consumer; drop the new DB. | +₹1.6 lakh/month (service + DB) |
-| 3 | Flip reads: the monolith's tariff and reconcile modules consume `EventIngested` from the stream instead of querying `ingest.events`, behind a feature flag per plaza (10 % → 50 % → 100 %). The old table is still written. | Operational: tariff and reconcile outcomes identical between paths for flagged plazas (daily diff report, zero differences for 7 days). Dashboard p95 < 400 ms. | Flag back to table reads instantly. | +₹0.2 lakh (consumers) |
-| 4 | Point gateways at the new ingestion service (also flag per plaza). The stage-2 workers keep running for un-flagged plazas. Warehouse consumer goes live for the state dashboard. | Reconciliation 100 % for flagged plazas for 14 days. Warehouse lag < 60 s. Cost per event ≤ budget. | Flag plazas back to the old queue path; both paths still exist. | +₹2.0 lakh (warehouse) |
+| 2 | Stand up the ingestion service and its own database as a **shadow consumer** of the stream: it writes to the new DB, serves no traffic. Hourly reconciliation job compares count and checksum of events per station per hour between old and new DBs. | Reconciliation mismatch rate < 0.01 % for 14 consecutive days. Structural: the new service references only `Ingest.Contracts` and `Shared`. Cost: within +₹0.015. | Stop the shadow consumer; drop the new DB. | +₹1.6 lakh/month (service + DB) |
+| 3 | Flip reads: the monolith's tariff and reconcile modules consume `EventIngested` from the stream instead of querying `ingest.events`, behind a feature flag per station (10 % → 50 % → 100 %). The old table is still written. | Operational: tariff and reconcile outcomes identical between paths for flagged stations (daily diff report, zero differences for 7 days). Dashboard p95 < 400 ms. | Flag back to table reads instantly. | +₹0.2 lakh (consumers) |
+| 4 | Point station gates at the new ingestion service (also flag per station). The stage-2 workers keep running for un-flagged stations. Warehouse consumer goes live for the city-wide dashboard. | Reconciliation 100 % for flagged stations for 14 days. Warehouse lag < 60 s. Cost per event ≤ budget. | Flag stations back to the old queue path; both paths still exist. | +₹2.0 lakh (warehouse) |
 | 5 | Retire: stop stage-2 workers and the outbox relay, archive `ingest.events` partitions to object storage, remove the dual path and the flags. Write ADR-02x recording stage 3 as the design in force and superseding ADR-011's ingestion decisions. | All fitness functions green for 30 days after retirement. | Restore from archive is the only path back; this is the irreversible step, which is why it is last. | −₹1.0 lakh (old workers, smaller primary) |
 
-**Cost summary**: stage 2 was about ₹2.4 lakh at 30 plazas; by 120 plazas the stage-2 design had grown to an estimated ₹9 lakh (bigger database tiers, more workers). Stage 3 adds roughly +₹4 lakh net, so about ₹13 lakh a month at 21 M events: ₹0.062 per event, inside budget. Had it come out above ₹0.08, the honest options are a new ADR raising the budget with a stated business reason (the state dashboard is a paid feature) or dropping the warehouse in favour of replica-based reports until the budget allows.
+**Cost summary**: stage 2 was about ₹2.4 lakh at 30 stations; by 120 stations the stage-2 design had grown to an estimated ₹9 lakh (bigger database tiers, more workers). Stage 3 adds roughly +₹4 lakh net, so about ₹13 lakh a month at 21 M events: ₹0.062 per event, inside budget. Had it come out above ₹0.08, the honest options are a new ADR raising the budget with a stated business reason (the city-wide dashboard is a paid feature) or dropping the warehouse in favour of replica-based reports until the budget allows.
 
-**Why dual paths and reconciliation**: the data move is the irreversible part. Running both paths with an hourly count-and-checksum comparison turns "we think it works" into "it has matched for 14 days across 21 M events". The flag per plaza limits the blast radius of any defect to a few plazas.
+**Why dual paths and reconciliation**: the data move is the irreversible part. Running both paths with an hourly count-and-checksum comparison turns "we think it works" into "it has matched for 14 days across 21 M events". The flag per station limits the blast radius of any defect to a few stations.
 
 **Stop criteria**: any fitness function red for more than 3 working days; reconciliation mismatches above 0.01 % in any week; cost per event above budget for a full calendar month; incident count for the ingestion team higher than the previous quarter's; or the trigger reversing (peak falling below 500/s for a quarter, which would mean the growth assumption was wrong and the roadmap should pause at the current stage).
 ::mistakes
@@ -1110,7 +1112,7 @@ Fitness functions are tests of the architecture; they still need tests of their 
 
 **3. Test the reflection source against known types.** In the fitness project, define two small test namespaces (`Fixture.A` referencing `Fixture.B.Internal` through a field) and assert the source finds the reference. This catches a regression where someone narrows the binding flags.
 
-**4. Make the pipeline depend on the exit code.** In GitHub Actions or Azure DevOps, the step `dotnet run --project TollTrack.Fitness -- --structural` runs on every pull request; `--operational` runs after the staging load test; `--cost-only` runs on a nightly schedule. The job fails on non-zero exit. Without this step, the whole framework is a console program nobody reads.
+**4. Make the pipeline depend on the exit code.** In GitHub Actions or Azure DevOps, the step `dotnet run --project FareTrack.Fitness -- --structural` runs on every pull request; `--operational` runs after the staging load test; `--cost-only` runs on a nightly schedule. The job fails on non-zero exit. Without this step, the whole framework is a console program nobody reads.
 
 ```csharp
 public class FitnessRunnerTests
@@ -1139,7 +1141,7 @@ public class FitnessRunnerTests
 
 - **Modular monoliths that later split.** Teams that enforce module boundaries with structural fitness functions from the start report that extracting a service is mostly mechanical: the dependencies are already clean. Teams without them discover 140 cross-module foreign keys on the day they try.
 - **Cloud cost programmes.** Well-Architected frameworks from the major clouds treat cost optimisation as a pillar with its own checks: idle resources, right-sizing, unit economics. A cost fitness function in the pipeline is the engineering-team-sized version of the same idea.
-- **Public-sector platforms in India** (project monitoring, grievance systems, tendering) commonly start small for one department and are then mandated for a whole state. The ones that survive the mandate are usually those that kept one deployable and one database but chose identifiers and module boundaries carefully, and then followed a staged roadmap when the mandate arrived, rather than those built "for national scale" on day one and never finished.
+- **Public-sector platforms in India** (grievance portals, school admissions, public-transport ticketing) commonly start small for one department and are then mandated for a whole state. The ones that survive the mandate are usually those that kept one deployable and one database but chose identifiers and module boundaries carefully, and then followed a staged roadmap when the mandate arrived, rather than those built "for national scale" on day one and never finished.
 - **ADRs in open source and enterprises.** Many engineering organisations keep `docs/adr/` in each repository; the pattern has been stable since Nygard's 2011 post because its value is in the discipline, not in tooling.
 - **Platform migrations** (monolith to services, one cloud to another, one database to another) almost always succeed as strangler-style roadmaps with dual paths and reconciliation, and almost always fail as big-bang rewrites. The public record of failed rewrites is long enough to treat this as a rule.
 
@@ -1238,7 +1240,7 @@ Your team wants to update ADR-007 because the decision changed. What is the corr
 - [ ] Leave ADR-007 as it is and make the change in code only.
 > ADRs are history. Editing or deleting erases the fact that the decision changed and why, which is exactly what future readers need.
 ::q single
-TollTrack's p95 and peak-load triggers have not fired, but the events table has grown to 180 GB and cost per event is climbing towards budget. What is the best response?
+FareTrack's p95 and peak-load triggers have not fired, but the events table has grown to 180 GB and cost per event is climbing towards budget. What is the best response?
 - [ ] Begin the stage-3 migration to a separate ingestion service and event stream.
 - [x] Take the cheap, reversible steps that address the actual problem (partition, archive old months to object storage, add the replica) and record the adjusted plan in a new ADR.
 - [ ] Buy a bigger database tier and wait for the triggers.

@@ -396,7 +396,7 @@ public sealed class Member(string id, string name, MembershipType type)
     internal void PayFine(decimal amount)
     {
         if (amount <= 0 || amount > FinesDue)
-            throw new LibraryRuleException(LibraryRule.InvalidAmount, $"Payment must be between ₹1 and ₹{FinesDue}.");
+            throw new LibraryRuleException(LibraryRule.InvalidAmount, $"Payment must be more than ₹0 and at most ₹{FinesDue}.");
         FinesDue -= amount;
     }
 }
@@ -831,6 +831,8 @@ Design notes:
 - **Every path that frees a copy calls `OfferToQueue`.** Return, cancelling a ready hold, hold expiry and adding a copy. That single helper is what keeps the "Available means nobody waiting" invariant true.
 - **Cancelled waiting reservations are removed lazily.** `Queue<T>` can't remove from the middle cheaply, so a cancelled entry stays in the queue and is skipped when it reaches the front. Simple, and correct because the status is checked.
 - **The API returns a `rule` code in the problem details.** The kiosk UI can show a friendly, translated message per rule, for example in Hindi or Marathi, without parsing English text.
+- **A repeated scan is not yet idempotent.** If the kiosk times out and the student scans the same book again, the second `Return` finds no open loan and gets 404, although the first one worked. A production kiosk sends a request id with each scan, and the service either replays the stored receipt for that id or answers "already returned on 18 Oct" with the original receipt instead of an error. A double fine is impossible either way, because the loan is closed exactly once under the lock.
+- **The notification outbox lives in memory.** If the process stops between releasing the lock and sending, the "ready for pickup" message is lost; the hold itself is safe. With a database, write the notifications to an outbox table in the same transaction and let a background worker send them ([transactional outbox](#/lesson/m12-outbox)).
 - **`Loan` and `Reservation` objects are returned to callers.** That's a simplification for the LLD. In a real API you'd map them to DTOs so callers can't observe later changes made under the lock.
 
 ## Automated testing

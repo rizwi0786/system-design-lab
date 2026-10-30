@@ -24,7 +24,7 @@ references:
     url: https://sre.google/sre-book/monitoring-distributed-systems/
 ---
 
-At 7:55 p.m. on a Friday, a food-ordering app in Bengaluru starts losing orders. The dashboard says CPU is 40 %, memory is fine, and every health check is green. Customers on Twitter say "payment spinning forever". The team has servers, logs and graphs, yet nobody can answer the only question that matters: *which part of the checkout is slow, for whom, since when?* That gap between "we collect data" and "we can answer new questions about production" is what observability is about.
+At 7:55 p.m. on a Friday, a food-ordering app in Bengaluru starts losing orders. The dashboard says CPU is 40 %, memory is fine, and every health check is green. Customers on social media say "payment spinning forever". The team has servers, logs and graphs, yet nobody can answer the only question that matters: *which part of the checkout is slow, for whom, since when?* That gap between "we collect data" and "we can answer new questions about production" is what observability is about.
 
 ## Learning objectives
 
@@ -129,14 +129,14 @@ Spans cross processes because the caller sends the trace context in the `tracepa
 The real power comes from joining the pillars:
 
 - Every log line written inside a span carries `trace_id` and `span_id`. From a slow trace you jump to its logs.
-- Histogram data points can carry **exemplars**: a sample trace id attached to a bucket. From a p99 spike on a graph you jump to one example slow trace.
-- All three carry the same **resource attributes**: `service.name`, `service.version`, `deployment.environment`, host or pod name. That is how you filter "only version 3.4.1 in production".
+- Histogram data points can carry **exemplars**: a sample trace id attached to a bucket. From a p99 spike on a graph you jump to one example slow trace. In the OpenTelemetry .NET SDK exemplars are opt-in (`SetExemplarFilter(ExemplarFilterType.TraceBased)`), and the backend must support them.
+- All three carry the same **resource attributes**: `service.name`, `service.version`, `deployment.environment.name`, host or pod name. That is how you filter "only version 3.4.1 in production".
 
 ### OpenTelemetry: one standard, many backends
 
 **OpenTelemetry** (OTel) is a vendor-neutral project under the CNCF. It defines:
 
-1. **APIs and semantic conventions**: standard names such as `http.request.method`, `http.response.status_code`, `db.system`, `url.path`. In .NET, the API *is* the BCL: `ActivitySource`, `Meter` and `ILogger`. That is unusual and convenient: your libraries don't need an OpenTelemetry package to emit telemetry.
+1. **APIs and semantic conventions**: standard names such as `http.request.method`, `http.response.status_code`, `http.route`, `db.system.name`, `url.path`. Conventions are versioned and some were renamed when they became stable (for example `db.system` became `db.system.name`), so prefer the names the official instrumentation emits over hand-typed strings. In .NET, the API *is* the BCL: `ActivitySource`, `Meter` and `ILogger`. That is unusual and convenient: your libraries don't need an OpenTelemetry package to emit telemetry.
 2. **SDKs**: the OpenTelemetry .NET SDK listens to those BCL APIs, batches the data and hands it to exporters.
 3. **OTLP** (OpenTelemetry Protocol): the wire format for sending logs, metrics and traces, over gRPC (port 4317) or HTTP/protobuf (port 4318).
 4. **The Collector**: a separate process that receives OTLP, processes it (batching, filtering, redacting, sampling) and exports it to one or more backends.
@@ -151,11 +151,11 @@ Why put a Collector in the middle? The app hands data off quickly and forgets it
 
 Worked estimate for the built-in `http.server.request.duration` histogram:
 
-- 30 route and method combinations × 5 status classes (`2xx`…`5xx` plus "other") × 6 pods = 900 combinations.
-- A histogram exported Prometheus-style is roughly 14 buckets + sum + count ≈ 16 series per combination.
-- 900 × 16 ≈ **14,400 series**. Fine for any backend.
+- 30 route and method combinations × about 6 status codes actually seen (200, 201, 400, 404, 500, 503; the built-in metric records the exact code) × 6 pods = 1,080 combinations.
+- With the default bucket boundaries (14 of them, so 15 buckets including `+Inf`), a histogram exported Prometheus-style is 15 bucket series + sum + count = 17 series per combination.
+- 1,080 × 17 ≈ **18,400 series**. Fine for any backend.
 
-Now someone adds `user_id` as a tag "to debug one customer". With 500,000 active users that becomes 14,400 × 500,000 = **7.2 billion** possible series. The backend slows down or refuses data, and many hosted vendors bill per series. The rule:
+Now someone adds `user_id` as a tag "to debug one customer". With 500,000 active users that becomes 18,400 × 500,000 ≈ **9.2 billion** possible series. The backend slows down or refuses data, and many hosted vendors bill per series. The rule:
 
 - **Metrics**: only low-cardinality tags with a small, *bounded* set of values (route template, status class, payment method, region, tenant *tier*).
 - **Traces and logs**: high-cardinality fields are fine and expected (order id, user id, tenant id), because each record is stored once anyway.
@@ -531,7 +531,8 @@ builder.Services.AddOpenTelemetry()
     .WithMetrics(m => m
         .AddMeter(ShopTelemetry.Name)           // our Meter
         .AddMeter("Microsoft.AspNetCore.Hosting", "Microsoft.AspNetCore.Server.Kestrel", "System.Net.Http")
-        .AddRuntimeInstrumentation())
+        .AddMeter("System.Runtime")             // built-in runtime metrics (.NET 9+): GC, thread pool, exceptions
+        .SetExemplarFilter(ExemplarFilterType.TraceBased))   // attach trace ids to histogram buckets
     .WithLogging()
     .UseOtlpExporter();   // endpoint from OTEL_EXPORTER_OTLP_ENDPOINT, e.g. http://localhost:4317
 ```
@@ -542,6 +543,7 @@ Notes on the choices:
 - `ParentBasedSampler` respects the caller's decision in `traceparent`. Without it, service B could keep a trace that service A dropped, leaving broken half-traces.
 - `UseOtlpExporter()` sends all three signals to one endpoint. The endpoint, headers and protocol come from standard `OTEL_*` environment variables, so the same build works on a laptop (local Collector or the .NET Aspire dashboard) and in production.
 - The exporter batches in the background. If the Collector is unreachable, the batch is dropped after retries; the request path is never blocked.
+- Telemetry crosses the network, so treat it like any other data flow: use `https://` endpoints (TLS) outside the local host, put the backend's API key in `OTEL_EXPORTER_OTLP_HEADERS` from a secret store rather than in `appsettings.json`, and remember that span tags and logs can contain personal data that the Collector should scrub.
 
 :::callout type=warning title="Metrics tags are forever"
 Once a high-cardinality tag reaches the metrics backend, the series exist until retention expires, and you pay for them. Review every new metric tag the same way you review a database index: what are the possible values, and how many?
@@ -1253,7 +1255,7 @@ The package `Microsoft.Extensions.Diagnostics.Testing` offers `MetricCollector<T
 - **Payments and UPI apps**: success-rate metrics split by bank and payment method (bounded tags), traces across the app, switch and bank connectors, and alerts when one bank's success rate drops. Engineering blogs from large payment companies describe this kind of per-bank dashboard as essential; how they implement it internally is not public.
 - **E-commerce sale days**: RED dashboards per route, with tail sampling raised to keep more checkout traces during the sale hour.
 - **Government portals**: one trace from the citizen's request through department routing, queues and SMS, so a support desk can answer "where is my complaint?" from a trace id printed on the acknowledgement.
-- **Infrastructure project platforms** (progress reporting, drone imagery processing): USE metrics on the image-processing workers (queue depth, GPU utilisation) and RED on upload APIs.
+- **Photo and video sharing apps** (upload, resize, transcode): USE metrics on the media-processing workers (queue depth, GPU utilisation) and RED on the upload APIs.
 - **.NET Aspire** uses exactly this stack locally: services emit OpenTelemetry over OTLP and the Aspire dashboard displays logs, metrics and traces together during development.
 
 ## Interview questions
@@ -1274,7 +1276,7 @@ RED (rate, errors, duration) applies to things that serve requests: APIs, gRPC s
 ::q intermediate
 What is metric cardinality and how do you control it in .NET?
 ::a
-Cardinality is the number of unique time series, which is the product of the number of distinct values of every tag (times the series per instrument, about 16 for a histogram). It drives storage, query speed and often cost. Control it by: using route templates instead of raw paths; only putting bounded tags on metrics (status class, method, region, tier); normalising inputs through allow-lists so unknown values become `other`; putting high-cardinality ids (user, order, tenant) on spans and logs instead; relying on OpenTelemetry's per-metric cardinality limit as a safety net; and reviewing new tags in code review. Estimate the product before adding a tag.
+Cardinality is the number of unique time series, which is the product of the number of distinct values of every tag (times the series per instrument, about 17 for a default histogram exported Prometheus-style). It drives storage, query speed and often cost. Control it by: using route templates instead of raw paths; only putting bounded tags on metrics (status class, method, region, tier); normalising inputs through allow-lists so unknown values become `other`; putting high-cardinality ids (user, order, tenant) on spans and logs instead; relying on OpenTelemetry's per-metric cardinality limit as a safety net; and reviewing new tags in code review. Estimate the product before adding a tag.
 ::q advanced
 Head sampling or tail sampling? Design the sampling for a payment service.
 ::a

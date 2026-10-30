@@ -405,7 +405,7 @@ app.MapGet("/team/{managerId:int}/leave-summary", async (int managerId, TeamLeav
 app.Run();
 ```
 
-**Why a shared time budget?** Without one, each data-tier call might get its own 30-second default timeout, and a slow database turns into minute-long requests that pile up and exhaust the application tier's threads and connections. One budget per use case means the user gets a clear `503` within 2 seconds, and the application tier stays healthy.
+**Why a shared time budget?** Without one, each data-tier call might get its own 30-second default timeout, and a slow database turns into minute-long requests that pile up and exhaust the application tier's database connection pool, memory and the load balancer's patience (most cut requests off at 30–60 seconds anyway). One budget per use case means the user gets a clear `503` within 2 seconds, and the application tier stays healthy.
 
 **Why count round trips?** Network hops are invisible in code: `await data.GetBalanceAsync(id)` inside a loop looks harmless. A header in development and a warning log in production make the cost of tier boundaries visible. With EF Core, the equivalent is logging the number of commands per request, or using an interceptor.
 
@@ -825,7 +825,7 @@ Count the network hops for "manager opens team dashboard". Keep it to two server
 
 **Hops for "open team dashboard".** Browser → load balancer → app (one internet round trip), app → PostgreSQL (two round trips with chunky queries). No other tier is involved.
 ::mistakes
-- Streaming PDFs through the app servers, which ties up threads and bandwidth.
+- Streaming PDFs through the app servers, which ties up connections, memory and bandwidth that page requests need.
 - Putting the database in the public subnet "for the admin tool".
 - Adding a separate business-logic tier between the app and the database.
 :::
@@ -1006,7 +1006,7 @@ Where should 12 GB a month of payslip PDF downloads flow in a well-designed thre
 - [x] From object storage through a CDN, using short-lived signed URLs issued by the application tier after an access check.
 - [ ] From the database directly to the browser.
 - [ ] Emailed as attachments.
-> The app tier checks permission and issues a link. The bytes never tie up application threads.
+> The app tier checks permission and issues a link. The bytes never pass through the application servers.
 ::q single
 A consultant proposes a separate "data access tier" REST API used only by your own application and always deployed with it. What is the most likely outcome?
 - [ ] Better security and lower latency.

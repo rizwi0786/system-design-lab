@@ -45,18 +45,18 @@ You should be comfortable with C# classes, `lock` and dictionaries. No maths bey
 
 ## Explain it like I'm a beginner
 
-Two site engineers on a highway project keep paper logbooks. Priya is at chainage 12 km, Arjun at chainage 14 km. Each writes the time from their own wristwatch next to each entry.
+In a hospital, two people keep paper logbooks. Priya is a nurse on ward 3; Arjun runs the lab on the ground floor. Each writes the time from their own wristwatch next to each entry.
 
-- Priya writes: **10:02** — "Concrete poured at pier P7."
-- She phones Arjun. He writes: **10:01** — "Received Priya's call; cube test samples taken for P7."
+- Priya writes: **10:02** — "Blood sample taken from the patient in bed 7, sent to the lab."
+- The sample reaches Arjun. He writes: **10:01** — "Sample for bed 7 received, test started."
 
-Read the logbooks later and the cube samples appear to be taken *before* the concrete was poured. Impossible. Arjun's watch is simply two minutes slow.
+Read the logbooks later and the lab appears to have started testing the sample *before* it was taken. Impossible. Arjun's watch is simply two minutes slow.
 
 Now imagine a computer deciding "the latest entry wins" by looking at those times. It would throw away Priya's entry as "older". That is exactly what happens in databases that resolve conflicts by timestamp.
 
-A smarter rule: **count instead of reading the watch.** Every entry gets a number. When you tell someone something, you tell them your number, and they make sure their next number is bigger. Now "the call came after the pour" is guaranteed by the numbers, whatever the watches say. That counting trick is a **Lamport clock** (a logical clock).
+A smarter rule: **count instead of reading the watch.** Every entry gets a number. When you tell someone something, you tell them your number, and they make sure their next number is bigger. Now "the lab received the sample after it was taken" is guaranteed by the numbers, whatever the watches say. That counting trick is a **Lamport clock** (a logical clock).
 
-If you also want to know when two entries were made *without knowing about each other* — two engineers changing the same drawing independently — you keep one counter per engineer. That is a **vector clock**.
+If you also want to know when two entries were made *without knowing about each other* — two doctors changing the same patient's medication chart independently — you keep one counter per person. That is a **vector clock**.
 
 And if you want numbers that still look like times of day, so people can read them, you mix the watch time with a small counter. That is a **hybrid logical clock**.
 
@@ -125,7 +125,7 @@ Lamport's 1978 paper replaced "which time was earlier?" with a question we *can*
 2. If a is "send message m" and b is "receive m", then a → b.
 3. If a → b and b → c, then a → c.
 
-If neither a → b nor b → a, the events are **concurrent**, written a ∥ b. Concurrent doesn't mean "at the same instant". It means *neither knew about the other*. Two customers editing the same drawing on two continents without seeing each other's change are concurrent, even if one edit was a minute after the other.
+If neither a → b nor b → a, the events are **concurrent**, written a ∥ b. Concurrent doesn't mean "at the same instant". It means *neither knew about the other*. Two people editing the same shared document on two continents without seeing each other's change are concurrent, even if one edit was a minute after the other.
 
 This is the order that matters for correctness. A system should never show an effect before its cause, and it should *detect* concurrent updates instead of silently choosing one by a clock.
 
@@ -191,7 +191,7 @@ Distributed SQL databases such as CockroachDB and YugabyteDB publicly document u
 
 ### When it is unnecessary — the simpler alternative
 
-If all writes for a piece of data go through **one leader**, that leader's log *is* the order. PostgreSQL's write-ahead log position, a `bigserial` column, a Kafka partition offset — these are all "a single counter on one machine", and they are perfectly ordered. You only need logical clocks when:
+If all writes for a piece of data go through **one leader**, that leader's log *is* the order. PostgreSQL's write-ahead log position, a `bigserial` column, a Kafka partition offset — these are all "a single counter on one machine". One caveat for sequences: a `bigserial` value is handed out when the row is inserted, not when the transaction commits, so two concurrent transactions can commit in the opposite order of their ids. A consumer that polls "rows with id > last seen" can then skip a row that commits late. Updates to one row are serialised by its row lock, so they are safe; for a table-wide feed, use logical decoding (commit order) or re-read a small overlap window. You only need logical clocks when:
 
 - several nodes accept writes for the same data (multi-leader, leaderless, offline-first apps), or
 - you need to order events across independent logs (several Kafka partitions, several services) by causality.
@@ -250,22 +250,22 @@ Every message carries the sender's counter, and every receiver jumps ahead of it
 
 ## Step-by-step example
 
-We will follow a shared document — a bill of quantities (BOQ) for a bridge — edited from two offices, and fix its ordering bugs one by one.
+We will follow a pharmacy chain's stock-planning sheet. Each medicine has a **reorder level**: when stock falls below it, the system orders more. Planners edit the sheet from two offices, Delhi and Patna, each with its own server. We will fix its ordering bugs one by one.
 
 ### Step 1 — the naive version
 
 ```csharp
-public sealed record BoqLine(string ItemCode, decimal Quantity, DateTimeOffset UpdatedAt);
+public sealed record ReorderLevel(string Sku, int Strips, DateTimeOffset UpdatedAt);
 
-public void Apply(BoqLine incoming)
+public void Apply(ReorderLevel incoming)
 {
-    var current = _lines[incoming.ItemCode];
+    var current = _levels[incoming.Sku];
     if (incoming.UpdatedAt > current.UpdatedAt)   // last writer wins by wall clock
-        _lines[incoming.ItemCode] = incoming;
+        _levels[incoming.Sku] = incoming;
 }
 ```
 
-The Patna office's server clock is 400 ms behind Delhi's. An engineer in Delhi changes "cement, item 4.2" to 1,200 bags. A reviewer in Patna sees that change and corrects it to 1,250 bags 300 ms later in real time. Patna's timestamp is 100 ms *earlier* than Delhi's. Every replica keeps 1,200. The correction is lost.
+The Patna office's server clock is 400 ms behind Delhi's. A planner in Delhi changes the reorder level of "paracetamol 500 mg, SKU PCM-500" to 1,200 strips. A reviewer in Patna sees that change and corrects it to 1,250 strips 300 ms later in real time. Patna's timestamp is 100 ms *earlier* than Delhi's. Every replica keeps 1,200. The correction is lost.
 
 ### Step 2 — Lamport timestamps
 
@@ -273,7 +273,7 @@ Each office server keeps a Lamport counter. Every replicated change carries `(co
 
 ### Step 3 — vector clocks for truly concurrent edits
 
-Now two engineers, one in each office, change item 4.2 at nearly the same moment without seeing each other's change. Lamport still picks one arbitrarily. With vector clocks, Delhi's write is `{del:5, pat:3}` and Patna's is `{del:4, pat:4}`: concurrent. The store keeps both as siblings, and the BOQ screen shows "Two conflicting edits: 1,200 (Delhi) and 1,180 (Patna). Choose one." For quantities that drive cost, a human choice is correct.
+Now two planners, one in each office, change PCM-500 at nearly the same moment without seeing each other's change. Lamport still picks one arbitrarily. With vector clocks, Delhi's write is `{del:5, pat:3}` and Patna's is `{del:4, pat:4}`: concurrent. The store keeps both as siblings, and the planning screen shows "Two conflicting edits: 1,200 (Delhi) and 1,180 (Patna). Choose one." For a setting that drives purchase orders, a human choice is correct. (Stock *movements* are different: record them as deltas, such as "+500 received" or "−3 sold", which add up in any order and never conflict. Only absolute settings like a reorder level need a winner.)
 
 ### Step 4 — HLC for readable, ordered audit history
 
@@ -284,7 +284,7 @@ Auditors want a history sorted by time that never shows effects before causes. E
 Project layout:
 
 ```text
-Boq.Api/
+Stock.Api/
   Program.cs
   Clocks/
     LamportClock.cs
@@ -551,19 +551,19 @@ app.Use(async (ctx, next) =>
     await next();
 });
 
-app.MapGet("/boq/{item}", (string item, SiblingStore store, HttpResponse resp) =>
+app.MapGet("/stock/{item}/reorder-level", (string item, SiblingStore store, HttpResponse resp) =>
 {
     var r = store.Get(item);
     resp.Headers["X-Context"] = r.Context.Serialize();   // send this back with your next write
     return Results.Ok(new { item, conflict = r.HasConflict, values = r.Siblings.Select(s => new { s.Value, s.WrittenBy, clock = s.Clock.ToString() }) });
 });
 
-app.MapPut("/boq/{item}", (string item, BoqWrite body, HttpRequest req, SiblingStore store) =>
+app.MapPut("/stock/{item}/reorder-level", (string item, ReorderLevelWrite body, HttpRequest req, SiblingStore store) =>
 {
     VectorClock context;
     try { context = VectorClock.Parse(req.Headers["X-Context"]); }
     catch (FormatException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status400BadRequest); }
-    var written = store.Put(item, body.Quantity.ToString(System.Globalization.CultureInfo.InvariantCulture), context);
+    var written = store.Put(item, body.Strips.ToString(System.Globalization.CultureInfo.InvariantCulture), context);
     return Results.Ok(new { clock = written.Clock.ToString() });
 });
 
@@ -578,7 +578,7 @@ static bool TryParseHlc(string? s, out HlcTimestamp ts)
     return true;
 }
 
-public sealed record BoqWrite(decimal Quantity);
+public sealed record ReorderLevelWrite(int Strips);
 ```
 
 Design notes:
@@ -612,7 +612,7 @@ Design notes:
 
 ## Practical playground
 
-The playground seeds an in-browser PostgreSQL with writes to two keys from three offices, each carrying a 3-entry vector clock (`vc_del`, `vc_pat`, `vc_mum`) and a wall-clock time from a skewed server. Try these queries:
+The playground seeds an in-browser PostgreSQL with reorder-level writes to two medicines from three offices, each carrying a 3-entry vector clock (`vc_del`, `vc_pat`, `vc_mum`) and a wall-clock time from a skewed server. Try these queries:
 
 1. Order by `wall_ts`. Do any writes appear before writes they were based on (`based_on`)?
 2. Write a query that, for each pair of writes to the same key, says `before`, `after` or `concurrent` using the vector entries.
@@ -623,7 +623,7 @@ The playground seeds an in-browser PostgreSQL with writes to two keys from three
 CREATE TABLE writes (
   id        int PRIMARY KEY,
   item      text NOT NULL,
-  quantity  int  NOT NULL,
+  strips    int  NOT NULL,
   office    text NOT NULL,
   wall_ts   timestamptz NOT NULL,
   based_on  int REFERENCES writes(id),
@@ -633,15 +633,15 @@ CREATE TABLE writes (
 );
 
 INSERT INTO writes VALUES
- (1, 'cement-4.2', 1000, 'del', '2026-10-19 10:00:00.000+00', NULL, 1, 0, 0),
- (2, 'cement-4.2', 1200, 'del', '2026-10-19 10:00:05.000+00', 1,    2, 0, 0),
- (3, 'cement-4.2', 1250, 'pat', '2026-10-19 10:00:04.900+00', 2,    2, 1, 0),
- (4, 'steel-5.1',   80,  'mum', '2026-10-19 10:01:00.000+00', NULL, 0, 0, 1),
- (5, 'steel-5.1',   85,  'del', '2026-10-19 10:01:02.000+00', 4,    3, 0, 1),
- (6, 'steel-5.1',   78,  'pat', '2026-10-19 10:01:02.300+00', 4,    2, 2, 1);
+ (1, 'PCM-500', 1000, 'del', '2026-10-19 10:00:00.000+00', NULL, 1, 0, 0),
+ (2, 'PCM-500', 1200, 'del', '2026-10-19 10:00:05.000+00', 1,    2, 0, 0),
+ (3, 'PCM-500', 1250, 'pat', '2026-10-19 10:00:04.900+00', 2,    2, 1, 0),
+ (4, 'ORS-21G',   80, 'mum', '2026-10-19 10:01:00.000+00', NULL, 0, 0, 1),
+ (5, 'ORS-21G',   85, 'del', '2026-10-19 10:01:02.000+00', 4,    3, 0, 1),
+ (6, 'ORS-21G',   78, 'pat', '2026-10-19 10:01:02.300+00', 4,    2, 2, 1);
 
 -- Start here: wall-clock order hides that write 3 was based on write 2.
-SELECT id, item, quantity, office, wall_ts FROM writes ORDER BY item, wall_ts;
+SELECT id, item, strips, office, wall_ts FROM writes ORDER BY item, wall_ts;
 ```
 :::
 
@@ -805,10 +805,10 @@ Pack the stamp into one `long` (48 bits of counter, 16 bits of node index) so it
 :::exercise id=m13-time-ordering-ex2 difficulty=beginner kind=written title="Which write survives?"
 A leaderless store resolves conflicts by last-writer-wins on server wall-clock time. Node A's clock is correct. Node B's clock is 800 ms behind. Node C's clock is 300 ms ahead.
 
-Real-time events for key `contractor:42:phone`:
+Real-time events for key `patient:42:phone` in a clinic's patient-records store:
 
-- t = 0 ms: an admin on node A sets it to `98100-11111`.
-- t = 500 ms: the contractor, who saw the admin's change, corrects it on node B to `98100-22222`.
+- t = 0 ms: a receptionist on node A sets it to `98100-11111`.
+- t = 500 ms: the patient, who saw the receptionist's change in the clinic app, corrects it on node B to `98100-22222`.
 - t = 600 ms: a batch import on node C, which saw neither, writes `98100-33333`.
 
 Answer: (a) which timestamp does each write get? (b) which value survives? (c) which outcome was *correct*, and why? (d) propose a design that gets it right.
@@ -828,14 +828,14 @@ Vector clocks would give A `{A:1}`, B `{A:1, B:1}`, C `{C:1}`. Compare B and C.
 ::solution
 **(a)** A's write: 0 ms. B's write: 500 − 800 = **−300 ms**. C's write: 600 + 300 = **900 ms**.
 
-**(b)** LWW keeps the highest timestamp: **C's `98100-33333`**. And if C hadn't written, A's write (0) would beat B's correction (−300): the contractor's correction would be lost even though it came later *and* was based on A's write.
+**(b)** LWW keeps the highest timestamp: **C's `98100-33333`**. And if C hadn't written, A's write (0) would beat B's correction (−300): the patient's correction would be lost even though it came later *and* was based on A's write.
 
 **(c)** B's write supersedes A's (B saw A: A → B). C's write is **concurrent** with both A and B (it saw neither). There is no "correct" winner between B and C by time; it's a business decision. The correct system outcome is "B supersedes A; B and C conflict".
 
 **(d)** Options:
 
 - **Vector clocks + siblings**: A `{A:1}`, B `{A:1, B:1}` (B read A's context), C `{C:1}`. B supersedes A; B ∥ C, so both are kept and the application resolves, for example "a human-entered value beats a batch import" or show both to an admin.
-- **Single leader per key**: route all writes for a contractor to one node; its sequence decides order, and the batch import is made to read-then-write with optimistic concurrency (`WHERE version = @v`), so it fails instead of overwriting a newer value.
+- **Single leader per key**: route all writes for a patient to one node; its sequence decides order, and the batch import is made to read-then-write with optimistic concurrency (`WHERE version = @v`), so it fails instead of overwriting a newer value.
 - **HLC instead of wall clock for LWW**: fixes A vs B (B's HLC > A's because B received A's), but still silently picks between B and C. Better than wall clocks, not a conflict detector.
 ::mistakes
 - Saying "C wins because it was last in real time". Real time is exactly what the store cannot see.
@@ -1324,13 +1324,13 @@ public void Concurrent_writes_become_siblings_and_resolution_supersedes_both()
 {
     var delhi = new SiblingStore("del");
     var patna = new SiblingStore("pat");
-    delhi.Put("cement-4.2", "1200", VectorClock.Empty);              // {del:1}
-    var fromPatna = patna.Put("cement-4.2", "1180", VectorClock.Empty); // {pat:1}, saw nothing
-    delhi.Replicate("cement-4.2", fromPatna);
-    Assert.True(delhi.Get("cement-4.2").HasConflict);
+    delhi.Put("PCM-500", "1200", VectorClock.Empty);              // {del:1}
+    var fromPatna = patna.Put("PCM-500", "1180", VectorClock.Empty); // {pat:1}, saw nothing
+    delhi.Replicate("PCM-500", fromPatna);
+    Assert.True(delhi.Get("PCM-500").HasConflict);
 
-    var resolved = delhi.Put("cement-4.2", "1200", delhi.Get("cement-4.2").Context);  // {del:2, pat:1}
-    Assert.False(delhi.Get("cement-4.2").HasConflict);
+    var resolved = delhi.Put("PCM-500", "1200", delhi.Get("PCM-500").Context);  // {del:2, pat:1}
+    Assert.False(delhi.Get("PCM-500").HasConflict);
     Assert.Equal(Causality.After, resolved.Clock.CompareTo(fromPatna.Clock));
 }
 ```
@@ -1346,7 +1346,7 @@ Also test a subtle case: two writes on the *same* node from the same stale conte
 - **Dynamo-style stores** (Riak, the original Dynamo design) use version vectors to keep concurrent writes as siblings. Apache Cassandra instead uses per-cell timestamps with last-write-wins, which is why clock sync matters so much for Cassandra clusters.
 - **Raft and Paxos** use monotonically increasing term or ballot numbers — logical clocks — to reject messages from old leaders.
 - **Kafka** gives a total order *within a partition* via offsets. Across partitions there is no order, so systems that need cross-partition causality carry their own logical timestamps in the message headers.
-- **Offline-first field apps** (inspections recorded on tablets at remote sites, synced later) cannot trust device clocks at all; a device can be hours off. They use per-device counters (version vectors) and server-assigned sequence numbers on sync.
+- **Offline-first mobile apps** (home-visit nurses recording patient notes on tablets in areas with poor signal, synced later) cannot trust device clocks at all; a device can be hours off. They use per-device counters (version vectors) and server-assigned sequence numbers on sync.
 
 ## Interview questions
 
@@ -1455,9 +1455,9 @@ All writes to an order go through one PostgreSQL primary. You need the order of 
 - [ ] Vector clocks.
 - [ ] Hybrid logical clocks.
 - [ ] Client device timestamps.
-> One writer means one log, which is already a perfect order. Logical clocks are for multiple writers.
+> One writer means one log, which is already a perfect order. Logical clocks are for multiple writers. (Status changes to one order lock the same row, so their sequence values follow commit order; across many rows, ids can commit out of order.)
 ::q single
-A field app on tablets records inspections offline and syncs later. Some tablets' clocks are hours off. How should the server order conflicting edits to the same inspection?
+A home-healthcare app on nurses' tablets records visit notes offline and syncs later. Some tablets' clocks are hours off. How should the server order conflicting edits to the same visit note?
 - [ ] By the tablet's timestamp.
 - [ ] By the time the server receives the sync.
 - [x] By per-device version counters (a version vector), flagging concurrent edits for review.

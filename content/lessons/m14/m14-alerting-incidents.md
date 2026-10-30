@@ -424,7 +424,7 @@ public sealed class SloAlertOptions
     public string SliName { get; set; } = "tax-payment-availability";
     public double Slo { get; set; } = 0.999;
     public TimeSpan EvaluationInterval { get; set; } = TimeSpan.FromMinutes(1);
-    public string RunbookUrl { get; set; } = "https://git.example.in/tax/docs/runbooks/payment-slo.md";
+    public string RunbookUrl { get; set; } = "https://git.example.com/tax/docs/runbooks/payment-slo.md";
 }
 
 /// <summary>Evaluates burn-rate rules every minute and notifies only on state changes,

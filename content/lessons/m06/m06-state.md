@@ -22,7 +22,7 @@ references:
     url: https://www.postgresql.org/docs/17/sql-update.html
 ---
 
-Almost every business object has a lifecycle. An order is placed, paid, packed, shipped and delivered. A leave request is drafted, submitted, approved or rejected. A drawing is submitted for review and returned for revision. What you are allowed to do with the object depends on where it is in that lifecycle. The State pattern gives each stage its own small class, so the rules for "what can happen now" live in one obvious place instead of being scattered through `if` statements.
+Almost every business object has a lifecycle. An order is placed, paid, packed, shipped and delivered. A leave request is drafted, submitted, approved or rejected. A seller's new product listing is submitted for review and sent back for changes. What you are allowed to do with the object depends on where it is in that lifecycle. The State pattern gives each stage its own small class, so the rules for "what can happen now" live in one obvious place instead of being scattered through `if` statements.
 
 ## Learning objectives
 
@@ -259,7 +259,7 @@ The repository stores status as text with a version column. Loading maps the tex
 
 ### Step 6 — a simpler workflow as a table
 
-Drawing approval (Draft → Under review → Approved, or Returned for revision) has no state-specific behaviour beyond "which moves are allowed, and who may make them". A transition table is shorter and doubles as documentation.
+Marketplace listing approval (a seller's new product listing goes Draft → Under review → Approved, or Returned for changes) has no state-specific behaviour beyond "which moves are allowed, and who may make them". A transition table is shorter and doubles as documentation.
 
 ## Production-style C# implementation
 
@@ -272,7 +272,7 @@ Shop.Api/
     OrderStates.cs
     OrderRepository.cs
   Approvals/
-    DrawingApprovalWorkflow.cs
+    ListingApprovalWorkflow.cs
 ```
 
 ```csharp file=Orders/OrderStatus.cs
@@ -520,40 +520,40 @@ RETURNING version;
 
 ### A transition table for a simpler workflow
 
-```csharp file=Approvals/DrawingApprovalWorkflow.cs
+```csharp file=Approvals/ListingApprovalWorkflow.cs
 using Shop.Orders;
 
 namespace Shop.Approvals;
 
-public enum DrawingStatus { Draft, UnderReview, Approved, ReturnedForRevision }
-public enum DrawingTrigger { Submit, Approve, Return, Revise }
+public enum ListingStatus { Draft, UnderReview, Approved, ReturnedForChanges }
+public enum ListingTrigger { Submit, Approve, Return, Revise }
 
-/// <summary>Who is acting, and on whose drawing. Guards read this.</summary>
-public sealed record DrawingActor(string UserId, string AuthorId, bool IsReviewer);
+/// <summary>Who is acting, and on whose listing. Guards read this.</summary>
+public sealed record ListingActor(string UserId, string SellerId, bool IsReviewer);
 
 /// <summary>
 /// Transition table: the whole workflow is visible in one array.
 /// Use this shape when states differ only in which moves are allowed, not in behaviour.
 /// </summary>
-public static class DrawingApprovalWorkflow
+public static class ListingApprovalWorkflow
 {
-    private sealed record Transition(DrawingStatus From, DrawingTrigger Trigger, DrawingStatus To, Func<DrawingActor, string?>? Guard = null);
+    private sealed record Transition(ListingStatus From, ListingTrigger Trigger, ListingStatus To, Func<ListingActor, string?>? Guard = null);
 
-    private static readonly Func<DrawingActor, string?> ReviewerNotAuthor =
-        a => !a.IsReviewer ? "Only reviewers can do this." : a.UserId == a.AuthorId ? "You cannot review your own drawing." : null;
+    private static readonly Func<ListingActor, string?> ReviewerNotSeller =
+        a => !a.IsReviewer ? "Only reviewers can do this." : a.UserId == a.SellerId ? "You cannot review your own listing." : null;
 
-    private static readonly Func<DrawingActor, string?> AuthorOnly =
-        a => a.UserId == a.AuthorId ? null : "Only the author can do this.";
+    private static readonly Func<ListingActor, string?> SellerOnly =
+        a => a.UserId == a.SellerId ? null : "Only the seller can do this.";
 
     private static readonly Transition[] Table =
     [
-        new(DrawingStatus.Draft,               DrawingTrigger.Submit,  DrawingStatus.UnderReview,         AuthorOnly),
-        new(DrawingStatus.UnderReview,         DrawingTrigger.Approve, DrawingStatus.Approved,            ReviewerNotAuthor),
-        new(DrawingStatus.UnderReview,         DrawingTrigger.Return,  DrawingStatus.ReturnedForRevision, ReviewerNotAuthor),
-        new(DrawingStatus.ReturnedForRevision, DrawingTrigger.Revise,  DrawingStatus.Draft,               AuthorOnly),
+        new(ListingStatus.Draft,               ListingTrigger.Submit,  ListingStatus.UnderReview,         SellerOnly),
+        new(ListingStatus.UnderReview,         ListingTrigger.Approve, ListingStatus.Approved,            ReviewerNotSeller),
+        new(ListingStatus.UnderReview,         ListingTrigger.Return,  ListingStatus.ReturnedForChanges, ReviewerNotSeller),
+        new(ListingStatus.ReturnedForChanges, ListingTrigger.Revise,  ListingStatus.Draft,               SellerOnly),
     ];
 
-    public static DrawingStatus Fire(DrawingStatus current, DrawingTrigger trigger, DrawingActor actor)
+    public static ListingStatus Fire(ListingStatus current, ListingTrigger trigger, ListingActor actor)
     {
         var t = Table.FirstOrDefault(x => x.From == current && x.Trigger == trigger)
                 ?? throw new InvalidTransitionException(current.ToString(), trigger.ToString().ToLowerInvariant());
@@ -562,7 +562,7 @@ public static class DrawingApprovalWorkflow
     }
 
     /// <summary>Drives the UI: show only buttons this user may press now.</summary>
-    public static IEnumerable<DrawingTrigger> Permitted(DrawingStatus current, DrawingActor actor) =>
+    public static IEnumerable<ListingTrigger> Permitted(ListingStatus current, ListingActor actor) =>
         Table.Where(t => t.From == current && t.Guard?.Invoke(actor) is null).Select(t => t.Trigger);
 }
 ```
@@ -618,9 +618,9 @@ app.MapPost("/orders/{id:guid}/deliver", (Guid id, IOrderRepository repo, TimePr
 app.MapPost("/orders/{id:guid}/cancel", (Guid id, [FromQuery] string reason, IOrderRepository repo, TimeProvider clock, CancellationToken ct) =>
     Act(id, repo, ct, o => o.Cancel(reason, clock.GetUtcNow())));
 
-app.MapPost("/drawings/fire", (DrawingStatus current, DrawingTrigger trigger, DrawingActor actor) =>
+app.MapPost("/listings/fire", (ListingStatus current, ListingTrigger trigger, ListingActor actor) =>
 {
-    try { return Results.Ok(new { status = DrawingApprovalWorkflow.Fire(current, trigger, actor).ToString() }); }
+    try { return Results.Ok(new { status = ListingApprovalWorkflow.Fire(current, trigger, actor).ToString() }); }
     catch (InvalidTransitionException ex) { return Results.Problem(ex.Message, statusCode: 409); }
     catch (UnauthorizedAccessException ex) { return Results.Problem(ex.Message, statusCode: 403); }
 });
@@ -722,7 +722,7 @@ public static class Program
     {
         var t = new Ticket();
         try { t.Resolve(); } catch (InvalidOperationException ex) { Console.WriteLine("  Rejected: " + ex.Message); }
-        t.Assign("ravi@site-office");
+        t.Assign("ravi@support");
         t.Resolve();
         t.Close();
         try { t.Assign("meera"); } catch (InvalidOperationException ex) { Console.WriteLine("  Rejected: " + ex.Message); }
@@ -1397,42 +1397,43 @@ Order 1005 entered `Packed` at 11:59 on 16 October, one minute before the cut-of
 - Using `min(changed_at)` when an order has re-entered `Packed`.
 :::
 
-:::exercise id=m06-state-ex5 difficulty=advanced kind=design title="Refactor a boolean-flag RFI workflow"
-On a highway project, contractors raise a **Request for Inspection (RFI)** before covering work (for example, before laying bitumen over a prepared base). The current code:
+:::exercise id=m06-state-ex5 difficulty=advanced kind=design title="Refactor a boolean-flag return-request workflow"
+An online fashion store lets customers raise a **return request** for a delivered item (wrong size, damaged, not as described). A courier brings the parcel back, a warehouse inspector checks it, and the return is either approved (refund issued) or rejected. Support agents can also raise a return on a customer's behalf after a phone call. The current code:
 
 ```csharp
-public class Rfi
+public class ReturnRequest
 {
     public bool IsSubmitted, IsInspected, IsApproved, IsRejected, IsClosed;
+    public string? RaisedBy;
     public string? InspectorId;
     public DateTime? InspectedAt;
 }
 
-public void Approve(Rfi rfi, string userId)
+public void Approve(ReturnRequest r, string userId)
 {
-    if (!rfi.IsSubmitted) throw new Exception("not submitted");
-    if (rfi.IsClosed) throw new Exception("closed");
-    rfi.IsInspected = true; rfi.IsApproved = true;
-    rfi.InspectorId = userId; rfi.InspectedAt = DateTime.Now;
+    if (!r.IsSubmitted) throw new Exception("not submitted");
+    if (r.IsClosed) throw new Exception("closed");
+    r.IsInspected = true; r.IsApproved = true;
+    r.InspectorId = userId; r.InspectedAt = DateTime.Now;
     _db.SaveChanges();
 }
 // Reject, Resubmit, Close, Escalate follow the same pattern
 ```
 
-Production data contains RFIs where `IsApproved` and `IsRejected` are both true, and RFIs approved by the contractor who raised them. Two inspectors sometimes act on the same RFI within seconds. RFIs not inspected within 24 hours must be escalated to the resident engineer.
+Production data contains returns where `IsApproved` and `IsRejected` are both true, and returns approved by the same support agent who raised them (a fraud risk: an agent can refund a friend). Two inspectors sometimes act on the same parcel within seconds, and a few customers were refunded twice. Returns not inspected within 24 hours of reaching the warehouse must be escalated to the warehouse supervisor.
 
 Design the replacement.
 ::acceptance
 - A state diagram covering Submitted, UnderInspection, Approved, Rejected, Resubmitted (or a loop back), Escalated and Closed, with guards.
 - A choice between state classes and a transition table, with a reason.
 - A database design: status column with constraints, version column, history table.
-- How concurrent inspector actions are handled, and what the API returns.
-- How the 24-hour escalation is triggered without a timer per RFI in memory.
+- How concurrent inspector actions are handled, what the API returns, and how a double refund is prevented.
+- How the 24-hour escalation is triggered without a timer per return in memory.
 - A migration plan for existing rows with contradictory flags.
 ::hint
 Start with the diagram. Every pair of flags that can't both be true is a sign they are really one status.
 ::hint
-"Approved by the contractor who raised it" is a guard on the transition, not a state.
+"Approved by the agent who raised it" is a guard on the transition, not a state.
 ::hint
 Concurrency: optimistic version check plus 409. Escalation: a scheduled query like the one in exercise 4, firing an `Escalate` trigger through the same state machine.
 ::hint
@@ -1440,33 +1441,34 @@ Migration: map flags to a status with a `CASE` expression ordered by priority (C
 ::solution
 ```mermaid
 stateDiagram-v2
-    [*] --> Submitted : Raise [contractor]
+    [*] --> Submitted : Raise [customer or support agent]
     Submitted --> UnderInspection : StartInspection [inspector]
-    Submitted --> Escalated : Escalate [24 h elapsed]
-    Escalated --> UnderInspection : StartInspection [resident engineer or inspector]
+    Submitted --> Escalated : Escalate [24 h in warehouse]
+    Escalated --> UnderInspection : StartInspection [supervisor or inspector]
     UnderInspection --> Approved : Approve [actor is not raiser]
     UnderInspection --> Rejected : Reject [remarks present]
-    Rejected --> Submitted : Resubmit [contractor, new evidence]
-    Approved --> Closed : Close
+    Rejected --> Submitted : Resubmit [customer, new photos]
+    Approved --> Closed : Close [refund confirmed]
     Closed --> [*]
 ```
 
-**Classes or table?** A **transition table** for the shape (seven states, nine transitions, guards on actor role) because the UI needs "allowed actions" and the QA team wants to review the rules as data. Two transitions have real behaviour (Approve records inspector and timestamp and unlocks the next activity; Reject requires remarks and notifies the contractor). Put that behaviour in small handlers keyed by trigger, or in methods on the `Rfi` entity called after the table approves the move. If more states gain behaviour, switch to state classes.
+**Classes or table?** A **transition table** for the shape (seven states, nine transitions, guards on actor role) because the UI needs "allowed actions" and the operations team wants to review the rules as data. Two transitions have real behaviour (Approve records the inspector and timestamp and requests the refund; Reject requires remarks and notifies the customer). Put that behaviour in small handlers keyed by trigger, or in methods on the `ReturnRequest` entity called after the table approves the move. If more states gain behaviour, switch to state classes.
 
 **Database**
-- `rfis.status text NOT NULL CHECK (status IN (...))`, `version int`, `raised_by`, `inspected_by`, `inspected_at timestamptz`.
-- `CHECK (status <> 'Approved' OR inspected_by IS NOT NULL)` and `CHECK (inspected_by IS NULL OR inspected_by <> raised_by)` so the database rejects impossible rows even if code regresses.
-- `rfi_status_history(rfi_id, from_status, to_status, actor, at, remarks)` for audit.
+- `return_requests.status text NOT NULL CHECK (status IN (...))`, `version int`, `raised_by`, `inspected_by`, `inspected_at timestamptz`, `received_at timestamptz` (when the parcel reached the warehouse).
+- `CHECK (status NOT IN ('Approved','Closed') OR inspected_by IS NOT NULL)` and `CHECK (inspected_by IS NULL OR inspected_by <> raised_by)` so the database rejects impossible rows even if code regresses.
+- `return_request_status_history(return_id, from_status, to_status, actor, at, remarks)` for audit.
 
-**Concurrency**: `UPDATE rfis SET status = 'Approved', version = version + 1, ... WHERE id = @id AND version = @v`. Zero rows → `409 Conflict` with the current status and allowed actions, so the second inspector sees "already approved by X at 14:02" instead of overwriting it.
+**Concurrency and refunds**: `UPDATE return_requests SET status = 'Approved', version = version + 1, ... WHERE id = @id AND version = @v`. Zero rows → `409 Conflict` with the current status and allowed actions, so the second inspector sees "already approved by Asha at 14:02" instead of overwriting it. The refund request is written to an outbox in the same transaction as the status change and sent to the payment provider with the return id as the idempotency key, so neither a race nor a retry can refund twice.
 
-**Escalation**: a `BackgroundService` runs every 5 minutes: `SELECT id, version FROM rfis WHERE status = 'Submitted' AND submitted_at < now() - interval '24 hours'`. For each row it fires `Escalate` through the same workflow and guarded update. If an inspector started inspection meanwhile, the version check fails and the escalation is skipped. No in-memory timers, survives restarts, scales to many RFIs.
+**Escalation**: a `BackgroundService` runs every 5 minutes: `SELECT id, version FROM return_requests WHERE status = 'Submitted' AND received_at < now() - interval '24 hours'`. For each row it fires `Escalate` through the same workflow and guarded update. If an inspector started inspection meanwhile, the version check fails and the escalation is skipped. No in-memory timers, survives restarts, works across many servers.
 
-**Migration**: compute a status with `CASE WHEN is_closed THEN 'Closed' WHEN is_approved AND NOT is_rejected THEN 'Approved' WHEN is_rejected AND NOT is_approved THEN 'Rejected' WHEN is_inspected THEN 'UnderInspection' WHEN is_submitted THEN 'Submitted' END`; rows where both approved and rejected are true, or approved by the raiser, go to a report for the quality team to resolve before the constraints are switched on. Keep the old columns read-only for one release, then drop them.
+**Migration**: compute a status with `CASE WHEN is_closed THEN 'Closed' WHEN is_approved AND NOT is_rejected THEN 'Approved' WHEN is_rejected AND NOT is_approved THEN 'Rejected' WHEN is_inspected THEN 'UnderInspection' WHEN is_submitted THEN 'Submitted' END`; rows where both approved and rejected are true, or approved by the raiser, go to a report for the customer-support and finance teams to resolve before the constraints are switched on. Keep the old columns read-only for one release, then drop them.
 ::mistakes
 - Modelling "Escalated" as a boolean next to the status, which recreates the flag soup.
-- Using an in-memory `Timer` per RFI for the 24-hour rule; timers vanish on restart and don't scale across servers.
+- Using an in-memory `Timer` per return for the 24-hour rule; timers vanish on restart and don't scale across servers.
 - Letting the escalation job write the status directly instead of going through the same guarded transition.
+- Calling the payment provider inside the request before the status update commits; a failed save then leaves a refund already sent.
 - Adding constraints before cleaning the data, which makes the migration fail halfway.
 :::
 
@@ -1497,7 +1499,7 @@ public static IEnumerable<(OrderStatus From, string Action)> InvalidPairs()
 
 With 6 states and 5 actions there are 30 pairs: 7 valid, 23 invalid. Testing all 23 takes milliseconds and catches the "new status is allowed to cancel by default" bug.
 
-**3. Guards and effects.** Blank tracking number, refund amounts, self-approval in the drawing workflow.
+**3. Guards and effects.** Blank tracking number, refund amounts, self-approval in the listing workflow.
 
 **4. Rehydration.** Save an order in each status, load it, and check that `AllowedActions` match. This catches a status string that no longer parses after someone renames an enum member, which is why storing text and testing round trips matters.
 
@@ -1508,7 +1510,7 @@ With 6 states and 5 actions there are 30 pairs: 7 valid, 23 invalid. Testing all
 ## Real-world application
 
 - **E-commerce and food delivery**: order, payment, shipment and return lifecycles. Each is usually its own small state machine, linked by events.
-- **Approvals**: leave requests, purchase orders, expense claims, drawing and RFI approvals on construction projects. Guards check roles ("not your own request") and amounts.
+- **Approvals**: leave requests, purchase orders, expense claims, product-listing and refund approvals on marketplaces. Guards check roles ("not your own request") and amounts.
 - **Payments**: a payment intent moves through created → authorised → captured → refunded. Payment providers document such lifecycles publicly, and integrating code must reject out-of-order webhooks using the same "invalid by default" idea.
 - **Infrastructure**: TCP connections (the GoF example), circuit breakers (Closed → Open → Half-open) and ASP.NET Core's own connection handling are state machines.
 - **Government services**: a grievance or application typically moves through registered → assigned → in progress → resolved → closed, with escalation timers per stage, implemented exactly like exercise 5.
@@ -1587,7 +1589,7 @@ An `Order` has five methods, each starting with `switch (Status)`. Product adds 
 Which situation is better modelled with Strategy than State?
 - [ ] A leave request moving from Draft to Submitted to Approved.
 - [x] Choosing a GST calculation method based on the supplier's registration type, fixed when the invoice is created.
-- [ ] An RFI escalating after 24 hours.
+- [ ] A return request escalating after 24 hours.
 - [ ] A TCP connection moving from Listening to Established.
 > The calculation is chosen once and doesn't change through a lifecycle. That's Strategy.
 ::q single
@@ -1619,9 +1621,9 @@ A "Cancel" request arrives for a delivered order. What should the API do?
 - [ ] Return 404 Not Found.
 > The order exists and the request is well-formed, but it conflicts with the current state. Silent success hides the problem from the user.
 ::q single
-An RFI must escalate if not inspected within 24 hours, across 3 API servers. What is the most robust approach?
-- [ ] A `System.Threading.Timer` per RFI on the server that created it.
-- [x] A scheduled background job that queries overdue RFIs and fires `Escalate` through the guarded transition.
+A return request must escalate if not inspected within 24 hours, across 3 API servers. What is the most robust approach?
+- [ ] A `System.Threading.Timer` per return request on the server that created it.
+- [x] A scheduled background job that queries overdue return requests and fires `Escalate` through the guarded transition.
 - [ ] A JavaScript timer in the inspector's browser.
 - [ ] A database trigger that sends emails.
 > Durable, restart-safe and multi-server safe. The version check stops the escalation if an inspector acted at the same moment.

@@ -70,35 +70,35 @@ In a single PostgreSQL database, a transaction gives you ACID: atomicity, consis
 2. **Put everything in one database.** Sometimes the right answer, but it couples the services.
 3. **A saga.** A sequence of local transactions T1, T2, …, Tn. Each Ti commits in its own service. If Tk fails, run compensations Ck−1, …, C1 in reverse order. Hector Garcia-Molina and Kenneth Salem described this for long-lived database transactions in 1987; microservices adopted it for cross-service processes.
 
-A saga keeps **atomicity of the business outcome** (eventually, either all steps take effect or their effects are compensated) and **durability**. It gives up **isolation**: other transactions can see the intermediate state, such as "equipment reserved, deposit not yet taken".
+A saga keeps **atomicity of the business outcome** (eventually, either all steps take effect or their effects are compensated) and **durability**. It gives up **isolation**: other transactions can see the intermediate state, such as "car reserved, deposit not yet taken".
 
 ### The running example
 
-RentRig is a marketplace that rents heavy construction equipment (cranes, excavators, transit mixers) to contractors. Renting a 100-tonne crawler crane for a metro project involves four services:
+DriveEasy is a self-drive car rental app that delivers the car to the customer's door. Renting an SUV for a weekend trip from Bengaluru involves four services:
 
-1. **Inventory**: reserve the crane for the dates. Compensation: release the reservation.
-2. **Payments**: authorise a refundable deposit of ₹2,00,000 on the contractor's account. Compensation: void the authorisation.
-3. **Logistics**: book a low-bed trailer with a partner transporter. Compensation: cancel the booking (the partner may charge a fee).
-4. **Orders**: capture the deposit and confirm the rental to the contractor. These run only after transport is booked and must not fail permanently.
+1. **Inventory**: reserve the car for the dates. Compensation: release the reservation.
+2. **Payments**: authorise (hold) a refundable security deposit of ₹10,000 on the customer's card. Compensation: void the authorisation.
+3. **Logistics**: book a delivery driver from a partner agency to bring the car to the customer's address. Compensation: cancel the booking (the partner may charge a fee).
+4. **Orders**: capture the deposit (refunded after the trip) and confirm the rental to the customer. These run only after delivery is booked and must not fail permanently.
 
-Volume estimates: 30,000 rentals a day ÷ 86,400 s ≈ 0.35 sagas/s on average, perhaps 3.5/s at a seasonal peak. Each saga exchanges about 8 to 10 messages, so throughput is easy (≈ 35 messages/s at peak). The same design scales to an e-commerce checkout with 2 million orders a day (≈ 23 sagas/s average, about 115/s at a 5× peak, around 1,000 messages/s). **What breaks first is never throughput; it is the failure paths.** If the transporter API fails 2 % of the time, that is 600 compensations a day at RentRig, and every one of them must work.
+Volume estimates: 30,000 rentals a day ÷ 86,400 s ≈ 0.35 sagas/s on average, perhaps 3.5/s at a long-weekend peak. Each saga exchanges about 8 to 10 messages, so throughput is easy (≈ 35 messages/s at peak). The same design scales to an e-commerce checkout with 2 million orders a day (≈ 23 sagas/s average, about 115/s at a 5× peak, around 1,000 messages/s). **What breaks first is never throughput; it is the failure paths.** If the delivery partner's API fails 2 % of the time, that is 600 compensations a day at DriveEasy, and every one of them must work.
 
 ### Compensations are semantic undo
 
 A compensation is a new forward action that cancels the business effect of a step. It is not a database rollback:
 
-- **It may not restore the exact previous state.** Cancelling a trailer booking may leave a ₹3,000 cancellation fee. Refunding a captured payment creates a new refund record; the original charge still exists in the ledger.
+- **It may not restore the exact previous state.** Cancelling a delivery-driver booking may leave a ₹150 cancellation fee. Refunding a captured payment creates a new refund record; the original charge still exists in the ledger.
 - **It must be idempotent.** It will sometimes be delivered twice.
 - **It must be retriable until it succeeds.** A compensation that fails permanently leaves the system in a state nobody designed. If a compensation can be rejected by business rules, the process needs a human fallback.
 - **It must tolerate "nothing to undo".** After a timeout you may compensate a step that never actually happened. "Release reservation" for a reservation that does not exist must succeed as a no-op.
-- **Some actions cannot be compensated** (an SMS sent, a machine dispatched, money paid out to a third party). Put those *after* the pivot, or replace them with something that can be undone (a hold instead of a charge, a draft instead of a sent email).
+- **Some actions cannot be compensated** (an SMS sent, a car handed over, money paid out to a third party). Put those *after* the pivot, or replace them with something that can be undone (a hold instead of a charge, a draft instead of a sent email).
 
 ### Compensatable, pivot and retriable steps
 
 Chris Richardson's classification helps you order the steps:
 
 - **Compensatable steps** come first. They can be undone: reserve, authorise a hold, create a pending record.
-- **The pivot** is the go/no-go step. If it succeeds, the saga will complete; if it fails, compensate everything before it. Often it is the step most likely to fail or the one that cannot be undone. In RentRig, booking the transport is the pivot: it is the step most likely to fail, and once a trailer is booked for a dispatch date, the business commits to the rental.
+- **The pivot** is the go/no-go step. If it succeeds, the saga will complete; if it fails, compensate everything before it. Often it is the step most likely to fail or the one that cannot be undone. In DriveEasy, booking the doorstep delivery is the pivot: it is the step most likely to fail (the partner has no driver free for the slot), and once a driver is assigned to the slot, the business commits to the rental.
 - **Retriable steps** come after the pivot. They cannot fail for business reasons and are retried until they succeed: capture the already-authorised deposit, confirm the order, send the notification.
 
 **Order steps to minimise damage.** Put steps likely to fail early and cheap-to-undo steps before expensive-to-undo ones. Authorising a deposit (a hold) instead of charging it is a classic move: a hold is easy to void, a charge needs a refund.
@@ -107,7 +107,7 @@ Chris Richardson's classification helps you order the steps:
 
 **Orchestration.** A saga orchestrator (a component with its own state) tells each participant what to do with a command and waits for the reply event. The whole process is written in one place.
 
-**Choreography.** There is no coordinator. Each service listens for events and reacts: Inventory publishes `EquipmentReserved`, Payments reacts by authorising and publishes `DepositAuthorised`, Logistics reacts by booking transport, and so on. Failures are events too: Logistics publishes `TransportFailed`, and Payments and Inventory each react by compensating.
+**Choreography.** There is no coordinator. Each service listens for events and reacts: Inventory publishes `CarReserved`, Payments reacts by authorising and publishes `DepositAuthorised`, Logistics reacts by booking a delivery driver, and so on. Failures are events too: Logistics publishes `DeliveryFailed`, and Payments and Inventory each react by compensating.
 
 | | Orchestration | Choreography |
 |---|---|---|
@@ -126,8 +126,8 @@ A practical rule: **choreography for simple notifications and fan-out ("order pl
 Every message in a saga can be delivered twice: the outbox relay can resend a command, the broker can redeliver, the orchestrator can resend after a timeout. Therefore:
 
 - **Commands carry a deterministic id**, for example `"{sagaId}:authorise-deposit"`. A resend has the same id, so the participant can recognise it.
-- **Participants store the result per command id** and return the same result for a duplicate. "Authorise ₹2,00,000" received twice must create one hold, not two.
-- **The orchestrator ignores events it does not expect in its current state.** A duplicate `EquipmentReserved` arriving while the saga waits for the deposit is simply dropped.
+- **Participants store the result per command id** and return the same result for a duplicate. "Authorise ₹10,000" received twice must create one hold, not two.
+- **The orchestrator ignores events it does not expect in its current state.** A duplicate `CarReserved` arriving while the saga waits for the deposit is simply dropped.
 - **State changes and outgoing commands are saved together**, with an outbox, so a crash cannot leave "state advanced, command never sent".
 
 ### Timeouts and unknown outcomes
@@ -144,13 +144,13 @@ Two traps follow from strategy 2:
 - **The late success.** The `DepositAuthorised` reply arrives after you started compensating. The orchestrator must not move forward; the compensation already in the plan will void it.
 - **Cancel before do.** The `VoidDeposit` compensation reaches Payments *before* the delayed `AuthoriseDeposit` command does (messages on different queues have no ordering). Payments finds nothing to void and says "done". Then the old authorise command arrives and creates a hold that nobody will ever void. The fix is a **tombstone**: when a compensation finds nothing to undo, the participant records "saga S is cancelled" and refuses any later action for S. Exercise 5 implements this.
 
-Choose deadlines from the participant's real latency. If the transporter API's p99 is 40 seconds, a 10-minute step deadline is generous and avoids false timeouts; a 30-second deadline would compensate perfectly good bookings. Add a **saga-level deadline** too (for example, "a rental must be confirmed or cancelled within 30 minutes") so a saga stuck in a retry loop surfaces to a human.
+Choose deadlines from the participant's real latency. If the delivery partner API's p99 is 40 seconds, a 10-minute step deadline is generous and avoids false timeouts; a 30-second deadline would compensate perfectly good bookings. Add a **saga-level deadline** too (for example, "a rental must be confirmed or cancelled within 30 minutes") so a saga stuck in a retry loop surfaces to a human.
 
 ### The lack of isolation, and countermeasures
 
 Because each step commits on its own, other requests can see half-finished sagas. Typical anomalies:
 
-- **Dirty read.** A dashboard counts the crane as "rented" while the saga will soon cancel it.
+- **Dirty read.** A dashboard counts the car as "booked" while the saga will soon cancel it.
 - **Lost update.** Saga A releases a reservation as compensation while saga B, in between, changed the same reservation.
 - **Fuzzy read.** A step reads the deposit limit, another saga changes it, and the next step reads a different value.
 
@@ -158,7 +158,7 @@ Countermeasures:
 
 - **Semantic lock.** Mark records touched by an unfinished saga with a status such as `PENDING`. Other requests see the flag and wait, fail fast or show "pending". The final step sets `CONFIRMED`; the compensation sets `CANCELLED`.
 - **Commutative updates.** Design updates that give the same result in any order (add and subtract from a counter, rather than set a value).
-- **Reorder steps.** Do the risky or visible step later (the "pessimistic view"): for example, only make the crane visible as "rented" in search after the pivot.
+- **Reorder steps.** Do the risky or visible step later (the "pessimistic view"): for example, only hide the car from search results as "booked" after the pivot.
 - **Reread and version checks.** Before overwriting, check the record's version and fail if it changed.
 - **Pass values, not references.** Put the agreed price in the command, so later steps do not reread a price that may have changed.
 
@@ -173,7 +173,7 @@ CREATE TABLE rental_sagas (
     state            text        NOT NULL,            -- AwaitingDeposit, Compensating, ...
     reservation_id   text,
     authorisation_id text,
-    transport_id     text,
+    delivery_id     text,
     completed_steps  text[]      NOT NULL DEFAULT '{}',  -- what to compensate, in order
     step_deadline    timestamptz NOT NULL,
     failure_reason   text,
@@ -188,10 +188,10 @@ Each event is handled by: load the saga, compute the transition, then in **one t
 
 ### When a saga is the wrong tool
 
-- **The steps can live in one database.** If reserving the crane and authorising the deposit are both tables in one service, use one local transaction. Do not split a service to then glue it back with a saga.
+- **The steps can live in one database.** If reserving the car and authorising the deposit are both tables in one service, use one local transaction. Do not split a service to then glue it back with a saga.
 - **Nothing needs undoing.** If later steps cannot fail for business reasons, you only need reliable delivery (outbox plus retries), not compensations.
 - **Strict isolation is required.** If no one may ever see the intermediate state (for example, moving money between two internal accounts), keep both accounts in one database and use a transaction.
-- **A workflow engine already does it.** For long, human-in-the-loop processes, durable workflow engines (Temporal, Azure Durable Functions, AWS Step Functions) persist state, timers and retries for you. You still design the compensations; the engine runs them.
+- **A workflow engine already does it.** For long, human-in-the-loop processes, durable workflow engines (Temporal, Azure Durable Functions, AWS Step Functions) persist state, timers and retries for you. You still design the compensations; the engine runs them. The price: another piece of infrastructure to run (or pay for), workflow code that must be deterministic because the engine replays it after a crash, and explicit versioning when you change a workflow while thousands of instances are still in flight. For a handful of short sagas, the hand-rolled state machine in this lesson is often simpler; for dozens of long-running, multi-day processes, an engine usually pays for itself.
 
 ### Trade-offs
 
@@ -209,7 +209,7 @@ Each event is handled by: load the saga, compute the transition, then in **one t
 
 ```mermaid
 flowchart LR
-    C["Contractor app"] -->|"POST rental"| API["Rental API"]
+    C["Customer app"] -->|"POST rental"| API["Rental API"]
     API -->|"start saga"| ORC["Saga orchestrator"]
     ORC -->|"state + outbox, one tx"| SDB[("Saga store (PostgreSQL)")]
     SDB -->|"outbox relay"| CMD["Command queues"]
@@ -224,13 +224,13 @@ flowchart LR
     EVT --> ORC
     TS["Timeout scanner"] -->|"StepTimedOut"| ORC
     TS -->|"find overdue sagas"| SDB
-    LOG -->|"partner API"| TP["Transporter (external)"]
+    LOG -->|"partner API"| TP["Delivery partner (external)"]
     MON["Monitoring"] -->|"stuck and compensating sagas"| SDB
 ```
 
 The API starts a saga and returns immediately. The orchestrator stores the saga's state and the next command in one transaction; the outbox relay delivers commands to each participant's queue. Participants do their local transaction and publish a reply event, which the orchestrator consumes to decide the next step. A timeout scanner finds sagas whose current step is overdue and feeds them a timeout event. Monitoring reads the saga table directly: how many sagas are compensating, how many are stuck, how old the oldest is.
 
-### Sequence: transport fails, compensations run in reverse
+### Sequence: delivery fails, compensations run in reverse
 
 ```mermaid
 sequenceDiagram
@@ -238,49 +238,49 @@ sequenceDiagram
     participant I as Inventory
     participant P as Payments
     participant L as Logistics
-    O->>I: ReserveEquipment (S1 reserve-equipment)
-    I-->>O: EquipmentReserved R-77
-    O->>P: AuthoriseDeposit 2,00,000 rupees
+    O->>I: ReserveCar (S1 reserve-car)
+    I-->>O: CarReserved R-77
+    O->>P: AuthoriseDeposit 10,000 rupees
     P-->>O: DepositAuthorised A-301
-    O->>L: BookTransport
-    L-->>O: TransportFailed, no trailer for the dates
-    Note over O: state Compensating, undo deposit then equipment
+    O->>L: BookDelivery
+    L-->>O: DeliveryFailed, no driver free for the slot
+    Note over O: state Compensating, undo deposit then car
     O->>P: VoidDeposit A-301
     P-->>O: CompensationDone deposit
-    O->>I: ReleaseEquipment R-77
-    I-->>O: CompensationDone equipment
-    Note over O: state Cancelled, contractor told no trailer available
+    O->>I: ReleaseCar R-77
+    I-->>O: CompensationDone car
+    Note over O: state Cancelled, customer told no delivery driver available
 ```
 
-The first two steps succeed and are recorded as completed. The pivot (transport) fails with a business reason. The orchestrator switches to compensating and works backwards through the completed steps: void the deposit hold first, then release the crane. It waits for each compensation to be confirmed before starting the next, so if the orchestrator crashes midway, the saga table shows exactly which compensations remain.
+The first two steps succeed and are recorded as completed. The pivot (delivery) fails with a business reason. The orchestrator switches to compensating and works backwards through the completed steps: void the deposit hold first, then release the car. It waits for each compensation to be confirmed before starting the next, so if the orchestrator crashes midway, the saga table shows exactly which compensations remain.
 
 ### Choreography of the same flow
 
 ```mermaid
 flowchart LR
     API["Rental API"] -->|"RentalRequested"| INV["Inventory"]
-    INV -->|"EquipmentReserved"| PAY["Payments"]
+    INV -->|"CarReserved"| PAY["Payments"]
     PAY -->|"DepositAuthorised"| LOG["Logistics"]
-    LOG -->|"TransportBooked"| ORD["Orders: capture and confirm"]
-    LOG -->|"TransportFailed"| PAY2["Payments: void hold"]
-    LOG -->|"TransportFailed"| INV2["Inventory: release crane"]
+    LOG -->|"DeliveryBooked"| ORD["Orders: capture and confirm"]
+    LOG -->|"DeliveryFailed"| PAY2["Payments: void hold"]
+    LOG -->|"DeliveryFailed"| INV2["Inventory: release car"]
     PAY -->|"DepositDeclined"| INV2
 ```
 
-Each service reacts to the previous service's event; nobody holds the whole plan. On failure, Logistics publishes `TransportFailed` and both Payments and Inventory compensate on their own (here in parallel, which is fine because the two compensations are independent). Notice what is missing: there is no single place that knows "rental 914 is compensating, waiting for Inventory". Answering that needs distributed tracing. Adding a fifth step means changing which service reacts to which event, and failure events must be handled by every service that did work earlier. That is why this lesson's implementation uses orchestration.
+Each service reacts to the previous service's event; nobody holds the whole plan. On failure, Logistics publishes `DeliveryFailed` and both Payments and Inventory compensate on their own (here in parallel, which is fine because the two compensations are independent). Notice what is missing: there is no single place that knows "rental 914 is compensating, waiting for Inventory". Answering that needs distributed tracing. Adding a fifth step means changing which service reacts to which event, and failure events must be handled by every service that did work earlier. That is why this lesson's implementation uses orchestration.
 
 ### The saga as a state machine
 
 ```mermaid
 stateDiagram-v2
     [*] --> AwaitingReservation: RentalRequested
-    AwaitingReservation --> AwaitingDeposit: EquipmentReserved
-    AwaitingReservation --> Cancelled: EquipmentUnavailable
+    AwaitingReservation --> AwaitingDeposit: CarReserved
+    AwaitingReservation --> Cancelled: CarUnavailable
     AwaitingReservation --> Compensating: timeout
-    AwaitingDeposit --> AwaitingTransport: DepositAuthorised
+    AwaitingDeposit --> AwaitingDelivery: DepositAuthorised
     AwaitingDeposit --> Compensating: declined or timeout
-    AwaitingTransport --> Completed: TransportBooked
-    AwaitingTransport --> Compensating: failed or timeout
+    AwaitingDelivery --> Completed: DeliveryBooked
+    AwaitingDelivery --> Compensating: failed or timeout
     Compensating --> Compensating: CompensationDone with steps left
     Compensating --> Cancelled: last CompensationDone
     Completed --> [*]
@@ -296,23 +296,23 @@ Each waiting state has exactly the transitions the business allows. A timeout fr
 ```csharp
 public async Task<IResult> RentAsync(RentalRequest r, CancellationToken ct)
 {
-    var reservation = await _inventory.ReserveAsync(r.EquipmentId, r.Dates, ct);
-    var auth = await _payments.AuthoriseAsync(r.ContractorId, 200_000m, ct);
-    var trailer = await _logistics.BookAsync(r.EquipmentId, r.SiteCity, ct);   // throws 2 % of the time
+    var reservation = await _inventory.ReserveAsync(r.CarId, r.Dates, ct);
+    var auth = await _payments.AuthoriseAsync(r.CustomerId, 10_000m, ct);
+    var delivery = await _logistics.BookAsync(r.CarId, r.DeliveryAddress, ct);   // throws 2 % of the time
     await _orders.ConfirmAsync(r.OrderId, ct);
     return Results.Ok();
 }
 ```
 
-When `BookAsync` throws, the crane stays reserved and the deposit stays held, and nobody will ever release them. If the API process crashes between calls, even a `catch` block would not run.
+When `BookAsync` throws, the car stays reserved and the deposit stays held, and nobody will ever release them. If the API process crashes between calls, even a `catch` block would not run.
 
 ### Step 2: add compensations in a catch block
 
-Wrapping the calls in `try/catch` and calling `ReleaseAsync` and `VoidAsync` handles the simple failure. It still loses everything on a crash, holds the HTTP request open for minutes when the transporter is slow, and retries nothing.
+Wrapping the calls in `try/catch` and calling `ReleaseAsync` and `VoidAsync` handles the simple failure. It still loses everything on a crash, holds the HTTP request open for minutes when the delivery partner is slow, and retries nothing.
 
 ### Step 3: make it a persisted state machine
 
-Store a saga row with the current state and completed steps. Each reply event moves the state forward and saves the next command in the same transaction (outbox). The HTTP request now returns `202 Accepted` with the saga id, and the contractor's app shows "Confirming your booking…".
+Store a saga row with the current state and completed steps. Each reply event moves the state forward and saves the next command in the same transaction (outbox). The HTTP request now returns `202 Accepted` with the saga id, and the customer's app shows "Confirming your booking…".
 
 ### Step 4: idempotency and timeouts
 
@@ -329,20 +329,20 @@ The orchestrator below is a pure state machine (easy to test) wrapped in a small
 ### Messages
 
 ```csharp file=Sagas/Messages.cs
-namespace RentRig.Sagas;
+namespace DriveEasy.Sagas;
 
 public abstract record SagaEvent(Guid SagaId)
 {
     public Guid EventId { get; init; } = Guid.NewGuid();
 }
 
-public sealed record RentalRequested(Guid SagaId, string OrderId, string EquipmentId, decimal DepositInr) : SagaEvent(SagaId);
-public sealed record EquipmentReserved(Guid SagaId, string ReservationId) : SagaEvent(SagaId);
-public sealed record EquipmentUnavailable(Guid SagaId, string Reason) : SagaEvent(SagaId);
+public sealed record RentalRequested(Guid SagaId, string OrderId, string CarId, decimal DepositInr) : SagaEvent(SagaId);
+public sealed record CarReserved(Guid SagaId, string ReservationId) : SagaEvent(SagaId);
+public sealed record CarUnavailable(Guid SagaId, string Reason) : SagaEvent(SagaId);
 public sealed record DepositAuthorised(Guid SagaId, string AuthorisationId) : SagaEvent(SagaId);
 public sealed record DepositDeclined(Guid SagaId, string Reason) : SagaEvent(SagaId);
-public sealed record TransportBooked(Guid SagaId, string BookingId) : SagaEvent(SagaId);
-public sealed record TransportFailed(Guid SagaId, string Reason) : SagaEvent(SagaId);
+public sealed record DeliveryBooked(Guid SagaId, string BookingId) : SagaEvent(SagaId);
+public sealed record DeliveryFailed(Guid SagaId, string Reason) : SagaEvent(SagaId);
 public sealed record CompensationDone(Guid SagaId, string Step) : SagaEvent(SagaId);
 public sealed record StepTimedOut(Guid SagaId, RentalSagaState InState) : SagaEvent(SagaId);
 
@@ -352,43 +352,43 @@ public abstract record SagaCommand(Guid SagaId, string Step)
     public string CommandId => $"{SagaId:N}:{Step}";
 }
 
-public sealed record ReserveEquipment(Guid SagaId, string EquipmentId, string OrderId) : SagaCommand(SagaId, "reserve-equipment");
+public sealed record ReserveCar(Guid SagaId, string CarId, string OrderId) : SagaCommand(SagaId, "reserve-car");
 public sealed record AuthoriseDeposit(Guid SagaId, decimal AmountInr) : SagaCommand(SagaId, "authorise-deposit");
-public sealed record BookTransport(Guid SagaId, string EquipmentId) : SagaCommand(SagaId, "book-transport");
+public sealed record BookDelivery(Guid SagaId, string CarId) : SagaCommand(SagaId, "book-delivery");
 public sealed record CaptureDeposit(Guid SagaId, string AuthorisationId) : SagaCommand(SagaId, "capture-deposit");
 public sealed record ConfirmRental(Guid SagaId, string OrderId) : SagaCommand(SagaId, "confirm-rental");
 
 // Compensations: idempotent, and must succeed even when there is nothing to undo.
-public sealed record ReleaseEquipment(Guid SagaId, string? ReservationId) : SagaCommand(SagaId, "release-equipment");
+public sealed record ReleaseCar(Guid SagaId, string? ReservationId) : SagaCommand(SagaId, "release-car");
 public sealed record VoidDeposit(Guid SagaId, string? AuthorisationId) : SagaCommand(SagaId, "void-deposit");
-public sealed record CancelTransport(Guid SagaId, string? BookingId) : SagaCommand(SagaId, "cancel-transport");
+public sealed record CancelDelivery(Guid SagaId, string? BookingId) : SagaCommand(SagaId, "cancel-delivery");
 ```
 
 ### Saga state
 
 ```csharp file=Sagas/RentalSaga.cs
-namespace RentRig.Sagas;
+namespace DriveEasy.Sagas;
 
-public enum RentalSagaState { AwaitingReservation, AwaitingDeposit, AwaitingTransport, Completed, Compensating, Cancelled }
+public enum RentalSagaState { AwaitingReservation, AwaitingDeposit, AwaitingDelivery, Completed, Compensating, Cancelled }
 
 public static class SagaSteps
 {
-    public const string Equipment = "equipment";
+    public const string Car = "car";
     public const string Deposit = "deposit";
-    public const string Transport = "transport";
+    public const string Delivery = "delivery";
 }
 
 public sealed class RentalSaga
 {
     public required Guid SagaId { get; init; }
     public required string OrderId { get; init; }
-    public required string EquipmentId { get; init; }
+    public required string CarId { get; init; }
     public required decimal DepositInr { get; init; }
 
     public RentalSagaState State { get; set; }
     public string? ReservationId { get; set; }
     public string? AuthorisationId { get; set; }
-    public string? TransportBookingId { get; set; }
+    public string? DeliveryBookingId { get; set; }
     public DateTimeOffset StepDeadline { get; set; }
     public string? FailureReason { get; set; }
 
@@ -400,9 +400,9 @@ public sealed class RentalSaga
 
     public RentalSaga Clone() => new()
     {
-        SagaId = SagaId, OrderId = OrderId, EquipmentId = EquipmentId, DepositInr = DepositInr,
+        SagaId = SagaId, OrderId = OrderId, CarId = CarId, DepositInr = DepositInr,
         State = State, ReservationId = ReservationId, AuthorisationId = AuthorisationId,
-        TransportBookingId = TransportBookingId, StepDeadline = StepDeadline, FailureReason = FailureReason,
+        DeliveryBookingId = DeliveryBookingId, StepDeadline = StepDeadline, FailureReason = FailureReason,
         CompletedSteps = new List<string>(CompletedSteps), Version = Version
     };
 }
@@ -413,13 +413,13 @@ public sealed class RentalSaga
 ```csharp file=Sagas/RentalSagaDefinition.cs
 using Microsoft.Extensions.Options;
 
-namespace RentRig.Sagas;
+namespace DriveEasy.Sagas;
 
 public sealed class SagaTimeoutOptions
 {
     public TimeSpan Reservation { get; set; } = TimeSpan.FromSeconds(30);
     public TimeSpan Deposit { get; set; } = TimeSpan.FromMinutes(2);
-    public TimeSpan Transport { get; set; } = TimeSpan.FromMinutes(10);
+    public TimeSpan Delivery { get; set; } = TimeSpan.FromMinutes(10);
     public TimeSpan Compensation { get; set; } = TimeSpan.FromMinutes(5);
 }
 
@@ -432,11 +432,11 @@ public sealed class RentalSagaDefinition(IOptions<SagaTimeoutOptions> options)
     {
         var saga = new RentalSaga
         {
-            SagaId = e.SagaId, OrderId = e.OrderId, EquipmentId = e.EquipmentId, DepositInr = e.DepositInr,
+            SagaId = e.SagaId, OrderId = e.OrderId, CarId = e.CarId, DepositInr = e.DepositInr,
             State = RentalSagaState.AwaitingReservation,
             StepDeadline = now + T.Reservation
         };
-        return (saga, [new ReserveEquipment(e.SagaId, e.EquipmentId, e.OrderId)]);
+        return (saga, [new ReserveCar(e.SagaId, e.CarId, e.OrderId)]);
     }
 
     public IReadOnlyList<SagaCommand> Handle(RentalSaga s, SagaEvent e, DateTimeOffset now)
@@ -444,23 +444,23 @@ public sealed class RentalSagaDefinition(IOptions<SagaTimeoutOptions> options)
         switch (s.State, e)
         {
             // ---- forward path -------------------------------------------------------------
-            case (RentalSagaState.AwaitingReservation, EquipmentReserved r):
+            case (RentalSagaState.AwaitingReservation, CarReserved r):
                 s.ReservationId = r.ReservationId;
-                s.CompletedSteps.Add(SagaSteps.Equipment);
+                s.CompletedSteps.Add(SagaSteps.Car);
                 return MoveTo(s, RentalSagaState.AwaitingDeposit, T.Deposit, now, new AuthoriseDeposit(s.SagaId, s.DepositInr));
 
             case (RentalSagaState.AwaitingDeposit, DepositAuthorised a):
                 s.AuthorisationId = a.AuthorisationId;
                 s.CompletedSteps.Add(SagaSteps.Deposit);
-                return MoveTo(s, RentalSagaState.AwaitingTransport, T.Transport, now, new BookTransport(s.SagaId, s.EquipmentId));
+                return MoveTo(s, RentalSagaState.AwaitingDelivery, T.Delivery, now, new BookDelivery(s.SagaId, s.CarId));
 
-            case (RentalSagaState.AwaitingTransport, TransportBooked b):          // the pivot succeeded
-                s.TransportBookingId = b.BookingId;
+            case (RentalSagaState.AwaitingDelivery, DeliveryBooked b):          // the pivot succeeded
+                s.DeliveryBookingId = b.BookingId;
                 s.State = RentalSagaState.Completed;
                 return [new CaptureDeposit(s.SagaId, s.AuthorisationId!), new ConfirmRental(s.SagaId, s.OrderId)];
 
             // ---- business failures ----------------------------------------------------------
-            case (RentalSagaState.AwaitingReservation, EquipmentUnavailable u):
+            case (RentalSagaState.AwaitingReservation, CarUnavailable u):
                 s.FailureReason = u.Reason;
                 s.State = RentalSagaState.Cancelled;                              // nothing to undo
                 return [];
@@ -468,21 +468,21 @@ public sealed class RentalSagaDefinition(IOptions<SagaTimeoutOptions> options)
             case (RentalSagaState.AwaitingDeposit, DepositDeclined d):
                 return BeginCompensation(s, d.Reason, now);
 
-            case (RentalSagaState.AwaitingTransport, TransportFailed f):
+            case (RentalSagaState.AwaitingDelivery, DeliveryFailed f):
                 return BeginCompensation(s, f.Reason, now);
 
             // ---- timeouts: the in-flight step may have happened, so compensate it too -------
             case (RentalSagaState.AwaitingReservation, StepTimedOut):
-                s.CompletedSteps.Add(SagaSteps.Equipment);
-                return BeginCompensation(s, "Equipment reservation timed out", now);
+                s.CompletedSteps.Add(SagaSteps.Car);
+                return BeginCompensation(s, "Car reservation timed out", now);
 
             case (RentalSagaState.AwaitingDeposit, StepTimedOut):
                 s.CompletedSteps.Add(SagaSteps.Deposit);
                 return BeginCompensation(s, "Deposit authorisation timed out", now);
 
-            case (RentalSagaState.AwaitingTransport, StepTimedOut):
-                s.CompletedSteps.Add(SagaSteps.Transport);
-                return BeginCompensation(s, "Transport booking timed out", now);
+            case (RentalSagaState.AwaitingDelivery, StepTimedOut):
+                s.CompletedSteps.Add(SagaSteps.Delivery);
+                return BeginCompensation(s, "Delivery booking timed out", now);
 
             // ---- compensating -------------------------------------------------------------
             case (RentalSagaState.Compensating, CompensationDone c) when s.CompletedSteps.Count > 0 && c.Step == s.CompletedSteps[^1]:
@@ -493,14 +493,14 @@ public sealed class RentalSagaDefinition(IOptions<SagaTimeoutOptions> options)
                 return NextCompensation(s, now);                                  // resend: compensations retry until done
 
             // Late successes while compensating: remember the ids; the planned compensation undoes them.
-            case (RentalSagaState.Compensating, EquipmentReserved r):
+            case (RentalSagaState.Compensating, CarReserved r):
                 s.ReservationId ??= r.ReservationId;
                 return [];
             case (RentalSagaState.Compensating, DepositAuthorised a):
                 s.AuthorisationId ??= a.AuthorisationId;
                 return [];
-            case (RentalSagaState.Compensating, TransportBooked b):
-                s.TransportBookingId ??= b.BookingId;
+            case (RentalSagaState.Compensating, DeliveryBooked b):
+                s.DeliveryBookingId ??= b.BookingId;
                 return [];
 
             default:
@@ -535,9 +535,9 @@ public sealed class RentalSagaDefinition(IOptions<SagaTimeoutOptions> options)
 
     private static SagaCommand CompensationFor(RentalSaga s, string step) => step switch
     {
-        SagaSteps.Equipment => new ReleaseEquipment(s.SagaId, s.ReservationId),
+        SagaSteps.Car => new ReleaseCar(s.SagaId, s.ReservationId),
         SagaSteps.Deposit => new VoidDeposit(s.SagaId, s.AuthorisationId),
-        SagaSteps.Transport => new CancelTransport(s.SagaId, s.TransportBookingId),
+        SagaSteps.Delivery => new CancelDelivery(s.SagaId, s.DeliveryBookingId),
         _ => throw new InvalidOperationException($"No compensation defined for step '{step}'.")
     };
 }
@@ -548,7 +548,7 @@ public sealed class RentalSagaDefinition(IOptions<SagaTimeoutOptions> options)
 ```csharp file=Sagas/SagaStore.cs
 using System.Threading.Channels;
 
-namespace RentRig.Sagas;
+namespace DriveEasy.Sagas;
 
 public sealed class SagaConcurrencyException(Guid sagaId) : Exception($"Saga {sagaId} was modified concurrently.");
 
@@ -613,7 +613,7 @@ public sealed class InMemorySagaStore : ISagaStore
 ```csharp file=Sagas/RentalSagaOrchestrator.cs
 using System.Collections.Concurrent;
 
-namespace RentRig.Sagas;
+namespace DriveEasy.Sagas;
 
 public sealed class RentalSagaOrchestrator(
     ISagaStore store, RentalSagaDefinition definition, TimeProvider clock, ILogger<RentalSagaOrchestrator> logger)
@@ -695,7 +695,7 @@ public sealed class SagaTimeoutScanner(
 ### Simulated participants
 
 ```csharp file=Sagas/SimulatedParticipants.cs
-namespace RentRig.Sagas;
+namespace DriveEasy.Sagas;
 
 /// <summary>
 /// Plays Inventory, Payments, Logistics and Orders for the demo. Real participants are separate
@@ -703,7 +703,7 @@ namespace RentRig.Sagas;
 /// </summary>
 public sealed class SimulatedParticipants(InMemorySagaStore store, RentalSagaOrchestrator orchestrator, ILogger<SimulatedParticipants> logger) : BackgroundService
 {
-    private const decimal DepositLimitInr = 500_000m;
+    private const decimal DepositLimitInr = 50_000m;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -713,14 +713,14 @@ public sealed class SimulatedParticipants(InMemorySagaStore store, RentalSagaOrc
             {
                 SagaEvent? reply = command switch
                 {
-                    ReserveEquipment c => new EquipmentReserved(c.SagaId, "R-" + c.SagaId.ToString("N")[..6]),
+                    ReserveCar c => new CarReserved(c.SagaId, "R-" + c.SagaId.ToString("N")[..6]),
                     AuthoriseDeposit c when c.AmountInr > DepositLimitInr => new DepositDeclined(c.SagaId, "Deposit above credit limit"),
                     AuthoriseDeposit c => new DepositAuthorised(c.SagaId, "A-" + c.SagaId.ToString("N")[..6]),
-                    BookTransport c when Random.Shared.NextDouble() < 0.1 => new TransportFailed(c.SagaId, "No trailer available for the dates"),
-                    BookTransport c => new TransportBooked(c.SagaId, "T-" + c.SagaId.ToString("N")[..6]),
-                    ReleaseEquipment c => new CompensationDone(c.SagaId, SagaSteps.Equipment),
+                    BookDelivery c when Random.Shared.NextDouble() < 0.1 => new DeliveryFailed(c.SagaId, "No delivery driver free for the slot"),
+                    BookDelivery c => new DeliveryBooked(c.SagaId, "T-" + c.SagaId.ToString("N")[..6]),
+                    ReleaseCar c => new CompensationDone(c.SagaId, SagaSteps.Car),
                     VoidDeposit c => new CompensationDone(c.SagaId, SagaSteps.Deposit),
-                    CancelTransport c => new CompensationDone(c.SagaId, SagaSteps.Transport),
+                    CancelDelivery c => new CompensationDone(c.SagaId, SagaSteps.Delivery),
                     _ => null                                                     // capture and confirm: no reply needed
                 };
                 logger.LogInformation("Handled {Command} ({CommandId})", command.GetType().Name, command.CommandId);
@@ -735,7 +735,7 @@ public sealed class SimulatedParticipants(InMemorySagaStore store, RentalSagaOrc
 ### Wiring and endpoints
 
 ```csharp file=Program.cs
-using RentRig.Sagas;
+using DriveEasy.Sagas;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -755,7 +755,7 @@ app.MapPost("/rentals", async (RentalRequest req, RentalSagaOrchestrator orchest
 {
     // One saga per order: derive the saga id from the order id so a retried POST starts nothing new.
     var sagaId = DeterministicGuid.From("rental:" + req.OrderId);
-    await orchestrator.StartAsync(new RentalRequested(sagaId, req.OrderId, req.EquipmentId, req.DepositInr), ct);
+    await orchestrator.StartAsync(new RentalRequested(sagaId, req.OrderId, req.CarId, req.DepositInr), ct);
     return Results.Accepted($"/rentals/{sagaId}", new { sagaId, status = "confirming" });
 });
 
@@ -766,7 +766,7 @@ app.MapGet("/rentals/{sagaId:guid}", async (Guid sagaId, ISagaStore store, Cance
 
 app.Run();
 
-public sealed record RentalRequest(string OrderId, string EquipmentId, decimal DepositInr);
+public sealed record RentalRequest(string OrderId, string CarId, decimal DepositInr);
 
 public static class DeterministicGuid
 {
@@ -778,7 +778,7 @@ public static class DeterministicGuid
 }
 ```
 
-**Real infrastructure.** With PostgreSQL, `SaveAsync` is one transaction: `UPDATE rental_sagas SET ..., version = version + 1 WHERE saga_id = @id AND version = @expected` (zero rows means a concurrent update) plus `INSERT INTO outbox ...` for each command. `FindOverdueAsync` uses the partial index on `step_deadline` with `FOR UPDATE SKIP LOCKED` so several scanner instances can share the work. .NET libraries such as MassTransit (state machine sagas) and NServiceBus (sagas with timeouts) provide this persistence and timeout plumbing; the transition logic and compensations are still yours to design.
+**Real infrastructure.** With PostgreSQL, `SaveAsync` is one transaction: `UPDATE rental_sagas SET ..., version = version + 1 WHERE saga_id = @id AND version = @expected` (zero rows means a concurrent update) plus `INSERT INTO outbox ...` for each command. `FindOverdueAsync` uses the partial index on `step_deadline` with `FOR UPDATE SKIP LOCKED` so several scanner instances can share the work. .NET libraries such as MassTransit (state machine sagas) and NServiceBus (sagas with timeouts) provide this persistence and timeout plumbing; the transition logic and compensations are still yours to design. Check licensing before you adopt one: NServiceBus is commercial, and MassTransit moved to a commercial licence from version 9. Two simplifications in the demo are worth naming: the per-saga `SemaphoreSlim` dictionary is never trimmed (in production, rely on the version check alone or evict locks for terminal sagas), and a scanner row lock taken with `SKIP LOCKED` only lasts for the scanner's own transaction, so the optimistic version check is what really prevents two instances from advancing the same saga.
 
 ## Bad design vs good design
 
@@ -797,17 +797,17 @@ After a timeout, the orchestrator compensates a step that may never have happene
 
 **Bad: random command ids.** `Guid.NewGuid()` for each send means a resend after a timeout looks like a new request, and Payments places two holds. **Good:** deterministic ids such as `"{sagaId}:authorise-deposit"`.
 
-**Bad: the orchestrator decides business rules.** The orchestrator checks credit limits and computes transport prices. Now it is a god service that every team must change. **Good:** the orchestrator sequences steps and reacts to outcomes; each participant owns its rules and replies "declined" with a reason.
+**Bad: the orchestrator decides business rules.** The orchestrator checks credit limits and computes delivery fees. Now it is a god service that every team must change. **Good:** the orchestrator sequences steps and reacts to outcomes; each participant owns its rules and replies "declined" with a reason.
 
-**Bad: non-compensatable steps before the pivot.** Sending "Your crane is confirmed!" by SMS before transport is booked, then having to send "Sorry, cancelled". **Good:** notifications are retriable steps after the pivot.
+**Bad: non-compensatable steps before the pivot.** Sending "Your car is confirmed!" by SMS before delivery is booked, then having to send "Sorry, cancelled". **Good:** notifications are retriable steps after the pivot.
 
 :::callout type=warning title="Compensations hide in the happy path"
-Teams test the forward path daily and the compensation path almost never, so compensations are the code most likely to be broken when you need it. Write a test for every compensation, run failure-injection tests in staging (make the transporter fail 50 % of the time for an hour), and alert when a saga stays in `Compensating` longer than expected.
+Teams test the forward path daily and the compensation path almost never, so compensations are the code most likely to be broken when you need it. Write a test for every compensation, run failure-injection tests in staging (make the delivery partner fail 50 % of the time for an hour), and alert when a saga stays in `Compensating` longer than expected.
 :::
 
 ## Practical playground
 
-The graph below is RentRig today: the Rental API calls each service synchronously, one after another, as in step 1 of the example. Open it in the HLD canvas and turn it into an orchestrated saga:
+The graph below is DriveEasy today: the Rental API calls each service synchronously, one after another, as in step 1 of the example. Open it in the HLD canvas and turn it into an orchestrated saga:
 
 1. Add a `worker` node for the saga orchestrator and a `database` node for the saga store (with outbox).
 2. Replace the synchronous API-to-service calls with `async` edges through a `queue` for commands and a `queue` for replies.
@@ -819,14 +819,14 @@ The graph below is RentRig today: the Rental API calls each service synchronousl
 ```json
 {
   "nodes": [
-    { "id": "app", "type": "client", "label": "Contractor app", "props": { "rps": 4 } },
+    { "id": "app", "type": "client", "label": "Customer app", "props": { "rps": 4 } },
     { "id": "api", "type": "app-server", "label": "Rental API", "props": { "instances": 2 } },
     { "id": "inv", "type": "app-server", "label": "Inventory service" },
     { "id": "invdb", "type": "database", "label": "Inventory DB" },
     { "id": "pay", "type": "app-server", "label": "Payments service" },
     { "id": "paydb", "type": "database", "label": "Payments DB" },
     { "id": "log", "type": "app-server", "label": "Logistics service" },
-    { "id": "tp", "type": "external", "label": "Transporter partner API" },
+    { "id": "tp", "type": "external", "label": "Delivery partner API" },
     { "id": "ord", "type": "app-server", "label": "Orders service" }
   ],
   "edges": [
@@ -835,7 +835,7 @@ The graph below is RentRig today: the Rental API calls each service synchronousl
     { "from": "inv", "to": "invdb", "kind": "sync" },
     { "from": "api", "to": "pay", "kind": "sync", "label": "authorise" },
     { "from": "pay", "to": "paydb", "kind": "sync" },
-    { "from": "api", "to": "log", "kind": "sync", "label": "book transport" },
+    { "from": "api", "to": "log", "kind": "sync", "label": "book delivery" },
     { "from": "log", "to": "tp", "kind": "sync" },
     { "from": "api", "to": "ord", "kind": "sync", "label": "confirm" }
   ]
@@ -845,33 +845,33 @@ The graph below is RentRig today: the Rental API calls each service synchronousl
 
 ## Exercises
 
-:::exercise id=m12-sagas-ex1 difficulty=beginner kind=written title="Design the compensations for a procurement saga"
-A contractor's procurement system places an order for 40 tonnes of TMT steel bars. Steps, in the current order: (1) send the purchase order PDF to the supplier by email; (2) reserve budget in the project's cost centre; (3) book a truck slot at the site gate; (4) get the supplier's order acknowledgement through their API; (5) record the commitment in the accounting ledger. For each step, give its compensation (or say it has none), classify it as compensatable, pivot or retriable, and propose a better order.
+:::exercise id=m12-sagas-ex1 difficulty=beginner kind=written title="Design the compensations for a made-to-order saga"
+A furniture marketplace sells a made-to-order sofa (₹45,000) built by a partner workshop. Steps, in the current order: (1) send the purchase order PDF to the workshop by email; (2) place a hold for ₹45,000 on the customer's card; (3) book a delivery slot with the courier; (4) get the workshop's order acknowledgement through their API; (5) record the commitment in the accounting ledger. For each step, give its compensation (or say it has none), classify it as compensatable, pivot or retriable, and propose a better order.
 ::acceptance
 - Sending the email is identified as non-compensatable and moved after the pivot (or replaced by a draft).
-- The supplier acknowledgement is identified as the pivot, with a reason.
-- Compensations are semantic (release budget, cancel gate slot), idempotent and tolerant of "nothing to undo".
+- The workshop acknowledgement is identified as the pivot, with a reason.
+- Compensations are semantic (void the card hold, cancel the delivery slot), idempotent and tolerant of "nothing to undo".
 - A reordered sequence is given: compensatable steps, then pivot, then retriable steps.
 ::hint
 Which step can never be undone once it happens?
 ::hint
 Which step is most likely to fail for a business reason outside your control?
 ::hint
-After the supplier accepts, which steps must simply be retried until they succeed?
+After the workshop accepts, which steps must simply be retried until they succeed?
 ::hint
 Order: cheap-to-undo reservations first, then the pivot, then everything that cannot fail.
 ::solution
 | Step | Compensation | Kind |
 |---|---|---|
-| Reserve budget | Release the budget reservation (no-op if none) | Compensatable |
-| Book truck slot | Cancel the gate slot (no-op if none) | Compensatable |
-| Supplier acknowledgement via API | Cancelling after acceptance may need a negotiated cancellation; treat as the point of no return | **Pivot** |
+| Hold ₹45,000 on the card | Void the hold (no-op if none) | Compensatable |
+| Book delivery slot | Cancel the delivery slot (no-op if none) | Compensatable |
+| Workshop acknowledgement via API | Cancelling after acceptance may need a negotiated cancellation; treat as the point of no return | **Pivot** |
 | Record commitment in ledger | None needed; retried until it succeeds | Retriable |
 | Email the purchase order PDF | None possible (an email cannot be unsent) | Retriable, after the pivot |
 
-**Better order:** reserve budget → book gate slot → supplier acknowledgement (pivot) → record ledger commitment → email the PDF as a confirmation copy.
+**Better order:** hold the payment → book delivery slot → workshop acknowledgement (pivot) → record ledger commitment → email the PDF as a confirmation copy.
 
-Reasons: the original order emailed the PO first, which cannot be undone; if budget reservation then failed, the supplier would have a PO for an order that does not exist. The supplier's API is the step most likely to fail for business reasons (out of stock, price changed), so it is the natural pivot; everything before it is cheap to undo. Ledger and email are made retriable: they should only fail for technical reasons and are retried with backoff, with a dead-letter alert if they keep failing.
+Reasons: the original order emailed the PO first, which cannot be undone; if the card hold then failed, the workshop would have a PO for an order nobody paid for. The workshop's API is the step most likely to fail for business reasons (fabric out of stock, order book full), so it is the natural pivot; everything before it is cheap to undo. Ledger and email are made retriable: they should only fail for technical reasons and are retried with backoff, with a dead-letter alert if they keep failing.
 ::mistakes
 - Treating "send email" as compensatable by "sending an apology email". That is a new action with a business cost, not an undo.
 - Putting the ledger commitment before the pivot, which creates entries that must later be reversed.
@@ -933,31 +933,31 @@ public class SagaLogTests
     public void Compensations_run_in_reverse_order()
     {
         var log = new SagaLog();
-        log.Completed("reserve-crane", StepKind.Compensatable, "release-crane");
+        log.Completed("reserve-car", StepKind.Compensatable, "release-car");
         log.Completed("hold-deposit", StepKind.Compensatable, "void-deposit");
-        log.Completed("hold-gate-slot", StepKind.Compensatable, "cancel-gate-slot");
-        Assert.Equal(new List<string> { "cancel-gate-slot", "void-deposit", "release-crane" }, log.CompensationsToRun());
+        log.Completed("hold-delivery-slot", StepKind.Compensatable, "cancel-delivery-slot");
+        Assert.Equal(new List<string> { "cancel-delivery-slot", "void-deposit", "release-car" }, log.CompensationsToRun());
     }
 
     [Fact]
     public void Compensatable_step_needs_a_compensation() =>
-        Assert.Throws<ArgumentException>(() => new SagaLog().Completed("reserve-crane", StepKind.Compensatable));
+        Assert.Throws<ArgumentException>(() => new SagaLog().Completed("reserve-car", StepKind.Compensatable));
 
     [Fact]
     public void Retriable_steps_add_nothing()
     {
         var log = new SagaLog();
-        log.Completed("reserve-crane", StepKind.Compensatable, "release-crane");
+        log.Completed("reserve-car", StepKind.Compensatable, "release-car");
         log.Completed("audit-log", StepKind.Retriable);
-        Assert.Equal(new List<string> { "release-crane" }, log.CompensationsToRun());
+        Assert.Equal(new List<string> { "release-car" }, log.CompensationsToRun());
     }
 
     [Fact]
     public void After_pivot_the_saga_must_roll_forward()
     {
         var log = new SagaLog();
-        log.Completed("reserve-crane", StepKind.Compensatable, "release-crane");
-        log.Completed("book-trailer", StepKind.Pivot);
+        log.Completed("reserve-car", StepKind.Compensatable, "release-car");
+        log.Completed("book-delivery", StepKind.Pivot);
         Assert.True(log.PastPivot);
         Assert.Throws<InvalidOperationException>(() => log.CompensationsToRun());
         Assert.Throws<InvalidOperationException>(() => log.Completed("hold-extra", StepKind.Compensatable, "void-extra"));
@@ -967,8 +967,8 @@ public class SagaLogTests
     public void Duplicate_steps_are_recorded_once()
     {
         var log = new SagaLog();
-        log.Completed("reserve-crane", StepKind.Compensatable, "release-crane");
-        log.Completed("reserve-crane", StepKind.Compensatable, "release-crane");
+        log.Completed("reserve-car", StepKind.Compensatable, "release-car");
+        log.Completed("reserve-car", StepKind.Compensatable, "release-car");
         Assert.Single(log.CompensationsToRun());
     }
 }
@@ -1020,7 +1020,7 @@ public sealed class SagaLog
 
 The pivot rule is the important design idea: once the point of no return is passed, failures are handled by retrying the remaining steps (and alerting a human if they keep failing), never by compensating.
 ::mistakes
-- Returning compensations in completion order, which releases the crane before voiding the deposit that depends on it.
+- Returning compensations in completion order, which releases the car before voiding the deposit that depends on it.
 - Allowing compensation after the pivot, which can cancel a booking the business has committed to.
 - Recording duplicates, so the same compensation runs twice (harmless only if it is idempotent).
 ::extensions
@@ -1222,7 +1222,7 @@ CREATE TABLE saga_instances (
 );
 INSERT INTO saga_instances VALUES
  ('S-101', 'rental', 'Completed',          '2026-10-01 10:00:00+00', 0),
- ('S-102', 'rental', 'AwaitingTransport',  '2026-10-01 11:20:00+00', 1),
+ ('S-102', 'rental', 'AwaitingDelivery',  '2026-10-01 11:20:00+00', 1),
  ('S-103', 'rental', 'Compensating',       '2026-10-01 11:50:30+00', 0),
  ('S-104', 'rental', 'AwaitingDeposit',    '2026-10-01 12:05:00+00', 0),
  ('S-105', 'rental', 'Cancelled',          '2026-10-01 09:00:00+00', 4),
@@ -1265,7 +1265,7 @@ WHERE state NOT IN ('Completed', 'Cancelled')
 ORDER BY overdue_minutes DESC, saga_id;
 ```
 
-The timeout scanner should normally pick these sagas up within seconds, so a non-empty result older than a few minutes means the scanner is down or a participant keeps failing. A saga stuck in `Compensating` is the most serious: some business effect (a held deposit, a reserved crane) is waiting to be undone. On PostgreSQL, the partial index on `step_deadline` for non-terminal states keeps this query fast however many completed sagas the table holds.
+The timeout scanner should normally pick these sagas up within seconds, so a non-empty result older than a few minutes means the scanner is down or a participant keeps failing. A saga stuck in `Compensating` is the most serious: some business effect (a held deposit, a reserved car) is waiting to be undone. On PostgreSQL, the partial index on `step_deadline` for non-terminal states keeps this query fast however many completed sagas the table holds.
 ::mistakes
 - Casting to `int` without `floor`, which rounds 9.5 to 10.
 - Forgetting to exclude terminal states, so finished sagas appear forever.
@@ -1336,22 +1336,22 @@ using Xunit;
 
 public class DepositLedgerTests
 {
-    private static DepositLedger Ledger() => new(limitInr: 500_000m);
+    private static DepositLedger Ledger() => new(limitInr: 50_000m);
 
     [Fact]
     public void Duplicate_authorise_creates_one_hold()
     {
         var l = Ledger();
-        Assert.Equal(AuthResult.Authorised, l.Authorise("S1", "S1:authorise", 200_000m));
-        Assert.Equal(AuthResult.Authorised, l.Authorise("S1", "S1:authorise", 200_000m));
-        Assert.Equal(200_000m, l.HeldTotal);
+        Assert.Equal(AuthResult.Authorised, l.Authorise("S1", "S1:authorise", 10_000m));
+        Assert.Equal(AuthResult.Authorised, l.Authorise("S1", "S1:authorise", 10_000m));
+        Assert.Equal(10_000m, l.HeldTotal);
     }
 
     [Fact]
     public void Void_after_authorise_releases_the_hold()
     {
         var l = Ledger();
-        l.Authorise("S1", "S1:authorise", 200_000m);
+        l.Authorise("S1", "S1:authorise", 10_000m);
         Assert.Equal(VoidResult.Voided, l.Void("S1", "S1:void"));
         Assert.Equal(0m, l.HeldTotal);
     }
@@ -1361,7 +1361,7 @@ public class DepositLedgerTests
     {
         var l = Ledger();
         Assert.Equal(VoidResult.NothingToVoid, l.Void("S1", "S1:void"));
-        Assert.Equal(AuthResult.RejectedCancelled, l.Authorise("S1", "S1:authorise", 200_000m));
+        Assert.Equal(AuthResult.RejectedCancelled, l.Authorise("S1", "S1:authorise", 10_000m));
         Assert.Equal(0m, l.HeldTotal);
     }
 
@@ -1369,7 +1369,7 @@ public class DepositLedgerTests
     public void Repeated_void_returns_the_original_result()
     {
         var l = Ledger();
-        l.Authorise("S1", "S1:authorise", 200_000m);
+        l.Authorise("S1", "S1:authorise", 10_000m);
         Assert.Equal(VoidResult.Voided, l.Void("S1", "S1:void"));
         Assert.Equal(VoidResult.Voided, l.Void("S1", "S1:void"));
     }
@@ -1378,7 +1378,7 @@ public class DepositLedgerTests
     public void Amount_above_limit_is_declined()
     {
         var l = Ledger();
-        Assert.Equal(AuthResult.Declined, l.Authorise("S1", "S1:authorise", 750_000m));
+        Assert.Equal(AuthResult.Declined, l.Authorise("S1", "S1:authorise", 75_000m));
         Assert.Equal(0m, l.HeldTotal);
     }
 
@@ -1387,8 +1387,8 @@ public class DepositLedgerTests
     {
         var l = Ledger();
         l.Void("S1", "S1:void");
-        Assert.Equal(AuthResult.Authorised, l.Authorise("S2", "S2:authorise", 100_000m));
-        Assert.Equal(100_000m, l.HeldTotal);
+        Assert.Equal(AuthResult.Authorised, l.Authorise("S2", "S2:authorise", 5_000m));
+        Assert.Equal(5_000m, l.HeldTotal);
     }
 }
 ```
@@ -1460,22 +1460,22 @@ Add `Capture(sagaId, commandId)` as a retriable step: it succeeds only if a hold
 
 ```csharp
 [Fact]
-public void Transport_failure_compensates_deposit_then_equipment()
+public void Delivery_failure_compensates_deposit_then_car()
 {
     var def = new RentalSagaDefinition(Options.Create(new SagaTimeoutOptions()));
     var now = DateTimeOffset.UnixEpoch;
     var id = Guid.NewGuid();
-    var (saga, _) = def.Start(new RentalRequested(id, "ORD-9", "CRANE-100T", 200_000m), now);
+    var (saga, _) = def.Start(new RentalRequested(id, "ORD-9", "SUV-KA05-7711", 10_000m), now);
 
-    def.Handle(saga, new EquipmentReserved(id, "R-77"), now);
+    def.Handle(saga, new CarReserved(id, "R-77"), now);
     def.Handle(saga, new DepositAuthorised(id, "A-301"), now);
-    var first = def.Handle(saga, new TransportFailed(id, "No trailer"), now);
+    var first = def.Handle(saga, new DeliveryFailed(id, "No driver"), now);
     Assert.IsType<VoidDeposit>(Assert.Single(first));
 
     var second = def.Handle(saga, new CompensationDone(id, SagaSteps.Deposit), now);
-    Assert.IsType<ReleaseEquipment>(Assert.Single(second));
+    Assert.IsType<ReleaseCar>(Assert.Single(second));
 
-    Assert.Empty(def.Handle(saga, new CompensationDone(id, SagaSteps.Equipment), now));
+    Assert.Empty(def.Handle(saga, new CompensationDone(id, SagaSteps.Car), now));
     Assert.Equal(RentalSagaState.Cancelled, saga.State);
 }
 ```
@@ -1486,7 +1486,7 @@ public void Transport_failure_compensates_deposit_then_equipment()
 
 **Test each participant's idempotency:** every command handled twice gives one effect; every compensation handled with nothing to undo succeeds; cancel-before-do leaves no effect.
 
-**End to end with failure injection.** In staging, configure the simulated (or real sandbox) transporter to fail 50 % of requests and to delay 10 % of replies beyond the step deadline. Run a few hundred sagas and assert invariants afterwards: no deposit hold without an active rental, no reserved crane without a saga in a non-terminal state, and every saga terminal within its saga-level deadline.
+**End to end with failure injection.** In staging, configure the simulated (or real sandbox) delivery partner to fail 50 % of requests and to delay 10 % of replies beyond the step deadline. Run a few hundred sagas and assert invariants afterwards: no deposit hold without an active rental, no reserved car without a saga in a non-terminal state, and every saga terminal within its saga-level deadline.
 
 ## Real-world application
 
@@ -1494,7 +1494,7 @@ public void Transport_failure_compensates_deposit_then_equipment()
 - **Travel booking.** Flights, hotels and cars from different providers are the textbook saga; cancellation fees are a real example of compensations that do not fully restore the earlier state.
 - **Banking and UPI-style payments.** A transfer between banks debits one account and credits another through intermediaries; reversal flows and status-check requests after timeouts are compensations and "ask before deciding" in practice.
 - **Ride-hailing and food delivery.** Assigning a driver, charging the customer and notifying the restaurant span services; a system like a food-delivery platform cancels and refunds automatically when a restaurant rejects an order after payment.
-- **Infrastructure and construction platforms.** Equipment rental, material procurement and contractor onboarding (verify documents, create vendor code, set up payment terms) are long-running processes with external parties and human approvals, where durable workflow engines or orchestrated sagas keep each case's state visible.
+- **Insurance claims and loan disbursal.** Claim settlement (verify documents, inspect the damage, approve, pay the garage) and loan disbursal (KYC, credit check, sign the agreement, disburse) are long-running processes with external parties and human approvals, where durable workflow engines or orchestrated sagas keep each case's state visible.
 - **Workflow engines.** Temporal, Azure Durable Functions and AWS Step Functions are commonly used to run sagas with durable timers and retries; MassTransit and NServiceBus provide saga state machines for .NET message-based systems.
 
 ## Interview questions
@@ -1523,7 +1523,7 @@ First, if the participant has a status API, ask before deciding. Otherwise, trea
 ::q advanced
 Sagas lack isolation. What anomalies can that cause and how do you mitigate them?
 ::a
-Other transactions can read uncommitted business state (dirty reads, for example showing a crane as rented when the saga will cancel), overwrite each other's changes (lost updates when a compensation and another saga touch the same record), or see values change between steps (fuzzy reads). Mitigations: semantic locks (a `PENDING` status that other requests respect), commutative updates (increments instead of overwrites), ordering steps so visible or risky effects happen after the pivot, version checks before overwriting, and passing agreed values (price, deposit) in commands rather than rereading them. For data that truly needs isolation, keep it in one service and one local transaction.
+Other transactions can read uncommitted business state (dirty reads, for example showing a car as booked when the saga will cancel), overwrite each other's changes (lost updates when a compensation and another saga touch the same record), or see values change between steps (fuzzy reads). Mitigations: semantic locks (a `PENDING` status that other requests respect), commutative updates (increments instead of overwrites), ordering steps so visible or risky effects happen after the pivot, version checks before overwriting, and passing agreed values (price, deposit) in commands rather than rereading them. For data that truly needs isolation, keep it in one service and one local transaction.
 :::
 
 ## Summary and revision
@@ -1574,10 +1574,10 @@ An API reserves stock, then charges a card, then books a courier, all in one HTT
 > Saga progress must be persisted; otherwise a process failure loses it. That is why sagas are state machines in a store, not code in a request.
 ::q single
 Which step order is best for a rental saga?
-- [ ] Send the confirmation SMS, reserve equipment, authorise deposit, book transport.
-- [x] Reserve equipment, authorise deposit hold, book transport (pivot), capture deposit, send confirmation.
-- [ ] Capture deposit, reserve equipment, book transport, send confirmation.
-- [ ] Book transport, send confirmation, reserve equipment, authorise deposit.
+- [ ] Send the confirmation SMS, reserve the car, authorise deposit, book delivery.
+- [x] Reserve the car, authorise deposit hold, book delivery (pivot), capture deposit, send confirmation.
+- [ ] Capture deposit, reserve the car, book delivery, send confirmation.
+- [ ] Book delivery, send confirmation, reserve the car, authorise deposit.
 > Compensatable steps first, then the pivot, then retriable steps. An SMS cannot be unsent and a captured payment needs a refund.
 ::q single
 The orchestrator sends `AuthoriseDeposit`, the deadline passes with no reply, and it starts compensating with `VoidDeposit`. Payments receives the void first, finds nothing, and replies "done". Then the original authorise arrives. What must Payments do?
@@ -1587,7 +1587,7 @@ The orchestrator sends `AuthoriseDeposit`, the deadline passes with no reply, an
 - [ ] Throw an exception so it goes to the DLQ.
 > Without a tombstone the hold would be orphaned: the saga already believes the deposit is voided.
 ::q single
-A duplicate `EquipmentReserved` arrives while the saga is in `AwaitingTransport`. What should the orchestrator do?
+A duplicate `CarReserved` arrives while the saga is in `AwaitingDelivery`. What should the orchestrator do?
 - [ ] Re-send `AuthoriseDeposit`.
 - [ ] Start compensating.
 - [x] Ignore it; it is not expected in the current state.
@@ -1609,14 +1609,14 @@ A team with a 6-step order flow, 4 compensations and a 30-minute deadline asks w
 - [ ] No saga; just retry each step.
 > Choreography shines for short, simple reactions. Long flows with compensation logic become hard to follow when spread across services.
 ::q single
-A dashboard shows a crane as "rented" for a few minutes, after which the saga compensates and it becomes available. Which countermeasure targets this?
+A dashboard shows a car as "booked" for a few minutes, after which the saga compensates and it becomes available. Which countermeasure targets this?
 - [ ] Shorter timeouts.
 - [x] A semantic lock: mark the reservation `PENDING` until the pivot, and show it as pending rather than rented.
 - [ ] Random command ids.
 - [ ] Removing the outbox.
 > Sagas lack isolation; semantic locks make the intermediate state explicit so readers can treat it correctly.
 ::q single
-The transporter API has a p99 latency of 40 seconds. Which step deadline is most sensible?
+The delivery partner's API has a p99 latency of 40 seconds. Which step deadline is most sensible?
 - [ ] 5 seconds.
 - [ ] 30 seconds.
 - [x] Several minutes (for example 10), well above p99, plus a saga-level deadline.

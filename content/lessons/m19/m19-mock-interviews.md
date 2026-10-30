@@ -10,7 +10,7 @@ prerequisites: [m19-interview-structure, m19-estimation-practice, m19-defending-
 related: [m19-clarifying-questions, m19-overengineering, m19-design-review, m17-movie-booking, m17-payment-system, m11-hld-framework]
 tags: [interview, mock-interview, rubric, scoring, practice, calibration]
 patterns: []
-summary: "Four complete, timed mock system design sessions (bus ticket booking, a live fantasy-cricket leaderboard, a site-photo and drone-imagery platform, and a marketplace payout system), each with the prompt card, hidden details for the interviewer, a minute-by-minute follow-up script, a model answer outline and a 1-4 rubric per dimension. Plus how to run mocks well and a C# scorecard and calibration tool."
+summary: "Four complete, timed mock system design sessions (bus ticket booking, a live fantasy-cricket leaderboard, a crop-insurance photo and drone-imagery platform, and a marketplace payout system), each with the prompt card, hidden details for the interviewer, a minute-by-minute follow-up script, a model answer outline and a 1-4 rubric per dimension. Plus how to run mocks well and a C# scorecard and calibration tool."
 references:
   - title: "Google SRE Book — Chapter 4, Service Level Objectives"
     url: https://sre.google/sre-book/service-level-objectives/
@@ -22,7 +22,7 @@ references:
     url: https://learn.microsoft.com/azure/architecture/guide/architecture-styles/web-queue-worker
 ---
 
-Reading about system design interviews is like reading about swimming. At some point you have to get in the water, with a clock running and someone asking awkward questions. This lesson is the pool. It contains four complete mock sessions you can run with a friend (or alone, with a timer and a recording), each scripted from the interviewer's side: what to say, what to reveal only when asked, which follow-ups to use at which minute, what a strong answer covers, and how to score it on a 1-4 scale for seven dimensions. It finishes with a small C# tool for scorecards and for calibrating several interviewers who scored the same session.
+Reading about system design interviews is like reading about swimming. At some point you have to get in the water, with a clock running and someone asking awkward questions. This lesson is the pool: four complete mock sessions you can run with a friend (or alone, with a timer and a recording), each scripted from the interviewer's side, plus a small C# tool for scorecards and interviewer calibration.
 
 ## Learning objectives
 
@@ -124,7 +124,7 @@ flowchart LR
     S --> B["10-minute debrief, two practice targets"]
 ```
 
-The session is a pipeline with time boxes. The interviewer controls information: hidden details are given only when the candidate asks, which is how the session measures requirements gathering. The deep-dive and changed-requirement phases come from the follow-up script, so every candidate faces the hard parts even if they would rather avoid them. Scoring happens immediately, from written evidence, and the debrief ends with exactly two practice targets.
+The session is a pipeline with time boxes. Hidden details are given only when the candidate asks, which is how the session measures requirements gathering. The deep dives and the changed requirement come from the follow-up script, so every candidate faces the hard parts. Scoring happens straight away, from written evidence, and the debrief ends with exactly two practice targets.
 
 ### Who does what during a session
 
@@ -148,7 +148,7 @@ sequenceDiagram
     O->>C: Debrief with evidence and two targets
 ```
 
-The interviewer and observer have separate jobs. The interviewer stays in conversation and controls information and follow-ups; the observer writes evidence and keeps time, sending time warnings at the phase boundaries. Splitting these roles is why three-person mocks give better feedback than two-person ones: an interviewer who is also writing notes misses half of what the candidate says. With only two people, record the session and fill the evidence in afterwards.
+The interviewer stays in the conversation; the observer writes evidence and sends time warnings at the phase boundaries. That split is why three-person mocks give better feedback: an interviewer who is also taking notes misses half of what the candidate says. With only two people, record the session and fill in the evidence afterwards.
 
 ## Step-by-step example
 
@@ -277,17 +277,17 @@ The four mock sessions below are complete. For each: the **prompt card** (read a
 
 ---
 
-### Mock 3 — Site photo and drone imagery platform (advanced, 45 minutes)
+### Mock 3 — Crop-insurance photo and drone imagery platform (advanced, 45 minutes)
 
-**Prompt card.** "An infrastructure consultancy supervises highway and bridge construction at hundreds of sites. Field engineers take photos on phones; drone teams fly sites weekly. Design a platform to upload, process, tag and browse this imagery, so project managers can track progress and resolve disputes with contractors."
+**Prompt card.** "A crop-insurance company covers farms across hundreds of districts. Field agents photograph insured fields on their phones; drone teams fly sample areas weekly. Design a platform to upload, process, tag and browse this imagery, so claims officers can assess crop damage, settle claims and resolve disputes with farmers."
 
 **Hidden details (reveal only if asked).**
-- 400 active sites, 6,000 field users; each uploads about 40 photos per working day (6 days a week) at about 4 MB.
+- 400 districts, 6,000 field agents; each uploads about 40 photos per working day (6 days a week) at about 4 MB.
 - 50 drone flights a week, about 30 GB of raw images per flight; processed into orthomosaic maps.
-- AI tagging (safety gear, equipment, progress stage) should be available within 1 hour of upload.
-- Many sites have weak mobile networks; uploads often happen in the evening at the site office.
-- Contract requires 7-year retention; some photos become evidence in disputes and must not be altered or deleted.
-- Users browse by project, location on a map, date and tags.
+- AI tagging (crop type, growth stage, damage level) should be available within 1 hour of upload.
+- Many villages have weak mobile networks; uploads often happen in the evening on the block office's Wi-Fi.
+- Regulation requires 7-year retention; some photos become evidence in claim disputes and must not be altered or deleted.
+- Users browse by district, farm location on a map, date and tags.
 
 **Time plan and interviewer follow-ups.**
 
@@ -295,17 +295,17 @@ The four mock sessions below are complete. For each: the **prompt card** (read a
 |---|---|---|
 | 5 | If no numbers | "How much data are we talking about?" |
 | 10 | Estimate | "What does 7 years cost you, roughly?" |
-| 22 | Deep dive 1 | "An engineer uploads 120 photos over a 2G connection and the connection drops at photo 63. What happens?" |
+| 22 | Deep dive 1 | "An agent uploads 120 photos over a 2G connection and the connection drops at photo 63. What happens?" |
 | 27 | Deep dive 2 | "Walk me through what happens from 'photo stored' to 'tags searchable'." |
 | 32 | Failure | "The upload retried, and now the same photo exists twice. Does it matter?" |
-| 35 | Change | "A contractor disputes progress; legal says photos from that site must be preserved unaltered for the case." |
+| 35 | Change | "A farmer takes a rejected claim to consumer court; legal says the photos for that claim must be preserved unaltered." |
 | 40 | Cost | "Finance says storage is too expensive. What do you change?" |
 
 **Model answer outline.**
 
 *Estimates.* Photos: 6,000 × 40 = 240,000 a day × 4 MB ≈ 0.96 TB a day; × 6 days ≈ 5.8 TB a week. Drones: 50 × 30 GB = 1.5 TB a week. Total ≈ 7.3 TB a week ≈ 380 TB a year ≈ 2.6 PB over 7 years before compression or tiering. Upload rate: 240,000 photos in a 10-hour day ≈ 6.7 per second (≈ 27 MB/s), with an evening peak of perhaps 3x. AI tagging: if one GPU tags around 20 images per second (an estimate to verify), 240,000 photos need about 12,000 GPU-seconds, roughly 3.3 GPU-hours a day. *Consequences:* storage and its lifecycle dominate cost; compute for tagging is small and can be batched; uploads must be resumable.
 
-*Architecture.* Mobile app with a local upload queue → API issues pre-signed multipart upload URLs → object storage (originals, immutable), with an "object created" event → queue → workers: EXIF and GPS extraction, thumbnails, deduplication by content hash, AI tagging on an autoscaled GPU pool in batches → PostgreSQL with spatial indexing (for example PostGIS) for metadata, tags and locations → search API (by project, bounding box, date, tag) → web dashboard with map. Drone pipeline: raw images to object storage, batch processing into orthomosaic tiles, tiles served via CDN.
+*Architecture.* Mobile app with a local upload queue → API issues pre-signed multipart upload URLs → object storage (originals, immutable), with an "object created" event → queue → workers: EXIF and GPS extraction, thumbnails, deduplication by content hash, AI tagging on an autoscaled GPU pool in batches → PostgreSQL with spatial indexing (for example PostGIS) for metadata, tags and locations → search API (by district, bounding box, date, tag) → web dashboard with map. Drone pipeline: raw images to object storage, batch processing into orthomosaic tiles, tiles served via CDN.
 
 *Deep dive 1 (2G upload).* Client-side compression (configurable; a 4 MB photo often shrinks considerably with little visible loss, worth measuring), a persistent upload queue on the device, multipart or chunked uploads with resumable parts, retries with back-off and jitter, upload only on Wi-Fi option, and an idempotency key per photo (client-generated id) so retries never create duplicates.
 
@@ -313,27 +313,27 @@ The four mock sessions below are complete. For each: the **prompt card** (read a
 
 *Duplicates.* Client-generated photo id prevents most; a content hash catches the rest; duplicates in object storage are a cost issue, duplicates in metadata are a correctness issue for progress counts.
 
-*Change (legal hold).* Object-lock or write-once (WORM) retention on originals, a legal-hold flag per site or photo that blocks deletion in the application and in storage policy, audit log of every access, and a hash recorded at upload so integrity can be shown later.
+*Change (legal hold).* Object-lock or write-once (WORM) retention on originals, a legal-hold flag per claim or photo that blocks deletion in the application and in storage policy, audit log of every access, and a hash recorded at upload so integrity can be shown later.
 
-*Cost.* Lifecycle rules: originals to infrequent-access after 90 days and to archive after 1 year; keep thumbnails and web-sized versions hot; drone raw images deleted after orthomosaics are produced and verified (if the contract allows), keeping the processed outputs.
+*Cost.* Lifecycle rules: originals to infrequent-access after 90 days and to archive after 1 year; keep thumbnails and web-sized versions hot; drone raw images deleted after orthomosaics are produced and verified (if the regulator allows), keeping the processed outputs.
 
 **Rubric for mock 3.**
 
 | Dimension | 1 | 2 | 3 | 4 |
 |---|---|---|---|---|
-| Requirements | Misses retention or weak networks | Finds retention but not disputes or the 1-hour tagging target | Finds volume, retention, weak networks and tagging latency | Identifies dispute evidence (immutability, integrity) as a first-class requirement |
+| Requirements | Misses retention or weak networks | Finds retention but not disputes or the 1-hour tagging target | Finds volume, retention, weak networks and tagging latency | Identifies claim-dispute evidence (immutability, integrity) as a first-class requirement |
 | Estimation | None | Per-day photo volume only | Weekly and 7-year storage, upload rate | Adds tagging compute and shows storage dominates cost, driving lifecycle design |
 | High-level design | Images stored in the database | Object storage but synchronous processing in upload request | Pre-signed uploads, event-driven pipeline, spatial metadata | Separate drone batch pipeline, model-versioned tags, CDN tiles |
 | Data model and APIs | No metadata model | Photos table without location or tag indexing | Spatial and tag indexes; upload API with client id | Idempotent upload protocol, status lifecycle, versioned tag results |
 | Deep dive and trade-offs | No answer for dropped uploads | Retries without idempotency | Resumable chunked uploads, idempotent ids, device queue | Compression trade-offs quantified, Wi-Fi-only option, dedupe by hash |
-| Reliability, security, ops | Ignores failures | Generic retries | DLQ, idempotent workers, access control per project | Legal hold, object lock, integrity hashes, audit of access |
+| Reliability, security, ops | Ignores failures | Generic retries | DLQ, idempotent workers, access control per district | Legal hold, object lock, integrity hashes, audit of access |
 | Communication | Rambles | Needs prompting to move on | Structured with time checks | Frames the session around cost and evidence integrity early |
 
 ---
 
 ### Mock 4 — Marketplace payouts and reconciliation (staff level, 45 minutes)
 
-**Prompt card.** "A B2B marketplace sells construction materials. Buyers pay the platform; the platform pays suppliers after delivery is confirmed, minus commission and statutory withholdings. Design the payouts system, including reconciliation with the bank."
+**Prompt card.** "A B2B marketplace sells supplies (vegetables, packaging, kitchen equipment) to restaurants. Buyers pay the platform; the platform pays suppliers after delivery is confirmed, minus commission and statutory withholdings. Design the payouts system, including reconciliation with the bank."
 
 **Hidden details (reveal only if asked).**
 - 50,000 orders a day, average value about ₹40,000; 8,000 active suppliers.
@@ -388,6 +388,20 @@ The four mock sessions below are complete. For each: the **prompt card** (read a
 | Communication | Defensive about simplicity | Over-explains basics | Clear, paced, invites challenge | Drives a review-quality discussion and summarises residual risks |
 
 **Sample scorecard (two interviewers, for the calibration exercise).** Interviewer A: requirements 3, estimation 4, HLD 3, data 3, deep dive 2, reliability 3, communication 3. Interviewer B: requirements 3, estimation 3, HLD 3, data 3, deep dive 4, reliability 2, communication 3. The deep-dive spread of 2 needs a debrief: A noted "resubmitted after timeout at 24:10 before querying status"; B noted "corrected himself at 25:00 and described the unknown state well". Both pieces of evidence are true; the debrief decides whether self-correction earns a 3.
+
+### More prompt cards
+
+Once the four mocks feel familiar, run new prompts in the same format. The interviewer writes the hidden details; the case studies make good model outlines afterwards.
+
+| Prompt card | Hidden detail that drives the design | Model outline |
+|---|---|---|
+| "Sell 10,000 phones at noon to 2 million waiting users." | Overselling is never allowed; most buyers arrive in the first 5 seconds | [Flash sale](#/lesson/m17-flash-sale) |
+| "Show restaurants within 3 km of the user, sorted by distance." | Restaurants rarely move, but delivery partners move every few seconds | [Proximity service](#/lesson/m17-proximity-service) |
+| "Run 50 million scheduled jobs a day, such as EMI reminders and report generation." | A job may run late but must not run twice with side effects | [Job scheduler](#/lesson/m17-job-scheduler) |
+| "Crawl 1 billion pages a month for a search start-up." | Each site allows only a few requests per second | [Web crawler](#/lesson/m17-web-crawler) |
+| "Generate order ids for 40 data centres, roughly sortable by time." | Clocks drift and nodes restart | [Unique ID generator](#/lesson/m17-unique-id-generator) |
+| "Take this app from 100 users to 10 million." | The interviewer changes the scale every 10 minutes | [Scaling journey](#/lesson/m17-scaling-journey) |
+| LLD: "Design an expense-splitting app" or "an LRU cache" | Rounding of paise; thread safety and O(1) operations | [Splitwise](#/lesson/m18-splitwise), [LRU cache](#/lesson/m18-lru-cache) |
 
 ## Production-style C# implementation
 
@@ -623,13 +637,9 @@ Here the "design" is how a mock is run.
 
 > The friend playing interviewer reads the prompt, then says "looks good" every few minutes, gives the numbers before being asked, never asks a follow-up, and at the end says "nice, you'd pass".
 
-Problems: no hidden details means requirements gathering is never tested; no follow-ups means deep dives never happen; no rubric means feedback is an impression; no evidence means the candidate can't tell what to practise. It feels pleasant and teaches almost nothing.
+Problems: with no hidden details, requirements gathering is never tested; with no follow-ups, the hard parts never come up; with no rubric or evidence, the candidate can't tell what to practise. It feels pleasant and teaches almost nothing.
 
 **Good mock:** the interviewer reveals details only when asked, uses the scripted follow-ups at the scripted minutes even if the candidate is "doing well", the observer writes timestamped evidence, scores are given per dimension, and the debrief ends with two specific targets: "estimate peak before average" and "lead with failure cases in the deep dive".
-
-:::callout type=tip title="Run the follow-ups even when it's going well"
-A strong candidate who never faces the changed requirement or the failure question has not been tested on them. The script exists so that every session covers the hard parts.
-:::
 
 :::callout type=mistake title="Practising only the model answers"
 The model outlines are a check, not a script to memorise. Interviewers vary prompts precisely to defeat memorisation. Practise the process on new prompts; use the outlines to find missed ideas.
@@ -829,7 +839,7 @@ public static class ScoreMath
 
         var avg = Math.Round(sum / total, 2);
         var rec = avg >= 3.5 ? "StrongHire" : avg >= 3.0 ? "Hire" : avg >= 2.5 ? "LeanNoHire" : "NoHire";
-        if (scores.Values.Contains(1) && rec is "StrongHire" or "Hire") rec = "LeanNoHire";
+        if (scores.Values.Contains(1) && (rec is "StrongHire" or "Hire")) rec = "LeanNoHire";
         return (avg, rec);
     }
 }
@@ -837,7 +847,6 @@ public static class ScoreMath
 
 Check the weighted test by hand: (3 + 3 + 3 + 2 × 4) ÷ 5 = 17 ÷ 5 = 3.4, which is "Hire". With equal weights it would be 13 ÷ 4 = 3.25; weighting the deep dive raises it.
 
-Note the precedence in `scores.Values.Contains(1) && rec is "StrongHire" or "Hire"`: the pattern `"StrongHire" or "Hire"` binds to `rec is` first, so it reads as intended. Parentheses would make that clearer to a reviewer.
 ::mistakes
 - Averaging without weights, which ignores that the rubric values deep dives more for senior roles.
 - Applying the cap before computing the band, which can raise a "NoHire" to "LeanNoHire".
@@ -920,11 +929,11 @@ Shape: CDN → waiting room → LB → API; API → cache (search) and replica (
 }
 ```
 
-Reasoning: the 8 a.m. spike is mostly reads, so the CDN and the search cache absorb them, and the waiting room controls how many users reach the booking path. Holds are the contended writes; they always go to the primary with a conditional update on the segment mask, so no two journeys can overlap on a seat. Seat maps can lag by seconds because the hold re-checks the truth. The webhook is idempotent; late payments either re-acquire the seat or trigger a refund via the queue. Conductors verify signatures offline against a public key from the depot sync, and upload validations later. Eight API instances is an estimate for ~3,600 requests per second at a few hundred per instance, to be confirmed by load test.
+Reasoning (the model outline for mock 1 has the detail): the 8 a.m. spike is mostly reads, absorbed by the CDN and search cache, while the waiting room limits who reaches booking. Holds are the contended writes and always hit the primary with a conditional update on the segment mask; seat maps can lag because the hold re-checks the truth. Eight API instances is an estimate for ~3,600 requests per second at a few hundred per instance, to be confirmed by a load test.
 ::mistakes
 - Sending all 3,600 searches per second to the primary.
 - Implementing holds with "read seat status, then insert hold" without a lock or condition.
-- Assuming conductors can call the API to validate each ticket on rural roads.
+- Assuming conductors can call the API to validate each ticket on rural routes with no signal.
 :::
 
 :::exercise id=m19-mock-interviews-ex4 difficulty=intermediate kind=code title="Where did the time go?"
@@ -1072,7 +1081,7 @@ public static class TimeBudget
 }
 ```
 
-The example session is the most common pattern in practice: requirements rushed (2 minutes instead of 5), high-level design dragging (21 minutes instead of 12), and deep dives squeezed. The time report makes the cause obvious: the design phase overran because requirements were skipped, so the candidate kept discovering requirements while drawing.
+The example is the most common pattern in practice: requirements rushed (2 minutes instead of 5), so the candidate keeps discovering requirements while drawing, the design phase drags (21 instead of 12) and the deep dives are squeezed.
 ::mistakes
 - Computing durations from planned starts instead of actual starts.
 - Forgetting the last phase, which has no "next start".
@@ -1261,7 +1270,7 @@ public static class Calibrate
 }
 ```
 
-A spread of 2 on a 4-point scale means one interviewer saw "concern" and the other "exceeds the bar". That's rarely a scoring-scale problem; it's usually that each saw different moments (the mock 4 sample: one wrote down the mistake at 24:10, the other the self-correction at 25:00). The debrief resolves it by putting both pieces of evidence side by side and agreeing on how the rubric treats self-correction.
+A spread of 2 on a 4-point scale usually means the interviewers saw different moments, as in the mock 4 sample (the mistake at 24:10, the self-correction at 25:00), not that the scale is broken.
 ::mistakes
 - Averaging scores and moving on, which hides real disagreement.
 - Comparing dimensions only from the first card, which drops dimensions others scored.
@@ -1302,7 +1311,7 @@ public class ScoreCalculatorTests
     [Fact]
     public void Deep_dive_weight_moves_the_average()
     {
-        // deep (weight 1.5) at 4, everything else at 3: (3*6.25 + 4*1.5) / 7.75 = 3.19
+        // other weights sum to 6.25; deep (1.5) at 4: (3 * 6.25 + 4 * 1.5) / 7.75 = 24.75 / 7.75 = 3.19
         var r = ScoreCalculator.Evaluate(StandardRubrics.Senior, Card(3, 3, 3, 3, 4, 3, 3));
         Assert.Equal(3.19, r.WeightedAverage, 2);
     }
@@ -1328,14 +1337,13 @@ public class ScoreCalculatorTests
 }
 ```
 
-Check the weighted arithmetic in the third test by hand before trusting it: the six other weights sum to 1.0 + 0.75 + 1.0 + 1.0 + 1.25 + 1.25 = 6.25, so (3 × 6.25 + 4 × 1.5) ÷ 7.75 = 24.75 ÷ 7.75 ≈ 3.19.
 
 ## Real-world application
 
 - **Interview loops.** Teams that interview regularly use written rubrics and evidence-based scorecards to reduce bias and make debriefs productive; the structure here mirrors common practice without claiming any particular company's internal rubric.
-- **Interviewer training.** New interviewers shadow, then reverse-shadow, using the same scripts; calibration sessions compare their scores with experienced interviewers on recorded mocks.
-- **Internal promotions and design reviews.** The same dimensions (requirements, trade-offs, reliability, communication) are what senior engineers are evaluated on in design reviews, so mock practice improves day-to-day work too.
-- **Team learning sessions.** A monthly "mock and debrief" with rotating roles is a cheap, effective way for a team to share architectural knowledge, especially with prompts drawn from the team's own domain (for example, transport ticketing, project billing or site imagery for an infrastructure consultancy).
+- **Interviewer training.** New interviewers shadow, then reverse-shadow, using the same scripts, and calibrate against experienced interviewers on recorded mocks.
+- **Design reviews.** The same dimensions (requirements, trade-offs, reliability, communication) are what design reviews judge, so mock practice improves day-to-day work too.
+- **Team learning sessions.** A monthly "mock and debrief" with rotating roles is a cheap, effective way for a team to share architectural knowledge, especially with prompts drawn from the team's own domain (for example, ticketing for a transport team or claims imagery for an insurer).
 - **Self-assessment.** Recording yourself on a new prompt each week and scoring it the next day is the most reliable way to see progress across the seven dimensions.
 
 ## Interview questions
@@ -1344,7 +1352,7 @@ Check the weighted arithmetic in the third test by hand before trusting it: the 
 ::q beginner
 How should you split 45 minutes in a system design interview?
 ::a
-Roughly: 5 minutes for requirements, 5 for estimation, 12 for the high-level design and data model, 13 for two deep dives, 7 for failure, scale and a changed requirement, and 3 to wrap up. The exact split bends to the prompt, but drawing boxes past minute 25 usually means the deep dives, where most of the signal is, get squeezed.
+Requirements 5, estimation 5, high-level design and data model 12, two deep dives 13, failure, scale and change 7, wrap-up 3. The split bends to the prompt, but drawing boxes past minute 25 squeezes the deep dives, where most of the signal is.
 ::q beginner
 What is the point of a rubric in a mock interview?
 ::a
@@ -1377,7 +1385,7 @@ A 3 solves the hard part correctly and names the trade-offs. A 4 compares at lea
 - Run the follow-ups even when the candidate is doing well.
 - Debrief in ten minutes and leave with two practice targets.
 - Calibrate interviewers by comparing evidence where scores differ by two or more.
-- Use the four model outlines to find missed ideas, not to memorise boxes.
+- Use the model outlines to find missed ideas, not to memorise boxes; then move on to new prompt cards.
 
 **Terminology**: mock interview, prompt card, hidden details, follow-up script, rubric, anchor, evidence, weighted average, recommendation cap, calibration, debrief.
 

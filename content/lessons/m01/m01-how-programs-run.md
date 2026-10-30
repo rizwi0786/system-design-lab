@@ -530,16 +530,16 @@ What to notice:
 
 ## Bad design vs good design
 
-**Bad**: making a web request "faster" by starting a new thread per job and sharing a list between them.
+**Bad**: a food-delivery dashboard shows today's total orders across 500 restaurants. A developer makes it "faster" by starting a new thread per restaurant and sharing a list between them.
 
 ```csharp
 var results = new List<int>();
-foreach (var siteId in siteIds)                    // 500 site ids
+foreach (var restaurantId in restaurantIds)        // 500 restaurant ids
 {
     new Thread(() =>
     {
-        var progress = LoadProgressFromDatabase(siteId);   // waits ~50 ms on the network
-        results.Add(progress);                             // List<T> is not thread-safe
+        var orders = LoadTodayOrderCount(restaurantId);    // waits ~50 ms on the network
+        results.Add(orders);                               // List<T> is not thread-safe
     }).Start();
 }
 Thread.Sleep(2000);                                 // "should be enough"
@@ -557,14 +557,15 @@ Problems:
 
 ```csharp
 // Best: let the database do set-based work in one round trip.
-var total = await progressRepository.SumProgressAsync(siteIds, cancellationToken);
+// SELECT count(*) FROM orders WHERE restaurant_id = ANY(@ids) AND placed_at >= @startOfDay
+var total = await orderRepository.CountTodayAsync(restaurantIds, cancellationToken);
 
 // If you truly need separate calls: async, limited concurrency, no shared mutable list.
 var options = new ParallelOptions { MaxDegreeOfParallelism = 8, CancellationToken = cancellationToken };
-var perSite = new ConcurrentBag<int>();
-await Parallel.ForEachAsync(siteIds, options, async (id, ct) =>
-    perSite.Add(await progressRepository.GetProgressAsync(id, ct)));
-var sum = perSite.Sum();
+var perRestaurant = new ConcurrentBag<int>();
+await Parallel.ForEachAsync(restaurantIds, options, async (id, ct) =>
+    perRestaurant.Add(await orderRepository.CountTodayAsync(id, ct)));
+var sum = perRestaurant.Sum();
 ```
 
 **Is the simpler version enough?** Usually, yes: a plain sequential loop is correct, easy to read and fast enough for small inputs. Add threads or parallel loops only when you have measured that CPU-bound work is the bottleneck. Add `async` for I/O, which is the normal case in web apps.
@@ -1325,7 +1326,7 @@ public class PrimeCounterTests
 
 - **ASP.NET Core web servers** run as one process per instance. Kestrel accepts connections and hands each request to a thread-pool thread. Because most request time is spent waiting for the database or other services, `async` code lets a handful of threads serve thousands of concurrent requests.
 - **Start-up time matters for scaling.** When a cloud platform adds instances during a traffic spike, each new process must start, load the CLR and JIT-compile hot paths. ReadyToRun and Native AOT exist largely to shorten this, and are popular for serverless functions and small containers.
-- **Background processing** (sending SMS, generating PDF reports, processing drone images) runs on worker threads or separate worker processes so that a slow CPU-heavy job does not slow web requests.
+- **Background processing** (sending SMS, generating PDF invoices, resizing uploaded product photos) runs on worker threads or separate worker processes so that a slow CPU-heavy job does not slow web requests.
 - **Containers**: a Docker container is (mostly) a process with limits on how much CPU and memory it may use. .NET reads those limits and sizes its thread pool and garbage collector to fit. Knowing that "4 cores" in a container may mean "4 cores' worth of time" helps explain performance in Kubernetes.
 - **Latency budgets**: when designing a system, engineers add up approximate times (memory: nanoseconds; database: milliseconds; cross-region call: tens to hundreds of milliseconds). The memory ladder from this lesson is the first tool of performance design.
 

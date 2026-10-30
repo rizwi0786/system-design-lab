@@ -7,7 +7,7 @@ status: reviewed
 template: hld-case
 minutes: 120
 prerequisites: [m09-transactions-acid, m10-idempotency, m10-webhooks, m12-outbox, m12-idempotent-consumers]
-related: [m17-ecommerce, m12-sagas, m12-delivery-guarantees, m13-distributed-transactions, m16-event-sourcing, m09-locking, m14-least-privilege-audit, m14-tls-encryption]
+related: [m17-ecommerce, m17-scaling-journey, m12-sagas, m12-delivery-guarantees, m13-distributed-transactions, m16-event-sourcing, m09-locking, m14-least-privilege-audit, m14-tls-encryption]
 tags: [hld, case-study, payments, ledger, double-entry, idempotency, webhooks, reconciliation, pci]
 patterns: []
 summary: Design a payment processing system for an online marketplace — a double-entry ledger with a balance invariant, idempotent payment APIs, integration with external payment service providers, signed webhooks that arrive late and out of order, daily reconciliation against settlement files, and a PCI scope kept as small as possible.
@@ -49,7 +49,7 @@ By the end of this lesson you will be able to:
 Picture a busy wholesale market in Delhi where a trusted middleman (that is us, the marketplace) collects money from buyers and pays the shopkeepers.
 
 - The middleman never handles cash directly. He uses a **bank's collection counter** (the payment service provider, PSP) that knows how to talk to every card company and every UPI app.
-- He keeps a **bound ledger book** in which every movement is written twice: "₹1,499 came in from buyer Asha" on one side and "₹1,469 now owed to shop Metro Fresh, ₹30 is our commission" on the other. The two sides must always add up to the same number. If they don't, someone made a mistake, and it is caught immediately (**double-entry bookkeeping**).
+- He keeps a **bound ledger book** in which every movement is written twice: "₹1,499 came in from buyer Asha" on one side and "₹1,469.02 now owed to shop Metro Fresh, ₹29.98 is our 2 % commission" on the other. The two sides must always add up to the same number. If they don't, someone made a mistake, and it is caught immediately (**double-entry bookkeeping**).
 - He never erases a line in the book. If something was wrong, he writes a new correcting line (**append-only ledger, reversal entries**).
 - Every buyer's request carries a **token number**. If the buyer's phone loses signal and they tap "Pay" again with the same token number, the clerk recognises it and says "already done" instead of charging twice (**idempotency key**).
 - Sometimes the bank counter is slow, and the clerk walks away not knowing whether the payment went through. He doesn't guess. He marks the slip **"pending"** and waits for the bank's messenger to bring a signed note later (**webhook**), or he phones the bank to ask (**status query**).
@@ -91,7 +91,7 @@ Notice the trade-off already written into the targets: when the system has to ch
 
 ## Capacity estimation
 
-All figures are **estimates** for illustration, for a marketplace with 5 M orders on a normal day and a festive sale on Big Billion-style days.
+All figures are **estimates** for illustration, for a marketplace with 5 M orders on a normal day and a few Diwali-season festive sale days a year.
 
 ### Payment throughput
 
@@ -100,17 +100,17 @@ All figures are **estimates** for illustration, for a marketplace with 5 M order
 - Daily peak (evening): ×4 ≈ **300/s**.
 - Festive sale: assume 6× a normal day's volume, concentrated in the first hours. 39 M attempts/day with, say, 20 % in the first two hours: 7.8 M ÷ 7,200 s ≈ **1,100/s**, and design for **2,000/s** of headroom.
 
-2,000 writes per second is well within what a single well-tuned PostgreSQL primary can sustain for short transactions on good hardware (an estimate; measure your own). **Throughput is not the hard part of payments. Correctness is.** The hard part at peak is hot rows (see deep dive 5) and the PSPs' own limits.
+2,000 short payment transactions per second (each a handful of row writes) is within what a single well-tuned PostgreSQL primary can sustain on good hardware (an estimate; measure your own with a load test). **Throughput is not the hard part of payments. Correctness is.** The hard part at peak is hot rows (see deep dive 5) and the PSPs' own limits.
 
 ### Ledger writes
 
 Each successful payment produces several postings (lines in the ledger):
 
-- Capture: debit PSP clearing ₹1,499; credit seller payable ₹1,469; credit commission revenue ₹30 → **3 postings**.
+- Capture: debit PSP clearing ₹1,499; credit seller payable ₹1,469.02; credit commission revenue ₹29.98 (2 %) → **3 postings**.
 - Settlement from the PSP (later, in a batch): debit bank, debit PSP fees expense, credit PSP clearing → about **3 postings**, but per settlement batch, not per payment, if you post aggregated.
 - Payout to the seller (batched per seller per day): 2 postings per seller.
 
-So roughly **4 postings per successful payment** on average. 5 M successful payments × 4 = **20 M postings/day** ≈ 230/s average, about 7,000/s at the festive peak if every payment posts immediately.
+So roughly **4 postings per successful payment** on average. 5 M successful payments × 4 = **20 M postings/day** ≈ 230/s average. At the festive peak only the capture postings happen in real time (settlement and payout postings are batch jobs that run off-peak): about 77 % of attempts succeed (5 M of 6.5 M), so 2,000 attempts/s × 0.77 × 3 ≈ **4,600 posting inserts/s** at the design headroom, plus the `ledger_txn` and `payment` rows.
 
 ### Storage
 
@@ -128,7 +128,7 @@ So roughly **4 postings per successful payment** on average. 5 M successful paym
 1. Average load (75/s) is modest; even the sale peak (2,000/s) fits a single primary database for writes. **Don't shard the ledger on day one.**
 2. **Hot accounts** (one PSP clearing account touched by every payment) will cause lock contention long before raw throughput becomes a problem.
 3. Storage grows steadily and must be kept for years: partition by time from the start.
-4. The real cost driver is not infrastructure but **PSP fees** (often around 2 % for cards, near zero merchant discount rate for UPI in India at the time of writing; check current rules), so routing and reconciliation directly affect profit.
+4. The real cost driver is not infrastructure but **PSP fees** (often around 2 % for cards, a zero regulated merchant discount rate for most UPI payments in India at the time of writing, though gateways may still charge a platform fee; check current rules), so routing and reconciliation directly affect profit.
 
 ## API design
 
@@ -195,7 +195,7 @@ CREATE TABLE payment (
 );
 
 CREATE TABLE ledger_account (
-    account_id      text    PRIMARY KEY,                 -- 'psp_clearing:razorpay', 'seller_payable:s_301'
+    account_id      text    PRIMARY KEY,                 -- 'psp_clearing:pspA', 'seller_payable:s_301'
     account_type    text    NOT NULL CHECK (account_type IN ('asset','liability','revenue','expense')),
     currency        char(3) NOT NULL,
     may_go_negative boolean NOT NULL DEFAULT true
@@ -347,7 +347,7 @@ Total debits 149,900 = total credits 149,900. Three days later the PSP settles, 
 
 | Account | Debit | Credit |
 |---|---|---|
-| `bank:hdfc_current` | 146,902 | |
+| `bank:current_account` | 146,902 | |
 | `expense:psp_fees` | 2,998 | |
 | `psp_clearing:pspA` | | 149,900 |
 
@@ -667,6 +667,9 @@ public sealed class PaymentService(IPaymentRepository repo, IPspClient psp, Ledg
     public bool ApplyOutcome(string paymentId, PspOutcome outcome, string pspReference, string? declineCode = null)
     {
         var payment = repo.Find(paymentId) ?? throw new KeyNotFoundException(paymentId);
+        // The lock stands in for SELECT ... FOR UPDATE on the payment row (or a conditional
+        // UPDATE ... WHERE status = 'processing'): the status check and the transition must be one atomic step,
+        // or a webhook and the PSP response arriving together could both post the capture.
         lock (payment)
         {
             if (payment.Status != PaymentStatus.Processing || outcome == PspOutcome.Pending) return false;
@@ -726,7 +729,7 @@ public sealed class WebhookVerifier(byte[] secret, TimeProvider clock)
     }
 }
 
-public enum WebhookResult { Applied, Duplicate, Ignored }
+public enum WebhookResult { Applied, Duplicate, Ignored, UnknownPayment }
 
 public sealed class WebhookProcessor(PaymentService payments)
 {
@@ -737,6 +740,9 @@ public sealed class WebhookProcessor(PaymentService payments)
 
     public WebhookResult Handle(PspEvent e)
     {
+        // Fast path only. Two concurrent deliveries of one event can both pass this check; that is safe because
+        // ApplyOutcome is the real guard (atomic status check) and the capture has a deterministic transaction id.
+        // In PostgreSQL the atomic check is INSERT INTO psp_event ... ON CONFLICT DO NOTHING.
         if (_processed.ContainsKey(e.Id)) return WebhookResult.Duplicate;
         var outcome = e.Type switch
         {
@@ -744,7 +750,13 @@ public sealed class WebhookProcessor(PaymentService payments)
             "charge.failed" => PspOutcome.Declined,
             _ => PspOutcome.Pending,
         };
-        var changed = payments.ApplyOutcome(e.PaymentId, outcome, e.PspReference, e.DeclineCode);
+        bool changed;
+        try { changed = payments.ApplyOutcome(e.PaymentId, outcome, e.PspReference, e.DeclineCode); }
+        catch (KeyNotFoundException)
+        {
+            // Acknowledge and park for review. Returning 500 would make the PSP retry this event for days.
+            return WebhookResult.UnknownPayment;
+        }
         _processed[e.Id] = true; // marked after success: a crash before this line just means a harmless re-apply
         return changed ? WebhookResult.Applied : WebhookResult.Ignored;
     }
@@ -889,7 +901,7 @@ Payments are a place to be conservative with caches.
 ## Security
 
 - **PCI DSS scope.** Any system that stores, processes or transmits cardholder data (the card number, PAN) is in scope for PCI DSS, along with systems connected to it. Keep card data out of your environment entirely: card fields are rendered by the PSP (hosted payment page, iframe fields or mobile SDK), so the card number goes from the customer's device to the PSP. You then typically qualify for one of the smallest self-assessment questionnaires (SAQ A for fully outsourced redirect or iframe flows; SAQ A-EP when your page delivers the scripts that collect card data). If you build your own card form posting to your servers, you are in SAQ D territory: audits, network segmentation, key management, quarterly scans. Confirm your exact obligations with your acquirer or a qualified assessor.
-- **Page integrity**: even with iframes, a compromised script on your checkout page could overlay a fake form. PCI DSS v4 requires controls over payment-page scripts (an inventory, authorisation and integrity checks such as a strict Content Security Policy and Subresource Integrity).
+- **Page integrity**: even with iframes, a compromised script on your checkout page could overlay a fake form. PCI DSS v4.x requires controls over payment-page scripts (requirements 6.4.3 and 11.6.1: an inventory, authorisation and integrity checks, and tamper detection, typically with a strict Content Security Policy and Subresource Integrity). Even an iframe-only checkout must confirm its pages are not open to script attacks to stay eligible for the smallest questionnaire.
 - **Never log card data or full tokens**: mask PAN-like patterns in logs at the logging pipeline, as a backstop.
 - **Service authentication**: only the order service and the checkout backend may create payments; only finance tools may read ledger entries; refunds above a threshold need a second approver.
 - **Webhook security**: HMAC or asymmetric signatures, constant-time comparison, timestamp tolerance, and secrets rotated with an overlap period (accept old and new for a day).
@@ -929,7 +941,7 @@ Payments are a place to be conservative with caches.
 
 ### When a simpler design is enough
 
-A small online store doing 200 orders a day doesn't need its own ledger, router or reconciliation pipeline. Use one PSP's hosted checkout, store the PSP's payment id and status on the order, verify webhooks, make your order update idempotent, and download the PSP's settlement report monthly for your accountant. Build the ledger when you hold money on behalf of others (marketplace payouts, wallets), when you add a second PSP, or when finance can no longer explain balances from PSP dashboards.
+A small online store doing 200 orders a day doesn't need its own ledger, router or reconciliation pipeline. Use one PSP's hosted checkout, store the PSP's payment id and status on the order, verify webhooks, make your order update idempotent, and download the PSP's settlement report monthly for your accountant. Build the ledger when you hold money on behalf of others (marketplace payouts, wallets), when you add a second PSP, or when finance can no longer explain balances from PSP dashboards. [Scaling a real system from 100 to 10 million users](#/lesson/m17-scaling-journey) shows this "add the box only when a measured problem forces it" discipline end to end, including its idempotent checkout.
 
 ## Alternatives and trade-offs
 
@@ -1237,7 +1249,7 @@ INSERT INTO ledger_posting VALUES
   ('refund:rf_02',   3, 'psp_clearing:pspA',    'C',  20000),
   ('refund:rf_03',   1, 'seller_payable:s_301', 'D',  10000),
   ('payout:s_301',   1, 'seller_payable:s_301', 'D',  86902),
-  ('payout:s_301',   2, 'bank:hdfc_current',    'C',  86902);
+  ('payout:s_301',   2, 'bank:current_account', 'C',  86902);
 ```
 ::check
 ```sql
@@ -1551,7 +1563,7 @@ Draw the money path first (client → PSP → bank) and then your system's recor
 ::hint
 Where can a request or event repeat? List each hop and put a dedupe mechanism on it.
 ::hint
-2,000 attempts/s × ~4 postings ≈ 8,000 row inserts/s at the very peak. Is that beyond a single PostgreSQL primary? What will contend first?
+2,000 attempts/s × ~77 % success × 3 capture postings ≈ 4,600 posting inserts/s at the very peak, plus payment rows (settlement and payout postings are batched off-peak). Is that beyond a single PostgreSQL primary? What will contend first?
 ::hint
 Shape: client ⇄ PSP hosted fields; client → gateway → payment service → (risk, router → PSP A/B, DB with ledger and outbox); PSPs ⇢ webhook receiver → inbox; DB ⇢ relay ⇢ bus ⇢ order service; scheduler → sweeper and reconciliation; files in object storage ⇢ reconciliation → DB.
 ::starter
@@ -1635,7 +1647,7 @@ Reasoning:
 - **Idempotency**: the API's unique (merchant, key) constraint; the PSP call uses the payment id as its idempotency key; the webhook inbox dedupes on event id; ledger transaction ids are deterministic; consumers dedupe event ids.
 - **One local transaction** for status, ledger postings and outbox row: there is no state where a payment succeeded without its postings or its event.
 - **Unknown outcome**: a timeout leaves the payment in `processing`. The webhook usually resolves it within seconds; the sweeper queries status for anything older than a few minutes; reconciliation is the last net.
-- **Why one primary is enough**: 2,000 attempts/s × ~4 postings ≈ 8,000 small inserts/s at the very peak, plus payment row updates. That is a heavy but achievable load for a well-provisioned PostgreSQL primary (an estimate to validate with load tests). The first real bottleneck is lock contention on shared balance rows, solved by not maintaining running balances for clearing and revenue accounts, or by sub-accounts. Sharding would turn every capture into a cross-shard problem for accounts like PSP clearing.
+- **Why one primary is enough**: 2,000 attempts/s × ~77 % success × 3 capture postings ≈ 4,600 small posting inserts/s at the very peak, plus about 2,000 payment inserts and 1,500 status updates per second; settlement and payout postings run as off-peak batches. That is a heavy but achievable load for a well-provisioned PostgreSQL primary (an estimate to validate with load tests). The first real bottleneck is lock contention on shared balance rows, solved by not maintaining running balances for clearing and revenue accounts, or by sub-accounts. Sharding would turn every capture into a cross-shard problem for accounts like PSP clearing.
 - **Durability**: synchronous standby in another zone (RPO ≈ 0); a read replica keeps finance queries off the primary.
 ::mistakes
 - Sending card numbers through your own API "just to forward them", which pulls your whole backend into PCI scope.
@@ -1868,7 +1880,7 @@ Treat it as an unknown outcome, not a failure. The charge may have succeeded. Ke
 ::q intermediate
 Explain double-entry bookkeeping and what invariant your ledger enforces.
 ::a
-Every transaction records money leaving some accounts and arriving in others, as debit and credit postings. The invariant is that for every transaction, total debits equal total credits, so money is never created or lost inside the system. A ₹1,499 sale with ₹30 commission debits PSP clearing ₹1,499 and credits seller payable ₹1,469 and commission revenue ₹30. The ledger enforces this in code (reject unbalanced transactions), in the database (a deferred constraint trigger per transaction, append-only permissions), and with detective checks (nightly trial balance must be zero). Corrections are reversal transactions, never updates.
+Every transaction records money leaving some accounts and arriving in others, as debit and credit postings. The invariant is that for every transaction, total debits equal total credits, so money is never created or lost inside the system. A ₹1,499 sale with 2 % commission debits PSP clearing ₹1,499.00 and credits seller payable ₹1,469.02 and commission revenue ₹29.98. The ledger enforces this in code (reject unbalanced transactions), in the database (a deferred constraint trigger per transaction, append-only permissions), and with detective checks (nightly trial balance must be zero). Corrections are reversal transactions, never updates.
 ::q advanced
 At a festive sale peak, payment latency climbs although CPU and IOPS look fine. What is likely happening and how do you fix it?
 ::a

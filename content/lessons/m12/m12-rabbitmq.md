@@ -153,6 +153,8 @@ The classic mistake is `nack(requeue: true)` on a message that will always fail:
 
 A queue can be declared with `x-dead-letter-exchange` (and optionally `x-dead-letter-routing-key`). A message is dead-lettered when it is rejected with `requeue: false`, its TTL expires, the queue exceeds its length limit with overflow set to `drop-head` (the default) or `reject-publish-dlx`, or it exceeds the quorum delivery limit. RabbitMQ republishes it to the dead-letter exchange and adds an `x-death` header recording why, from which queue and how many times. Bind a `.dlq` queue to that exchange, and alert on it.
 
+One detail matters for business data: by default, dead-lettering is **at-most-once**. The broker removes the message from the source queue and publishes it to the DLX without waiting for confirmation, so if the DLX route is missing or the target is unavailable at that moment, the message is gone. Quorum queues can do **at-least-once** dead-lettering instead: declare the source queue with `x-dead-letter-strategy: at-least-once` and `x-overflow: reject-publish`, and the message stays in the source queue until the dead-letter queue has confirmed it. Use that for anything you would have to explain to a customer.
+
 ### Durability, persistence and queue types
 
 Three different settings are often confused:
@@ -172,6 +174,8 @@ RabbitMQ has three main queue types today:
 | Best for | Temporary, exclusive or non-critical queues | Business data that must not be lost | Replay, very large fan-out, history |
 
 Quorum queues are the recommended default for durable data. They use the [Raft consensus algorithm](#/lesson/m13-consensus): the leader appends a message, followers replicate it, and the publish is confirmed once a **majority** (2 of 3) has written it to disk. With 3 nodes you survive the loss of 1; with 5, the loss of 2. The cost is extra disk and network writes per message and somewhat higher latency than a single-node classic queue. The old "classic mirrored queues" were removed in RabbitMQ 4.0; quorum queues replace them.
+
+**Streams** are the third type, for when you need history rather than a to-do list. A stream is a replicated, append-only log: consuming does not delete anything, each consumer chooses where to start (`first`, `last`, `next`, an offset or a timestamp), and retention is by size or age (`x-max-length-bytes`, `x-max-age`). They can be read through AMQP 0-9-1 (with prefetch and acks only used for flow control), but the dedicated stream protocol (port 5552, used by the `RabbitMQ.Stream.Client` .NET library) is much faster and adds **super streams** (a stream partitioned into several streams by routing key, similar to Kafka partitions) and single active consumer per partition. Use a stream when a new service must replay last week's order events, or when hundreds of consumers each need every message; keep quorum queues for work items that are processed once and removed.
 
 ### Publisher confirms
 
@@ -1556,7 +1560,7 @@ public void Routing_contract(string key, string expected)
 - **Event-driven commerce.** A system like a quick-commerce or food-delivery platform commonly publishes order lifecycle events to a topic exchange and lets billing, notifications, logistics and analytics subscribe independently; new teams add bindings, not producer changes.
 - **Task distribution.** Document rendering, report generation and image processing use direct exchanges with competing consumers and low prefetch, because each job is slow and uneven.
 - **Cache invalidation and configuration broadcasts.** Fanout exchanges with one auto-delete queue per instance push "config changed" to every running node.
-- **IoT and field devices.** RabbitMQ's MQTT plugin lets devices on construction sites or in vehicles publish with MQTT, while back-end services consume the same messages over AMQP with topic routing on device and site identifiers.
+- **IoT and field devices.** RabbitMQ's MQTT plugin lets delivery-bike trackers, smart meters or vehicles publish with MQTT, while back-end services consume the same messages over AMQP with topic routing on device and city identifiers.
 - **Frameworks.** In .NET, MassTransit, NServiceBus and Wolverine build on RabbitMQ and generate exchanges, queues, retries and dead-lettering from conventions. Knowing the underlying model is what lets you debug them.
 
 ## Interview questions

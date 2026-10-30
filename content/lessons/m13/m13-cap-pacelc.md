@@ -147,7 +147,7 @@ Typical classifications (for *default* or *typical* configurations — all are t
 
 A team wants zero data loss for OTP records, so it configures the primary in Mumbai to wait for a synchronous standby in Hyderabad before every commit. Normally that adds 20–30 ms (estimated) — acceptable. Then the inter-region link degrades: packets aren't lost, but latency jumps to 2 s. Every commit now takes 2 s, the connection pool fills (Little's law again: 300 writes/s × 2 s = 600 connections needed), and the OTP service is effectively down — although **no partition was ever declared**. The "else" branch of PACELC (latency) quietly became the "partition" branch (availability).
 
-Mitigations: a commit timeout with a deliberate fallback (with an alert, because durability has just been reduced); two synchronous standbys with "any one of two" acknowledgement (PostgreSQL's `synchronous_standby_names = 'ANY 1 (s1, s2)'`); or keeping the synchronous standby in the same region and replicating asynchronously across regions.
+Mitigations: an application-side commit deadline with a deliberate fallback (with an alert, because durability has just been reduced) — but know your database: in PostgreSQL a commit waiting for a synchronous standby has *already been written locally*, so cancelling the wait does not undo it, and the client sees an unknown outcome; two synchronous standbys with "any one of two" acknowledgement (PostgreSQL's `synchronous_standby_names = 'ANY 1 (s1, s2)'`); or keeping the synchronous standby in the same region and replicating asynchronously across regions.
 
 ### Designing the AP side so nothing is lost
 
@@ -242,7 +242,7 @@ Fast and always available. During a partition between Pune and Mumbai, both side
 
 ### Step 3 — quorum reads and writes for reservations
 
-With N = 3 replicas, require W = 2 acknowledgements for writes and R = 2 for reads. Any read quorum overlaps any write quorum in at least one replica (2 + 2 > 3), so a read sees the latest acknowledged write. Combine it with a version check (compare-and-set) so two tills can't both decrement from the same value. During a partition, the Pune side (1 replica) can't form a quorum and refuses reservations; Mumbai keeps working. (This overlap idea, R + W > N, is the subject of [Quorums](#/lesson/m13-quorums). On its own it doesn't give full linearizability under all failure patterns; that needs read repair or consensus. It is enough to show the trade-off here.)
+With N = 3 replicas, require W = 2 acknowledgements for writes and R = 2 for reads. Any read quorum overlaps any write quorum in at least one replica (2 + 2 > 3), so a read sees the latest acknowledged write. Overlap alone does not stop two tills from both reading quantity 1 and both writing 0, so reservations also need an atomic compare-and-set. In a leaderless store, a per-replica version check is *not* enough (two writers can each win on different replicas); route each SKU's reservations through one leader, or use the store's consensus-backed conditional write (for example Cassandra lightweight transactions or a PostgreSQL `UPDATE ... WHERE quantity > 0`). During a partition, the Pune side (1 replica) can't form a quorum and refuses reservations; Mumbai keeps working. (This overlap idea, R + W > N, is the subject of [Quorums](#/lesson/m13-quorums). On its own it doesn't give full linearizability under all failure patterns; that needs read repair or consensus. It is enough to show the trade-off here.)
 
 ### Step 4 — one-replica reads for display
 

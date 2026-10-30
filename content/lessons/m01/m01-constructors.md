@@ -143,7 +143,7 @@ These early "stop here if the input is bad" lines are called **guard clauses**.
 Two constructors, one set of rules:
 
 ```csharp
-public TrainTicket(string pnr, string passengerName, int seat) { /* all the checks above */ }
+public TrainTicket(string pnr, string passengerName, int? seat) { /* all the checks above; null seat = waitlisted */ }
 
 // A waitlisted ticket has no seat yet. Reuse the main constructor's checks:
 public TrainTicket(string pnr, string passengerName) : this(pnr, passengerName, seat: null) { }
@@ -298,7 +298,7 @@ In a web app, *you* rarely write `new InvoiceService(...)`. The dependency injec
 
 ## Step-by-step example
 
-We'll build an invoice line for a building-materials supplier in four steps.
+We'll build an invoice line for a mobile-accessories seller on an online marketplace in four steps.
 
 ### Step 1 — no constructor (the naive version)
 
@@ -310,7 +310,7 @@ public class InvoiceLine
     public decimal UnitPrice { get; set; }
 }
 
-var line = new InvoiceLine { Description = "OPC cement 50 kg bag", Quantity = 40 };
+var line = new InvoiceLine { Description = "USB-C charging cable, 1 m", Quantity = 40 };
 // forgot UnitPrice: the line is worth ₹0 and nothing complains
 ```
 
@@ -1296,16 +1296,16 @@ public class InvoiceLineTests
     [InlineData(0)]
     [InlineData(-1)]
     public void Quantity_must_be_positive(int qty) =>
-        Assert.Throws<ArgumentOutOfRangeException>(() => new InvoiceLine("Cement", qty, 380m));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new InvoiceLine("USB-C cable", qty, 380m));
 
     [Fact]
     public void Short_constructor_uses_standard_rate() =>
-        Assert.Equal(InvoiceLine.StandardGstRate, new InvoiceLine("Cement", 40m, 380m).GstRatePercent);
+        Assert.Equal(InvoiceLine.StandardGstRate, new InvoiceLine("USB-C cable", 40m, 380m).GstRatePercent);
 
     [Fact]
     public void Totals_are_rounded_per_line()
     {
-        var line = new InvoiceLine("TMT bar 12 mm (kg)", 1250m, 61.35m, 18m);
+        var line = new InvoiceLine("Silicone phone case", 1250m, 61.35m, 18m);
         Assert.Equal(76687.50m, line.TaxableValue);
         Assert.Equal(13803.75m, line.GstAmount);
     }
@@ -1324,7 +1324,7 @@ public class InvoiceLineTests
 - **Value objects** in business systems use private constructors and factories: `Email`, `PhoneNumber`, `Pan`, `Gstin`, `Money`. Code that receives one can trust it.
 - **Configuration** classes (`IOptions<T>`) use parameterless constructors and settable properties, because the binder creates them. Validation happens separately at start-up.
 - **Records** are the default for API requests and responses, messages and events. Immutability makes them safe to pass between threads and services.
-- **Infrastructure and contract systems** often have objects such as a `MeasurementBookEntry` or `RunningBill` where cross-field rules (quantity executed ≤ quantity sanctioned, bill date within contract period) belong in the constructor, so an invalid entry can never reach the database.
+- **Booking and subscription systems** often have objects such as a `HotelBooking` or `GymMembership` where cross-field rules (check-out after check-in, guests within the room's capacity, membership end after start) belong in the constructor, so an invalid booking can never reach the database.
 
 ## Interview questions
 

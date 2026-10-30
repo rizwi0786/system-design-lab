@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 90
 prerequisites: [m08-cqrs-fundamentals, m12-outbox, m12-eventual-consistency, m09-replicas]
-related: [m16-event-sourcing, m16-cdc, m12-idempotent-consumers, m16-search-architecture, m16-service-boundaries, m09-indexes]
+related: [m16-event-sourcing, m16-cdc, m17-scaling-journey, m12-idempotent-consumers, m16-search-architecture, m16-service-boundaries, m09-indexes]
 tags: [architecture, cqrs, read-models, projections, eventual-consistency, outbox]
 patterns: [CQRS, Read Model, Projection, Transactional Outbox, Materialized View]
 summary: Running separate write and read models for real — the levels of CQRS from query classes to asynchronous projections, how to build idempotent checkpointed projections, how to measure and live with lag (including read-your-writes), how to rebuild read models safely, and when an index, a view or a replica is the better answer.
@@ -115,7 +115,7 @@ Two complementary measures:
 - **Position lag**: `latest written position − projector checkpoint`. "The projector is 4,200 events behind." Good for capacity planning.
 - **Time lag**: `now − commit time of the last event processed` (when there is a backlog). "Reads are 3.1 seconds stale." Good for user-facing SLOs.
 
-Set an objective such as "p99 time lag under 2 seconds" and alert when lag exceeds, say, 30 seconds for 5 minutes. A projector that stops silently is the most common CQRS outage: writes succeed, nothing errors, and the dashboard slowly freezes in time.
+Export both as metrics from the projector (in .NET, an `ObservableGauge` from `System.Diagnostics.Metrics`, collected by OpenTelemetry), labelled per projection. Set an objective such as "p99 time lag under 2 seconds" and alert when lag exceeds, say, 30 seconds for 5 minutes. A projector that stops silently is the most common CQRS outage: writes succeed, nothing errors, and the dashboard slowly freezes in time.
 
 ### Read-your-writes on an eventual read model
 
@@ -156,7 +156,7 @@ Read models are disposable: you can delete and rebuild them from the source of t
 - **Strong consistency everywhere**: if every read must reflect the latest write (seat booking, stock checks), the eventual read model is the wrong source for those decisions.
 - **Small team, young product**: a projector, checkpoints, lag alerts and rebuild tooling are a real ongoing cost.
 
-**Simpler alternatives, in order of effort**: a better index or a covering index ([see the lesson](#/lesson/m09-indexes)); a SQL view; a PostgreSQL **materialized view** refreshed every minute (`REFRESH MATERIALIZED VIEW CONCURRENTLY` needs a unique index); a read replica for heavy reports; a cache in front of a hot query. Reach for asynchronous projections when these do not fit.
+**Simpler alternatives, in order of effort**: a better index or a covering index ([see the lesson](#/lesson/m09-indexes)); a SQL view; a PostgreSQL **materialized view** refreshed every minute (`REFRESH MATERIALIZED VIEW CONCURRENTLY` needs a unique index); a read replica for heavy reports; a cache in front of a hot query. Reach for asynchronous projections when these do not fit. In the [scaling journey](#/lesson/m17-scaling-journey) case study, separate read models appear only after replicas and caching have been used up, at the stage where one read shape (search, a dashboard) needs a different store; that is the typical order in real systems too.
 
 ## Visual explanation
 
@@ -751,7 +751,7 @@ For each scenario, recommend: no CQRS beyond separate query code (level 0), leve
 2. A stock exchange-style order book where traders must see their order the instant it is accepted. 5,000 writes per second.
 3. A hospital's monthly bed-occupancy report, run by 5 managers, taking 40 seconds on the primary database.
 4. A food-delivery app's restaurant search: 12,000 reads per second, full-text and geo filters, menu changes 50 times per second.
-5. A contractor billing system where the "bill summary" page joins 6 tables, 80 reads per second, 10 writes per second.
+5. A gym chain's membership system where the "member billing summary" page joins 6 tables (member, plan, invoices, payments, freezes, add-ons), 80 reads per second, 10 writes per second.
 ::acceptance
 - Each scenario has a level or a tool, with a reason tied to the numbers.
 - At least one scenario is answered with "no CQRS needed".
@@ -1302,7 +1302,7 @@ public void Backlog_is_correct_whatever_the_batch_split()
 - **E-commerce order history and search** commonly use asynchronous projections into a search engine, because customers search by product name, date and status — shapes the order write model does not support.
 - **Banking apps** often show a "pending" transaction list from the write side and a "statement" from a read model, which is why the two sometimes disagree for a few seconds.
 - **Logistics and courier tracking** (like this lesson's example) use per-shipment tracking documents built from scan events, plus hub-level aggregates for operations.
-- **Government dashboards** (grievances per district, project progress per state) are classic read models: heavy aggregations, read by many, tolerant of a minute of lag — often a materialized view is enough.
+- **Government dashboards** (grievances per district, vaccination counts per state) are classic read models: heavy aggregations, read by many, tolerant of a minute of lag — often a materialized view is enough.
 - **In .NET**, level 0 and 1 CQRS are usually plain ASP.NET Core with EF Core for commands and Dapper or raw SQL for queries; level 2 uses an outbox (hand-rolled or from a messaging library) and `BackgroundService` projectors like the one above.
 
 ## Interview questions

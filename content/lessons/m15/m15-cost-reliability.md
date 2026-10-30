@@ -24,7 +24,7 @@ references:
     url: https://www.finops.org/framework/
 ---
 
-**SitePulse** is a SaaS platform for infrastructure contractors: site engineers upload daily progress photos and drone images, the platform tiles the imagery, tracks quantities against the bill of quantities and generates daily progress reports (DPRs) for clients such as highway authorities and metro corporations. About 300 contractor organisations use it. In July the Azure bill was ₹3.1 lakh. In October it was ₹5.4 lakh, revenue had grown by only 12 %, and nobody could say why. The finance head asked three questions: "What are we paying for? Which customers cost us the most? Why did it jump?" A week later a zone-level outage in the region took the single-zone PostgreSQL server down for 70 minutes during the morning DPR rush, and the CTO asked the opposite question: "Why aren't we paying for zone redundancy?" This lesson is about answering both kinds of question with data: **what does it cost, and what does it buy**.
+**FarmLens** is a SaaS platform for agri-businesses: field agents walk farms every morning, upload crop photos and drone images, the platform tiles the imagery into zoomable field maps, spots pest and water stress, and generates a daily crop-health report for each farm, which goes to clients such as crop insurers, seed companies and food processors. About 300 agri-business organisations (farmer cooperatives, insurers, contract-farming companies) use it. In July the Azure bill was ₹3.1 lakh. In October it was ₹5.4 lakh, revenue had grown by only 12 %, and nobody could say why. The finance head asked three questions: "What are we paying for? Which customers cost us the most? Why did it jump?" A week later a zone-level outage in the region took the single-zone PostgreSQL server down for 70 minutes during the morning report rush, and the CTO asked the opposite question: "Why aren't we paying for zone redundancy?" This lesson is about answering both kinds of question with data: **what does it cost, and what does it buy**.
 
 ## Learning objectives
 
@@ -32,7 +32,7 @@ By the end of this lesson you will be able to:
 
 1. Make cloud spend visible and attributable with a tagging standard, cost exports and allocation of shared costs.
 2. Set budgets with actual and forecast alerts, and explain what budgets do and don't do.
-3. Express cost as unit economics (₹ per report, per tenant, per GB) and use it to make design decisions.
+3. Express cost as unit economics (₹ per crop report, per tenant, per GB) and use it to make design decisions.
 4. Find and act on the main cost drivers: over-sized compute, always-on non-production, log ingestion, storage tiers, egress, idle resources, and commitment discounts.
 5. Detect cost anomalies with a robust statistical method (median and MAD) and implement it in C#.
 6. Trade reliability against cost using SLOs, composite availability arithmetic and the cost of downtime, and decide when zone or region redundancy is worth paying for.
@@ -74,14 +74,14 @@ The fix is not a one-time clean-up but a loop. The FinOps Framework describes it
 
 ### Inform: tags and allocation
 
-Tags are key-value labels on resources (and resource groups) that appear in cost data. A minimal standard for SitePulse:
+Tags are key-value labels on resources (and resource groups) that appear in cost data. A minimal standard for FarmLens:
 
 | Tag | Example | Why |
 |---|---|---|
 | `environment` | `prod`, `staging`, `dev` | Separate production cost from everything else |
-| `workload` | `sitepulse-imagery` | Which product or component |
+| `workload` | `farmlens-imagery` | Which product or component |
 | `costCentre` | `ENG-PLATFORM-02` | Who pays (showback or chargeback) |
-| `owner` | `imagery-team@sitepulse.example` | Who to ask about a resource |
+| `owner` | `imagery-team@farmlens.example` | Who to ask about a resource |
 | `managedBy` | `bicep` | Whether it is safe to change by hand (it isn't) |
 
 Rules that make tags work:
@@ -112,8 +112,8 @@ Azure Cost Management also offers **anomaly alerts** on subscriptions. They are 
 | Metric | July | October |
 |---|---|---|
 | Total cost | ₹3,10,000 | ₹5,40,000 |
-| DPRs generated | 62,000 | 70,000 |
-| Cost per DPR | ₹5.00 | ₹7.71 |
+| Crop reports generated | 62,000 | 70,000 |
+| Cost per crop report | ₹5.00 | ₹7.71 |
 | Imagery GB processed | 18,500 | 21,000 |
 | Cost per imagery GB | ₹16.8 | ₹25.7 |
 
@@ -160,7 +160,7 @@ Cost data usually arrives with a delay (often several hours to a day, and can be
 
 ### Reliability costs money, so decide with numbers
 
-Every reliability feature has a price. For SitePulse:
+Every reliability feature has a price. For FarmLens:
 
 | Feature | What it protects against | Rough cost effect (estimate) |
 |---|---|---|
@@ -180,9 +180,9 @@ Decide with three numbers: the **SLO**, the **availability** each design can ach
   - Single-zone database: 0.9995 × 0.999 ≈ 0.9985, about 99.85 %, which allows about 0.0015 × 43,800 minutes ≈ 66 minutes of downtime a month (a month is about 43,800 minutes).
   - Zone-redundant database: 0.9995 × 0.9999 ≈ 0.9994, about 99.94 %, about 26 minutes a month.
 
-If SitePulse's SLO is 99.9 % (about 44 minutes a month), the single-zone design **can't meet it on paper**, which matches the 70-minute outage. Zone-redundant HA can.
+If FarmLens's SLO is 99.9 % (about 44 minutes a month), the single-zone design **can't meet it on paper**, which matches the 70-minute outage. Zone-redundant HA can.
 
-**Cost of downtime** (estimate): during the morning rush, about 1,200 DPR submissions an hour are blocked; contracts include service credits of, say, 5 % of the monthly fee when availability drops below 99.9 %; and contractors' site teams wait. If one 70-minute outage triggers credits worth ₹1.5 lakh plus support effort and churn risk, while zone-redundant HA adds perhaps ₹35,000 a month to the database bill (estimate; price it for your SKU), the decision is easy. For a dev environment the answer is the opposite: no HA, scale to zero.
+**Cost of downtime** (estimate): during the morning rush, about 1,200 report submissions an hour are blocked; contracts include service credits of, say, 5 % of the monthly fee when availability drops below 99.9 %; and field agents stand in farms unable to submit, while insurers' claim decisions wait. If one 70-minute outage triggers credits worth ₹1.5 lakh plus support effort and churn risk, while zone-redundant HA adds perhaps ₹35,000 a month to the database bill (estimate; price it for your SKU), the decision is easy. For a dev environment the answer is the opposite: no HA, scale to zero.
 
 The general rule: **spend on reliability where the SLO and the cost of downtime justify it, and save everywhere else.** Error budgets connect the two: if you consistently use only 10 % of your error budget, you may be over-paying for reliability; if you keep exhausting it, invest.
 
@@ -194,7 +194,7 @@ Some of the best reliability improvements are cheap:
 - **Timeouts, retries with backoff and circuit breakers** so dependency blips don't cascade.
 - **Autoscaling with sensible minimums and maximums**, and checking **subscription quotas** (vCPU limits per region) so a scale-out isn't blocked during a spike.
 - **Tested restores**: a backup that has never been restored is a hope, not a plan ([backups and DR](#/lesson/m14-dr)).
-- **Load shedding** for non-critical work (thumbnail generation can wait; DPR submission can't).
+- **Load shedding** for non-critical work (thumbnail generation can wait; report submission can't).
 - **Chaos experiments** in staging to verify the redundancy you pay for actually works ([chaos engineering](#/lesson/m14-chaos)).
 
 ### Free and open-source alternatives for practice
@@ -286,7 +286,7 @@ Group by service and compare July with October:
 | Bandwidth (egress) | ₹21,000 | ₹46,000 | +₹25,000 |
 | Other | ₹34,000 | ₹50,000 | +₹16,000 |
 
-Three causes explain most of the ₹2.3 lakh increase: verbose logging in the imagery worker since a September release, raw drone uploads kept in the hot tier after processing, and imagery tiles served directly from storage rather than through a CDN.
+Three causes explain most of the ₹2.3 lakh increase: verbose logging in the imagery worker since a September release, raw drone and photo uploads kept in the hot tier after processing, and imagery tiles served directly from storage rather than through a CDN.
 
 ### Step 4: fix the causes, not the symptoms
 
@@ -298,12 +298,12 @@ Calculate composite availability for the current and zone-redundant database des
 
 ### Step 6: operate
 
-Budget ₹4.2 lakh with forecast alerts at 90 % and 100 %; the anomaly job runs daily; unit costs per DPR and per imagery GB go on the monthly engineering review.
+Budget ₹4.2 lakh with forecast alerts at 90 % and 100 %; the anomaly job runs daily; unit costs per crop report and per imagery GB go on the monthly engineering review.
 
 ## Production-style C# implementation
 
 ```csharp file=Costs/CostModel.cs
-namespace SitePulse.Costs;
+namespace FarmLens.Costs;
 
 /// <summary>One row of a daily cost export (simplified). Tags as exported, keys case-insensitive.</summary>
 public sealed record CostRecord(DateOnly Date, string Service, string ResourceId, decimal CostInr, IReadOnlyDictionary<string, string> Tags);
@@ -359,7 +359,7 @@ public sealed class LogAlertSink(ILogger<LogAlertSink> log) : IAlertSink
 ```csharp file=Costs/CostAnomalyDetector.cs
 using Microsoft.Extensions.Options;
 
-namespace SitePulse.Costs;
+namespace FarmLens.Costs;
 
 public sealed class AnomalyOptions
 {
@@ -436,7 +436,7 @@ public sealed class CostAnomalyDetector(IOptions<AnomalyOptions> options)
 ```
 
 ```csharp file=Costs/BudgetForecaster.cs
-namespace SitePulse.Costs;
+namespace FarmLens.Costs;
 
 public sealed record BudgetStatus(
     decimal MonthToDateInr,
@@ -477,13 +477,13 @@ public static class BudgetForecaster
 ```csharp file=Costs/UsageMetrics.cs
 using System.Diagnostics.Metrics;
 
-namespace SitePulse.Costs;
+namespace FarmLens.Costs;
 
 /// <summary>Business units for unit economics, per tenant. Exported by OpenTelemetry (or scraped
-/// by Prometheus locally) and joined with cost data: cost per DPR, cost per imagery GB.</summary>
+/// by Prometheus locally) and joined with cost data: cost per crop report, cost per imagery GB.</summary>
 public sealed class UsageMetrics
 {
-    public const string MeterName = "SitePulse.Usage";
+    public const string MeterName = "FarmLens.Usage";
 
     private readonly Counter<long> _reports;
     private readonly Counter<long> _imageryBytes;
@@ -491,8 +491,8 @@ public sealed class UsageMetrics
     public UsageMetrics(IMeterFactory meterFactory)
     {
         var meter = meterFactory.Create(MeterName);
-        _reports = meter.CreateCounter<long>("sitepulse.dpr.generated", unit: "{report}", description: "Daily progress reports generated");
-        _imageryBytes = meter.CreateCounter<long>("sitepulse.imagery.processed", unit: "By", description: "Imagery bytes processed");
+        _reports = meter.CreateCounter<long>("farmlens.report.generated", unit: "{report}", description: "Daily crop-health reports generated");
+        _imageryBytes = meter.CreateCounter<long>("farmlens.imagery.processed", unit: "By", description: "Imagery bytes processed");
     }
 
     // Keep the tenant dimension bounded (about 300 tenants). Never tag with user ids or URLs.
@@ -507,7 +507,7 @@ public sealed class UsageMetrics
 ```csharp file=Costs/CostWatchService.cs
 using Microsoft.Extensions.Options;
 
-namespace SitePulse.Costs;
+namespace FarmLens.Costs;
 
 public sealed class CostWatchOptions
 {
@@ -563,7 +563,7 @@ public sealed class CostWatchService(
 ```
 
 ```csharp file=Program.cs
-using SitePulse.Costs;
+using FarmLens.Costs;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -587,7 +587,7 @@ builder.Services.AddSingleton<UsageMetrics>();
 var app = builder.Build();
 
 // Business endpoints count the units that drive cost.
-app.MapPost("/api/tenants/{tenantId}/dpr", (string tenantId, UsageMetrics usage) =>
+app.MapPost("/api/tenants/{tenantId}/reports", (string tenantId, UsageMetrics usage) =>
 {
     usage.ReportGenerated(tenantId);
     return Results.Accepted(value: new { tenantId, status = "queued" });
@@ -613,15 +613,15 @@ app.Run();
 ```bicep
 // Budget with actual and forecast alerts, deployed with the environment (resource group scope)
 resource budget 'Microsoft.Consumption/budgets@2023-05-01' = {
-  name: 'budget-sitepulse-prd'
+  name: 'budget-farmlens-prd'
   properties: {
     category: 'Cost'
     amount: 420000
     timeGrain: 'Monthly'
     timePeriod: { startDate: '2026-11-01' }
     notifications: {
-      actual80: { enabled: true, operator: 'GreaterThanOrEqualTo', threshold: 80, thresholdType: 'Actual', contactEmails: ['finops@sitepulse.example'] }
-      forecast100: { enabled: true, operator: 'GreaterThanOrEqualTo', threshold: 100, thresholdType: 'Forecasted', contactEmails: ['finops@sitepulse.example', 'cto@sitepulse.example'] }
+      actual80: { enabled: true, operator: 'GreaterThanOrEqualTo', threshold: 80, thresholdType: 'Actual', contactEmails: ['finops@farmlens.example'] }
+      forecast100: { enabled: true, operator: 'GreaterThanOrEqualTo', threshold: 100, thresholdType: 'Forecasted', contactEmails: ['finops@farmlens.example', 'cto@farmlens.example'] }
     }
   }
 }
@@ -651,7 +651,7 @@ resource budget 'Microsoft.Consumption/budgets@2023-05-01' = {
 # Local practice: Prometheus and Grafana for per-tenant usage (no cloud account)
 services:
   api:
-    image: sitepulse-api:dev
+    image: farmlens-api:dev
     environment:
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       Costs__ExportPath: "/data/cost-export.csv"
@@ -684,14 +684,14 @@ Design notes:
 - One budget at 100 % actual, emails go to a shared mailbox
 - Dev and staging are clones of production, running 24x7, zone redundant
 - Log level Debug in production "to help support", 90-day retention on everything
-- All drone imagery kept in the hot tier forever
+- All drone imagery and raw photos kept in the hot tier forever
 - Reservations bought for the peak, now 40 % unused
 - Zone redundancy rejected as "too expensive" without knowing the SLO or the cost of downtime
 ```
 
 What goes wrong: nobody can say which feature or customer drives cost. The alert arrives after the money is spent, and nobody reads it. Non-production costs as much as production. Logging becomes the largest line item. Storage grows forever. Commitments waste money. The first zone outage breaches the SLA and costs more in credits than redundancy would have.
 
-**Good**: required tags enforced by policy and set by IaC; untagged spend measured and kept small; budgets with forecast alerts routed to named owners; daily anomaly detection per service; unit costs per DPR and per GB reviewed monthly; non-production scaled to zero or scheduled; sensible log levels, sampling and retention; storage lifecycle rules; commitments sized to the steady baseline; reliability spend decided per environment from SLOs, availability arithmetic and the cost of downtime.
+**Good**: required tags enforced by policy and set by IaC; untagged spend measured and kept small; budgets with forecast alerts routed to named owners; daily anomaly detection per service; unit costs per crop report and per GB reviewed monthly; non-production scaled to zero or scheduled; sensible log levels, sampling and retention; storage lifecycle rules; commitments sized to the steady baseline; reliability spend decided per environment from SLOs, availability arithmetic and the cost of downtime.
 
 :::callout type=warning title="Budgets don't stop spending"
 For most Azure subscriptions a budget only alerts. Treat it as a smoke detector, not a sprinkler. If you need automatic action, wire an action group to a runbook that scales down non-production, and keep production changes in human hands.
@@ -710,18 +710,18 @@ The simulator shows an autoscaled service during a traffic spike. Use it to see 
 3. Lower `targetUtil` from 0.7 to 0.5. Drops fall and cost rises. Which matches a 99.9 % SLO better?
 4. Increase `provisionSec` to 180 (slow cold starts). How much extra minimum capacity does that force you to pay for?
 
-:::playground type=sim sim=scaling title="Cost versus dropped requests during the morning DPR rush" instances=3 capacityPerInstance=120 provisionSec=60 cooldownSec=60 spikeMultiplier=3 targetUtil=0.7 maxInstances=20
+:::playground type=sim sim=scaling title="Cost versus dropped requests during the morning report rush" instances=3 capacityPerInstance=120 provisionSec=60 cooldownSec=60 spikeMultiplier=3 targetUtil=0.7 maxInstances=20
 :::
 
 ## Exercises
 
 :::exercise id=m15-cost-reliability-ex1 difficulty=beginner kind=written title="Find the savings in a cost breakdown"
-SitePulse's October bill is ₹5,40,000. Using the table and facts below, propose the **five** most valuable actions. For each, estimate the monthly saving in rupees (show the arithmetic), name the trade-off, and say how you'd verify the saving.
+FarmLens's October bill is ₹5,40,000. Using the table and facts below, propose the **five** most valuable actions. For each, estimate the monthly saving in rupees (show the arithmetic), name the trade-off, and say how you'd verify the saving.
 
 | Line item | October | Facts |
 |---|---|---|
 | Log Analytics ingestion | ₹1,52,000 | Imagery worker logs at Debug since 12 Sep; 70 % of ingested GB come from it |
-| Blob Storage (hot) | ₹1,08,000 | 62 % of stored data is raw drone uploads older than 30 days, never read after processing |
+| Blob Storage (hot) | ₹1,08,000 | 62 % of stored data is raw drone and photo uploads older than 30 days, never read after processing |
 | Container Apps (prod) | ₹96,000 | 6 replicas minimum, p95 CPU 22 % outside 08:00–11:00 |
 | PostgreSQL (prod) | ₹88,000 | 8 vCores, p95 CPU 18 %, buffer cache hit ratio 99.6 % |
 | Dev and staging (all services) | ₹50,000 | Run 24×7; used about 10 hours on weekdays |
@@ -744,11 +744,11 @@ All figures are estimates to be verified against the next month's cost data.
 
 1. **Fix imagery-worker logging** (largest win). 70 % of ₹1,52,000 ≈ ₹1,06,000 comes from one component logging at Debug. Return it to Information, sample verbose categories, and move high-volume diagnostic logs to a cheaper log tier or shorter retention. If that component's volume drops by 85 %, saving ≈ ₹1,06,000 × 0.85 ≈ **₹90,000/month**. Trade-off: less detail during incidents; mitigate with dynamic log levels that can be raised temporarily. Verify: ingested GB per day by table and by component, and the Log Analytics line.
 2. **Lifecycle rule for raw uploads.** 62 % of ₹1,08,000 ≈ ₹67,000 is raw uploads older than 30 days. Moving them to cool (assume about half the per-GB price) saves about ₹33,000; deleting them after 180 days (keeping processed tiles) saves more over time. Estimate **₹33,000–45,000/month** within two months. Trade-off: retrieval charges and latency if anyone needs a raw file; deletion is irreversible, so agree retention with customers. Verify: capacity per tier and the storage line.
-3. **CDN for imagery tiles.** 80 % of ₹46,000 ≈ ₹37,000 is tile downloads. With a CDN and a high hit ratio, origin egress drops sharply, but CDN delivery has its own cost. Net saving perhaps **₹10,000–20,000/month** (estimate; depends on hit ratio and CDN pricing), plus faster tile loading for sites far from the region. Trade-off: cache invalidation when tiles are regenerated (use versioned URLs). Verify: origin egress GB and CDN hit ratio.
+3. **CDN for imagery tiles.** 80 % of ₹46,000 ≈ ₹37,000 is tile downloads. With a CDN and a high hit ratio, origin egress drops sharply, but CDN delivery has its own cost. Net saving perhaps **₹10,000–20,000/month** (estimate; depends on hit ratio and CDN pricing), plus faster tile loading for users far from the region. Trade-off: cache invalidation when tiles are regenerated (use versioned URLs). Verify: origin egress GB and CDN hit ratio.
 4. **Schedule dev and staging.** Running 50 of 168 hours saves about 70 % of running time. If about two-thirds of ₹50,000 is compute that stops, saving ≈ ₹50,000 × 0.67 × 0.70 ≈ **₹23,000/month**. Trade-off: morning start-up delay and a process for out-of-hours testing. Verify: the cost of resources tagged `environment=dev|staging`.
 5. **Right-size production compute, carefully.** Container Apps: lower minimum replicas from 6 to 3 outside 08:00–11:00 with scheduled or metric-based scaling for the rush; if half the replica-hours go, saving ≈ ₹96,000 × 0.4 ≈ **₹38,000/month** (estimate). PostgreSQL: CPU p95 is 18 %, but the 99.6 % cache hit ratio depends on memory, and General Purpose sizes tie memory to vCores. Test 8 → 4 vCores in staging with production-like data and load; only proceed if the hit ratio and p95 query latency hold. If they do, saving ≈ ₹40,000/month, but that money may be better spent on zone-redundant HA (see the reliability decision). Verify: replica-hours, p95 latency, cache hit ratio, and the SLO.
 
-Together, roughly ₹1.9–2.1 lakh a month, bringing the bill back near ₹3.4 lakh, with cost per DPR back to about ₹4.9.
+Together, roughly ₹1.9–2.1 lakh a month, bringing the bill back near ₹3.4 lakh, with cost per crop report back to about ₹4.9.
 ::mistakes
 - Proposing reservations first. Commit only after removing waste, or you commit to the waste.
 - Downsizing the database on CPU alone.
@@ -909,7 +909,7 @@ Here 63 % of spend is non-compliant even though only two of three resources fail
 :::
 
 :::exercise id=m15-cost-reliability-ex3 difficulty=intermediate kind=code title="Allocate shared costs to tenants, to the paisa"
-The shared imagery cluster and Log Analytics cost ₹48,750.00 this month. Allocate it to tenants in proportion to DPRs generated, so that:
+The shared imagery cluster and Log Analytics cost ₹48,750.00 this month. Allocate it to tenants in proportion to crop reports generated, so that:
 
 - Each tenant's share is in rupees with exactly two decimals (paise).
 - The shares add up to **exactly** the shared cost.
@@ -952,13 +952,13 @@ public class SharedCostAllocatorTests
     {
         var shares = SharedCostAllocator.Allocate(48_750.00m, new Dictionary<string, long>
         {
-            ["nhai-pkg-4"] = 12_400,
-            ["metro-ph2"] = 7_900,
-            ["smartcity-ward"] = 2_100,
+            ["kisan-coop-12"] = 12_400,
+            ["orchard-insure"] = 7_900,
+            ["agriseed-west"] = 2_100,
         });
-        Assert.Equal(26_986.61m, shares["nhai-pkg-4"]);
-        Assert.Equal(17_193.08m, shares["metro-ph2"]);
-        Assert.Equal(4_570.31m, shares["smartcity-ward"]);
+        Assert.Equal(26_986.61m, shares["kisan-coop-12"]);
+        Assert.Equal(17_193.08m, shares["orchard-insure"]);
+        Assert.Equal(4_570.31m, shares["agriseed-west"]);
         Assert.Equal(48_750.00m, shares.Values.Sum());
     }
 
@@ -1041,7 +1041,7 @@ public static class SharedCostAllocator
 }
 ```
 
-For SitePulse: nhai-pkg-4's exact share is 2,698,660.714 paise, metro-ph2's 1,719,308.036 and smartcity-ward's 457,031.25. The floors sum to 4,874,999, one paisa short; nhai-pkg-4 has the largest remainder (0.714) and gets it. Finance can now issue showback reports whose lines add up to the invoice, which is the first thing finance checks.
+For FarmLens: kisan-coop-12's exact share is 2,698,660.714 paise, orchard-insure's 1,719,308.036 and agriseed-west's 457,031.25. The floors sum to 4,874,999, one paisa short; kisan-coop-12 has the largest remainder (0.714) and gets it. Finance can now issue showback reports whose lines add up to the invoice, which is the first thing finance checks.
 ::alternatives
 Allocate by a weighted mix of drivers (for example 60 % by CPU-seconds, 40 % by GB stored) when one driver doesn't reflect cost well. Keep the method simple enough to explain to a customer, especially if allocation feeds chargeback or pricing.
 ::mistakes
@@ -1178,7 +1178,7 @@ The F4 is cheaper than D4 but fails the first case on memory (6.5 GB > 8 × 0.7 
 :::
 
 :::exercise id=m15-cost-reliability-ex5 difficulty=advanced kind=code title="Anomalies that respect the weekly pattern"
-SitePulse's costs follow a weekly cycle: Sundays are quiet, Mondays busy. Implement a detector that compares each service's cost on `day` with the **same weekday** in the previous `weeks` weeks:
+FarmLens's costs follow a weekly cycle: Sundays are quiet, Mondays busy. Implement a detector that compares each service's cost on `day` with the **same weekday** in the previous `weeks` weeks:
 
 - Sum costs per service per date first (a service can have several rows a day).
 - For each service with cost on `day` (in ordinal order):
@@ -1349,7 +1349,7 @@ Seasonal decomposition (separating trend, weekly cycle and residual) or forecast
 :::
 
 :::exercise id=m15-cost-reliability-ex6 difficulty=intermediate kind=hld title="Reliability you can justify"
-SitePulse's SLO is 99.9 % monthly availability for DPR submission; contracts give 5 % service credits when it's missed. Today: one region, app with 3 replicas across zones, single-zone PostgreSQL, Blob Storage with locally redundant storage, no CDN. A zone outage caused 70 minutes of downtime last month. Design the production reliability architecture for the next year, and justify each reliability feature with availability arithmetic, the cost of downtime, or both. Also say what you would **not** buy yet, and why.
+FarmLens's SLO is 99.9 % monthly availability for crop-report submission; contracts give 5 % service credits when it's missed. Today: one region, app with 3 replicas across zones, single-zone PostgreSQL, Blob Storage with locally redundant storage, no CDN. A zone outage caused 70 minutes of downtime last month. Design the production reliability architecture for the next year, and justify each reliability feature with availability arithmetic, the cost of downtime, or both. Also say what you would **not** buy yet, and why.
 ::acceptance
 - Shows composite availability for the current and proposed designs (with stated assumptions) against 99.9 % (about 44 minutes a month).
 - Adds zone-redundant HA for PostgreSQL and zone-redundant storage with a cost estimate, labelled as an estimate.
@@ -1366,8 +1366,8 @@ A warm standby region nearly doubles cost. What RTO does the business actually n
 ```json
 {
   "nodes": [
-    { "id": "users", "type": "client", "label": "Site engineers and client reviewers", "props": { "rps": 40 } },
-    { "id": "app", "type": "app-server", "label": "SitePulse API (3 replicas across zones)", "props": { "instances": 3, "multiAz": true } },
+    { "id": "users", "type": "client", "label": "Field agents and client reviewers", "props": { "rps": 40 } },
+    { "id": "app", "type": "app-server", "label": "FarmLens API (3 replicas across zones)", "props": { "instances": 3, "multiAz": true } },
     { "id": "pg", "type": "database", "label": "PostgreSQL single zone" },
     { "id": "blob", "type": "object-storage", "label": "Blob Storage LRS (imagery)" }
   ],
@@ -1382,11 +1382,11 @@ A warm standby region nearly doubles cost. What RTO does the business actually n
 ```json
 {
   "nodes": [
-    { "id": "users", "type": "client", "label": "Site engineers and client reviewers", "props": { "rps": 40 } },
+    { "id": "users", "type": "client", "label": "Field agents and client reviewers", "props": { "rps": 40 } },
     { "id": "cdn", "type": "cdn", "label": "CDN for imagery tiles and report PDFs (versioned URLs)" },
-    { "id": "app", "type": "app-server", "label": "SitePulse API, 3+ replicas across 3 zones, autoscale 3-12", "props": { "instances": 3, "multiAz": true } },
+    { "id": "app", "type": "app-server", "label": "FarmLens API, 3+ replicas across 3 zones, autoscale 3-12", "props": { "instances": 3, "multiAz": true } },
     { "id": "worker", "type": "worker", "label": "Imagery workers on spot capacity, checkpointing", "props": { "instances": 4 } },
-    { "id": "q", "type": "queue", "label": "Job queue (tiling, DPR PDFs): shed or delay under load" },
+    { "id": "q", "type": "queue", "label": "Job queue (tiling, report PDFs): shed or delay under load" },
     { "id": "pg", "type": "database", "label": "PostgreSQL zone-redundant HA, geo-redundant backups", "props": { "replicas": 1, "multiAz": true } },
     { "id": "blob", "type": "object-storage", "label": "Blob Storage ZRS, lifecycle to cool after 30 days", "props": { "multiAz": true } },
     { "id": "dr", "type": "object-storage", "label": "DR: IaC for second region + geo-restore runbook, drilled twice a year", "props": { "region": "secondary" } },
@@ -1394,7 +1394,7 @@ A warm standby region nearly doubles cost. What RTO does the business actually n
   ],
   "edges": [
     { "from": "users", "to": "cdn", "kind": "sync" },
-    { "from": "users", "to": "app", "kind": "sync", "label": "DPR submission (SLO path)" },
+    { "from": "users", "to": "app", "kind": "sync", "label": "Report submission (SLO path)" },
     { "from": "cdn", "to": "blob", "kind": "sync" },
     { "from": "app", "to": "pg", "kind": "sync" },
     { "from": "app", "to": "blob", "kind": "sync" },
@@ -1410,7 +1410,7 @@ A warm standby region nearly doubles cost. What RTO does the business actually n
 **Availability (assumptions for illustration; use current published SLAs and your own measurements).** App across zones 99.95 %, single-zone database 99.9 %, zone-redundant database 99.99 %, storage 99.9 % for reads that the SLO path needs (assumed similar for LRS and ZRS on the SLA, but ZRS survives a zone loss, which is the failure we actually saw).
 
 - Current: 0.9995 × 0.999 × 0.999 ≈ 0.9975, about 99.75 %, roughly 110 minutes a month allowed by the components' own targets. The SLO of 99.9 % (about 44 minutes) can't be met on paper, and the 70-minute zone outage confirms it.
-- Proposed: 0.9995 × 0.9999 × 0.999 ≈ 0.9984 on paper, and in practice a zone loss no longer takes down the database or storage, which removes the failure mode that actually happened. DPR submission can also tolerate short storage blips by queueing photo uploads, which takes storage partly off the synchronous path.
+- Proposed: 0.9995 × 0.9999 × 0.999 ≈ 0.9984 on paper, and in practice a zone loss no longer takes down the database or storage, which removes the failure mode that actually happened. Report submission can also tolerate short storage blips by queueing photo uploads, which takes storage partly off the synchronous path.
 
 **Cost of downtime versus redundancy (estimates).** Missing the SLO triggers 5 % credits: on monthly revenue of, say, ₹30 lakh, that's ₹1.5 lakh, plus support load and churn risk. Zone-redundant HA roughly doubles database compute: on ₹88,000, about +₹80,000 a month (or less after right-sizing to 4 vCores, about +₹40,000). ZRS costs somewhat more per GB than LRS, partly offset by lifecycle tiering. One avoided SLO breach every few months pays for both.
 
@@ -1435,7 +1435,7 @@ A warm standby region nearly doubles cost. What RTO does the business actually n
 
 **4. Policy tests.** Deploy a resource without required tags into a test resource group and assert that Azure Policy denies it or appends the tags.
 
-**5. Metric tests.** With `MeterListener` (or the `Microsoft.Extensions.Diagnostics.Testing` metric collector, if available in your setup), assert that calling the DPR endpoint records one `sitepulse.dpr.generated` measurement with the right `tenant` tag.
+**5. Metric tests.** With `MeterListener` (or the `Microsoft.Extensions.Diagnostics.Testing` metric collector, if available in your setup), assert that calling the report endpoint records one `farmlens.report.generated` measurement with the right `tenant` tag.
 
 **6. Reliability tests.** Chaos experiments in staging that stop a zone's instances or fail over the database, verifying that the redundancy you pay for works, and restore drills that measure real RTO.
 
@@ -1444,7 +1444,7 @@ A warm standby region nearly doubles cost. What RTO does the business actually n
 - **FinOps teams** in large organisations run the inform, optimise and operate loop: tagging standards, showback dashboards per team, monthly reviews of unit costs, and central purchasing of reservations and savings plans for the steady baseline.
 - **SaaS companies** track cost per tenant and gross margin per plan; tenants whose usage makes them unprofitable lead to plan changes or usage-based pricing.
 - **Kubernetes users** commonly use OpenCost or similar tools to allocate cluster cost by namespace and label, because node-level bills don't map to teams.
-- **Public-sector and infrastructure clients** often require cost reports per project or package (for example per highway package or metro phase), which is the same tag-and-allocate technique.
+- **Enterprise and public-sector clients** often require cost reports per business unit, contract or scheme (for example per crop-insurance scheme or per state), which is the same tag-and-allocate technique.
 - **Reliability decisions** in mature teams are written as SLOs with error budgets; spending on redundancy is justified when the error budget is under pressure, and reduced when it is consistently unused.
 
 ## Interview questions
@@ -1483,7 +1483,7 @@ Start from the SLO and the cost of missing it. Compute composite availability fo
 - Cloud costs drift upward by default; manage them in a continuous loop: inform, optimise, operate.
 - Tag everything in IaC, enforce with policy, measure untagged spend in money, and allocate shared costs by usage with exact rounding.
 - Budgets alert, they don't cap. Use forecast thresholds and route alerts to owners.
-- Unit economics (₹ per DPR, per tenant, per GB) show efficiency; the app must emit the driver metrics.
+- Unit economics (₹ per crop report, per tenant, per GB) show efficiency; the app must emit the driver metrics.
 - The big levers: logging volume, storage tiers and lifecycle, CDN for egress, non-production schedules, right-sizing on p95 with headroom, commitments for the steady baseline, spot for batch.
 - Detect anomalies with median and MAD, same-weekday baselines and a money floor; evaluate yesterday because cost data lags.
 - Reliability costs money: decide with SLOs, composite availability arithmetic and the cost of downtime. Buy redundancy where it pays (production database HA), save elsewhere (non-production).
@@ -1516,12 +1516,12 @@ A: When the SLO can't be met without it and the expected cost of downtime exceed
 
 :::quiz pass=70
 ::q single
-The bill rose 74 % while DPR volume rose 13 %. What does this tell you first?
+The bill rose 74 % while report volume rose 13 %. What does this tell you first?
 - [ ] Growth explains the increase.
 - [x] Cost per unit rose sharply, so the system became less efficient. Look for waste or a design change.
 - [ ] The cloud provider raised prices.
 - [ ] Nothing until the next month's bill.
-> Unit economics separates "more business" from "less efficient". Here cost per DPR rose by about half.
+> Unit economics separates "more business" from "less efficient". Here cost per crop report rose by about half.
 ::q single
 A budget of ₹4.2 lakh has an alert at 100 % actual. What happens when spend reaches ₹4.2 lakh?
 - [ ] Azure stops all resources in the subscription.
@@ -1544,7 +1544,7 @@ Which are good reasons not to downsize the production database from 8 to 4 vCore
 - [x] It should be tested in staging with production-like load and applied through IaC with a revert path.
 > Right-size on CPU and memory, over a representative period, with a test and a rollback plan.
 ::q single
-App availability 99.95 % and single-zone database 99.9 % are both required for DPR submission. Roughly what composite availability can you expect?
+App availability 99.95 % and single-zone database 99.9 % are both required for report submission. Roughly what composite availability can you expect?
 - [ ] 99.95 %
 - [ ] 99.9 %
 - [x] About 99.85 %
@@ -1556,9 +1556,9 @@ Imagery tile downloads make up most of the egress bill. What is the most effecti
 - [x] Serve tiles through a CDN with versioned URLs, so most downloads are served from the edge.
 - [ ] Compress the database.
 - [ ] Buy a reservation for bandwidth.
-> A CDN cuts origin egress and improves latency for distant sites; archive tier would make tiles slow and costly to read.
+> A CDN cuts origin egress and improves latency for distant users; archive tier would make tiles slow and costly to read.
 ::q single
-Which reliability purchase should SitePulse defer?
+Which reliability purchase should FarmLens defer?
 - [ ] Zone-redundant HA for the production database.
 - [ ] Zone-redundant storage for imagery.
 - [x] A warm standby in a second region, until contracts require regional failover; keep IaC and tested geo-restore instead.

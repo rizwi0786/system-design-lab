@@ -144,6 +144,7 @@ The core above fits in a few hundred lines. Production Raft adds much more:
 - **Snapshots and log compaction**, so the log does not grow forever and a new node can catch up from a snapshot.
 - **Membership changes** (adding or removing nodes) using joint consensus or one-server-at-a-time changes; doing it naively can create two disjoint majorities.
 - **PreVote**: a node that was partitioned keeps incrementing its term; when it returns, its huge term forces a healthy leader to step down. PreVote asks "would you vote for me?" without bumping the term first.
+- **Exactly-once client commands.** If a leader commits a command and crashes before replying, the client retries against the new leader and the command is applied twice. Section 8 of the Raft paper has clients tag each command with a client id and sequence number, and the state machine remembers the last result per client so duplicates are answered, not re-applied.
 - **Leadership transfer, batching, pipelining, flow control, disk-full handling and checksums.**
 
 Each of these has caused real bugs in mature implementations. That is the strongest argument for the final section of this explanation.
@@ -1258,7 +1259,7 @@ These two invariants (election safety and state-machine safety) are the ones the
 ## Real-world application
 
 - **etcd** stores all Kubernetes cluster state. Every `kubectl apply` is a Raft write; controllers use `Lease` objects for leader election and fencing.
-- **ZooKeeper** (ZAB protocol, similar in spirit to Raft) coordinated Kafka metadata for years; Kafka now uses **KRaft**, its own Raft-based controller quorum, which removed the separate ZooKeeper dependency.
+- **ZooKeeper** (ZAB protocol, similar in spirit to Raft) coordinated Kafka metadata for years; Kafka now uses **KRaft**, its own Raft-based controller quorum, and Kafka 4.0 removed ZooKeeper mode entirely.
 - **CockroachDB, YugabyteDB and TiKV** split data into ranges, each replicated by its own Raft group, so consensus orders writes per range while many ranges spread the load.
 - **Consul** uses Raft for its catalogue and key-value store, used for service discovery and configuration.
 - **Single-region PostgreSQL with Patroni** uses a consensus store (etcd, Consul or ZooKeeper) to decide which PostgreSQL node is primary, so the database avoids [split-brain](#/lesson/m13-split-brain).

@@ -7,9 +7,9 @@ status: reviewed
 template: lld-case
 minutes: 95
 prerequisites: [m06-chain-of-responsibility, m06-state, m07-validation-rules, m04-testability]
-related: [m07-extensible-workflows, m16-workflow-engines, m18-order-processing, m14-rbac-pbac, m06-flyweight]
+related: [m07-extensible-workflows, m16-workflow-engines, m18-order-processing, m14-rbac-pbac]
 tags: [lld, chain-of-responsibility, state, approvals, calendars, balances]
-patterns: [Chain of Responsibility, State, Flyweight, Facade]
+patterns: [Chain of Responsibility, State, Facade]
 summary: Design a leave management module with working-day counting per office calendar (including the sandwich rule), reserved and used balances, a Chain of Responsibility that routes requests to the right approvers by authority, and State classes that make illegal moves impossible.
 references:
   - title: Refactoring.Guru — Chain of Responsibility
@@ -22,7 +22,7 @@ references:
     url: https://learn.microsoft.com/dotnet/api/system.timeprovider
 ---
 
-Almost every company builds a leave system at some point, and almost every first version gets the same things wrong: it counts calendar days instead of working days, forgets that site offices have different holidays from head office, lets an employee spend the same balance on two overlapping requests, and hard-codes "manager then HR" so deeply that the first policy change means a rewrite. This case study designs a leave and approval workflow that handles those cases cleanly, using two behavioural patterns that fit the problem almost perfectly: Chain of Responsibility for routing approvals and State for the request lifecycle.
+Almost every company builds a leave system at some point, and almost every first version gets the same things wrong: it counts calendar days instead of working days, forgets that a hospital in Patna has different holidays and work weeks from the corporate office in Gurgaon, lets an employee spend the same balance on two overlapping requests, and hard-codes "manager then HR" so deeply that the first policy change means a rewrite. This case study designs a leave and approval workflow that handles those cases cleanly, using two behavioural patterns that fit the problem almost perfectly: Chain of Responsibility for routing approvals and State for the request lifecycle.
 
 ## Learning objectives
 
@@ -43,9 +43,9 @@ By the end of this case study you will be able to:
 
 ## Explain it like I'm a beginner
 
-Picture a site engineer, Ravi, working on a highway project near Patna. He wants leave to attend a family wedding. He fills in a paper form and it travels:
+Picture Ravi, a lab technician at a CityCare hospital in Patna. He wants leave to attend a family wedding. He fills in a paper form and it travels:
 
-1. To his **project manager**, Meena. She can sign off on short leave (up to 2 working days) herself.
+1. To his **lab manager**, Meena. She can sign off on short leave (up to 2 working days) herself.
 2. If it is longer, Meena signs and passes it to the **department head**, Arjun, who can sign off on up to 5 days.
 3. Anything longer also goes to **HR**, who can approve any length.
 
@@ -55,14 +55,14 @@ The form itself is always in exactly one condition: *waiting for approval*, *app
 
 Two more everyday details matter:
 
-- **Which days count?** At a site office that works six days a week, Saturday is a working day; at head office in Gurgaon it is not. A festival holiday in Bihar is a working day in Haryana. So "how many days is Thursday to Tuesday?" depends on *where* you work.
+- **Which days count?** At the Patna hospital, where the lab works six days a week, Saturday is a working day; at the corporate office in Gurgaon it is not. A festival holiday in Bihar is a working day in Haryana. So "how many days is Thursday to Tuesday?" depends on *where* you work.
 - **Is the leave available?** If Ravi has 12 days of casual leave and applies for 8, then applies for another 8 before the first is approved, the second must be refused. The first request has already "booked" 8 days.
 
 ## Requirements
 
 ### The scenario
 
-An infrastructure consultancy has about 1,800 employees: a head office in Gurgaon and around 40 project offices across states, each with its own holiday list and work week. Leave is managed today by email and spreadsheets; balances are reconciled by HR every month and are often wrong. The new module will be part of the company's internal HR portal (ASP.NET Core, PostgreSQL).
+CityCare, a hospital chain, has about 1,800 employees: a corporate office in Gurgaon and around 40 hospitals and clinics across states, each with its own holiday list and work week. Leave is managed today by email and spreadsheets; balances are reconciled by HR every month and are often wrong. The new module will be part of the chain's internal HR portal (ASP.NET Core, PostgreSQL).
 
 ### Functional requirements
 
@@ -85,7 +85,7 @@ An infrastructure consultancy has about 1,800 employees: a head office in Gurgao
 |---|---|---|
 | N1 | Correct balances | `Used + Reserved <= Entitled + CarriedForward` at all times, even when requests are approved concurrently. |
 | N2 | Auditability | Every decision records who, what, when and why. |
-| N3 | Changeability | Adding an approval level ("Project Director for leave over 10 days") changes configuration and one class, not the lifecycle code. |
+| N3 | Changeability | Adding an approval level ("Medical Director for leave over 10 days") changes configuration and one class, not the lifecycle code. |
 | N4 | Testability | "Today" comes from `TimeProvider`; calendars and the org chart are interfaces. |
 | N5 | Scale | About 1,800 employees and a few hundred requests a day (an estimate). Simplicity beats throughput here. |
 
@@ -98,6 +98,7 @@ An infrastructure consultancy has about 1,800 employees: a head office in Gurgao
 - **Carry forward and encashment?** Year-end jobs outside this module; the balance model has a `CarriedForward` field ready for it.
 - **Leave spanning two years?** Rejected with a message to split it; per-year balances keep the maths simple.
 - **Time zone?** All offices are in India (IST, no daylight saving), so "today" is computed in IST.
+- **Shift rosters?** Ward nurses and doctors work rotating rosters, so their "working days" come from a per-person roster, not the office calendar. Phase 1 covers staff on fixed weekly patterns (lab, pharmacy, administration); because day counting goes through `IWorkCalendars`, a roster-backed calendar can be plugged in later without touching the workflow.
 
 ## Identifying classes and responsibilities
 
@@ -267,7 +268,7 @@ The base class owns the shared algorithm, including the awkward cases:
 | No approver at this level | A department without a head | Skip; the next level must cover it |
 | End of chain reached without authority | HR not configured | `NoEligibleApproverException` (a configuration bug, surfaced loudly) |
 
-**Why a chain rather than a list of rules in one method?** Each level is a small class with one job, so adding "Project Director approves over 10 days" means writing one handler and linking it. The `if (days <= 2) ... else if (days <= 5) ...` alternative works for three levels; it becomes fragile once levels depend on department, leave type or location.
+**Why a chain rather than a list of rules in one method?** Each level is a small class with one job, so adding "Medical Director approves over 10 days" means writing one handler and linking it. The `if (days <= 2) ... else if (days <= 5) ...` alternative works for three levels; it becomes fragile once levels depend on department, leave type or location.
 
 **Why not freeze the route at submission?** Resolving lazily handles people moving roles. The cost: an audit question like "who *would* have approved this?" requires replaying the chain. We store every decision with the approver's id, so "who *did*" is always answerable.
 
@@ -849,8 +850,8 @@ public sealed class LeaveService(IOrgDirectory org, IWorkCalendars calendars, Le
                 throw new LeaveRuleException("These dates overlap another pending or approved leave request.");
 
             var request = new LeaveRequest(Guid.NewGuid(), employee.Id, type, cmd.From, cmd.To, days, cmd.Reason, Now);
+            request.PendingStep = chain.NextStep(request, employee, org);      // may throw on bad org data: nothing reserved yet
             ledger.Reserve(employee.Id, type.Code, cmd.From.Year, days);      // throws if not enough balance
-            request.PendingStep = chain.NextStep(request, employee, org);
             if (request.PendingStep is null)                                    // only if nobody needs to approve
             {
                 request.MoveTo(ApprovedState.Instance);
@@ -928,6 +929,10 @@ public sealed class LeaveService(IOrgDirectory org, IWorkCalendars calendars, Le
 }
 ```
 
+Two details in `Apply` are deliberate. The route is computed *before* the balance is reserved, so a misconfigured org chart (`NoEligibleApproverException`) cannot leave days stuck in `Reserved` with no request to release them. And the overlap check, the reservation and the insert all happen inside one lock, so two browser tabs submitting overlapping requests cannot both pass the check.
+
+What this version does not do is make *decisions* idempotent. If Meena double-clicks Approve, the second call finds the request waiting for Arjun and gets 403 (or 409 once it is approved). Nothing is corrupted, but the UI shows an error for a click that worked. A production API either sends a decision id with each click and replays the stored result, or treats "you already approved this step" as success.
+
 ### Composition root
 
 ```csharp file=Program.cs
@@ -938,14 +943,14 @@ var builder = WebApplication.CreateBuilder(args);
 // Sample data. Holiday names and dates are illustrative; real lists are uploaded by HR per office each year.
 var org = new InMemoryOrgDirectory(
     [
-        new Employee("ravi", "Ravi Kumar", "meena", "highways", "PAT"),
-        new Employee("meena", "Meena Sharma", "arjun", "highways", "PAT"),
-        new Employee("arjun", "Arjun Rao", "md", "highways", "GGN"),
+        new Employee("ravi", "Ravi Kumar", "meena", "diagnostics", "PAT"),
+        new Employee("meena", "Meena Sharma", "arjun", "diagnostics", "PAT"),
+        new Employee("arjun", "Arjun Rao", "md", "diagnostics", "GGN"),
         new Employee("md", "Managing Director", null, "management", "GGN"),
         new Employee("hr-pat", "HR Patna", "hr-head", "hr", "PAT"),
         new Employee("hr-head", "HR Head", "md", "hr", "GGN"),
     ],
-    new Dictionary<string, string> { ["highways"] = "arjun", ["hr"] = "hr-head", ["management"] = "md" },
+    new Dictionary<string, string> { ["diagnostics"] = "arjun", ["hr"] = "hr-head", ["management"] = "md" },
     new Dictionary<string, string> { ["PAT"] = "hr-pat", ["GGN"] = "hr-head" },
     hrHead: "hr-head");
 
@@ -1025,14 +1030,14 @@ public static class TestWorld
     {
         var org = new InMemoryOrgDirectory(
             [
-                new Employee("ravi", "Ravi", "meena", "highways", "PAT"),
-                new Employee("meena", "Meena", "arjun", "highways", "PAT"),
-                new Employee("arjun", "Arjun", "md", "highways", "GGN"),
+                new Employee("ravi", "Ravi", "meena", "diagnostics", "PAT"),
+                new Employee("meena", "Meena", "arjun", "diagnostics", "PAT"),
+                new Employee("arjun", "Arjun", "md", "diagnostics", "GGN"),
                 new Employee("md", "MD", null, "management", "GGN"),
                 new Employee("hr-pat", "HR Patna", "hr-head", "hr", "PAT"),
                 new Employee("hr-head", "HR Head", "md", "hr", "GGN"),
             ],
-            new Dictionary<string, string> { ["highways"] = "arjun", ["hr"] = "hr-head", ["management"] = "md" },
+            new Dictionary<string, string> { ["diagnostics"] = "arjun", ["hr"] = "hr-head", ["management"] = "md" },
             new Dictionary<string, string> { ["PAT"] = "hr-pat", ["GGN"] = "hr-head" },
             "hr-head");
         var ledger = new LeaveLedger();
@@ -1070,7 +1075,7 @@ public class LeaveDayCounterTests
         Assert.Equal(expected, LeaveDayCounter.Count(Nov(from), Nov(to), Gurgaon, sandwich));
 
     [Fact]
-    public void Site_office_works_saturdays_and_has_its_own_holiday()
+    public void Patna_hospital_works_saturdays_and_has_its_own_holiday()
     {
         // Thu 12 to Tue 17: Sun 15 off, Mon 16 regional holiday. Working: 12, 13, 14, 17.
         Assert.Equal(4, LeaveDayCounter.Count(Nov(12), Nov(17), Patna, false));
@@ -1152,7 +1157,7 @@ public class LeaveWorkflowTests
         var (svc, ledger, _) = New();
         var r = svc.Apply(new ApplyLeave("ravi", "CL", Nov(9), Nov(10), "x"));
         Assert.Throws<LeaveRuleException>(() => svc.Reject(r.Id, "meena", " "));
-        svc.Reject(r.Id, "meena", "monsoon concreting window");
+        svc.Reject(r.Id, "meena", "two technicians already on leave that week");
         Assert.Equal(12, ledger.View("ravi", "CL", 2026).Available);
         Assert.Throws<InvalidLeaveTransitionException>(() => svc.Approve(r.Id, "meena"));
     }
@@ -1226,7 +1231,7 @@ public void ApproveLeave(int requestId, int userId)
 What goes wrong:
 
 1. **Calendar days, not working days.** Friday to Monday is charged as 4 days for everyone, and office holidays are ignored.
-2. **Approval levels are baked into status strings.** Adding a "Project Director" level means new statuses and edits in every branch.
+2. **Approval levels are baked into status strings.** Adding a "Medical Director" level means new statuses and edits in every branch.
 3. **Balances change only at final approval.** Two pending requests can both pass the balance check and overspend.
 4. **One balance for all leave types.** Sick leave and earned leave cannot have different rules.
 5. **Silent no-ops.** A wrong approver calling this method changes nothing and gets no error, so the UI shows "approved" while nothing happened.
@@ -1274,7 +1279,7 @@ Keep balances in PostgreSQL with a `CHECK (used + reserved <= entitled + carried
 
 Open the reference model in the LLD designer and try:
 
-1. Add a `ProjectDirectorApproval` handler for leave over 10 days. Where does it go in the chain, and what changes in `HrApproval`?
+1. Add a `MedicalDirectorApproval` handler for leave over 10 days. Where does it go in the chain, and what changes in `HrApproval`?
 2. Add an `OnHoldState` (HR is waiting for documents). Which actions does it allow?
 3. Add a `Delegation` class so an approver on leave can hand their queue to someone else. Which class consults it?
 
@@ -1806,7 +1811,7 @@ classDiagram
 :::exercise id=m18-leave-workflow-ex5 difficulty=advanced kind=code title="State classes with cancellation and curtailment"
 Implement `LeaveApplication` using the **State pattern**: one class per state. Each state allows only its own actions; everything else throws `InvalidOperationException`. Balance effects are applied to an `Account` (provided).
 ::requirements
-- Created with an employee id, dates, a day count, an ordered list of approver ids (the route), and an `Account`. Construction reserves the days.
+- Created with an employee id, dates, a day count, an ordered list of approver ids (the route), and an `Account`. Creating the application reserves the days.
 - `Approve(approverId)`: only the current approver in the route; after the last approver the application is Approved and the days are committed.
 - `Reject(approverId, reason)`: current approver only, reason required; releases the reservation.
 - `Withdraw(employeeId)`: applicant only, while pending; releases.
@@ -1892,7 +1897,7 @@ public class LeaveApplicationTests
     }
 
     [Fact]
-    public void Construction_reserves()
+    public void Creating_the_application_reserves_days()
     {
         var (_, acc) = New("meena");
         Assert.Equal(5, acc.Reserved);
@@ -1918,7 +1923,7 @@ public class LeaveApplicationTests
     {
         var (app, acc) = New("meena");
         Assert.Throws<ArgumentException>(() => app.Reject("meena", ""));
-        app.Reject("meena", "site audit that week");
+        app.Reject("meena", "accreditation audit that week");
         Assert.Equal(ApplicationStatus.Rejected, app.Status);
         Assert.Equal(12, acc.Available);
         Assert.Throws<InvalidOperationException>(() => app.Approve("meena"));
@@ -2138,7 +2143,7 @@ Add an `OnHold` state that HR can put a pending request into (waiting for docume
 ::q beginner
 How would you count the number of leave days between two dates?
 ::a
-Not with `to - from + 1`. Leave is charged in *working days* for the employee's office: exclude the weekly offs (which differ between a five-day head office and a six-day site office) and the office's holidays (which differ by state). Use `DateOnly`, loop over the range, and count days for which `calendar.IsWorkingDay(d)` is true. Then apply policy rules such as the sandwich rule, where non-working days between two leave days in the same request are also charged. Keep the counter a pure function of (range, calendar, rule) so it can be tested with a table of cases.
+Not with `to - from + 1`. Leave is charged in *working days* for the employee's office: exclude the weekly offs (which differ between a five-day corporate office and a six-day hospital) and the office's holidays (which differ by state). Use `DateOnly`, loop over the range, and count days for which `calendar.IsWorkingDay(d)` is true. Then apply policy rules such as the sandwich rule, where non-working days between two leave days in the same request are also charged. Keep the counter a pure function of (range, calendar, rule) so it can be tested with a table of cases.
 ::q beginner
 What is the Chain of Responsibility pattern and why does it suit approvals?
 ::a
@@ -2150,7 +2155,7 @@ Because pending requests compete for the same balance. If deduction happens only
 ::q intermediate
 Your manager is also your department head. You apply for 4 days. How many approvals do you need, and how does the design handle it?
 ::a
-One. The manager level approves; since 4 days exceeds the manager's 2-day authority, the chain moves to the department-head level, which resolves to the same person. Because that person has already approved this request, the level is considered satisfied, and its 5-day authority covers 4 days, so the request is complete. The opposite case matters too: if *you* are the department head, that level resolves to you and is skipped entirely, without lending its authority, so the request must go on to HR. Self-approval is impossible by construction.
+One. The manager level approves; since 4 days exceeds the manager's 2-day authority, the chain moves to the department-head level, which resolves to the same person. Because that person has already approved this request, the level is considered satisfied, and its 5-day authority covers 4 days, so the request is complete. The opposite case matters too: if *you* are the department head, that level resolves to you and is skipped entirely, without lending its authority, so the request must go on to HR. Self-approval is impossible by design.
 ::q advanced
 How would you ensure two concurrent approvals or applications cannot overspend a balance or create overlapping leave across several app servers?
 ::a

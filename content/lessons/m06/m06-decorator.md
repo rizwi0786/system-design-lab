@@ -10,19 +10,21 @@ prerequisites: [m01-interfaces-abstract, m03-dependency-injection, m03-service-l
 related: [m06-proxy, m06-adapter, m06-chain-of-responsibility, m06-pipeline, m06-composite, m06-pattern-comparison, m10-timeouts-retries, m12-cache-patterns]
 tags: [structural, gof, cross-cutting, caching, logging, retry, httpclient, di]
 patterns: [Decorator]
-summary: Add behaviour such as caching, logging and retries around an object by wrapping it in another object with the same interface, without changing the original class or exploding into subclasses, and wire the wrappers up in ASP.NET Core DI without extra libraries.
+summary: Add behaviour such as caching, logging and retries around an object by wrapping it in another object with the same interface, without changing the original class or exploding into subclasses. See where .NET already does it (Stream, DelegatingHandler, HybridCache) and wire your own wrappers in ASP.NET Core DI without extra libraries.
 references:
   - title: Microsoft Learn — HTTP requests with IHttpClientFactory (outgoing request middleware / DelegatingHandler)
     url: https://learn.microsoft.com/aspnet/core/fundamentals/http-requests
   - title: Microsoft Learn — Dependency injection guidelines
     url: https://learn.microsoft.com/dotnet/core/extensions/dependency-injection-guidelines
-  - title: Microsoft Learn — Caching in-memory in ASP.NET Core
-    url: https://learn.microsoft.com/aspnet/core/performance/caching/memory
+  - title: Microsoft Learn — HybridCache library in ASP.NET Core
+    url: https://learn.microsoft.com/aspnet/core/performance/caching/hybrid
+  - title: Microsoft Learn — Build resilient HTTP apps (Microsoft.Extensions.Http.Resilience)
+    url: https://learn.microsoft.com/dotnet/core/resilience/http-resilience
   - title: Refactoring.Guru — Decorator
     url: https://refactoring.guru/design-patterns/decorator
 ---
 
-Decorator is how you add "and also" to a class without touching it. Fetch the rate *and also* cache it. Save the order *and also* log how long it took. Call the API *and also* retry on a 503. You don't add these features by editing the class or subclassing it. You wrap it in another object that has the same interface, does its extra bit, and passes the call through. .NET uses this idea everywhere: streams, `HttpClient` handlers, and logging providers all rely on it.
+Decorator is how you add "and also" to a class without touching it. Fetch the price *and also* cache it. Save the appointment *and also* log how long it took. Call the partner API *and also* retry on a 503. You don't add these features by editing the class or subclassing it. You wrap it in another object that has the same interface, does its extra bit, and passes the call through. .NET uses this idea everywhere: streams, `HttpClient` handlers, response compression and caching all rely on it.
 
 ## Learning objectives
 
@@ -33,8 +35,9 @@ By the end of this lesson you will be able to:
 3. Write caching, logging and retry decorators around a service in C#, and reason about the order of the wrappers.
 4. Use `DelegatingHandler` to decorate `HttpClient` calls, and recognise stream decorators (`GZipStream`, `BufferedStream`, `CryptoStream`).
 5. Register decorator chains in ASP.NET Core DI without Scrutor, including a reusable `Decorate<TService, TDecorator>()` extension.
-6. Test each decorator in isolation with fakes, and test the assembled chain.
-7. Tell Decorator apart from Proxy, Adapter, Chain of Responsibility and middleware, and know when a decorator is overkill.
+6. Know when `HybridCache` or the HTTP resilience pipeline should replace a hand-written decorator.
+7. Test each decorator in isolation with fakes, and test the assembled chain.
+8. Tell Decorator apart from Proxy, Adapter, Chain of Responsibility and middleware, and know when a decorator is overkill.
 
 ## Prerequisites
 
@@ -50,22 +53,22 @@ Now imagine the stall had to print a separate menu item for every combination: g
 
 Decorator says: keep one base thing, and build add-ons that each **wrap** whatever they are given and still behave like the base thing.
 
-In code:
+In code, for a clinic-booking app that shows lab-test prices before a patient books a home sample collection:
 
-- "A chai" is an **interface**: `IMaterialRateProvider` with `GetRateAsync(...)`.
-- The base tea is the **concrete component**: `HttpMaterialRateProvider`, which really calls the rates API.
-- Each add-on is a **decorator**: `CachingMaterialRateProvider`, `LoggingMaterialRateProvider`, `RetryingMaterialRateProvider`. Each one *implements* the same interface and *holds* another `IMaterialRateProvider` inside it.
+- "A chai" is an **interface**: `ILabPriceProvider` with `GetPriceAsync(...)`.
+- The base tea is the **concrete component**: `HttpLabPriceProvider`, which really calls the partner diagnostics lab's API.
+- Each add-on is a **decorator**: `CachingLabPriceProvider`, `LoggingLabPriceProvider`, `RetryingLabPriceProvider`. Each one *implements* the same interface and *holds* another `ILabPriceProvider` inside it.
 
 ```text
 Logging( Caching( Retrying( Http ) ) )
 ```
 
-When the app calls `GetRateAsync`, the call travels inward through each layer and the answer travels back out. The calling code can't tell how many layers there are, just as you can't tell from the cup how many add-ons went in.
+When the app calls `GetPriceAsync`, the call travels inward through each layer and the answer travels back out. The calling code can't tell how many layers there are, just as you can't tell from the cup how many add-ons went in.
 
 Two more things to know:
 
 1. **Order matters.** Sugar before or after the milk makes no difference to chai, but in software, "cache outside retry" and "retry outside cache" behave differently. We'll see why.
-2. **Layers are reusable.** The same logging decorator can wrap the real rates provider in production and a fake one in a demo.
+2. **Layers are reusable.** The same logging decorator can wrap the real lab API in production and a fake price list in a demo.
 
 ## First-principles explanation
 
@@ -73,9 +76,9 @@ Two more things to know:
 
 The *Design Patterns* book describes Decorator as: "Attach additional responsibilities to an object dynamically. Decorators provide a flexible alternative to subclassing for extending functionality."
 
-Suppose `HttpMaterialRateProvider` fetches today's cement and steel rates for a city from a market-rates API. Over a few months, people ask for:
+Suppose `HttpLabPriceProvider` fetches today's price of a lab test (a complete blood count, a thyroid profile) in a given city from a partner lab's API, so the app can show "CBC — ₹350, report in 12 hours" before booking. Over a few months, people ask for:
 
-- **caching** (the rates change once a day, and the API charges per call),
+- **caching** (prices change at most once a day, and the partner rate-limits and bills per call),
 - **logging** with timings,
 - **retries** for occasional 503s,
 - **metrics** for dashboards,
@@ -83,9 +86,9 @@ Suppose `HttpMaterialRateProvider` fetches today's cement and steel rates for a 
 
 You have three ways to add these:
 
-1. **Edit the class.** It grows to 300 lines, with caching, retries and logging tangled through the one method that matters. Every change risks breaking the HTTP logic, and you can't turn caching off for one caller.
-2. **Subclass.** `CachingHttpRateProvider`, `LoggingCachingHttpRateProvider`, `RetryingLoggingCachingHttpRateProvider`... With *n* optional behaviours you need up to 2ⁿ classes. Worse, the behaviours are welded to *HTTP*. A second provider (a CSV import) needs its own set of subclasses.
-3. **Wrap.** Each behaviour is a small class that implements `IMaterialRateProvider`, takes an `IMaterialRateProvider` in its constructor, and adds its behaviour around the call. Five behaviours means five classes, combinable in any order, around any provider.
+1. **Edit the class.** It grows to 300 lines, with caching, retries and logging tangled through the one method that matters. Every change risks breaking the HTTP logic, and you can't turn caching off for the admin "refresh prices" screen.
+2. **Subclass.** `CachingHttpLabPriceProvider`, `LoggingCachingHttpLabPriceProvider`, `RetryingLoggingCachingHttpLabPriceProvider`... With *n* optional behaviours you need up to 2ⁿ classes. Worse, the behaviours are welded to *HTTP*. A second lab partner that sends a nightly CSV price list needs its own set of subclasses.
+3. **Wrap.** Each behaviour is a small class that implements `ILabPriceProvider`, takes an `ILabPriceProvider` in its constructor, and adds its behaviour around the call. Five behaviours means five classes, combinable in any order, around any provider.
 
 Option 3 is Decorator.
 
@@ -93,24 +96,24 @@ Option 3 is Decorator.
 
 There is no magic, only two facts about C#:
 
-1. A decorator **is an** `IMaterialRateProvider` (it implements the interface), so anything that accepts the interface accepts the decorator.
-2. A decorator **has an** `IMaterialRateProvider` (a constructor parameter, usually called `inner`). It calls `inner.GetRateAsync(...)` at the right moment.
+1. A decorator **is an** `ILabPriceProvider` (it implements the interface), so anything that accepts the interface accepts the decorator.
+2. A decorator **has an** `ILabPriceProvider` (a constructor parameter, usually called `inner`). It calls `inner.GetPriceAsync(...)` at the right moment.
 
 Each decorator does work **before** the inner call (check cache, start timer), **instead of** it (return a cached value, short-circuit when a circuit is open), **after** it (store in cache, log the elapsed time), or **around failures** (catch, wait, retry). Because each wrapper only knows "some inner provider", you can stack them in any order.
 
-The cost at runtime is one extra virtual call per layer, nanoseconds next to a network call of tens of milliseconds. The real costs are elsewhere: more types, a call stack that's harder to follow when debugging, and the need to wire the chain correctly.
+The cost at runtime is one extra virtual call per layer (plus an async state machine per `async` layer), nanoseconds next to a network call of tens of milliseconds. The real costs are elsewhere: more types, a call stack that's harder to follow when debugging, and the need to wire the chain correctly.
 
 ### The simplest implementation
 
 ```csharp
-public sealed class LoggingRateProvider(IMaterialRateProvider inner, ILogger<LoggingRateProvider> log) : IMaterialRateProvider
+public sealed class LoggingPriceProvider(ILabPriceProvider inner, ILogger<LoggingPriceProvider> log) : ILabPriceProvider
 {
-    public async Task<MaterialRate?> GetRateAsync(string material, string city, CancellationToken ct)
+    public async Task<LabTestPrice?> GetPriceAsync(string testCode, string city, CancellationToken ct)
     {
-        log.LogInformation("Fetching {Material} rate for {City}", material, city);   // before
-        var rate = await inner.GetRateAsync(material, city, ct);                      // delegate
-        log.LogInformation("Got {Rate}", rate?.PricePerUnit);                          // after
-        return rate;
+        log.LogInformation("Fetching {Test} price for {City}", testCode, city);   // before
+        var price = await inner.GetPriceAsync(testCode, city, ct);                 // delegate
+        log.LogInformation("Got {Price}", price?.Price);                           // after
+        return price;
     }
 }
 ```
@@ -121,19 +124,20 @@ Implement the interface, hold an inner instance, call it, and add something befo
 
 | Participant | Role | In our example |
 |---|---|---|
-| **Component** | The interface clients use | `IMaterialRateProvider` |
-| **Concrete component** | The real work | `HttpMaterialRateProvider` |
+| **Component** | The interface clients use | `ILabPriceProvider` |
+| **Concrete component** | The real work | `HttpLabPriceProvider` |
 | **Decorator** (optional base) | Holds an inner component and forwards calls by default | Not needed for a one-method interface; useful when the interface has many methods |
-| **Concrete decorators** | Each adds one responsibility | `CachingMaterialRateProvider`, `RetryingMaterialRateProvider`, `LoggingMaterialRateProvider` |
-| **Client** | Uses the component interface and has no idea it's decorated | The `/rates` endpoint |
+| **Concrete decorators** | Each adds one responsibility | `CachingLabPriceProvider`, `RetryingLabPriceProvider`, `LoggingLabPriceProvider` |
+| **Client** | Uses the component interface and has no idea it's decorated | The `/lab-tests/{code}/price` endpoint |
 
 The GoF book includes an abstract `Decorator` base class that forwards every method. In C#, that base pays off only when the interface has many members and each decorator overrides just one or two. For small interfaces, implement the interface directly. It's clearer.
 
 ### Where .NET already uses Decorator
 
 - **Streams.** `GZipStream`, `BufferedStream`, `CryptoStream` and `SslStream` are all `Stream`s that wrap another `Stream`: `new GZipStream(new BufferedStream(File.Create(path)), CompressionLevel.Optimal)`. Each layer adds compression, buffering, encryption or TLS, and the code writing to the outermost stream doesn't know.
-- **`HttpClient` handlers.** A `DelegatingHandler` *is an* `HttpMessageHandler` and *has an* `InnerHandler`. `IHttpClientFactory` chains them: your auth handler → logging handler → resilience handler → `SocketsHttpHandler`.
-- **Logging.** `ILogger` implementations are often composed with filtering and scoping layers.
+- **ASP.NET Core response bodies.** The response compression middleware replaces the response body with a compressing wrapper around the original, so your endpoint writes plain bytes and the client receives gzip or Brotli.
+- **`HttpClient` handlers.** A `DelegatingHandler` *is an* `HttpMessageHandler` and *has an* `InnerHandler`. `IHttpClientFactory` chains them: your auth handler → logging handler → resilience handler → `SocketsHttpHandler`. `AddStandardResilienceHandler()` is itself a decorator in that chain.
+- **AI clients.** In `Microsoft.Extensions.AI`, `DelegatingChatClient` wraps an `IChatClient` to add caching, telemetry or function calling: the same shape again.
 - **Request pipelines.** MediatR-style "pipeline behaviours" (validation, transactions around a command handler) are decorators around handlers.
 
 ### When it is useful
@@ -146,9 +150,10 @@ The GoF book includes an abstract `Decorator` base class that forwards every met
 ### When not to use it
 
 - **There's one behaviour and it's core to the class.** If a repository *must* always validate, put validation in the repository. Decorators are for optional or orthogonal concerns.
-- **The framework already does it.** HTTP retries and timeouts belong in the HTTP pipeline (`AddStandardResilienceHandler`, or your own `DelegatingHandler`), not in a hand-written decorator around every typed client. Request logging belongs in ASP.NET Core middleware and OpenTelemetry, not in a decorator on every service.
+- **The framework already does it.** HTTP retries, timeouts and circuit breakers belong in the HTTP pipeline (`AddStandardResilienceHandler`, or your own `DelegatingHandler`), not in a hand-written decorator around every typed client. Request logging and timing belong in ASP.NET Core middleware and OpenTelemetry. Read-through caching with stampede protection is what `HybridCache` is for.
 - **The interface is wide.** Decorating an interface with 25 methods means 25 forwarding methods per decorator. Either split the interface ([ISP](#/lesson/m04-isp)) or reconsider.
 - **The decorator needs the internals.** If caching needs to know which *rows* changed inside the repository, a decorator outside can't see them. That logic belongs inside, or in an explicit event.
+- **The inner object calls itself.** A decorator sees only calls that come through the interface. If `SqlDoctorRepository.GetSchedule` internally calls its own `GetById`, that inner call bypasses the caching decorator. Don't expect a decorator to intercept self-calls.
 - **Ordering is subtle and nobody will remember it.** Five decorators in a specific order, wired in a far-away `Program.cs`, can confuse a team. Document the chain and test it.
 
 ### Trade-offs
@@ -159,7 +164,7 @@ The GoF book includes an abstract `Decorator` base class that forwards every met
 | Combine behaviours freely, without 2ⁿ subclasses | Order is significant, and wrong order is a silent bug |
 | Each behaviour is tested alone | Wiring in DI needs care (factories, lifetimes) |
 | Reuse one decorator across several implementations | Wide interfaces mean lots of forwarding code |
-| Follows the Open/Closed Principle and SRP | Object identity: `decorated is HttpMaterialRateProvider` is now false |
+| Follows the Open/Closed Principle and SRP | Object identity: `decorated is HttpLabPriceProvider` is now false |
 
 ## Visual explanation
 
@@ -167,93 +172,93 @@ The GoF book includes an abstract `Decorator` base class that forwards every met
 
 ```mermaid
 classDiagram
-    class IMaterialRateProvider {
+    class ILabPriceProvider {
         <<interface>>
-        +GetRateAsync(string material, string city, CancellationToken ct) Task~MaterialRate~
+        +GetPriceAsync(string testCode, string city, CancellationToken ct) Task~LabTestPrice~
     }
-    class HttpMaterialRateProvider {
+    class HttpLabPriceProvider {
         -HttpClient http
     }
-    class CachingMaterialRateProvider {
-        -IMaterialRateProvider inner
+    class CachingLabPriceProvider {
+        -ILabPriceProvider inner
         -IMemoryCache cache
     }
-    class RetryingMaterialRateProvider {
-        -IMaterialRateProvider inner
+    class RetryingLabPriceProvider {
+        -ILabPriceProvider inner
         -TimeProvider time
     }
-    class LoggingMaterialRateProvider {
-        -IMaterialRateProvider inner
+    class LoggingLabPriceProvider {
+        -ILabPriceProvider inner
         -ILogger logger
     }
-    class RatesEndpoint {
-        +Get(material, city) IResult
+    class PriceEndpoint {
+        +Get(testCode, city) IResult
     }
-    IMaterialRateProvider <|.. HttpMaterialRateProvider
-    IMaterialRateProvider <|.. CachingMaterialRateProvider
-    IMaterialRateProvider <|.. RetryingMaterialRateProvider
-    IMaterialRateProvider <|.. LoggingMaterialRateProvider
-    CachingMaterialRateProvider o-- IMaterialRateProvider : inner
-    RetryingMaterialRateProvider o-- IMaterialRateProvider : inner
-    LoggingMaterialRateProvider o-- IMaterialRateProvider : inner
-    RatesEndpoint --> IMaterialRateProvider : uses
+    ILabPriceProvider <|.. HttpLabPriceProvider
+    ILabPriceProvider <|.. CachingLabPriceProvider
+    ILabPriceProvider <|.. RetryingLabPriceProvider
+    ILabPriceProvider <|.. LoggingLabPriceProvider
+    CachingLabPriceProvider o-- ILabPriceProvider : inner
+    RetryingLabPriceProvider o-- ILabPriceProvider : inner
+    LoggingLabPriceProvider o-- ILabPriceProvider : inner
+    PriceEndpoint --> ILabPriceProvider : uses
 ```
 
-How to read it: every class implements `IMaterialRateProvider` (dotted lines with hollow triangles). The three decorators *also* hold an `IMaterialRateProvider` (hollow diamonds labelled `inner`). That combination of "is one and has one" is the signature of Decorator. Notice that the decorators point at the **interface**, not at `HttpMaterialRateProvider`. That is what lets them stack on each other in any order. The endpoint depends only on the interface and never learns how many layers are inside.
+How to read it: every class implements `ILabPriceProvider` (dotted lines with hollow triangles). The three decorators *also* hold an `ILabPriceProvider` (hollow diamonds labelled `inner`). That combination of "is one and has one" is the signature of Decorator. Notice that the decorators point at the **interface**, not at `HttpLabPriceProvider`. That is what lets them stack on each other in any order. The endpoint depends only on the interface and never learns how many layers are inside.
 
 ### Sequence diagram
 
 ```mermaid
 sequenceDiagram
-    participant E as GET /rates/cement
+    participant E as GET /lab-tests/CBC/price
     participant L as Logging
     participant C as Caching
     participant R as Retrying
     participant H as Http provider
-    E->>L: GetRateAsync("CEMENT-OPC53", "Pune")
+    E->>L: GetPriceAsync("CBC", "Pune")
     L->>L: start timer
-    L->>C: GetRateAsync(...)
-    C->>C: cache miss for rate:CEMENT-OPC53:PUNE
-    C->>R: GetRateAsync(...)
+    L->>C: GetPriceAsync(...)
+    C->>C: cache miss for price:CBC:PUNE
+    C->>R: GetPriceAsync(...)
     R->>H: attempt 1
-    H-->>R: throws RateUnavailableException (503)
+    H-->>R: throws PriceUnavailableException (503)
     R->>R: wait 200 ms + jitter
     R->>H: attempt 2
-    H-->>R: ₹385 per bag
-    R-->>C: ₹385
+    H-->>R: ₹350, report in 12 h
+    R-->>C: ₹350
     C->>C: store for 15 minutes
-    C-->>L: ₹385
-    L->>L: log "CEMENT-OPC53 Pune 385 in 412 ms"
-    L-->>E: ₹385
+    C-->>L: ₹350
+    L->>L: log "CBC Pune 350 in 412 ms"
+    L-->>E: ₹350
 ```
 
-Follow one request inward and back out. Logging is outermost, so it times everything, including the retry wait. Caching sits *outside* Retrying, so a cache hit never triggers retries, and a successful retried value is cached once. If the next request comes within 15 minutes, the Caching layer returns immediately and Retrying and Http aren't called at all. Swap Caching and Retrying and you'd retry around the cache lookup, which is pointless. The diagram is the best tool for reasoning about order: draw it before wiring the chain.
+Follow one request inward and back out. Logging is outermost, so it times everything, including the retry wait. Caching sits *outside* Retrying, so a cache hit never triggers retries, and a successful retried value is cached once. If the next patient asks within 15 minutes, the Caching layer returns immediately and Retrying and Http aren't called at all. Swap Caching and Retrying and you'd retry around the cache lookup, which is pointless. The diagram is the best tool for reasoning about order: draw it before wiring the chain.
 
 ## Step-by-step example
 
 ### Step 1 — the naive version: everything in one class
 
 ```csharp
-public async Task<MaterialRate?> GetRateAsync(string material, string city, CancellationToken ct)
+public async Task<LabTestPrice?> GetPriceAsync(string testCode, string city, CancellationToken ct)
 {
-    var key = $"rate:{material}:{city}";
-    if (_cache.TryGetValue(key, out MaterialRate? hit)) { _log.LogInformation("hit"); return hit; }
+    var key = $"price:{testCode}:{city}";
+    if (_cache.TryGetValue(key, out LabTestPrice? hit)) { _log.LogInformation("hit"); return hit; }
     var sw = Stopwatch.StartNew();
     for (var attempt = 1; ; attempt++)
     {
         try
         {
-            var rate = await _http.GetFromJsonAsync<MaterialRate>($"v1/rates/{material}?city={city}", ct);
-            _cache.Set(key, rate, TimeSpan.FromMinutes(15));
+            var price = await _http.GetFromJsonAsync<LabTestPrice>($"v1/tests/{testCode}/price?city={city}", ct);
+            _cache.Set(key, price, TimeSpan.FromMinutes(15));
             _log.LogInformation("ok in {Ms}", sw.ElapsedMilliseconds);
-            return rate;
+            return price;
         }
         catch (HttpRequestException) when (attempt < 3) { await Task.Delay(200 * attempt, ct); }
     }
 }
 ```
 
-The HTTP call, the one line that matters, is buried. You can't test retries without HTTP, can't disable caching for an admin "refresh" screen, and can't reuse the retry logic for the CSV-based provider.
+The HTTP call, the one line that matters, is buried. You can't test retries without HTTP, can't disable caching for the admin "refresh prices" screen, and can't reuse the retry logic for the CSV-based partner.
 
 ### Step 2 — identify the layers
 
@@ -261,7 +266,7 @@ Read the method and label each line: *caching*, *timing/logging*, *retry*, *real
 
 ### Step 3 — one decorator per concern
 
-Move each concern into its own class implementing `IMaterialRateProvider`. The HTTP class keeps only the HTTP call and the translation of status codes into domain exceptions.
+Move each concern into its own class implementing `ILabPriceProvider`. The HTTP class keeps only the HTTP call and the translation of status codes into domain exceptions.
 
 ### Step 4 — compose in DI
 
@@ -270,45 +275,45 @@ Register the real provider, then wrap it: Retry, then Cache, then Logging. The e
 ## Production-style C# implementation
 
 ```text
-Infra.Api/
+Clinic.Api/
   Program.cs
-  Rates/MaterialRates.cs                  # component interface + types
-  Rates/HttpMaterialRateProvider.cs       # concrete component
-  Rates/Decorators/CachingMaterialRateProvider.cs
-  Rates/Decorators/RetryingMaterialRateProvider.cs
-  Rates/Decorators/LoggingMaterialRateProvider.cs
-  Http/ApiKeyHandler.cs                   # DelegatingHandler: a decorator for HttpClient
+  Pricing/LabPrices.cs                     # component interface + types
+  Pricing/HttpLabPriceProvider.cs          # concrete component
+  Pricing/Decorators/CachingLabPriceProvider.cs
+  Pricing/Decorators/RetryingLabPriceProvider.cs
+  Pricing/Decorators/LoggingLabPriceProvider.cs
+  Http/ApiKeyHandler.cs                    # DelegatingHandler: a decorator for HttpClient
   DependencyInjection/DecoratorExtensions.cs
 ```
 
-```csharp file=Rates/MaterialRates.cs
-namespace Infra.Rates;
+```csharp file=Pricing/LabPrices.cs
+namespace Clinic.Pricing;
 
-public sealed record MaterialRate(string MaterialCode, string City, decimal PricePerUnit, string Unit, DateOnly AsOf);
+public sealed record LabTestPrice(string TestCode, string City, decimal Price, int ReportHours, DateOnly AsOf);
 
-/// <summary>The rate service is temporarily unavailable; retrying may help.</summary>
-public sealed class RateUnavailableException(string message, Exception? inner = null) : Exception(message, inner);
+/// <summary>The partner's price service is temporarily unavailable; retrying may help.</summary>
+public sealed class PriceUnavailableException(string message, Exception? inner = null) : Exception(message, inner);
 
 /// <summary>Component interface. Every decorator implements it AND wraps it.</summary>
-public interface IMaterialRateProvider
+public interface ILabPriceProvider
 {
-    /// <returns>The rate, or null if the material/city combination is unknown.</returns>
-    Task<MaterialRate?> GetRateAsync(string materialCode, string city, CancellationToken ct = default);
+    /// <returns>The price, or null if the test is not offered in that city.</returns>
+    Task<LabTestPrice?> GetPriceAsync(string testCode, string city, CancellationToken ct = default);
 }
 ```
 
-```csharp file=Rates/HttpMaterialRateProvider.cs
+```csharp file=Pricing/HttpLabPriceProvider.cs
 using System.Net;
 using System.Net.Http.Json;
 
-namespace Infra.Rates;
+namespace Clinic.Pricing;
 
 /// <summary>Concrete component: only the HTTP call and status-code translation. No caching, retries or logging.</summary>
-public sealed class HttpMaterialRateProvider(HttpClient http) : IMaterialRateProvider
+public sealed class HttpLabPriceProvider(HttpClient http) : ILabPriceProvider
 {
-    public async Task<MaterialRate?> GetRateAsync(string materialCode, string city, CancellationToken ct = default)
+    public async Task<LabTestPrice?> GetPriceAsync(string testCode, string city, CancellationToken ct = default)
     {
-        var url = $"v1/rates/{Uri.EscapeDataString(materialCode)}?city={Uri.EscapeDataString(city)}";
+        var url = $"v1/tests/{Uri.EscapeDataString(testCode)}/price?city={Uri.EscapeDataString(city)}";
         HttpResponseMessage response;
         try
         {
@@ -316,79 +321,79 @@ public sealed class HttpMaterialRateProvider(HttpClient http) : IMaterialRatePro
         }
         catch (HttpRequestException ex)
         {
-            throw new RateUnavailableException("Rate service unreachable.", ex);
+            throw new PriceUnavailableException("Lab price service unreachable.", ex);
         }
 
         using (response)
         {
             if (response.StatusCode == HttpStatusCode.NotFound) return null;
             if (response.StatusCode is HttpStatusCode.TooManyRequests || (int)response.StatusCode >= 500)
-                throw new RateUnavailableException($"Rate service returned {(int)response.StatusCode}.");
+                throw new PriceUnavailableException($"Lab price service returned {(int)response.StatusCode}.");
             response.EnsureSuccessStatusCode();
-            return await response.Content.ReadFromJsonAsync<MaterialRate>(ct);
+            return await response.Content.ReadFromJsonAsync<LabTestPrice>(ct);
         }
     }
 }
 ```
 
-```csharp file=Rates/Decorators/CachingMaterialRateProvider.cs
+```csharp file=Pricing/Decorators/CachingLabPriceProvider.cs
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 
-namespace Infra.Rates.Decorators;
+namespace Clinic.Pricing.Decorators;
 
-public sealed class RateCacheOptions
+public sealed class PriceCacheOptions
 {
     public TimeSpan TimeToLive { get; set; } = TimeSpan.FromMinutes(15);
 }
 
-/// <summary>Cache-aside decorator. Unknown materials (null) are not cached, so typos don't stick.</summary>
-public sealed class CachingMaterialRateProvider(IMaterialRateProvider inner, IMemoryCache cache, IOptions<RateCacheOptions> options)
-    : IMaterialRateProvider
+/// <summary>Cache-aside decorator. Unknown tests (null) are not cached, so a newly added test shows up at once.</summary>
+public sealed class CachingLabPriceProvider(ILabPriceProvider inner, IMemoryCache cache, IOptions<PriceCacheOptions> options)
+    : ILabPriceProvider
 {
-    public async Task<MaterialRate?> GetRateAsync(string materialCode, string city, CancellationToken ct = default)
+    public async Task<LabTestPrice?> GetPriceAsync(string testCode, string city, CancellationToken ct = default)
     {
-        var key = $"rate:{materialCode.ToUpperInvariant()}:{city.ToUpperInvariant()}";
-        if (cache.TryGetValue(key, out MaterialRate? cached)) return cached;
+        var key = $"price:{testCode.ToUpperInvariant()}:{city.ToUpperInvariant()}";
+        if (cache.TryGetValue(key, out LabTestPrice? cached)) return cached;
 
-        var rate = await inner.GetRateAsync(materialCode, city, ct);
-        if (rate is not null) cache.Set(key, rate, options.Value.TimeToLive);
-        return rate;
+        var price = await inner.GetPriceAsync(testCode, city, ct);
+        if (price is not null) cache.Set(key, price, options.Value.TimeToLive);
+        return price;
     }
 }
 ```
 
-```csharp file=Rates/Decorators/RetryingMaterialRateProvider.cs
+```csharp file=Pricing/Decorators/RetryingLabPriceProvider.cs
 using Microsoft.Extensions.Options;
 
-namespace Infra.Rates.Decorators;
+namespace Clinic.Pricing.Decorators;
 
-public sealed class RateRetryOptions
+public sealed class PriceRetryOptions
 {
     public int MaxAttempts { get; set; } = 3;
     public TimeSpan BaseDelay { get; set; } = TimeSpan.FromMilliseconds(200);
 }
 
-/// <summary>Retries only RateUnavailableException (transient), with exponential backoff and jitter.
+/// <summary>Retries only PriceUnavailableException (transient), with exponential backoff and jitter.
 /// Reads are idempotent, so retrying is safe here; never wrap non-idempotent writes like this.</summary>
-public sealed class RetryingMaterialRateProvider(
-    IMaterialRateProvider inner, IOptions<RateRetryOptions> options, TimeProvider time, ILogger<RetryingMaterialRateProvider> logger)
-    : IMaterialRateProvider
+public sealed class RetryingLabPriceProvider(
+    ILabPriceProvider inner, IOptions<PriceRetryOptions> options, TimeProvider time, ILogger<RetryingLabPriceProvider> logger)
+    : ILabPriceProvider
 {
-    private readonly RateRetryOptions _o = options.Value;
+    private readonly PriceRetryOptions _o = options.Value;
 
-    public async Task<MaterialRate?> GetRateAsync(string materialCode, string city, CancellationToken ct = default)
+    public async Task<LabTestPrice?> GetPriceAsync(string testCode, string city, CancellationToken ct = default)
     {
         for (var attempt = 1; ; attempt++)
         {
             try
             {
-                return await inner.GetRateAsync(materialCode, city, ct);
+                return await inner.GetPriceAsync(testCode, city, ct);
             }
-            catch (RateUnavailableException ex) when (attempt < _o.MaxAttempts && !ct.IsCancellationRequested)
+            catch (PriceUnavailableException ex) when (attempt < _o.MaxAttempts && !ct.IsCancellationRequested)
             {
                 var delay = Backoff(attempt);
-                logger.LogWarning(ex, "Rate lookup attempt {Attempt} failed; retrying in {DelayMs} ms", attempt, (int)delay.TotalMilliseconds);
+                logger.LogWarning(ex, "Price lookup attempt {Attempt} failed; retrying in {DelayMs} ms", attempt, (int)delay.TotalMilliseconds);
                 await Task.Delay(delay, time, ct);
             }
         }
@@ -400,29 +405,29 @@ public sealed class RetryingMaterialRateProvider(
 }
 ```
 
-```csharp file=Rates/Decorators/LoggingMaterialRateProvider.cs
+```csharp file=Pricing/Decorators/LoggingLabPriceProvider.cs
 using System.Diagnostics;
 
-namespace Infra.Rates.Decorators;
+namespace Clinic.Pricing.Decorators;
 
 /// <summary>Outermost decorator: logs every call, including cache hits, with its duration.</summary>
-public sealed class LoggingMaterialRateProvider(IMaterialRateProvider inner, ILogger<LoggingMaterialRateProvider> logger)
-    : IMaterialRateProvider
+public sealed class LoggingLabPriceProvider(ILabPriceProvider inner, ILogger<LoggingLabPriceProvider> logger)
+    : ILabPriceProvider
 {
-    public async Task<MaterialRate?> GetRateAsync(string materialCode, string city, CancellationToken ct = default)
+    public async Task<LabTestPrice?> GetPriceAsync(string testCode, string city, CancellationToken ct = default)
     {
         var start = Stopwatch.GetTimestamp();
         try
         {
-            var rate = await inner.GetRateAsync(materialCode, city, ct);
-            logger.LogInformation("Rate {Material}/{City} = {Price} in {ElapsedMs:F0} ms",
-                materialCode, city, rate?.PricePerUnit, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
-            return rate;
+            var price = await inner.GetPriceAsync(testCode, city, ct);
+            logger.LogInformation("Price {Test}/{City} = {Price} in {ElapsedMs:F0} ms",
+                testCode, city, price?.Price, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+            return price;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.LogError(ex, "Rate {Material}/{City} failed after {ElapsedMs:F0} ms",
-                materialCode, city, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+            logger.LogError(ex, "Price {Test}/{City} failed after {ElapsedMs:F0} ms",
+                testCode, city, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
             throw;   // never swallow: a logging decorator must not change behaviour
         }
     }
@@ -432,16 +437,16 @@ public sealed class LoggingMaterialRateProvider(IMaterialRateProvider inner, ILo
 ```csharp file=Http/ApiKeyHandler.cs
 using Microsoft.Extensions.Options;
 
-namespace Infra.Http;
+namespace Clinic.Http;
 
-public sealed class RateApiOptions
+public sealed class LabApiOptions
 {
-    public string BaseUrl { get; set; } = "https://rates.example.com/";
+    public string BaseUrl { get; set; } = "https://partner-lab.example.com/";
     public string ApiKey { get; set; } = "";
 }
 
 /// <summary>A decorator for HttpClient: same "send a request" contract, plus an API-key header.</summary>
-public sealed class ApiKeyHandler(IOptions<RateApiOptions> options) : DelegatingHandler
+public sealed class ApiKeyHandler(IOptions<LabApiOptions> options) : DelegatingHandler
 {
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
@@ -455,7 +460,7 @@ public sealed class ApiKeyHandler(IOptions<RateApiOptions> options) : Delegating
 ```csharp file=DependencyInjection/DecoratorExtensions.cs
 using Microsoft.Extensions.DependencyInjection;
 
-namespace Infra.DependencyInjection;
+namespace Clinic.DependencyInjection;
 
 public static class DecoratorExtensions
 {
@@ -495,45 +500,48 @@ public static class DecoratorExtensions
 ```
 
 ```csharp file=Program.cs
-using Infra.DependencyInjection;
-using Infra.Http;
-using Infra.Rates;
-using Infra.Rates.Decorators;
+using Clinic.DependencyInjection;
+using Clinic.Http;
+using Clinic.Pricing;
+using Clinic.Pricing.Decorators;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.Configure<RateApiOptions>(builder.Configuration.GetSection("Rates:Api"));
-builder.Services.Configure<RateCacheOptions>(builder.Configuration.GetSection("Rates:Cache"));
-builder.Services.Configure<RateRetryOptions>(builder.Configuration.GetSection("Rates:Retry"));
+builder.Services.Configure<LabApiOptions>(builder.Configuration.GetSection("LabPrices:Api"));
+builder.Services.Configure<PriceCacheOptions>(builder.Configuration.GetSection("LabPrices:Cache"));
+builder.Services.Configure<PriceRetryOptions>(builder.Configuration.GetSection("LabPrices:Retry"));
 
 // 1. Concrete component: a typed HttpClient, itself decorated by a DelegatingHandler.
 builder.Services.AddTransient<ApiKeyHandler>();
-builder.Services.AddHttpClient<IMaterialRateProvider, HttpMaterialRateProvider>((sp, c) =>
+builder.Services.AddHttpClient<ILabPriceProvider, HttpLabPriceProvider>((sp, c) =>
 {
-    c.BaseAddress = new Uri(sp.GetRequiredService<IOptions<RateApiOptions>>().Value.BaseUrl);
+    c.BaseAddress = new Uri(sp.GetRequiredService<IOptions<LabApiOptions>>().Value.BaseUrl);
     c.Timeout = TimeSpan.FromSeconds(5);
 }).AddHttpMessageHandler<ApiKeyHandler>();
+// Retries live in ONE place. Here that's RetryingLabPriceProvider, to show the mechanics. If you add
+// .AddStandardResilienceHandler() to the client instead, remove the retry decorator, or 3 x 3 = 9 attempts.
 
 // 2. Decorators, innermost first. Resulting chain: Logging(Caching(Retrying(Http))).
-builder.Services.Decorate<IMaterialRateProvider, RetryingMaterialRateProvider>();
-builder.Services.Decorate<IMaterialRateProvider, CachingMaterialRateProvider>();
-builder.Services.Decorate<IMaterialRateProvider, LoggingMaterialRateProvider>();
+builder.Services.Decorate<ILabPriceProvider, RetryingLabPriceProvider>();
+builder.Services.Decorate<ILabPriceProvider, CachingLabPriceProvider>();
+builder.Services.Decorate<ILabPriceProvider, LoggingLabPriceProvider>();
 
 var app = builder.Build();
 
-app.MapGet("/rates/{material}", async (string material, string city, IMaterialRateProvider rates, CancellationToken ct) =>
+// GET /lab-tests/CBC/price?city=Pune
+app.MapGet("/lab-tests/{testCode}/price", async (string testCode, string city, ILabPriceProvider prices, CancellationToken ct) =>
 {
     try
     {
-        var rate = await rates.GetRateAsync(material, city, ct);
-        return rate is null ? Results.NotFound() : Results.Ok(rate);
+        var price = await prices.GetPriceAsync(testCode, city, ct);
+        return price is null ? Results.NotFound() : Results.Ok(price);
     }
-    catch (RateUnavailableException)
+    catch (PriceUnavailableException)
     {
-        return Results.Problem("Material rates are temporarily unavailable.", statusCode: StatusCodes.Status503ServiceUnavailable);
+        return Results.Problem("Lab prices are temporarily unavailable.", statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 });
 
@@ -542,57 +550,94 @@ app.Run();
 
 ### Registering decorators without Scrutor
 
-The popular Scrutor library provides `services.Decorate<TService, TDecorator>()`. You don't need it for this. There are two built-in-only options:
+The popular Scrutor library provides `services.Decorate<TService, TDecorator>()`. You don't need it for this. There are three built-in-only options:
 
 **Option A: an explicit factory.** It's the most readable for a single chain:
 
 ```csharp
-builder.Services.AddScoped<SqlProjectRepository>();
-builder.Services.AddScoped<IProjectRepository>(sp =>
-    new LoggingProjectRepository(
-        new CachingProjectRepository(
-            sp.GetRequiredService<SqlProjectRepository>(),
+builder.Services.AddScoped<SqlDoctorRepository>();
+builder.Services.AddScoped<IDoctorRepository>(sp =>
+    new LoggingDoctorRepository(
+        new CachingDoctorRepository(
+            sp.GetRequiredService<SqlDoctorRepository>(),
             sp.GetRequiredService<IMemoryCache>()),
-        sp.GetRequiredService<ILogger<LoggingProjectRepository>>()));
+        sp.GetRequiredService<ILogger<LoggingDoctorRepository>>()));
 ```
 
 The nesting *is* the diagram: read from the inside out. The downside is that adding a constructor parameter to any decorator means editing this factory.
 
 **Option B: the `Decorate` extension above** (about 30 lines). It finds the last registration of the service, replaces it with a factory that builds the original and passes it to `ActivatorUtilities.CreateInstance<TDecorator>`, and keeps the original lifetime. `ActivatorUtilities` fills the remaining constructor parameters (`IMemoryCache`, `ILogger<T>`, options) from the container.
 
-Caveats for either option:
+**Option C: keyed services (.NET 8+).** Register the real implementation under a key and let the decorator ask for it by key:
 
-- **Lifetimes.** The decorator gets the *inner's* lifetime. A singleton decorator around a scoped inner would capture it (a captive dependency). Keep stateful caches in a singleton `IMemoryCache`, not in decorator fields, so transient or scoped decorators lose nothing.
+```csharp
+builder.Services.AddKeyedScoped<IDoctorRepository, SqlDoctorRepository>("inner");
+builder.Services.AddScoped<IDoctorRepository, CachingDoctorRepository>();
+
+public sealed class CachingDoctorRepository(
+    [FromKeyedServices("inner")] IDoctorRepository inner, IMemoryCache cache) : IDoctorRepository { /* ... */ }
+```
+
+It needs no helper code, but the decorator class now knows about DI keys, and a chain of three needs three keys.
+
+Caveats for every option:
+
+- **Lifetimes.** The decorator gets the *inner's* lifetime. A singleton decorator around a scoped inner would capture it (a captive dependency). Keep stateful caches in a singleton `IMemoryCache` or `HybridCache`, not in decorator fields, so transient or scoped decorators lose nothing.
 - **Disposal.** The container disposes the object the factory returns (the outermost decorator). An inner object created by `ActivatorUtilities` inside the factory isn't tracked. If the inner owns resources, have the decorator dispose it, or register the inner as its own service and resolve it.
 - **Keyed and open-generic services** need separate handling. The extension skips keyed registrations on purpose.
+
+### When HybridCache replaces your caching decorator
+
+`CachingLabPriceProvider` uses `IMemoryCache`, which is per-server and has no stampede protection: when a popular entry expires, every concurrent request calls the partner API (exercise 5 builds the fix by hand). Since .NET 9, `HybridCache` (package `Microsoft.Extensions.Caching.Hybrid`) gives you a two-level cache (in-process plus an optional `IDistributedCache` such as Redis), one factory call per key under concurrency, and tag-based invalidation. The decorator shrinks to a few lines:
+
+```csharp
+// builder.Services.AddHybridCache(o => o.DefaultEntryOptions = new HybridCacheEntryOptions
+// {
+//     Expiration = TimeSpan.FromMinutes(15),           // shared (L2) lifetime
+//     LocalCacheExpiration = TimeSpan.FromMinutes(5),  // per-server (L1) lifetime
+// });
+
+public sealed class HybridCachingLabPriceProvider(ILabPriceProvider inner, HybridCache cache) : ILabPriceProvider
+{
+    public async Task<LabTestPrice?> GetPriceAsync(string testCode, string city, CancellationToken ct = default) =>
+        await cache.GetOrCreateAsync(
+            $"price:{testCode.ToUpperInvariant()}:{city.ToUpperInvariant()}",
+            (inner, testCode, city),
+            static async (s, token) => await s.inner.GetPriceAsync(s.testCode, s.city, token),
+            tags: ["lab-prices"],
+            cancellationToken: ct);
+}
+```
+
+When the partner publishes a new price list, `await cache.RemoveByTagAsync("lab-prices")` clears every price at once. Two differences from the hand-written version: `HybridCache` stores `null` results too (so an unknown test is remembered for the TTL unless you handle it), and values in the distributed layer are serialised, so they must be serialisable records. The pattern is unchanged: it is still a caching decorator, just built on a better cache.
 
 ### Stream decorators in one picture
 
 ```csharp
-await using var file   = File.Create("boq-export.csv.gz");                     // concrete component
+await using var file   = File.Create("appointments-2026-10.csv.gz");            // concrete component
 await using var gzip   = new GZipStream(file, CompressionLevel.SmallestSize);  // decorator: compression
 await using var buffer = new BufferedStream(gzip, 64 * 1024);                   // decorator: buffering
 await using var writer = new StreamWriter(buffer);                              // adapter: Stream -> text
-await writer.WriteLineAsync("code,description,qty,rate");
+await writer.WriteLineAsync("appointment_id,doctor,slot_start,status");
 ```
 
-`GZipStream` and `BufferedStream` are decorators: they *are* `Stream`s and *wrap* a `Stream`. `StreamWriter` is different. It's an *adapter* that turns a byte stream into a text-writing interface. Disposing the outer layer flushes and disposes the inner ones, in order. This one snippet shows Decorator and [Adapter](#/lesson/m06-adapter) side by side.
+`GZipStream` and `BufferedStream` are decorators: they *are* `Stream`s and *wrap* a `Stream`. `StreamWriter` is different. It's an *adapter* that turns a byte stream into a text-writing interface. Disposing the outer layer flushes and disposes the inner ones, in order. This one snippet shows Decorator and [Adapter](#/lesson/m06-adapter) side by side. Reading is the mirror image: `new GZipStream(File.OpenRead(path), CompressionMode.Decompress)` decompresses transparently for whoever reads it.
 
 ## Bad design vs good design
 
 **Bad: subclassing for each combination.**
 
 ```csharp
-public class HttpRateProvider { public virtual Task<MaterialRate?> GetRateAsync(...) { ... } }
-public class CachingHttpRateProvider : HttpRateProvider { public override async Task<MaterialRate?> GetRateAsync(...) { /* cache, then base */ } }
-public class LoggingCachingHttpRateProvider : CachingHttpRateProvider { /* log, then base */ }
-public class RetryingLoggingCachingHttpRateProvider : LoggingCachingHttpRateProvider { /* retry, then base */ }
-// and the CSV provider needs CachingCsvRateProvider, LoggingCachingCsvRateProvider, ...
+public class HttpLabPriceProvider { public virtual Task<LabTestPrice?> GetPriceAsync(...) { ... } }
+public class CachingHttpLabPriceProvider : HttpLabPriceProvider { public override async Task<LabTestPrice?> GetPriceAsync(...) { /* cache, then base */ } }
+public class LoggingCachingHttpLabPriceProvider : CachingHttpLabPriceProvider { /* log, then base */ }
+public class RetryingLoggingCachingHttpLabPriceProvider : LoggingCachingHttpLabPriceProvider { /* retry, then base */ }
+// and the CSV partner needs CachingCsvLabPriceProvider, LoggingCachingCsvLabPriceProvider, ...
 ```
 
 Problems:
 
-- The behaviours are fused to `HttpRateProvider` and can't be reused for the CSV provider.
+- The behaviours are fused to `HttpLabPriceProvider` and can't be reused for the CSV partner.
 - The order is frozen by the inheritance chain.
 - You can't get "logging without caching" without yet another class.
 - Testing caching requires a real HTTP stack, because the cache lives in a subclass of it.
@@ -603,7 +648,7 @@ Problems:
 catch (Exception ex) { _log.LogError(ex, "failed"); return null; }   // swallows errors: callers now see "not found"
 ```
 
-A logging decorator that turns failures into `null` changes the contract. The endpoint returns 404 for an outage. Decorators may add behaviour, but they must keep the component's contract: same results, same exceptions, unless changing them *is* the decorator's documented purpose (as with retries).
+A logging decorator that turns failures into `null` changes the contract. The endpoint returns 404 ("this test isn't offered in your city") during an outage, and patients go elsewhere. Decorators may add behaviour, but they must keep the component's contract: same results, same exceptions, unless changing them *is* the decorator's documented purpose (as with retries).
 
 **Good:** the implementation above. Each concern lives in one class, the core class only does HTTP, the chain is composed in one place, and each layer can be tested with a fake inner provider.
 
@@ -614,12 +659,12 @@ A logging decorator that turns failures into `null` changes the contract. The en
 :::
 
 :::callout type=mistake title="Retrying non-idempotent calls"
-A retry decorator around `CreatePaymentAsync` can charge a customer twice if the first attempt succeeded but its response was lost. Retry only idempotent operations, or use idempotency keys ([see the lesson](#/lesson/m10-idempotency)).
+A retry decorator around `BookAppointmentAsync` or `CapturePaymentAsync` can book the same slot twice or charge a patient twice if the first attempt succeeded but its response was lost. Retry only idempotent operations, or use idempotency keys ([see the lesson](#/lesson/m10-idempotency)).
 :::
 
 ## Practical playground
 
-Run the program and read the console output from top to bottom. It shows how the call travels through the layers. Then swap the order of `Retrying` and `Logging` in `Main` and predict the new output before running it again.
+Run the program and read the console output from top to bottom. It shows how an appointment-reminder SMS travels through the layers. Then swap the order of `Retrying` and `Logging` in `Main` and predict the new output before running it again.
 
 :::playground type=csharp title="Watch a decorator chain run"
 ```csharp file=Program.cs
@@ -668,24 +713,24 @@ public static class Program
     {
         IMessageSender sender = new LoggingSender(new RetryingSender(new FlakySmsSender(), maxAttempts: 3));
         Console.WriteLine("Chain: Logging(Retrying(Flaky))");
-        await sender.SendAsync("+919876543210", "Concrete pour at 06:00 tomorrow");
+        await sender.SendAsync("+919876543210", "Reminder: Dr. Mehta, tomorrow 10:30, Andheri clinic");
     }
 }
 ```
 :::
 
-With Logging outside Retrying, you see one "->" and one "<- ok", and the two failed attempts are hidden inside the retry layer. Swap them (`new RetryingSender(new LoggingSender(new FlakySmsSender()), 3)`) and logging now records *each attempt*, including two failures. Neither order is wrong. They answer different questions ("did the operation succeed?" versus "how often does the gateway fail?"), which is why order is a design decision.
+With Logging outside Retrying, you see one "->" and one "<- ok", and the two failed attempts are hidden inside the retry layer. Swap them (`new RetryingSender(new LoggingSender(new FlakySmsSender()), 3)`) and logging now records *each attempt*, including two failures. Neither order is wrong. They answer different questions ("did the reminder go out?" versus "how often does the SMS gateway fail?"), which is why order is a design decision. One caution that applies to real SMS: a timeout doesn't prove the message wasn't sent, so a retried reminder can arrive twice. For reminders that's acceptable; for one-time passwords or payments it may not be.
 
 ## Exercises
 
 :::exercise id=m06-decorator-ex1 difficulty=beginner kind=code title="A logging decorator that doesn't change behaviour"
-Write `LoggingGstRateService`, a decorator for `IGstRateService` that logs each lookup. The tests provide a simple in-memory logger.
+The clinic's pharmacy counter looks up the GST rate for each medicine by its HSN code (for example 3004, medicaments). Write `LoggingGstRateService`, a decorator for `IGstRateService` that logs each lookup. The tests provide a simple in-memory logger and a fake inner service that returns 5 %.
 ::requirements
 - On success, log one `Information` entry that contains the HSN code and the returned rate, and return the inner value unchanged.
 - On failure, log one `Error` entry carrying the exception, then rethrow the **same** exception object.
 - Call the inner service exactly once per call.
 ::acceptance
-- `GetRateAsync("7308")` returns 18 from the inner service and logs an Information message containing "7308" and "18".
+- `GetRateAsync("3004")` returns 5 from the inner service and logs an Information message containing "3004" and "5".
 - When the inner service throws, the same exception instance reaches the caller, and the Error entry carries it.
 - The inner service is called exactly once per lookup.
 ::hint
@@ -743,7 +788,7 @@ public sealed class FakeGst : IGstRateService
     public Task<decimal> GetRateAsync(string hsnCode, CancellationToken ct = default)
     {
         Calls++;
-        return Throw is null ? Task.FromResult(18m) : Task.FromException<decimal>(Throw);
+        return Throw is null ? Task.FromResult(5m) : Task.FromException<decimal>(Throw);
     }
 }
 
@@ -754,21 +799,21 @@ public class LoggingGstRateServiceTests
     {
         var inner = new FakeGst();
         var log = new ListLogger<LoggingGstRateService>();
-        var rate = await new LoggingGstRateService(inner, log).GetRateAsync("7308");
-        Assert.Equal(18m, rate);
+        var rate = await new LoggingGstRateService(inner, log).GetRateAsync("3004");
+        Assert.Equal(5m, rate);
         var entry = Assert.Single(log.Entries);
         Assert.Equal(LogLevel.Information, entry.Level);
-        Assert.Contains("7308", entry.Message);
-        Assert.Contains("18", entry.Message);
+        Assert.Contains("3004", entry.Message);
+        Assert.Contains("is 5", entry.Message);
     }
 
     [Fact]
     public async Task Logs_error_and_rethrows_same_exception()
     {
-        var boom = new InvalidOperationException("GST portal down");
+        var boom = new InvalidOperationException("GST rate table unavailable");
         var inner = new FakeGst { Throw = boom };
         var log = new ListLogger<LoggingGstRateService>();
-        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => new LoggingGstRateService(inner, log).GetRateAsync("7308"));
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => new LoggingGstRateService(inner, log).GetRateAsync("3004"));
         Assert.Same(boom, thrown);
         var entry = Assert.Single(log.Entries);
         Assert.Equal(LogLevel.Error, entry.Level);
@@ -780,8 +825,8 @@ public class LoggingGstRateServiceTests
     {
         var inner = new FakeGst();
         var svc = new LoggingGstRateService(inner, new ListLogger<LoggingGstRateService>());
-        await svc.GetRateAsync("2523");
-        await svc.GetRateAsync("7214");
+        await svc.GetRateAsync("3004");
+        await svc.GetRateAsync("9018");
         Assert.Equal(2, inner.Calls);
     }
 }
@@ -829,57 +874,57 @@ public sealed class LoggingGstRateService : IGstRateService
 The decorator is invisible to callers: same results, same exceptions. The only observable difference is the log entries, which is exactly its purpose.
 ::mistakes
 - `throw ex;` loses the original stack trace.
-- `return 0m;` in the `catch`. GST at 0 % on a failure is a very expensive bug.
+- `return 0m;` in the `catch`. Billing medicines at 0 % GST because a lookup failed is a very expensive bug.
 - String interpolation in log messages (`$"... {hsn}"`), which loses structured logging fields.
 ::extensions
 Add the elapsed time using `Stopwatch.GetTimestamp()` and `Stopwatch.GetElapsedTime(start)`, and skip the Error log for `OperationCanceledException` (a client disconnecting isn't a server error).
 :::
 
 :::exercise id=m06-decorator-ex2 difficulty=beginner kind=code title="A caching repository decorator with invalidation"
-Write `CachingProjectRepository`, a decorator for `IProjectRepository` that caches `GetByIdAsync` results in `IMemoryCache` and invalidates on update.
+The doctor-profile page (name, speciality, consultation fee) is read thousands of times a day and edited a few times a month. Write `CachingDoctorRepository`, a decorator for `IDoctorRepository` that caches `GetByIdAsync` results in `IMemoryCache` and invalidates on update.
 ::requirements
-- Cache key `project:{id}`, with an absolute expiry of the given TTL (default 5 minutes).
-- Don't cache `null` (unknown project), so a project created later isn't hidden.
+- Cache key `doctor:{id}`, with an absolute expiry of the given TTL (default 5 minutes).
+- Don't cache `null` (unknown doctor), so a doctor onboarded a minute later isn't hidden.
 - `UpdateAsync` calls the inner repository first, and removes the cache entry **only if** the update succeeded.
 ::acceptance
 - Two `GetByIdAsync(42)` calls hit the inner repository once.
 - Two lookups of an unknown id hit the inner repository twice.
-- After `UpdateAsync`, the next `GetByIdAsync` returns the updated project from the inner repository.
-- If the inner `UpdateAsync` throws, the exception propagates and the old cached value is still served.
+- After `UpdateAsync` changes the fee from ₹600 to ₹700, the next `GetByIdAsync` returns ₹700 from the inner repository.
+- If the inner `UpdateAsync` throws, the exception propagates and the old cached value (₹600) is still served.
 ::hint
-Reads: `if (cache.TryGetValue(key, out Project? p)) return p;`, otherwise load, and if not null, `Set` with the TTL.
+Reads: `if (cache.TryGetValue(key, out Doctor? d)) return d;`, otherwise load, and if not null, `Set` with the TTL.
 ::hint
 Writes: `await inner.UpdateAsync(...)`, then `cache.Remove(key)`. If the first line throws, the second never runs, which is what you want.
 ::hint
 Why not update the cache with the new value instead of removing it? Think about what the database might change: triggers, computed columns, concurrency tokens.
 ::hint
-`cache.Set(key, project, ttl)` with a `TimeSpan` sets an absolute expiry relative to now.
+`cache.Set(key, doctor, ttl)` with a `TimeSpan` sets an absolute expiry relative to now.
 ::starter
-```csharp file=CachingProjectRepository.cs
+```csharp file=CachingDoctorRepository.cs
 using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Caching.Memory;
 
-public sealed record Project(int Id, string Name, decimal PhysicalProgressPercent);
+public sealed record Doctor(int Id, string Name, string Speciality, decimal ConsultationFee);
 
-public interface IProjectRepository
+public interface IDoctorRepository
 {
-    Task<Project?> GetByIdAsync(int id, CancellationToken ct = default);
-    Task UpdateAsync(Project project, CancellationToken ct = default);
+    Task<Doctor?> GetByIdAsync(int id, CancellationToken ct = default);
+    Task UpdateAsync(Doctor doctor, CancellationToken ct = default);
 }
 
-public sealed class CachingProjectRepository : IProjectRepository
+public sealed class CachingDoctorRepository : IDoctorRepository
 {
-    public CachingProjectRepository(IProjectRepository inner, IMemoryCache cache, TimeSpan? ttl = null) =>
+    public CachingDoctorRepository(IDoctorRepository inner, IMemoryCache cache, TimeSpan? ttl = null) =>
         throw new NotImplementedException();
 
-    public Task<Project?> GetByIdAsync(int id, CancellationToken ct = default) => throw new NotImplementedException();
-    public Task UpdateAsync(Project project, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task<Doctor?> GetByIdAsync(int id, CancellationToken ct = default) => throw new NotImplementedException();
+    public Task UpdateAsync(Doctor doctor, CancellationToken ct = default) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=CachingProjectRepositoryTests.cs
+```csharp file=CachingDoctorRepositoryTests.cs
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -887,32 +932,32 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Caching.Memory;
 using Xunit;
 
-public sealed class InMemoryRepo : IProjectRepository
+public sealed class InMemoryDoctors : IDoctorRepository
 {
-    public Dictionary<int, Project> Rows { get; } = new() { [42] = new Project(42, "NH-44 Package 3", 61.5m) };
+    public Dictionary<int, Doctor> Rows { get; } = new() { [42] = new Doctor(42, "Dr. Asha Mehta", "Cardiology", 600m) };
     public int Gets { get; private set; }
     public bool FailUpdates { get; set; }
 
-    public Task<Project?> GetByIdAsync(int id, CancellationToken ct = default)
+    public Task<Doctor?> GetByIdAsync(int id, CancellationToken ct = default)
     {
         Gets++;
-        return Task.FromResult(Rows.TryGetValue(id, out var p) ? p : null);
+        return Task.FromResult(Rows.TryGetValue(id, out var d) ? d : null);
     }
 
-    public Task UpdateAsync(Project project, CancellationToken ct = default)
+    public Task UpdateAsync(Doctor doctor, CancellationToken ct = default)
     {
         if (FailUpdates) throw new InvalidOperationException("deadlock");
-        Rows[project.Id] = project;
+        Rows[doctor.Id] = doctor;
         return Task.CompletedTask;
     }
 }
 
-public class CachingProjectRepositoryTests
+public class CachingDoctorRepositoryTests
 {
-    private static (CachingProjectRepository Sut, InMemoryRepo Inner) Create()
+    private static (CachingDoctorRepository Sut, InMemoryDoctors Inner) Create()
     {
-        var inner = new InMemoryRepo();
-        return (new CachingProjectRepository(inner, new MemoryCache(new MemoryCacheOptions())), inner);
+        var inner = new InMemoryDoctors();
+        return (new CachingDoctorRepository(inner, new MemoryCache(new MemoryCacheOptions())), inner);
     }
 
     [Fact]
@@ -939,9 +984,9 @@ public class CachingProjectRepositoryTests
     {
         var (sut, inner) = Create();
         await sut.GetByIdAsync(42);
-        await sut.UpdateAsync(new Project(42, "NH-44 Package 3", 64.0m));
+        await sut.UpdateAsync(new Doctor(42, "Dr. Asha Mehta", "Cardiology", 700m));
         var after = await sut.GetByIdAsync(42);
-        Assert.Equal(64.0m, after!.PhysicalProgressPercent);
+        Assert.Equal(700m, after!.ConsultationFee);
         Assert.Equal(2, inner.Gets);
     }
 
@@ -951,9 +996,9 @@ public class CachingProjectRepositoryTests
         var (sut, inner) = Create();
         await sut.GetByIdAsync(42);
         inner.FailUpdates = true;
-        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.UpdateAsync(new Project(42, "x", 99m)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.UpdateAsync(new Doctor(42, "x", "x", 999m)));
         var still = await sut.GetByIdAsync(42);
-        Assert.Equal(61.5m, still!.PhysicalProgressPercent);
+        Assert.Equal(600m, still!.ConsultationFee);
         Assert.Equal(1, inner.Gets);
     }
 
@@ -961,7 +1006,7 @@ public class CachingProjectRepositoryTests
     public async Task Different_ids_are_cached_separately()
     {
         var (sut, inner) = Create();
-        inner.Rows[43] = new Project(43, "Bridge at Km 18", 20m);
+        inner.Rows[43] = new Doctor(43, "Dr. Rahul Iyer", "Dermatology", 500m);
         await sut.GetByIdAsync(42);
         await sut.GetByIdAsync(43);
         await sut.GetByIdAsync(42);
@@ -970,63 +1015,65 @@ public class CachingProjectRepositoryTests
 }
 ```
 ::solution
-```csharp file=CachingProjectRepository.cs
+```csharp file=CachingDoctorRepository.cs
 using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Caching.Memory;
 
-public sealed record Project(int Id, string Name, decimal PhysicalProgressPercent);
+public sealed record Doctor(int Id, string Name, string Speciality, decimal ConsultationFee);
 
-public interface IProjectRepository
+public interface IDoctorRepository
 {
-    Task<Project?> GetByIdAsync(int id, CancellationToken ct = default);
-    Task UpdateAsync(Project project, CancellationToken ct = default);
+    Task<Doctor?> GetByIdAsync(int id, CancellationToken ct = default);
+    Task UpdateAsync(Doctor doctor, CancellationToken ct = default);
 }
 
-public sealed class CachingProjectRepository : IProjectRepository
+public sealed class CachingDoctorRepository : IDoctorRepository
 {
-    private readonly IProjectRepository _inner;
+    private readonly IDoctorRepository _inner;
     private readonly IMemoryCache _cache;
     private readonly TimeSpan _ttl;
 
-    public CachingProjectRepository(IProjectRepository inner, IMemoryCache cache, TimeSpan? ttl = null)
+    public CachingDoctorRepository(IDoctorRepository inner, IMemoryCache cache, TimeSpan? ttl = null)
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
         _cache = cache ?? throw new ArgumentNullException(nameof(cache));
         _ttl = ttl ?? TimeSpan.FromMinutes(5);
     }
 
-    private static string Key(int id) => $"project:{id}";
+    private static string Key(int id) => $"doctor:{id}";
 
-    public async Task<Project?> GetByIdAsync(int id, CancellationToken ct = default)
+    public async Task<Doctor?> GetByIdAsync(int id, CancellationToken ct = default)
     {
-        if (_cache.TryGetValue(Key(id), out Project? cached)) return cached;
-        var project = await _inner.GetByIdAsync(id, ct);
-        if (project is not null) _cache.Set(Key(id), project, _ttl);
-        return project;
+        if (_cache.TryGetValue(Key(id), out Doctor? cached)) return cached;
+        var doctor = await _inner.GetByIdAsync(id, ct);
+        if (doctor is not null) _cache.Set(Key(id), doctor, _ttl);
+        return doctor;
     }
 
-    public async Task UpdateAsync(Project project, CancellationToken ct = default)
+    public async Task UpdateAsync(Doctor doctor, CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(project);
-        await _inner.UpdateAsync(project, ct);   // if this throws, the cache stays as it was
-        _cache.Remove(Key(project.Id));
+        ArgumentNullException.ThrowIfNull(doctor);
+        await _inner.UpdateAsync(doctor, ct);   // if this throws, the cache stays as it was
+        _cache.Remove(Key(doctor.Id));
     }
 }
 ```
 
 Removing instead of overwriting is the safer default: the next read gets exactly what the database stored, including anything triggers or defaults changed. This is the cache-aside pattern described in the [caching patterns lesson](#/lesson/m12-cache-patterns).
+
+Cache only what's safe to share. A doctor's public profile is fine. A patient's records are personal health data: if you cache them at all, key them by patient, keep the TTL short, and make sure authorisation runs *before* the cache (exercise 4).
 ::mistakes
 - Removing the key *before* the update. A concurrent read can then re-cache the old value between the remove and the write.
-- Caching `null` with the same TTL, so a newly created project is "not found" for 5 minutes.
-- Building the key from `project.Name` or another mutable field.
+- Caching `null` with the same TTL, so a newly onboarded doctor is "not found" for 5 minutes.
+- Building the key from `doctor.Name` or another mutable field.
 ::extensions
-With several API instances, an in-memory cache can't be invalidated across servers. Explain how you'd switch to `HybridCache` or Redis with the *same* decorator interface, and what TTL you'd accept as the staleness bound.
+With several API instances, an in-memory cache can't be invalidated across servers: instance A clears its entry, instance B keeps showing ₹600 for up to 5 minutes. Explain how you'd switch to `HybridCache` (with Redis as the second level) behind the *same* decorator interface, and what TTL you'd accept as the staleness bound.
 :::
 
 :::exercise id=m06-decorator-ex3 difficulty=intermediate kind=code title="Decorate HttpClient with DelegatingHandlers"
-Write two `DelegatingHandler`s: `CorrelationIdHandler`, which adds an `X-Correlation-ID` header if it's missing, and `RetryOn503Handler`, which retries idempotent requests on `503 Service Unavailable`.
+The clinic app calls the partner lab's API for prices and report status. Write two `DelegatingHandler`s: `CorrelationIdHandler`, which adds an `X-Correlation-ID` header if it's missing, and `RetryOn503Handler`, which retries idempotent requests on `503 Service Unavailable`.
 ::requirements
 - `CorrelationIdHandler(Func<string> idFactory)` adds the header from the factory unless the request already has one. An existing value is never overwritten.
 - `RetryOn503Handler(int maxRetries, TimeSpan delay)` retries only `GET`, `HEAD`, `PUT`, `DELETE` and `OPTIONS` (idempotent methods), never `POST`.
@@ -1035,7 +1082,7 @@ Write two `DelegatingHandler`s: `CorrelationIdHandler`, which adds an `X-Correla
 ::acceptance
 - A GET that receives 503, 503, 200 returns 200 after 3 attempts.
 - A GET that keeps receiving 503 with `maxRetries: 2` returns 503 after 3 attempts.
-- A POST receiving 503 is sent once.
+- A POST (booking a home sample collection) receiving 503 is sent once.
 - Every attempt carries the correlation header, and a caller-supplied header is preserved.
 - The two discarded 503 responses are disposed; the returned response is not.
 ::hint
@@ -1114,7 +1161,7 @@ public class HandlersTests
             InnerHandler = new RetryOn503Handler(retries, TimeSpan.Zero) { InnerHandler = stub },
         });
 
-    private static HttpRequestMessage Req(HttpMethod m) => new(m, "https://rates.example.com/v1/rates/STEEL");
+    private static HttpRequestMessage Req(HttpMethod m) => new(m, "https://partner-lab.example.com/v1/tests/CBC/price?city=Pune");
 
     [Fact]
     public async Task Get_retries_until_success()
@@ -1226,9 +1273,9 @@ public sealed class RetryOn503Handler : DelegatingHandler
 }
 ```
 
-Register them with `services.AddTransient<CorrelationIdHandler>(...)` and `.AddHttpMessageHandler<...>()` on a named or typed client. Handlers registered first are outermost. For production retries, Microsoft's `AddStandardResilienceHandler` (from the `Microsoft.Extensions.Http.Resilience` package) adds retries with jitter, timeouts and a circuit breaker. Writing one yourself shows what that package does underneath.
+Register them with `services.AddTransient<CorrelationIdHandler>(...)` and `.AddHttpMessageHandler<...>()` on a named or typed client. Handlers registered first are outermost. For production retries, Microsoft's `AddStandardResilienceHandler` (from the `Microsoft.Extensions.Http.Resilience` package) adds retries with jitter, total and per-attempt timeouts, rate limiting and a circuit breaker. Writing one yourself shows what that package does underneath. In practice, prefer the built-in W3C `traceparent` header that `HttpClient` already propagates with OpenTelemetry; a custom correlation header is for partners that require one.
 ::mistakes
-- Retrying POST. If the first request reached the server, you may create two orders.
+- Retrying POST. If the first request reached the partner, you may book two home sample collections.
 - Not disposing discarded responses. Under load this ties up connections in the pool.
 - Overwriting a caller's correlation id, which breaks end-to-end tracing ([see the lesson](#/lesson/m10-correlation)).
 - Resending a request whose content stream was already read. For requests with bodies, buffer the content or rebuild the request.
@@ -1237,22 +1284,22 @@ Honour the `Retry-After` header when the server sends one, capped at 10 seconds.
 :::
 
 :::exercise id=m06-decorator-ex4 difficulty=intermediate kind=design title="Refactor: pull cross-cutting code out of a repository"
-This repository is 280 lines long. Here is a representative method:
+The appointment repository of a multi-clinic booking system is 280 lines long. Here is a representative method:
 
 ```csharp
-public async Task<IReadOnlyList<MeasurementBookEntry>> GetEntriesAsync(int contractId, CancellationToken ct)
+public async Task<IReadOnlyList<Appointment>> GetForDoctorAsync(int doctorId, DateOnly day, CancellationToken ct)
 {
-    if (!_user.HasPermission("mb.read", contractId)) throw new ForbiddenException();
-    var key = $"mb:{contractId}";
-    if (_cache.TryGetValue(key, out IReadOnlyList<MeasurementBookEntry>? hit)) { _metrics.Hit(); return hit!; }
+    if (!_user.HasPermission("appointments.read", doctorId)) throw new ForbiddenException();
+    var key = $"appts:{doctorId}:{day:yyyy-MM-dd}";
+    if (_cache.TryGetValue(key, out IReadOnlyList<Appointment>? hit)) { _metrics.Hit(); return hit!; }
     var sw = Stopwatch.StartNew();
     for (var i = 0; ; i++)
     {
         try
         {
-            var rows = await _db.QueryAsync<MeasurementBookEntry>("SELECT ... WHERE contract_id = @id", new { id = contractId });
+            var rows = await _db.QueryAsync<Appointment>("SELECT ... WHERE doctor_id = @id AND slot_date = @day", new { id = doctorId, day });
             _cache.Set(key, rows, TimeSpan.FromMinutes(2));
-            _log.LogInformation("MB {Contract} {Count} rows {Ms}ms", contractId, rows.Count, sw.ElapsedMilliseconds);
+            _log.LogInformation("Appts {Doctor} {Day} {Count} rows {Ms}ms", doctorId, day, rows.Count, sw.ElapsedMilliseconds);
             return rows;
         }
         catch (NpgsqlException ex) when (ex.IsTransient && i < 2) { await Task.Delay(100, ct); }
@@ -1280,37 +1327,38 @@ Logging and timing of database calls may already come from OpenTelemetry instrum
 **Proposed chain** (outermost first):
 
 ```text
-AuthorizingMeasurementBookRepository     // 1. reject early; never serve cached data to an unauthorised user
-  -> CachingMeasurementBookRepository     // 2. reads only; invalidate on writes; emits hit/miss metrics
-    -> SqlMeasurementBookRepository       // 3. SQL + mapping only
+AuthorizingAppointmentRepository     // 1. reject early; never serve cached data to an unauthorised user
+  -> CachingAppointmentRepository     // 2. reads only; invalidate on writes; emits hit/miss metrics
+    -> SqlAppointmentRepository       // 3. SQL + mapping only
 ```
 
-- **Authorisation outermost.** If caching were outside it, user B could get user A's cached entries without a permission check. Arguably authorisation belongs in the application layer (an endpoint filter or policy) rather than a repository decorator. If the codebase already uses ASP.NET Core authorisation policies, put it there and drop this decorator.
-- **Caching** wraps only read methods and invalidates `mb:{contractId}` in write methods, after a successful write. Hit/miss counters live here because only this layer knows about hits. Use `System.Diagnostics.Metrics` counters.
+- **Authorisation outermost.** If caching were outside it, a receptionist from another clinic could receive a doctor's patient list that was cached for an authorised user, without any permission check. With health data, that is a reportable privacy breach, not just a bug. Arguably authorisation belongs in the application layer (an endpoint filter or policy) rather than a repository decorator. If the codebase already uses ASP.NET Core authorisation policies, put it there and drop this decorator.
+- **Caching** wraps only read methods and invalidates `appts:{doctorId}:{day}` in write methods (book, cancel, reschedule), after a successful write. Two minutes of staleness is acceptable for a doctor's day view but *not* for the "is this slot free?" check during booking: that must read the database (and rely on a unique constraint on `(doctor_id, slot_start)`), never the cache. Hit/miss counters live here because only this layer knows about hits. Use `System.Diagnostics.Metrics` counters.
 - **Retries: not a decorator.** Configure the data access layer: with EF Core, `UseNpgsql(cs, o => o.EnableRetryOnFailure())`; with Dapper, a small helper for the connection or command, or a resilience pipeline. Retrying at the repository level can double-retry with the driver and would wrap whole multi-statement operations.
-- **Logging and timing: not a decorator.** Npgsql and EF Core emit OpenTelemetry traces and metrics with durations. Add a decorator only for *business* logging that tracing can't provide.
+- **Logging and timing: not a decorator.** Npgsql and EF Core emit OpenTelemetry traces and metrics with durations. Add a decorator only for *business* logging that tracing can't provide, such as an audit trail of who viewed which patient's appointments.
 
 **DI** (built-in only):
 
 ```csharp
-services.AddScoped<IMeasurementBookRepository, SqlMeasurementBookRepository>();
-services.Decorate<IMeasurementBookRepository, CachingMeasurementBookRepository>();
-services.Decorate<IMeasurementBookRepository, AuthorizingMeasurementBookRepository>();
+services.AddScoped<IAppointmentRepository, SqlAppointmentRepository>();
+services.Decorate<IAppointmentRepository, CachingAppointmentRepository>();
+services.Decorate<IAppointmentRepository, AuthorizingAppointmentRepository>();
 ```
 
 All three are scoped. The cache data itself lives in the singleton `IMemoryCache`, so a scoped caching decorator loses nothing. The authorising decorator needs the scoped current-user service, so it must be scoped.
 
-**Tests**: SQL repository against a real PostgreSQL in a container (Testcontainers) for queries and mapping. Caching decorator with a fake inner repository (hits, misses, invalidation, no caching of empty or forbidden results). Authorising decorator with a fake user (forbidden → exception, and the inner repository is **never** called). One wiring test that resolves `IMeasurementBookRepository` from the real container and asserts the outer type is `AuthorizingMeasurementBookRepository`.
+**Tests**: SQL repository against a real PostgreSQL in a container (Testcontainers) for queries and mapping. Caching decorator with a fake inner repository (hits, misses, invalidation, no caching of empty or forbidden results). Authorising decorator with a fake user (forbidden → exception, and the inner repository is **never** called). One wiring test that resolves `IAppointmentRepository` from the real container and asserts the outer type is `AuthorizingAppointmentRepository`.
 
 **Result**: nine methods lose about 15 lines each. Each concern is tested once instead of nine times, and the SQL is readable again.
 ::mistakes
-- Placing caching outside authorisation, which leaks data between users.
+- Placing caching outside authorisation, which leaks patient data between users.
 - Writing a retry decorator on top of a driver-level retry strategy, so a transient blip causes 3 × 3 attempts.
+- Using the cached day view to decide whether a slot is free, which double-books patients.
 - A decorator for every concern by reflex, including ones the platform already handles (tracing).
 :::
 
 :::exercise id=m06-decorator-ex5 difficulty=advanced kind=code title="A single-flight caching decorator (no cache stampede)"
-When a popular cache entry expires, 200 concurrent requests may all miss and all call the slow rates API at once. That's a *cache stampede*. Write `SingleFlightCachingRateSource`, a decorator that lets only **one** inner call happen per key at a time. Concurrent callers for the same key share its result.
+At 9:00 a.m. the clinic app launches a ₹499 full-body checkup offer. When a popular price entry expires, 200 concurrent requests may all miss and all call the slow partner lab API at once. That's a *cache stampede*. Write `SingleFlightCachingPriceSource`, a decorator that lets only **one** inner call happen per key at a time. Concurrent callers for the same key share its result.
 ::requirements
 - Concurrent misses for the same key cause exactly one inner call, and all callers get its value.
 - Successful values are cached for `ttl`, measured with the injected `TimeProvider`. After expiry, the next call refreshes.
@@ -1318,7 +1366,7 @@ When a popular cache entry expires, 200 concurrent requests may all miss and all
 - A caller cancelling its own wait must not cancel the shared inner call for the others.
 - Different keys don't block each other.
 ::acceptance
-- 10 concurrent calls for "STEEL-FE500" cause 1 inner call and all return ₹61,000.
+- 10 concurrent calls for "FULL-BODY" cause 1 inner call and all return ₹499.
 - Within the TTL, further calls cause no inner calls. After advancing the clock past the TTL, there is one more.
 - A failed inner call surfaces to its waiters, and an immediate retry calls inner again.
 - If caller A cancels, caller B still gets the value, and inner is called once.
@@ -1341,17 +1389,17 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-public interface IRateSource
+public interface IPriceSource
 {
-    Task<decimal> GetAsync(string materialCode, CancellationToken ct = default);
+    Task<decimal> GetAsync(string testCode, CancellationToken ct = default);
 }
 
-public sealed class SingleFlightCachingRateSource : IRateSource
+public sealed class SingleFlightCachingPriceSource : IPriceSource
 {
-    public SingleFlightCachingRateSource(IRateSource inner, TimeSpan ttl, TimeProvider time) =>
+    public SingleFlightCachingPriceSource(IPriceSource inner, TimeSpan ttl, TimeProvider time) =>
         throw new NotImplementedException();
 
-    public Task<decimal> GetAsync(string materialCode, CancellationToken ct = default) =>
+    public Task<decimal> GetAsync(string testCode, CancellationToken ct = default) =>
         throw new NotImplementedException();
 }
 ```
@@ -1369,7 +1417,7 @@ public sealed class ManualTime : TimeProvider
     public override DateTimeOffset GetUtcNow() => Now;
 }
 
-public sealed class GatedSource : IRateSource
+public sealed class GatedSource : IPriceSource
 {
     private int _calls;
     public int Calls => Volatile.Read(ref _calls);
@@ -1377,11 +1425,11 @@ public sealed class GatedSource : IRateSource
     public bool Open { get; set; }
     public Exception? FailWith { get; set; }
 
-    public async Task<decimal> GetAsync(string materialCode, CancellationToken ct = default)
+    public async Task<decimal> GetAsync(string testCode, CancellationToken ct = default)
     {
         Interlocked.Increment(ref _calls);
         if (FailWith is not null) { var ex = FailWith; FailWith = null; await Task.Yield(); throw ex; }
-        if (Open) return materialCode.Length * 1000m;
+        if (Open) return testCode.Length * 100m;   // e.g. "HBA1C" -> 500
         return await Gate.Task;
     }
 }
@@ -1392,12 +1440,12 @@ public class SingleFlightTests
     public async Task Concurrent_misses_share_one_inner_call()
     {
         var inner = new GatedSource();
-        var sut = new SingleFlightCachingRateSource(inner, TimeSpan.FromMinutes(10), new ManualTime());
-        var tasks = Enumerable.Range(0, 10).Select(_ => sut.GetAsync("STEEL-FE500")).ToArray();
+        var sut = new SingleFlightCachingPriceSource(inner, TimeSpan.FromMinutes(10), new ManualTime());
+        var tasks = Enumerable.Range(0, 10).Select(_ => sut.GetAsync("FULL-BODY")).ToArray();
         await Task.Delay(50);
-        inner.Gate.SetResult(61_000m);
+        inner.Gate.SetResult(499m);
         var results = await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.All(results, r => Assert.Equal(61_000m, r));
+        Assert.All(results, r => Assert.Equal(499m, r));
         Assert.Equal(1, inner.Calls);
     }
 
@@ -1406,23 +1454,23 @@ public class SingleFlightTests
     {
         var time = new ManualTime();
         var inner = new GatedSource { Open = true };
-        var sut = new SingleFlightCachingRateSource(inner, TimeSpan.FromMinutes(10), time);
-        await sut.GetAsync("CEMENT");
+        var sut = new SingleFlightCachingPriceSource(inner, TimeSpan.FromMinutes(10), time);
+        await sut.GetAsync("CBC");
         time.Now = time.Now.AddMinutes(9);
-        await sut.GetAsync("CEMENT");
+        await sut.GetAsync("CBC");
         Assert.Equal(1, inner.Calls);
         time.Now = time.Now.AddMinutes(2);
-        await sut.GetAsync("CEMENT");
+        await sut.GetAsync("CBC");
         Assert.Equal(2, inner.Calls);
     }
 
     [Fact]
     public async Task Failures_are_not_cached()
     {
-        var inner = new GatedSource { Open = true, FailWith = new TimeoutException("rates API slow") };
-        var sut = new SingleFlightCachingRateSource(inner, TimeSpan.FromMinutes(10), new ManualTime());
-        await Assert.ThrowsAsync<TimeoutException>(() => sut.GetAsync("SAND"));
-        Assert.Equal(4000m, await sut.GetAsync("SAND"));
+        var inner = new GatedSource { Open = true, FailWith = new TimeoutException("lab API slow") };
+        var sut = new SingleFlightCachingPriceSource(inner, TimeSpan.FromMinutes(10), new ManualTime());
+        await Assert.ThrowsAsync<TimeoutException>(() => sut.GetAsync("HBA1C"));
+        Assert.Equal(500m, await sut.GetAsync("HBA1C"));
         Assert.Equal(2, inner.Calls);
     }
 
@@ -1430,14 +1478,14 @@ public class SingleFlightTests
     public async Task One_callers_cancellation_does_not_affect_others()
     {
         var inner = new GatedSource();
-        var sut = new SingleFlightCachingRateSource(inner, TimeSpan.FromMinutes(10), new ManualTime());
+        var sut = new SingleFlightCachingPriceSource(inner, TimeSpan.FromMinutes(10), new ManualTime());
         using var cts = new CancellationTokenSource();
-        var a = sut.GetAsync("BITUMEN", cts.Token);
-        var b = sut.GetAsync("BITUMEN");
+        var a = sut.GetAsync("VITAMIN-D", cts.Token);
+        var b = sut.GetAsync("VITAMIN-D");
         cts.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => a);
-        inner.Gate.SetResult(52_000m);
-        Assert.Equal(52_000m, await b.WaitAsync(TimeSpan.FromSeconds(2)));
+        inner.Gate.SetResult(1_400m);
+        Assert.Equal(1_400m, await b.WaitAsync(TimeSpan.FromSeconds(2)));
         Assert.Equal(1, inner.Calls);
     }
 
@@ -1445,8 +1493,8 @@ public class SingleFlightTests
     public async Task Different_keys_are_independent()
     {
         var inner = new GatedSource { Open = true };
-        var sut = new SingleFlightCachingRateSource(inner, TimeSpan.FromMinutes(10), new ManualTime());
-        await Task.WhenAll(sut.GetAsync("CEMENT"), sut.GetAsync("STEEL"));
+        var sut = new SingleFlightCachingPriceSource(inner, TimeSpan.FromMinutes(10), new ManualTime());
+        await Task.WhenAll(sut.GetAsync("CBC"), sut.GetAsync("TSH"));
         Assert.Equal(2, inner.Calls);
     }
 }
@@ -1459,12 +1507,12 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-public interface IRateSource
+public interface IPriceSource
 {
-    Task<decimal> GetAsync(string materialCode, CancellationToken ct = default);
+    Task<decimal> GetAsync(string testCode, CancellationToken ct = default);
 }
 
-public sealed class SingleFlightCachingRateSource : IRateSource
+public sealed class SingleFlightCachingPriceSource : IPriceSource
 {
     private sealed class Entry(Task<decimal> task)
     {
@@ -1478,11 +1526,11 @@ public sealed class SingleFlightCachingRateSource : IRateSource
     }
 
     private readonly ConcurrentDictionary<string, Entry> _entries = new(StringComparer.OrdinalIgnoreCase);
-    private readonly IRateSource _inner;
+    private readonly IPriceSource _inner;
     private readonly TimeSpan _ttl;
     private readonly TimeProvider _time;
 
-    public SingleFlightCachingRateSource(IRateSource inner, TimeSpan ttl, TimeProvider time)
+    public SingleFlightCachingPriceSource(IPriceSource inner, TimeSpan ttl, TimeProvider time)
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
         _time = time ?? throw new ArgumentNullException(nameof(time));
@@ -1490,13 +1538,13 @@ public sealed class SingleFlightCachingRateSource : IRateSource
         _ttl = ttl;
     }
 
-    public Task<decimal> GetAsync(string materialCode, CancellationToken ct = default)
+    public Task<decimal> GetAsync(string testCode, CancellationToken ct = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(materialCode);
+        ArgumentException.ThrowIfNullOrWhiteSpace(testCode);
         while (true)
         {
             var nowTicks = _time.GetUtcNow().UtcTicks;
-            _entries.TryGetValue(materialCode, out var existing);
+            _entries.TryGetValue(testCode, out var existing);
 
             // Pending, or completed and still fresh: join it.
             if (existing is not null && !(existing.Task.IsCompletedSuccessfully && existing.ExpiresAtUtcTicks <= nowTicks))
@@ -1506,11 +1554,11 @@ public sealed class SingleFlightCachingRateSource : IRateSource
             var tcs = new TaskCompletionSource<decimal>(TaskCreationOptions.RunContinuationsAsynchronously);
             var entry = new Entry(tcs.Task);
             var won = existing is null
-                ? _entries.TryAdd(materialCode, entry)
-                : _entries.TryUpdate(materialCode, entry, existing);
+                ? _entries.TryAdd(testCode, entry)
+                : _entries.TryUpdate(testCode, entry, existing);
             if (!won) continue;   // someone else just inserted; loop and join theirs
 
-            _ = FetchAsync(materialCode, entry, tcs);
+            _ = FetchAsync(testCode, entry, tcs);
             return tcs.Task.WaitAsync(ct);
         }
     }
@@ -1533,7 +1581,7 @@ public sealed class SingleFlightCachingRateSource : IRateSource
 }
 ```
 
-Caching the *task* rather than the value is the key move. A pending task naturally represents "in flight". `TryAdd`/`TryUpdate` pick exactly one winner per key without locks. `WaitAsync(ct)` gives each caller its own cancellation. In production, consider `HybridCache` (.NET 9+), which provides stampede protection out of the box. This exercise shows the mechanism it uses.
+Caching the *task* rather than the value is the key move. A pending task naturally represents "in flight". `TryAdd`/`TryUpdate` pick exactly one winner per key without locks. `WaitAsync(ct)` gives each caller its own cancellation. In production, use `HybridCache` (.NET 9+), whose `GetOrCreateAsync` provides this stampede protection out of the box, per server. This exercise shows the mechanism it uses. Two limits of this version: the dictionary never shrinks (fine for a few thousand test codes, not for unbounded keys), and with the shared inner call running on `CancellationToken.None`, a hung partner API keeps the entry pending, so the inner call must have its own timeout.
 ::alternatives
 `Lazy<Task<T>>` inside `IMemoryCache.GetOrCreate` is a common shortcut, but `GetOrCreate` alone doesn't stop concurrent factory calls. Wrap the factory result in `Lazy` and evict failed lazies explicitly. A per-key `SemaphoreSlim` also works but needs cleanup of the semaphores.
 ::mistakes
@@ -1559,11 +1607,11 @@ Decorators are among the easiest classes to test, because their only collaborato
 [Fact]
 public async Task Retry_stops_after_max_attempts_and_rethrows()
 {
-    var inner = new AlwaysFailingRates();   // throws RateUnavailableException, counts calls
-    var sut = new RetryingMaterialRateProvider(inner,
-        Options.Create(new RateRetryOptions { MaxAttempts = 3, BaseDelay = TimeSpan.Zero }),
-        TimeProvider.System, NullLogger<RetryingMaterialRateProvider>.Instance);
-    await Assert.ThrowsAsync<RateUnavailableException>(() => sut.GetRateAsync("STEEL", "Pune"));
+    var inner = new AlwaysFailingPrices();   // throws PriceUnavailableException, counts calls
+    var sut = new RetryingLabPriceProvider(inner,
+        Options.Create(new PriceRetryOptions { MaxAttempts = 3, BaseDelay = TimeSpan.Zero }),
+        TimeProvider.System, NullLogger<RetryingLabPriceProvider>.Instance);
+    await Assert.ThrowsAsync<PriceUnavailableException>(() => sut.GetPriceAsync("CBC", "Pune"));
     Assert.Equal(3, inner.Calls);
 }
 ```
@@ -1576,29 +1624,29 @@ Inject `TimeProvider` so backoff tests don't actually sleep. The `Microsoft.Exte
 
 ```csharp
 [Fact]
-public void Rate_provider_chain_is_logging_then_caching()
+public void Price_provider_chain_is_logging_then_caching()
 {
     using var app = new WebApplicationFactory<Program>();
     using var scope = app.Services.CreateScope();
-    var provider = scope.ServiceProvider.GetRequiredService<IMaterialRateProvider>();
-    Assert.IsType<LoggingMaterialRateProvider>(provider);
+    var provider = scope.ServiceProvider.GetRequiredService<ILabPriceProvider>();
+    Assert.IsType<LoggingLabPriceProvider>(provider);
 }
 ```
 
-This catches the most common decorator bug in real projects: someone registers `IMaterialRateProvider` again later in `Program.cs`, and the chain silently disappears.
+This catches the most common decorator bug in real projects: someone registers `ILabPriceProvider` again later in `Program.cs`, and the chain silently disappears.
 
 **4. Order-sensitive behaviour, end to end.** One integration test that proves "a cache hit doesn't call HTTP" (count stub-handler calls across two requests) documents the order better than any comment.
 
-**Extensibility.** A new concern means a new decorator plus one `Decorate` line. A new implementation of the component (a CSV rate importer) gets every existing decorator for free.
+**Extensibility.** A new concern means a new decorator plus one `Decorate` line. A new implementation of the component (the CSV price-list partner) gets every existing decorator for free.
 
 ## Real-world application
 
-- **`System.IO` streams**: compression, buffering, encryption and TLS layers around file and network streams.
+- **`System.IO` streams**: compression, buffering, encryption and TLS layers around file and network streams; ASP.NET Core's response compression wraps the response body the same way.
 - **`IHttpClientFactory` pipelines**: authentication, correlation ids, logging and resilience as `DelegatingHandler`s around `SocketsHttpHandler`. Microsoft's resilience handlers (retry, circuit breaker, timeout, hedging) are themselves decorators in this chain.
-- **Command pipelines**: MediatR-style behaviours, or hand-rolled decorators around `ICommandHandler<T>`, add validation, transactions, auditing and idempotency to every command without touching handlers.
-- **Caching layers**: a caching decorator around a repository or a remote client is one of the most common real uses, from rate cards and tax tables to permission lookups.
+- **Command pipelines**: MediatR-style behaviours, or hand-rolled decorators around `ICommandHandler<T>`, add validation, transactions, auditing and idempotency to every command (book appointment, cancel appointment) without touching handlers.
+- **Caching layers**: a caching decorator around a repository or a remote client is one of the most common real uses, from doctor profiles and price lists to tax tables and permission lookups.
 - **Feature toggling and canaries**: a decorator can route 5 % of calls to a new implementation and compare results (shadow testing) without changing callers.
-- **Infrastructure data platforms**: calls to slow government or ERP systems (contractor registries, GST portals) are typically wrapped as adapter → retry → cache → logging, each a separate class.
+- **Healthcare and payment integrations**: calls to slow external systems (insurance eligibility checks, lab partners, payment gateways) are typically wrapped as adapter → retry → cache → logging, each a separate class, with retries only on the idempotent reads.
 
 ### Comparison with similar patterns
 
@@ -1608,7 +1656,7 @@ This catches the most common decorator bug in real projects: someone registers `
 | [Proxy](#/lesson/m06-proxy) | Same as wrapped object | *Control access* to the object | Lazy loading, remote proxy, permission check |
 | [Adapter](#/lesson/m06-adapter) | *Different* from wrapped object | Make an incompatible interface fit | SMS SDK → `ISmsSender` |
 | [Chain of Responsibility](#/lesson/m06-chain-of-responsibility) | Handlers share an interface | Pass a request along until someone handles it; any link may stop the chain | Approval workflows, ASP.NET Core middleware |
-| [Composite](#/lesson/m06-composite) | Same as children | Treat a *tree* of objects as one | A BOQ section containing items and sub-sections |
+| [Composite](#/lesson/m06-composite) | Same as children | Treat a *tree* of objects as one | A course module containing lessons and sub-sections |
 | Inheritance | Subclass | Specialise a class statically | Fine for one fixed variant; explodes for combinations |
 
 Decorator and Proxy have identical class diagrams. The difference is intent. A caching wrapper is often called a "caching proxy", and both names are used in practice. ASP.NET Core middleware and `DelegatingHandler` mix Decorator (wrap and add) with Chain of Responsibility (any link can short-circuit). See [Choosing between similar patterns](#/lesson/m06-pattern-comparison).
@@ -1623,19 +1671,19 @@ Decorator adds behaviour to an object by wrapping it in another object that impl
 ::q beginner
 Give two examples of Decorator in .NET itself.
 ::a
-Streams: `GZipStream`, `BufferedStream` and `CryptoStream` are `Stream`s that wrap another `Stream` and add compression, buffering or encryption. `HttpClient` handlers: a `DelegatingHandler` is an `HttpMessageHandler` with an `InnerHandler`, and `IHttpClientFactory` chains handlers for authentication, logging and resilience around the socket handler. Command-pipeline behaviours in MediatR-style libraries are another common example.
+Streams: `GZipStream`, `BufferedStream` and `CryptoStream` are `Stream`s that wrap another `Stream` and add compression, buffering or encryption. `HttpClient` handlers: a `DelegatingHandler` is an `HttpMessageHandler` with an `InnerHandler`, and `IHttpClientFactory` chains handlers for authentication, logging and resilience around the socket handler. Others: ASP.NET Core's response compression wrapping the response body, `DelegatingChatClient` in Microsoft.Extensions.AI, and command-pipeline behaviours in MediatR-style libraries.
 ::q intermediate
 Why does the order of decorators matter? Give an example.
 ::a
-Each decorator sees only what is inside it. With `Cache(Retry(Http))`, cache hits never trigger retries, and a successfully retried result is cached once. With `Retry(Cache(Http))`, the retry wraps the cache lookup, which is pointless. With logging outermost, you log every call including cache hits. Innermost, you log only real HTTP attempts, including each retry. A circuit breaker should sit inside the cache so cached data is still served while it's open. Authorisation must sit outside caching, or cached data can be served to unauthorised users. Decide order from the request flow and test it.
+Each decorator sees only what is inside it. With `Cache(Retry(Http))`, cache hits never trigger retries, and a successfully retried result is cached once. With `Retry(Cache(Http))`, the retry wraps the cache lookup, which is pointless. With logging outermost, you log every call including cache hits. Innermost, you log only real HTTP attempts, including each retry. A circuit breaker should sit inside the cache so cached data is still served while it's open. Authorisation must sit outside caching, or cached data (say, a doctor's patient list) can be served to unauthorised users. Decide order from the request flow and test it.
 ::q intermediate
 How do you register decorators in ASP.NET Core DI without Scrutor?
 ::a
-Either register the concrete component as itself and register the interface with a factory that builds the chain: `services.AddScoped<IRepo>(sp => new LoggingRepo(new CachingRepo(sp.GetRequiredService<SqlRepo>(), ...), ...))`. Or write a small `Decorate<TService, TDecorator>()` extension that finds the existing `ServiceDescriptor`, replaces it with a factory creating the original (from its type, factory or instance) and passes it to `ActivatorUtilities.CreateInstance<TDecorator>(sp, inner)`, keeping the original lifetime. Watch lifetimes (no singleton decorator around scoped services), disposal of inner objects created by factories, and later re-registrations that silently replace the chain.
+Three ways. Register the concrete component as itself and register the interface with a factory that builds the chain: `services.AddScoped<IRepo>(sp => new LoggingRepo(new CachingRepo(sp.GetRequiredService<SqlRepo>(), ...), ...))`. Or write a small `Decorate<TService, TDecorator>()` extension that finds the existing `ServiceDescriptor`, replaces it with a factory creating the original (from its type, factory or instance) and passes it to `ActivatorUtilities.CreateInstance<TDecorator>(sp, inner)`, keeping the original lifetime. Or, since .NET 8, register the inner as a keyed service and inject it with `[FromKeyedServices("inner")]`. Watch lifetimes (no singleton decorator around scoped services), disposal of inner objects created by factories, and later re-registrations that silently replace the chain.
 ::q advanced
-A teammate adds a retry decorator around `IOrderService.PlaceOrderAsync`. What concerns do you raise?
+A teammate adds a retry decorator around `IAppointmentService.BookAsync`. What concerns do you raise?
 ::a
-Idempotency first. If the first attempt succeeded on the server but the response was lost, a retry creates a duplicate order and charge. Retry only idempotent operations, or add an idempotency key that the downstream system de-duplicates. Second, retry only transient failures (timeouts, 503, specific database error codes), not validation errors. Third, use backoff with jitter and a cap to avoid retry storms, respect cancellation, and consider a circuit breaker. Fourth, check for double retries: if the HTTP client or database driver already retries, nesting multiplies attempts (3 × 3 = 9). Finally, the right level may be the HTTP pipeline or the database execution strategy rather than a service decorator.
+Idempotency first. If the first attempt succeeded on the server but the response was lost, a retry books the slot twice or charges the patient twice. Retry only idempotent operations, or add an idempotency key that the booking service de-duplicates, plus a unique constraint on the slot. Second, retry only transient failures (timeouts, 503, specific database error codes), not validation errors or "slot already taken". Third, use backoff with jitter and a cap to avoid retry storms, respect cancellation, and consider a circuit breaker. Fourth, check for double retries: if the HTTP client or database driver already retries, nesting multiplies attempts (3 × 3 = 9). Finally, the right level may be the HTTP pipeline or the database execution strategy rather than a service decorator.
 ::q advanced
 Decorator vs Proxy vs Chain of Responsibility: they all wrap something. How do you tell them apart in a design review?
 ::a
@@ -1650,9 +1698,9 @@ Look at intent and interface. A Decorator has the same interface and *adds* beha
 - It replaces subclass explosion with small, combinable classes, and follows the Open/Closed and Single Responsibility principles.
 - Decorators must preserve the contract: same results and exceptions, unless changing them is their stated purpose.
 - **Order is behaviour.** Authorisation outside caching, caching outside retries, logging wherever it answers your question. Draw the sequence diagram.
-- .NET is full of decorators: streams, `DelegatingHandler`, resilience handlers.
-- Register chains with a factory or a 30-line `Decorate` extension, mind lifetimes and disposal, and test the wiring.
-- Don't build decorators for what the platform already does well (HTTP resilience, tracing), and never retry non-idempotent operations blindly.
+- .NET is full of decorators: streams, `DelegatingHandler`, resilience handlers, response compression.
+- Register chains with a factory, a 30-line `Decorate` extension or keyed services; mind lifetimes and disposal, and test the wiring.
+- Don't build decorators for what the platform already does well (HTTP resilience, tracing, `HybridCache` stampede protection), don't expect them to intercept the inner object's self-calls, and never retry non-idempotent operations blindly.
 
 **Terminology**: component, concrete component, decorator, inner, cross-cutting concern, subclass explosion, `DelegatingHandler`, decorator chain, cache stampede, single-flight, idempotent.
 
@@ -1666,20 +1714,22 @@ A: Outside it, so cached data is never returned without a permission check.
 Q: Which HttpClient type is a decorator?
 A: DelegatingHandler: it is an HttpMessageHandler and wraps an InnerHandler.
 Q: How do you add a decorator in .NET DI without Scrutor?
-A: Register a factory that builds the chain, or write a Decorate<TService, TDecorator>() extension that wraps the existing ServiceDescriptor using ActivatorUtilities.
+A: Register a factory that builds the chain, write a Decorate<TService, TDecorator>() extension that wraps the existing ServiceDescriptor using ActivatorUtilities, or inject a keyed inner service.
 Q: What must a logging decorator never do?
 A: Change behaviour, such as swallowing exceptions or altering results. Use `throw;` to rethrow.
 Q: What is a cache stampede, and how does a single-flight decorator prevent it?
-A: Many concurrent misses for the same key all call the backend; single-flight caches the in-flight Task so concurrent callers share one call.
+A: Many concurrent misses for the same key all call the backend; single-flight caches the in-flight Task so concurrent callers share one call. HybridCache does this for you.
 Q: Decorator vs Adapter in one line?
 A: Decorator keeps the interface and adds behaviour; Adapter changes the interface.
+Q: Name a case where a decorator is the wrong tool.
+A: HTTP retries/timeouts (use the resilience handler), request tracing (use OpenTelemetry), behaviour the inner object triggers by calling itself, or a 25-method interface.
 :::
 
 ## Knowledge check
 
 :::quiz pass=70
 ::q single
-You need caching, logging and retries around three different rate providers (HTTP, CSV, database), each switchable per environment. Which approach scales best?
+You need caching, logging and retries around three different lab-price providers (an HTTP partner API, a nightly CSV import, a database table), each switchable per environment. Which approach scales best?
 - [ ] A subclass of each provider for every combination of behaviours.
 - [x] Three decorators implementing the provider interface, composed in DI around whichever provider is used.
 - [ ] Add `if (cachingEnabled)` flags inside each provider.
@@ -1693,9 +1743,9 @@ The chain is `Retry(Cache(Http))`. What's the effect compared with `Cache(Retry(
 - [ ] `Cache(Retry(Http))` disables retries.
 > Each layer acts on everything inside it. Put the retry closest to the operation that can fail transiently.
 ::q single
-A caching decorator sits *outside* an authorisation decorator on a repository. What can go wrong?
+A caching decorator sits *outside* an authorisation decorator on an appointment repository. What can go wrong?
 - [ ] Nothing; caching is always outermost.
-- [x] A user without permission can receive data that was cached for an authorised user, because the cache answers before the permission check runs.
+- [x] A user without permission can receive a patient list that was cached for an authorised user, because the cache answers before the permission check runs.
 - [ ] The cache will never be hit.
 - [ ] Authorisation will run twice.
 > Security checks must run before anything can return data, including caches.
@@ -1714,9 +1764,9 @@ A logging decorator catches exceptions, logs them and returns `null`. What's the
 - [ ] `null` can't be logged.
 > Decorators must be transparent unless changing behaviour is their stated purpose. Log and rethrow with `throw;`.
 ::q single
-You register `IRates` → `HttpRates`, then `Decorate<IRates, CachingRates>()`, and much later another developer adds `services.AddTransient<IRates, HttpRates>()`. What happens when resolving `IRates`?
+You register `IPrices` → `HttpPrices`, then `Decorate<IPrices, CachingPrices>()`, and much later another developer adds `services.AddTransient<IPrices, HttpPrices>()`. What happens when resolving `IPrices`?
 - [ ] The container throws a duplicate registration error.
-- [x] The last registration wins, so `IRates` resolves to the undecorated `HttpRates`, and the caching silently disappears.
+- [x] The last registration wins, so `IPrices` resolves to the undecorated `HttpPrices`, and the caching silently disappears.
 - [ ] The decorator wraps both.
 - [ ] The first registration wins.
 > .NET DI resolves the last registration for a single service. A wiring test that asserts the outermost type catches this.
@@ -1727,6 +1777,13 @@ Which concern is usually the *worst* fit for a hand-written decorator around a t
 - [x] HTTP-level retries, timeouts and circuit breaking, which belong in the `HttpClient` handler pipeline (for example, a resilience handler).
 - [ ] Mapping vendor exceptions to domain exceptions.
 > HTTP resilience is a transport concern with well-tested built-in support at the handler level. Decorating every service duplicates it, and risks nested retries.
+::q single
+`SqlDoctorRepository.GetScheduleAsync` internally calls its own `GetByIdAsync`. You wrap the repository in `CachingDoctorRepository`, which caches `GetByIdAsync`. Is the internal call cached?
+- [ ] Yes, decorators intercept every call to the inner object.
+- [x] No. The internal call goes straight to `this`, not through the decorator, so it bypasses the cache.
+- [ ] Only if the decorator is registered as a singleton.
+- [ ] Only for async methods.
+> A decorator sees only calls made through the interface reference it was given. Self-calls inside the inner object never reach it.
 :::
 
 ## Completion criteria
@@ -1738,3 +1795,4 @@ You have finished this lesson when you can:
 - [ ] Complete exercise 3 or 5 and compare with the solution.
 - [ ] Draw the sequence diagram for a three-layer chain and explain why you chose its order.
 - [ ] Register a decorator chain in ASP.NET Core without third-party libraries, and write a test that proves the wiring.
+- [ ] Say when `HybridCache` or a resilience handler should replace a hand-written decorator.

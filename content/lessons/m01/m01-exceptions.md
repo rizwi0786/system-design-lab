@@ -20,7 +20,7 @@ references:
     url: https://learn.microsoft.com/aspnet/core/fundamentals/error-handling
 ---
 
-Programs fail. Files go missing, users type "abc" where a number belongs, a supplier's server times out, and sometimes your own code has a bug. How a program *reports* and *handles* those failures decides whether users see a helpful message or a blank screen, and whether you find the bug in five minutes or five days. This lesson teaches C#'s main tool for failures, the **exception**, and the equally important skill of knowing when *not* to use it. The running example is the material store at a construction site, which issues cement bags and steel bars against requisitions.
+Programs fail. Files go missing, users type "abc" where a number belongs, a supplier's server times out, and sometimes your own code has a bug. How a program *reports* and *handles* those failures decides whether users see a helpful message or a blank screen, and whether you find the bug in five minutes or five days. This lesson teaches C#'s main tool for failures, the **exception**, and the equally important skill of knowing when *not* to use it. The running example is a hospital pharmacy, which issues medicines (paracetamol strips, antibiotic capsules, ORS sachets) against doctors' prescriptions.
 
 ## Learning objectives
 
@@ -61,9 +61,9 @@ The most common beginner mistake is ringing the fire alarm for "sold out": throw
 
 ### A promise the method can't keep
 
-A useful way to think about it: every method makes a **promise**, written in its name. `IssueMaterial(code, 10)` promises "I will issue 10 units". If, for any reason, it can't keep that promise, it must not quietly do half the job or pretend it worked. It **throws**: it stops immediately and hands a description of the problem back up to whoever called it.
+A useful way to think about it: every method makes a **promise**, written in its name. `IssueMedicine(code, 10)` promises "I will issue 10 units". If, for any reason, it can't keep that promise, it must not quietly do half the job or pretend it worked. It **throws**: it stops immediately and hands a description of the problem back up to whoever called it.
 
-If failing is a normal, expected part of the job, then make it part of the promise: `TryIssueMaterial(code, 10)` promises "I will *try*, and tell you if it worked". Now returning `false` *keeps* the promise, and no exception is needed.
+If failing is a normal, expected part of the job, then make it part of the promise: `TryIssueMedicine(code, 10)` promises "I will *try*, and tell you if it worked". Now returning `false` *keeps* the promise, and no exception is needed.
 
 ## First-principles explanation
 
@@ -97,16 +97,16 @@ if (quantity <= 0)
 try
 {
     // code that might fail
-    var qty = store.Issue("CEM-OPC53", 40, "REQ-1021");
-    Console.WriteLine($"Issued. {qty} bags left.");
+    var qty = store.Issue("PCM-500", 40, "RX-1021");
+    Console.WriteLine($"Issued. {qty} strips left.");
 }
 catch (InsufficientStockException ex)          // most specific first
 {
-    Console.WriteLine($"Only {ex.Available} bags in stock.");
+    Console.WriteLine($"Only {ex.Available} strips in stock.");
 }
 catch (IOException ex)                          // a different, unrelated failure
 {
-    Console.WriteLine($"Could not write the issue slip: {ex.Message}");
+    Console.WriteLine($"Could not write the dispensing slip: {ex.Message}");
 }
 finally
 {
@@ -137,7 +137,7 @@ If a `catch` can do none of these, delete it. An exception that travels up to a 
 ```csharp
 catch (IOException ex)
 {
-    logger.LogWarning(ex, "Slip printer failed for {Requisition}", requisitionNo);
+    logger.LogWarning(ex, "Slip printer failed for {Prescription}", prescriptionNo);
     throw;          // rethrows the SAME exception with its ORIGINAL stack trace
 }
 ```
@@ -247,7 +247,7 @@ When an `async` method throws, the exception is stored in its `Task` and rethrow
 In a web app, you don't wrap every endpoint in `try`/`catch`. You register **one** handler at the edge:
 
 - `builder.Services.AddProblemDetails()` and `app.UseExceptionHandler()` turn unhandled exceptions into a standard JSON error response (RFC 9457 "problem details") with status 500, without leaking the stack trace to users.
-- An `IExceptionHandler` implementation (available since .NET 8) can map *your* exception types to proper status codes: `InsufficientStockException` → 409 Conflict, `UnknownMaterialException` → 404 Not Found.
+- An `IExceptionHandler` implementation (available since .NET 8) can map *your* exception types to proper status codes: `InsufficientStockException` → 409 Conflict, `UnknownMedicineException` → 404 Not Found.
 
 Endpoints still validate their input and return 400 for bad requests directly; that's an expected outcome. The global handler is the safety net for everything else. The [filters, middleware and exception handling](#/lesson/m03-filters-exceptions) lesson goes deeper.
 
@@ -274,14 +274,14 @@ Walk through this chart whenever you are about to write `throw` or `catch`. The 
 
 ```mermaid
 sequenceDiagram
-    participant Client as Site engineer app
+    participant Client as Pharmacy counter app
     participant MW as Exception handler middleware
     participant EP as POST issues endpoint
-    participant Store as MaterialStore
-    Client->>MW: POST issues with 40 bags of cement
+    participant Store as MedicineStore
+    Client->>MW: POST issues with 40 strips of paracetamol
     MW->>EP: call the endpoint
     EP->>EP: validate request, quantity is positive
-    EP->>Store: Issue(CEM-OPC53, 40, REQ-1021)
+    EP->>Store: Issue(PCM-500, 40, RX-1021)
     Store->>Store: enter lock and check stock, only 25 on hand
     Store-->>EP: throw InsufficientStockException
     Note over Store: lock released on the way out, like a finally block
@@ -290,7 +290,7 @@ sequenceDiagram
     MW-->>Client: 409 problem details, only 25 in stock
 ```
 
-This sequence diagram shows one request where the store can't keep its promise. The endpoint validates the request first and would return a 400 itself for a negative quantity, because that's an expected input problem. The store, inside its lock, finds only 25 bags and **throws**. Notice what does *not* happen: the endpoint has no `try`/`catch`. The exception unwinds through it, the `lock` is released automatically on the way out (a `lock` statement is a `try`/`finally` underneath), and the middleware at the edge catches it. Our `StoreExceptionHandler` recognises the type and turns it into a `409 Conflict` with a readable message. One handler, written once, serves every endpoint.
+This sequence diagram shows one request where the store can't keep its promise. The endpoint validates the request first and would return a 400 itself for a negative quantity, because that's an expected input problem. The store, inside its lock, finds only 25 strips and **throws**. Notice what does *not* happen: the endpoint has no `try`/`catch`. The exception unwinds through it, the `lock` is released automatically on the way out (a `lock` statement is a `try`/`finally` underneath), and the middleware at the edge catches it. Our `StoreExceptionHandler` recognises the type and turns it into a `409 Conflict` with a readable message. One handler, written once, serves every endpoint.
 
 ## Step-by-step example
 
@@ -299,7 +299,7 @@ We'll evolve the store's `Issue` method through four versions.
 ### Version 1: error codes (easy to ignore)
 
 ```csharp
-// returns remaining stock, or -1 if unknown material, or -2 if not enough
+// returns remaining stock, or -1 if unknown medicine, or -2 if not enough
 public int Issue(string code, int quantity)
 {
     if (!_onHand.TryGetValue(code, out var available)) return -1;
@@ -308,8 +308,8 @@ public int Issue(string code, int quantity)
     return available - quantity;
 }
 
-var left = store.Issue("CEM-OPC53", 40);
-Console.WriteLine($"{left} bags left");     // prints "-2 bags left": nobody checked
+var left = store.Issue("PCM-500", 40);
+Console.WriteLine($"{left} strips left");     // prints "-2 strips left": nobody checked
 ```
 
 Problems: callers must remember magic numbers; forgetting to check is silent; a negative `quantity` *adds* stock. And where does the message for the user come from?
@@ -320,14 +320,14 @@ Problems: callers must remember magic numbers; forgetting to check is silent; a 
 public int Issue(string code, int quantity)
 {
     if (quantity <= 0) throw new ArgumentOutOfRangeException(nameof(quantity));
-    if (!_onHand.TryGetValue(code, out var available)) throw new UnknownMaterialException(code);
+    if (!_onHand.TryGetValue(code, out var available)) throw new UnknownMedicineException(code);
     if (available < quantity) throw new InsufficientStockException(code, quantity, available);
     _onHand[code] = available - quantity;
     return available - quantity;
 }
 ```
 
-Better: failures can't be ignored, and each carries data. But if the store screen calls this to *check* whether 40 bags can be issued, it must catch an exception for an everyday situation.
+Better: failures can't be ignored, and each carries data. But if the store screen calls this to *check* whether 40 strips can be issued, it must catch an exception for an everyday situation.
 
 ### Version 3: add a Try method for the expected case
 
@@ -340,10 +340,10 @@ if (!store.TryGetOnHand(code, out var available))
 else if (available < requested)
     ShowError($"Only {available} in stock.");
 else
-    store.Issue(code, requested, requisitionNo);
+    store.Issue(code, requested, prescriptionNo);
 ```
 
-The screen checks the normal cases with ordinary `if`s. `Issue` still throws if it is called wrongly. Why keep the exception at all? Because between the check and the issue, another storekeeper on another tablet might issue the last 30 bags. The exception is the **safety net** for that race; it should be rare.
+The screen checks the normal cases with ordinary `if`s. `Issue` still throws if it is called wrongly. Why keep the exception at all? Because between the check and the issue, another pharmacist on another tablet might issue the last 30 strips. The exception is the **safety net** for that race; it should be rare.
 
 ### Version 4: catch at the right level, clean up always
 
@@ -361,28 +361,28 @@ That's the whole philosophy in two lines: **expected problems become data, real 
 
 ## Production-style C# implementation
 
-The site material store as an ASP.NET Core API, with a single exception handler at the edge.
+The hospital pharmacy store as an ASP.NET Core API, with a single exception handler at the edge.
 
 ```text
-SiteStore.Api/
+Pharmacy.Api/
   Program.cs
   Store/
-    Material.cs                // what a material is
+    Medicine.cs                // what a medicine is
     StoreExceptions.cs         // custom exceptions with data
-    MaterialStore.cs           // the rules, thread-safe
+    MedicineStore.cs           // the rules, thread-safe
     DeliveryImporter.cs        // bad lines become a report, not exceptions
     StoreExceptionHandler.cs   // maps domain exceptions to HTTP status codes
     Contracts.cs
 ```
 
-```csharp file=Store/Material.cs
-namespace SiteStore.Api.Store;
+```csharp file=Store/Medicine.cs
+namespace Pharmacy.Api.Store;
 
-public sealed record Material(string Code, string Name, string Unit);
+public sealed record Medicine(string Code, string Name, string Unit);
 ```
 
 ```csharp file=Store/StoreExceptions.cs
-namespace SiteStore.Api.Store;
+namespace Pharmacy.Api.Store;
 
 /// <summary>Base type for store rule violations, so callers can catch the whole family if they need to.</summary>
 public abstract class StoreException : Exception
@@ -391,10 +391,10 @@ public abstract class StoreException : Exception
     protected StoreException(string message, Exception innerException) : base(message, innerException) { }
 }
 
-public sealed class UnknownMaterialException : StoreException
+public sealed class UnknownMedicineException : StoreException
 {
-    public UnknownMaterialException(string code)
-        : base($"Material '{code}' is not stocked at this site.") => Code = code;
+    public UnknownMedicineException(string code)
+        : base($"Medicine '{code}' is not stocked at this pharmacy.") => Code = code;
 
     public string Code { get; }
 }
@@ -415,25 +415,25 @@ public sealed class InsufficientStockException : StoreException
 }
 ```
 
-```csharp file=Store/MaterialStore.cs
-namespace SiteStore.Api.Store;
+```csharp file=Store/MedicineStore.cs
+namespace Pharmacy.Api.Store;
 
-public sealed record IssueRecord(string Code, int Quantity, string RequisitionNo, int RemainingAfter);
+public sealed record IssueRecord(string Code, int Quantity, string PrescriptionNo, int RemainingAfter);
 
-public sealed class MaterialStore
+public sealed class MedicineStore
 {
     private readonly Lock _gate = new();
-    private readonly Dictionary<string, Material> _catalogue = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Medicine> _catalogue = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> _onHand = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<IssueRecord> _issues = new();
 
-    public MaterialStore(IEnumerable<Material> catalogue)
+    public MedicineStore(IEnumerable<Medicine> catalogue)
     {
         ArgumentNullException.ThrowIfNull(catalogue);
         foreach (var m in catalogue)
         {
             if (!_catalogue.TryAdd(m.Code, m))
-                throw new ArgumentException($"Duplicate material code '{m.Code}'.", nameof(catalogue));
+                throw new ArgumentException($"Duplicate medicine code '{m.Code}'.", nameof(catalogue));
             _onHand[m.Code] = 0;
         }
     }
@@ -452,27 +452,27 @@ public sealed class MaterialStore
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(quantity);
         lock (_gate)
         {
-            if (!_onHand.TryGetValue(code, out var current)) throw new UnknownMaterialException(code);
+            if (!_onHand.TryGetValue(code, out var current)) throw new UnknownMedicineException(code);
             _onHand[code] = checked(current + quantity);        // overflow is a real failure: throw, don't wrap
         }
     }
 
-    /// <summary>Callers should check stock first. The exception is the safety net for races between storekeepers.</summary>
-    public int Issue(string code, int quantity, string requisitionNo)
+    /// <summary>Callers should check stock first. The exception is the safety net for races between pharmacists.</summary>
+    public int Issue(string code, int quantity, string prescriptionNo)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(code);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(quantity);
-        ArgumentException.ThrowIfNullOrWhiteSpace(requisitionNo);
+        ArgumentException.ThrowIfNullOrWhiteSpace(prescriptionNo);
 
         lock (_gate)
         {
-            if (!_onHand.TryGetValue(code, out var available)) throw new UnknownMaterialException(code);
+            if (!_onHand.TryGetValue(code, out var available)) throw new UnknownMedicineException(code);
             if (available < quantity) throw new InsufficientStockException(code, quantity, available);
 
             // All checks passed: now change state. Nothing below can fail halfway.
             var remaining = available - quantity;
             _onHand[code] = remaining;
-            _issues.Add(new IssueRecord(code, quantity, requisitionNo, remaining));
+            _issues.Add(new IssueRecord(code, quantity, prescriptionNo, remaining));
             return remaining;
         }
     }
@@ -482,13 +482,13 @@ public sealed class MaterialStore
 ```
 
 ```csharp file=Store/DeliveryImporter.cs
-namespace SiteStore.Api.Store;
+namespace Pharmacy.Api.Store;
 
 public sealed record ImportReport(int Accepted, IReadOnlyList<string> Errors);
 
 /// <summary>Reads "code,quantity" lines. Bad lines are expected (typos), so they become report entries.
 /// I/O failures are not expected, so they propagate to the caller.</summary>
-public sealed class DeliveryImporter(MaterialStore store)
+public sealed class DeliveryImporter(MedicineStore store)
 {
     public const int MaxErrors = 100;
 
@@ -510,7 +510,7 @@ public sealed class DeliveryImporter(MaterialStore store)
             else if (!int.TryParse(parts[1], out var qty) || qty <= 0)
                 errors.Add($"Line {lineNo}: '{parts[1]}' is not a positive whole number.");
             else if (!store.IsStocked(parts[0]))
-                errors.Add($"Line {lineNo}: unknown material '{parts[0]}'.");
+                errors.Add($"Line {lineNo}: unknown medicine '{parts[0]}'.");
             else
             {
                 store.Receive(parts[0], qty);      // already validated: if this throws, it is a real bug
@@ -531,7 +531,7 @@ public sealed class DeliveryImporter(MaterialStore store)
 ```csharp file=Store/StoreExceptionHandler.cs
 using Microsoft.AspNetCore.Diagnostics;
 
-namespace SiteStore.Api.Store;
+namespace Pharmacy.Api.Store;
 
 /// <summary>One place that turns domain exceptions into HTTP responses. Anything it does not
 /// recognise returns false, so the default handler logs it and returns a generic 500.</summary>
@@ -541,7 +541,7 @@ public sealed class StoreExceptionHandler(ILogger<StoreExceptionHandler> logger)
     {
         var (status, title) = exception switch
         {
-            UnknownMaterialException => (StatusCodes.Status404NotFound, "Unknown material"),
+            UnknownMedicineException => (StatusCodes.Status404NotFound, "Unknown medicine"),
             InsufficientStockException => (StatusCodes.Status409Conflict, "Not enough stock"),
             _ => (0, ""),
         };
@@ -555,44 +555,44 @@ public sealed class StoreExceptionHandler(ILogger<StoreExceptionHandler> logger)
 ```
 
 ```csharp file=Store/Contracts.cs
-namespace SiteStore.Api.Store;
+namespace Pharmacy.Api.Store;
 
-public sealed record IssueRequest(string Code, int Quantity, string RequisitionNo);
+public sealed record IssueRequest(string Code, int Quantity, string PrescriptionNo);
 ```
 
 ```csharp file=Program.cs
-using SiteStore.Api.Store;
+using Pharmacy.Api.Store;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<StoreExceptionHandler>();
-builder.Services.AddSingleton(new MaterialStore(new[]
+builder.Services.AddSingleton(new MedicineStore(new[]
 {
-    new Material("CEM-OPC53", "OPC 53 grade cement", "bag"),
-    new Material("TMT-12", "TMT bar 12 mm", "piece"),
-    new Material("AGG-20", "Aggregate 20 mm", "cubic metre"),
+    new Medicine("PCM-500", "Paracetamol 500 mg tablets, strip of 10", "strip"),
+    new Medicine("AMX-250", "Amoxicillin 250 mg capsules, strip of 10", "strip"),
+    new Medicine("ORS-200", "Oral rehydration salts, 21 g sachet", "sachet"),
 }));
 builder.Services.AddSingleton<DeliveryImporter>();
 
 var app = builder.Build();
 app.UseExceptionHandler();          // the safety net: must be early in the pipeline
 
-app.MapGet("/stock/{code}", (string code, MaterialStore store) =>
+app.MapGet("/stock/{code}", (string code, MedicineStore store) =>
     store.TryGetOnHand(code, out var qty)
         ? Results.Ok(new { code, onHand = qty })
         : Results.NotFound());
 
-app.MapPost("/issues", (IssueRequest req, MaterialStore store) =>
+app.MapPost("/issues", (IssueRequest req, MedicineStore store) =>
 {
     // Expected input problems: answer directly with 400, no exceptions involved.
-    if (string.IsNullOrWhiteSpace(req.Code) || string.IsNullOrWhiteSpace(req.RequisitionNo))
-        return Results.Problem("Code and requisition number are required.", statusCode: 400);
+    if (string.IsNullOrWhiteSpace(req.Code) || string.IsNullOrWhiteSpace(req.PrescriptionNo))
+        return Results.Problem("Code and prescription number are required.", statusCode: 400);
     if (req.Quantity <= 0)
         return Results.Problem("Quantity must be a positive number.", statusCode: 400);
 
     // Rule violations (unknown code, race on stock) throw and are mapped by StoreExceptionHandler.
-    var remaining = store.Issue(req.Code, req.Quantity, req.RequisitionNo);
+    var remaining = store.Issue(req.Code, req.Quantity, req.PrescriptionNo);
     return Results.Ok(new { req.Code, issued = req.Quantity, remaining });
 });
 
@@ -609,7 +609,7 @@ app.Run();
 
 What to notice:
 
-- **Validation at the edge, rules in the model, safety net at the top.** The endpoint returns 400 for bad input without exceptions. `MaterialStore` throws if its rules are broken anyway. `StoreExceptionHandler` turns those into 404 or 409. Anything else becomes a 500 with no stack trace leaked to the client.
+- **Validation at the edge, rules in the model, safety net at the top.** The endpoint returns 400 for bad input without exceptions. `MedicineStore` throws if its rules are broken anyway. `StoreExceptionHandler` turns those into 404 or 409. Anything else becomes a 500 with no stack trace leaked to the client.
 - **Check everything, then change state.** `Issue` performs every check before touching `_onHand`, so a thrown exception leaves the store exactly as it was. This property, sometimes called the **strong exception guarantee**, is what makes exceptions safe to use.
 - **The lock is a `try`/`finally`.** When `Issue` throws inside `lock (_gate)`, the lock is released automatically. Without that guarantee, one exception would freeze the store for every other request.
 - **`checked` arithmetic in `Receive`.** Silently wrapping a stock count to a negative number is far worse than an `OverflowException`.
@@ -631,7 +631,7 @@ public void IssueAll(List<IssueRequest> requests)
 {
     foreach (var r in requests)
     {
-        try { _store.Issue(r.Code, r.Quantity, r.RequisitionNo); }
+        try { _store.Issue(r.Code, r.Quantity, r.PrescriptionNo); }
         catch (Exception) { }              // 2. swallowed: issues silently skipped
     }
 }
@@ -650,7 +650,7 @@ public void Import(string path)
 Problems:
 
 1. `int.Parse` inside `try`/`catch` is slow for bad input and hides *which* error occurred. `int.TryParse` says what you mean.
-2. The empty `catch (Exception)` hides everything: a typo in a material code, an insufficient-stock race, and a genuine bug such as a `NullReferenceException` all look like success. The storekeeper believes 12 requisitions were issued; only 9 were. This is the most damaging pattern in this lesson.
+2. The empty `catch (Exception)` hides everything: a typo in a medicine code, an insufficient-stock race, and a genuine bug such as a `NullReferenceException` all look like success. The pharmacist believes 12 prescriptions were filled; only 9 were. This is the most damaging pattern in this lesson.
 3. `throw ex;` destroys the original stack trace, so the log shows the error "happening" in `Import`, not where it really occurred.
 
 **Good**:
@@ -663,10 +663,10 @@ public IssueSummary IssueAll(IReadOnlyList<IssueRequest> requests)
     var failed = new List<string>();
     foreach (var r in requests)
     {
-        try { _store.Issue(r.Code, r.Quantity, r.RequisitionNo); }
+        try { _store.Issue(r.Code, r.Quantity, r.PrescriptionNo); }
         catch (StoreException ex)          // only the failures we expect and can report
         {
-            failed.Add($"{r.RequisitionNo}: {ex.Message}");
+            failed.Add($"{r.PrescriptionNo}: {ex.Message}");
         }
     }
     return new IssueSummary(requests.Count - failed.Count, failed);   // bugs still propagate
@@ -742,7 +742,7 @@ public static class Program
         catch (Exception ex) { Console.WriteLine($"throw ex; -> top frame: {TopFrame(ex)}"); }
 
         // 3. Wrapping keeps the original as InnerException
-        try { ParseLine("CEM-OPC53,abc", 7); }
+        try { ParseLine("PCM-500,abc", 7); }
         catch (InvalidOperationException ex)
         {
             Console.WriteLine($"{ex.Message} | inner: {ex.InnerException?.GetType().Name}");
@@ -930,7 +930,7 @@ Add a rule that children under 5 travel free and don't take a seat. Is a 4-year-
 :::
 
 :::exercise id=m01-exceptions-ex2 difficulty=beginner kind=code title="Always release the printer"
-A site office has one shared printer for material issue slips. Code must always release the printer after using it, or nobody else can print.
+The pharmacy counter has one shared label printer for dispensing slips. Code must always release the printer after using it, or nobody else can print.
 ::requirements
 - `PrintJobRunner.Run(IPrinter printer, Func<string> render)`: first call `render()` to produce the document, *then* `Acquire()` the printer, `Print(document)`, and `Release()`. Release must happen even if `Print` throws. Exceptions propagate to the caller unchanged.
 - If `render()` throws, the printer must never be acquired.
@@ -1016,7 +1016,7 @@ public class PrintJobRunnerTests
     public void Success_order()
     {
         var p = new FakePrinter();
-        PrintJobRunner.Run(p, () => "Slip REQ-1021");
+        PrintJobRunner.Run(p, () => "Slip RX-1021");
         Assert.Equal(new[] { "Acquire", "Print", "Release" }, p.Calls);
     }
 
@@ -1780,12 +1780,12 @@ Add an idempotency key so the same transfer request processed twice moves money 
 Error paths deserve tests as much as the happy path, because they run rarely and break silently. xUnit's `Assert.Throws<T>` checks that the **exact** type is thrown (not a subclass) and returns the exception so you can check its data:
 
 ```csharp
-public class MaterialStoreTests
+public class MedicineStoreTests
 {
-    private static MaterialStore NewStore()
+    private static MedicineStore NewStore()
     {
-        var store = new MaterialStore(new[] { new Material("CEM-OPC53", "OPC 53 cement", "bag") });
-        store.Receive("CEM-OPC53", 25);
+        var store = new MedicineStore(new[] { new Medicine("PCM-500", "Paracetamol 500 mg", "strip") });
+        store.Receive("PCM-500", 25);
         return store;
     }
 
@@ -1794,10 +1794,10 @@ public class MaterialStoreTests
     {
         var store = NewStore();
 
-        var ex = Assert.Throws<InsufficientStockException>(() => store.Issue("CEM-OPC53", 40, "REQ-1021"));
+        var ex = Assert.Throws<InsufficientStockException>(() => store.Issue("PCM-500", 40, "RX-1021"));
 
         Assert.Equal(25, ex.Available);
-        Assert.True(store.TryGetOnHand("CEM-OPC53", out var left));
+        Assert.True(store.TryGetOnHand("PCM-500", out var left));
         Assert.Equal(25, left);                   // strong exception guarantee
         Assert.Empty(store.Issues);
     }
@@ -1806,7 +1806,7 @@ public class MaterialStoreTests
     public void Importer_reports_bad_lines_instead_of_throwing()
     {
         var importer = new DeliveryImporter(NewStore());
-        var report = importer.Import(new StringReader("CEM-OPC53,10\nCEM-OPC53,abc\nXYZ,5"));
+        var report = importer.Import(new StringReader("PCM-500,10\nPCM-500,abc\nXYZ,5"));
 
         Assert.Equal(1, report.Accepted);
         Assert.Equal(2, report.Errors.Count);
@@ -1829,9 +1829,9 @@ The [unit testing and debugging lesson](#/lesson/m01-testing-debugging) covers t
 
 - **ASP.NET Core** catches every unhandled exception per request, so one bad request never kills the server. `UseExceptionHandler` + `IExceptionHandler` + `AddProblemDetails` is the standard way to shape the response.
 - **Entity Framework Core and Npgsql** throw `DbUpdateConcurrencyException` and `PostgresException` (with SQL state codes such as `23505` for a unique violation). Good apps translate the expected ones, like "this email is already registered", into domain errors at the repository boundary.
-- **`HttpClient`** throws `HttpRequestException` for network failures and `TaskCanceledException` for timeouts. Resilience libraries retry transient failures using exception filters, which is the [circuit breaker](#/lesson/m10-circuit-breaker) idea in practice.
+- **`HttpClient`** throws `HttpRequestException` for network failures and `TaskCanceledException` for timeouts. `Microsoft.Extensions.Http.Resilience` (`AddStandardResilienceHandler()`) decides which of these are transient and retries them with backoff, and stops calling a failing dependency for a while, which is the [circuit breaker](#/lesson/m10-circuit-breaker) idea in practice. Only retry operations that are safe to repeat (idempotent).
 - **Payment and banking systems** use compensation exactly like exercise 5 when money moves between systems that can't share a transaction, and keep a reconciliation report for the rare "undo failed" case.
-- **Infrastructure project software** (billing, measurement books, material reconciliation) is full of business rules where "not enough stock" or "measurement exceeds BOQ quantity" are expected outcomes shown to the engineer, while a failed connection to the head-office ERP is a real exception that is retried or queued.
+- **Hospital and pharmacy software** (billing, stock, prescriptions) is full of business rules where "out of stock" or "dose exceeds the prescribed quantity" are expected outcomes shown to the pharmacist, while a failed connection to the central inventory or insurance system is a real exception that is retried or queued.
 
 ## Interview questions
 
@@ -1945,7 +1945,7 @@ Which are good reasons to write a `catch` block? (Select all that apply.)
 ::q single
 In an ASP.NET Core API, where is the best place to turn `InsufficientStockException` into a 409 response?
 - [ ] In a `try`/`catch` inside every endpoint.
-- [ ] Inside `MaterialStore`, by returning HTTP results from the domain class.
+- [ ] Inside `MedicineStore`, by returning HTTP results from the domain class.
 - [x] In one `IExceptionHandler` registered with `AddExceptionHandler` and `UseExceptionHandler`.
 - [ ] In the client app, by parsing the 500 error text.
 > One handler at the edge keeps endpoints clean and HTTP concerns out of the domain model.

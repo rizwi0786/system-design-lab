@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 85
 prerequisites: [m03-background-services, m03-async-await, m11-stateless]
-related: [m12-message-queues, m12-idempotent-consumers, m12-retries-dlq, m12-outbox, m03-health-shutdown, m11-object-storage]
+related: [m12-message-queues, m12-idempotent-consumers, m12-retries-dlq, m12-outbox, m03-health-shutdown, m11-object-storage, m17-job-scheduler, m17-scaling-journey]
 tags: [hld, background-jobs, job-queue, workers, scheduling, idempotency, backgroundservice, channels]
 patterns: []
 summary: How to move slow, unreliable and scheduled work out of the request path — in-process with BackgroundService and Channels, or durably with job queues and schedulers — and how to make jobs safe under at-least-once delivery with retries, leases and idempotency.
@@ -176,6 +176,7 @@ A dead-letter queue is only useful if someone looks at it: alert on its size, sh
 - **Time zones**: "02:00 every night" in which zone? Store schedules with an explicit zone (`Asia/Kolkata`). India has no daylight saving time, but if you also serve, say, the UK, a 01:30 job is skipped or run twice on DST change days. Run the trigger in UTC with a zone-aware calculation.
 - **Overlap**: if the nightly reconciliation sometimes takes 70 minutes and runs hourly, two runs overlap and fight over the same rows. Disallow concurrent runs, or make the job skip if the previous run hasn't finished.
 - **Missed runs**: if the scheduler was down at 02:00, should the job run when it comes back (catch up), or wait for tomorrow (skip)? Decide per job. Catching up 30 missed runs of a "every minute" job at once is a self-inflicted spike.
+- **At larger scale**, thousands of tenant-specific schedules need a proper distributed scheduler with leases and sharded trigger tables; [Distributed job scheduler](#/lesson/m17-job-scheduler) designs one end to end.
 - **Make the scheduler enqueue, not execute.** The scheduler puts "reconcile 2026-10-18" on the queue. Workers do the work with the usual retries and idempotency. The date in the payload makes it idempotent ("reconcile *this* day") instead of "reconcile yesterday", which changes meaning if a retry runs after midnight.
 
 ### Long-running jobs
@@ -310,7 +311,7 @@ The `send-invoice` handler: (1) checks the processed-jobs table, (2) renders the
 
 ### Step 4 — retries and dead letters
 
-Timeouts and `5xx` from the provider: retry up to 6 times with exponential backoff and full jitter, base 5 s, cap 10 minutes. An invalid phone number (`400`): dead-letter immediately, and show "Couldn't deliver: check the customer's number" in the shop owner's app.
+Timeouts and `5xx` from the provider: retry with exponential backoff (up to 6 attempts in total, matching `RetryPolicy.Default`) and full jitter, base 5 s, cap 10 minutes. An invalid phone number (`400`): dead-letter immediately, and show "Couldn't deliver: check the customer's number" in the shop owner's app.
 
 ### Step 5 — recurring reconciliation
 
@@ -1531,6 +1532,7 @@ public void Next_run_is_tonight_at_two_ist_when_called_in_the_evening()
 - **Media processing**: uploads trigger jobs to transcode video, generate thumbnails and scan for malware (see [Object storage](#/lesson/m11-object-storage)).
 - **Reporting**: month-end statements and large exports are split into per-tenant or per-batch jobs, run at lower priority than user-facing work, and delivered by link when ready.
 - **Notifications**: OTP and alert messages use a dedicated high-priority queue; marketing campaigns use a separate, rate-limited one.
+- **A growing app**: in [Scaling a real system from 100 to 10 million users](#/lesson/m17-scaling-journey), a grocery-delivery app starts with everything inside the request on one VM, then moves receipts, rider notifications and reporting to background workers (and later an outbox and a broker) only when measured latency and load demand it.
 
 ## Interview questions
 

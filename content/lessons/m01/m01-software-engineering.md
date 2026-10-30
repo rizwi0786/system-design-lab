@@ -81,7 +81,7 @@ Every word matters:
 | Success | It runs on my laptop | It meets agreed requirements, in production, under real load |
 | Tools | Editor, compiler | Plus version control, tests, reviews, CI/CD, monitoring |
 
-Coding is a *part* of engineering, the way bricklaying is a part of building a bridge. A bridge also needs surveys, drawings, load calculations, inspections and a maintenance plan. You would not trust a bridge built by talented bricklayers with no plan. Users feel the same about software that holds their salary data or their money.
+Coding is a *part* of engineering, the way flying the plane is a part of running an airline. An airline also needs schedules, pre-flight checklists, maintenance records, crew training and a plan for when an engine fails. You would not board a flight run by talented pilots with no checklists and no maintenance log. Users feel the same about software that holds their salary data or their money.
 
 **Google's engineers have a short way to say this: software engineering is "programming integrated over time".** A script you run once does not need tests. A system that 40 people use every day for ten years absolutely does.
 
@@ -551,7 +551,7 @@ public static class Program
         // Experiments:
         // 1. HR changes the allowance to 21 days. How many lines of code must change?
         //    Try: new LeaveBook(new LeavePolicy { AnnualAllowanceDays = 21 })
-        // 2. Some site offices work on Saturdays. Change CountWorkingDays so only Sunday is skipped.
+        // 2. The customer-support team works on Saturdays. Change CountWorkingDays so only Sunday is skipped.
         //    Which outputs change? Is that a coding change or a requirements change?
         // 3. Apply for 1 April to 14 April three times with different years. What happens and why?
         // 4. Add a rule: at least 2 days' notice. What information would the method need that it lacks?
@@ -876,9 +876,9 @@ Add a rainy-day surcharge of ₹20 that applies only to non-members. Write the n
 :::
 
 :::exercise id=m01-software-engineering-ex4 difficulty=intermediate kind=written title="Estimate the real cost of a feature"
-A small team built an attendance app for 12 construction sites. The first version took 2 developers 3 months. Assume (illustrative numbers) a developer costs the company ₹1.5 lakh per month all-inclusive.
+A small team built a staff attendance app for a supermarket chain with 12 stores. The first version took 2 developers 3 months. Assume (illustrative numbers) a developer costs the company ₹1.5 lakh per month all-inclusive.
 
-Over the next 4 years, the client asks for: GPS check-in (1 month), offline mode for sites with poor network (2 months), a new labour-law report (0.5 months), an Android upgrade every year (0.25 months each), and bug fixes taking about 10% of one developer's time all year.
+Over the next 4 years, the client asks for: GPS check-in (1 month), offline mode for stores with poor network (2 months), a new statutory payroll report (0.5 months), an Android upgrade every year (0.25 months each), and bug fixes taking about 10% of one developer's time all year.
 
 1. Calculate the cost of version 1 and the cost of the next 4 years.
 2. What percentage of the 4-year-plus-build total is maintenance?
@@ -888,7 +888,7 @@ Over the next 4 years, the client asks for: GPS check-in (1 month), offline mode
 - Shows the arithmetic for each step, not just answers.
 - Correctly separates first-build cost from maintenance cost.
 - Gives a percentage for maintenance.
-- The argument mentions both cost and risk (bugs reaching site supervisors), and states one situation where tests would *not* be worth it.
+- The argument mentions both cost and risk (bugs reaching store managers and payroll), and states one situation where tests would *not* be worth it.
 ::hint
 Convert everything to developer-months first, then multiply by ₹1.5 lakh.
 ::hint
@@ -915,7 +915,7 @@ Applying 40% to the 9.3 developer-months: 9.3 × 0.4 ≈ 3.7 developer-months �
 
 **4. Argument**
 
-Three extra developer-weeks (about 0.75 months, ≈ ₹1.1 lakh) in version 1 would very likely have paid for itself several times over, saving ₹2.7–5.6 lakh in this estimate. It also lowers risk: a broken attendance report can delay wages for site workers, which is a far bigger cost than developer time. Tests would *not* be worth it for a throw-away prototype built only to show the client an idea, which would be rewritten anyway once the client agreed to the project.
+Three extra developer-weeks (about 0.75 months, ≈ ₹1.1 lakh) in version 1 would very likely have paid for itself several times over, saving ₹2.7–5.6 lakh in this estimate. It also lowers risk: a broken attendance report can delay wages for store staff, which is a far bigger cost than developer time. Tests would *not* be worth it for a throw-away prototype built only to show the client an idea, which would be rewritten anyway once the client agreed to the project.
 ::mistakes
 - Treating the first build as the main cost and ignoring the 4 years after it.
 - Mixing units (weeks, months, lakhs) without converting.
@@ -924,7 +924,7 @@ Three extra developer-weeks (about 0.75 months, ≈ ₹1.1 lakh) in version 1 wo
 :::
 
 :::exercise id=m01-software-engineering-ex5 difficulty=advanced kind=code title="A rule that changes on a date"
-The company's leave policy changed on 1 April 2026: site offices moved to a 6-day week, so **Saturday became a working day** (and therefore counts as a leave day). Leave before that date must still use the old rules, because payroll for those months is already closed. Build a `PolicyBook` that keeps every version of the rules.
+The company's leave policy changed on 1 April 2026: the office moved to a 6-day week to serve weekend customers, so **Saturday became a working day** (and therefore counts as a leave day). Leave before that date must still use the old rules, because payroll for those months is already closed. Build a `PolicyBook` that keeps every version of the rules.
 ::requirements
 - `LeaveRules(DateOnly EffectiveFrom, int AnnualAllowance, bool SaturdayIsWorkingDay)`.
 - `PolicyBook.Add(rules)`: adding two rule sets with the same `EffectiveFrom` throws `InvalidOperationException`. Rules may be added in any order.
@@ -1068,7 +1068,7 @@ In a database, the same idea is a `leave_rules` table with an `effective_from` c
 - Assuming rules are added in date order. The test adds them out of order on purpose.
 - Overwriting the old rules instead of keeping both.
 ::extensions
-Add `ValidUntil` support so a temporary rule (for example, a 6-day week only during a monsoon catch-up period) ends automatically. What should happen if two rule sets overlap?
+Add `ValidUntil` support so a temporary rule (for example, a 6-day week only during the Diwali sales season) ends automatically. What should happen if two rule sets overlap?
 :::
 
 ## Automated testing
@@ -1120,7 +1120,7 @@ What to test first in any business tool: each rule at its boundary (18th day all
 
 - **Payroll and HR systems** (leave, attendance, salary) are full of rules that change with laws and company policy. Versioned rules, tests per rule and careful reviews are standard practice because mistakes affect people's pay.
 - **Tax and billing**: when GST rates change for a category, billing software must apply the new rate from the effective date and keep old invoices unchanged. This is the `PolicyBook` idea at national scale.
-- **Infrastructure projects**: software that tracks progress, bills and measurements on a highway or metro project often lives as long as the project, 5 years or more, with many developers and many rule changes along the way. Maintenance cost dominates.
+- **Banking and UPI apps**: a mobile banking app lives for a decade or more. In that time it absorbs new RBI rules, new UPI features, new Android and iOS versions and several generations of developers. Its first version is a small fraction of its total cost; maintenance dominates.
 - **Open-source .NET itself** follows these practices in public: every change to the .NET runtime goes through a pull request on GitHub, automated builds and tests across many operating systems, and review by maintainers. You can read the discussions to see engineering in action.
 - **Startups** deliberately ship rough first versions to learn fast, then invest in tests and structure once the product is proven. Choosing *when* to invest is itself an engineering decision.
 
@@ -1203,7 +1203,7 @@ Which requirement is testable?
 - [ ] The app must be secure.
 > Only the third has concrete numbers you can measure as pass or fail.
 ::q single
-Over five years, an attendance app receives a new labour-law report, offline mode, two Android upgrades and many bug fixes. What are these, collectively?
+Over five years, an attendance app receives a new statutory payroll report, offline mode, two Android upgrades and many bug fixes. What are these, collectively?
 - [ ] Version 1 development.
 - [x] Maintenance.
 - [ ] Requirements gathering.

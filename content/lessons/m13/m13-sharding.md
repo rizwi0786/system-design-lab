@@ -130,6 +130,7 @@ For **replication**, walk clockwise from the key and take the first N *distinct*
 
 - **Rendezvous (highest random weight) hashing:** for each key, compute `hash(key, node)` for every node and pick the highest. Minimal movement and no ring to store, at O(nodes) per lookup.
 - **Jump consistent hash** (Lamping and Veach, 2014): a few lines of arithmetic map a key to one of N buckets with minimal movement, but only when buckets are numbered 0..N−1 and you only add or remove at the end.
+- **Consistent hashing with bounded loads** (Mirrokni, Thorup and Zadimoghaddam): each node accepts at most (1 + ε) × the average load, and a key whose node is full spills to the next node clockwise. It is used for routing *requests* to caches or backends under skewed traffic, not for placing stored data, because a key's location then depends on current load.
 - **Fixed hash slots:** split the hash space into a fixed number of slots, say 1,024 (Redis Cluster uses 16,384), and keep a small table `slot → node`. A key's slot never changes (`hash(key) mod 1024`); only the slot table changes. Moving one slot moves about 0.1 % of the data, and you can move slots one at a time, throttle the copy, and verify each. This is the most common production design because resharding becomes a controlled list of slot moves.
 
 ### Hot partitions
@@ -239,20 +240,22 @@ The worker copies a snapshot of slot 317, then applies A's ongoing changes to B 
 
 ## Step-by-step example
 
-**Scenario.** A multi-tenant construction project management SaaS stores daily progress reports, photos metadata and measurements for about 2,000 contractor tenants. One tenant (a large national highway contractor) produces 25 % of all writes.
+**Scenario.** A multi-tenant clinic-management SaaS stores patients, appointments, prescriptions, lab results and billing for about 2,000 tenants: single-doctor clinics, dental chains, diagnostic labs and a few hospital groups. One tenant (a large national hospital chain with 60 branches) produces 25 % of all writes.
 
 ### Step 1: measure and estimate
 
 ```text
-Writes: 6 M rows/day ÷ 86,400 ≈ 70 writes/s average; month-end peak × 10 ≈ 700 writes/s
-Data:   6 M × 1.5 KB × 365 ≈ 3.3 TB/year; 3-year retention ≈ 10 TB with indexes (estimate)
+Writes: 6 M rows/day ÷ 86,400 ≈ 70 writes/s average
+        most writes happen in clinic hours (≈ 10 h), so peak ≈ 70 × 2.4 × 3 (morning OPD rush) ≈ 500 writes/s
+Data:   6 M × 1.5 KB × 365 ≈ 3.3 TB/year; 3-year retention ≈ 10 TB before indexes (estimate),
+        and medical records usually must be kept for years, so it never shrinks
 ```
 
 The write rate is fine for one primary; the **storage growth** is the driver.
 
 ### Step 2: choose the shard key
 
-Every query is scoped to one tenant, and reports join project, site and measurement tables within a tenant. So **`tenant_id`** is the shard key: one tenant's data stays on one shard and all joins and transactions are local.
+Every query is scoped to one tenant, and screens join patient, appointment, prescription and invoice tables within a tenant. So **`tenant_id`** is the shard key: one tenant's data stays on one shard and all joins and transactions are local.
 
 ### Step 3: choose the mapping
 
@@ -260,15 +263,15 @@ Use **1,024 hash slots** (`slot = hash(tenant_id) mod 1024`) mapped to 4 shards 
 
 ### Step 4: handle the hot tenant
 
-The highway contractor alone is 25 % of writes and would make its shard 2× busier than the others. Place it on a **dedicated shard** via the directory override. Its own data can later be sharded by `project_id` if it keeps growing.
+The hospital chain alone is 25 % of writes. On a shared 4-shard layout its shard would carry about 25 % + 75 % ÷ 4 ≈ 44 % of all writes, against about 19 % on each of the others: more than twice as busy. Place it on a **dedicated shard** via the directory override. Its own data can later be sharded by `branch_id` if it keeps growing (most of its queries are scoped to one branch).
 
 ### Step 5: plan growth
 
-When shards reach about 60 % of disk or CPU, add a shard and move about a fifth of the slots to it, one slot at a time, during low-traffic hours. Each slot is about 0.1 % of the data: 10 TB ÷ 1,024 ≈ 10 GB per slot, which copies in minutes.
+When shards reach about 60 % of disk or CPU, add a shard and move about a fifth of the slots to it, one slot at a time, at night when clinics are closed. Each slot is about 0.1 % of the data: 10 TB ÷ 1,024 ≈ 10 GB per slot on average, which copies in minutes. Because slots hold whole tenants, sizes are uneven: track bytes per slot and move by size, not just by count.
 
 ### Step 6: plan cross-tenant queries
 
-The platform's internal analytics ("total measured concrete across all tenants this month") are scatter-gather. Instead of running them against the shards, stream changes into an analytics store nightly.
+The platform's internal analytics ("total appointments booked across all tenants this month") are scatter-gather. Instead of running them against the shards, stream changes into an analytics store nightly.
 
 ## Production-style C# implementation
 
@@ -1003,10 +1006,10 @@ The `request_log` table has per-shard, per-tenant request counts for the last ho
 ```sql
 CREATE TABLE request_log (shard_id int NOT NULL, tenant text NOT NULL, requests int NOT NULL);
 INSERT INTO request_log VALUES
- (1, 'acme-builders', 1200), (1, 'bharat-steel', 300),
- (2, 'cityrail', 800), (2, 'acme-roads', 100),
+ (1, 'sunrise-clinics', 1200), (1, 'greenleaf-pharmacy', 300),
+ (2, 'citycare', 800), (2, 'smile-dental', 100),
  (3, 'megamart', 9000), (3, 'tiny-co', 50),
- (4, 'shree-infra', 700), (4, 'cityrail-ops', 150);
+ (4, 'fitzone-gyms', 700), (4, 'citycare-labs', 150);
 ```
 ::check
 ```sql

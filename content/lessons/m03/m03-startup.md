@@ -48,21 +48,21 @@ You do **not** need to know dependency injection or middleware yet. This lesson 
 
 ## Explain it like I'm a beginner
 
-Think about a toll plaza on a national highway opening for the day. Before the first car arrives at 6 a.m., a lot has to happen, and it has to happen in a specific order:
+Think about a gym opening for the day. Before the first member walks in at 6 a.m., a lot has to happen, and it has to happen in a specific order:
 
-1. **Read today's instructions.** The plaza manager reads the rate card for the day: ₹120 for a car, ₹190 for a light commercial vehicle, which lanes are open, whether FASTag is enabled. Changing the rate card does not require rebuilding the plaza.
-2. **Hire and brief the staff.** Cashiers, the supervisor, the maintenance person. Each one knows their job and whom to call for help. Nobody is serving cars yet; this is pure preparation.
-3. **Lay out the lane.** Barrier → camera → FASTag reader → cash booth → receipt printer → exit barrier. Each car will pass these stations in this order. Put the exit barrier before the payment booth and cars leave without paying.
-4. **Open the barrier.** Now, and only now, cars start flowing. The plaza keeps running until someone decides to close it.
+1. **Read today's notice board.** The manager checks the fee chart (₹1,500 a month, ₹4,000 a quarter), the opening hours, and whether this week's 10 % festive offer is on. Changing the fee chart does not require rebuilding the gym.
+2. **Bring in and brief the staff.** The front-desk person, the trainers, the cleaner. Each one knows their job and whom to call for help. Nobody is serving members yet; this is pure preparation.
+3. **Set up the entry flow.** Door → membership-card scanner → locker desk → workout floor. Each member passes these stations in this order. Put the workout floor before the card scanner and people train without paying.
+4. **Unlock the door.** Now, and only now, members start coming in. The gym keeps running until someone decides to close it for the night.
 
 An ASP.NET Core app starts in exactly these four steps:
 
 1. **Read configuration** (`appsettings.json`, environment variables, command-line arguments).
-2. **Register services**: the objects your app will need, such as a database connection factory or a pricing calculator. This is the *service registration phase*, done on `builder.Services`.
+2. **Register services**: the objects your app will need, such as a database connection factory or a membership fee calculator. This is the *service registration phase*, done on `builder.Services`.
 3. **Build the request pipeline**: the ordered list of steps every HTTP request passes through (this is the *middleware pipeline*). Done on `app` after `Build()`.
 4. **Run**: start the web server (Kestrel) and wait for requests until a shutdown signal arrives.
 
-The thing that coordinates all four steps, keeps the app alive, and shuts it down tidily is called the **host**. Think of the host as the plaza manager: it does not collect tolls itself, but nothing happens without it.
+The thing that coordinates all four steps, keeps the app alive, and shuts it down tidily is called the **host**. Think of the host as the gym manager: they do not train anyone themselves, but nothing happens without them.
 
 ## First-principles explanation
 
@@ -71,7 +71,7 @@ The thing that coordinates all four steps, keeps the app alive, and shuts it dow
 ```csharp
 var builder = WebApplication.CreateBuilder(args);
 var app = builder.Build();
-app.MapGet("/", () => "Toll plaza API is up");
+app.MapGet("/", () => "Gym membership API is up");
 app.Run();
 ```
 
@@ -81,10 +81,10 @@ Four lines, and it is a complete web server. Let's unpack each line, because alm
 
 This single call does the boring but essential work that used to take a hundred lines. It creates a `WebApplicationBuilder` that has already:
 
-- **Set up configuration** (a merged, read-only view of all your settings, called `IConfiguration`). Sources are loaded in this order, and later sources override earlier ones: `appsettings.json` → `appsettings.{Environment}.json` → user secrets (only in Development) → environment variables → command-line arguments. So `dotnet run --Toll:CarRate=150` beats the value in `appsettings.json`. This is why you never need to edit a JSON file to change a setting on a server; you set an environment variable.
+- **Set up configuration** (a merged, read-only view of all your settings, called `IConfiguration`). Sources are loaded in this order, and later sources override earlier ones: `appsettings.json` → `appsettings.{Environment}.json` → user secrets (only in Development) → environment variables → command-line arguments. So `dotnet run --Membership:MonthlyFee=1800` beats the value in `appsettings.json`. This is why you never need to edit a JSON file to change a setting on a server; you set an environment variable.
 - **Set up logging** (`ILogger<T>`) with console and debug output by default, reading levels from the `Logging` section of configuration.
 - **Detected the environment** from the `ASPNETCORE_ENVIRONMENT` variable (falling back to `DOTNET_ENVIRONMENT`, then to `Production`). More on this below.
-- **Configured Kestrel**, the built-in web server, to listen on the URLs from configuration or `launchSettings.json` (typically `http://localhost:5000` and `https://localhost:5001` in development).
+- **Configured Kestrel**, the built-in web server, to listen on the URLs from configuration (`ASPNETCORE_URLS`, `ASPNETCORE_HTTP_PORTS`, the `Kestrel` section) or, under `dotnet run`, from `launchSettings.json`, where project templates put randomly chosen local ports. With nothing configured it listens on `http://localhost:5000`; the official .NET container images set `ASPNETCORE_HTTP_PORTS=8080`.
 - **Created an empty service container** (`IServiceCollection`, exposed as `builder.Services`) and pre-registered the framework's own services in it: logging, configuration, `IHostEnvironment`, `IHostApplicationLifetime` and options support. Things such as `IHttpClientFactory`, controllers or your own `TimeProvider` registration you add yourself.
 
 `args` is passed in so command-line arguments become configuration. Always pass it.
@@ -94,12 +94,12 @@ This single call does the boring but essential work that used to take a hundred 
 Between `CreateBuilder` and `Build()`, you describe what your app needs. You do not create objects here; you write down *recipes* for creating them:
 
 ```csharp
-builder.Services.AddSingleton<ITollRateCard, ConfiguredTollRateCard>();
-builder.Services.AddScoped<ITollCalculator, TollCalculator>();
-builder.Services.Configure<TollOptions>(builder.Configuration.GetSection("Toll"));
+builder.Services.AddSingleton<IPlanCatalog, ConfiguredPlanCatalog>();
+builder.Services.AddScoped<IRenewalCalculator, RenewalCalculator>();
+builder.Services.Configure<MembershipOptions>(builder.Configuration.GetSection("Membership"));
 ```
 
-Each line says: "when someone asks for `ITollRateCard`, give them a `ConfiguredTollRateCard`". The container figures out the constructor parameters itself. This is dependency injection, and it has [its own lesson](#/lesson/m03-dependency-injection). For now, the key fact is **timing**: `builder.Services` is a list of recipes, and `Build()` freezes that list. Registrations after `Build()` throw an exception, because the container (`IServiceProvider`) has already been created from the frozen list.
+Each line says: "when someone asks for `IPlanCatalog`, give them a `ConfiguredPlanCatalog`". The container figures out the constructor parameters itself. This is dependency injection, and it has [its own lesson](#/lesson/m03-dependency-injection). For now, the key fact is **timing**: `builder.Services` is a list of recipes, and `Build()` freezes that list. Registrations after `Build()` throw an exception, because the container (`IServiceProvider`) has already been created from the frozen list.
 
 A useful mental test: anything that answers "what objects exist in this app and how are they made?" belongs before `Build()`.
 
@@ -118,15 +118,15 @@ After `Build()`, the variable name changes from `builder` to `app`, and the ques
 Now you describe what happens to each request, in order:
 
 ```csharp
-if (app.Environment.IsDevelopment())
-    app.UseDeveloperExceptionPage();   // detailed errors only for developers
+if (!app.Environment.IsDevelopment())
+    app.UseExceptionHandler("/error");   // safe errors for the public; Development gets the detailed page automatically
 app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
-app.MapGet("/rates/{vehicle}", (string vehicle, ITollCalculator calc) => calc.RateFor(vehicle));
+app.MapGet("/members/{id}/renewal", (int id, IRenewalCalculator calc) => calc.QuoteFor(id));
 ```
 
-Each `Use*` call adds one station to the lane. Each `Map*` call registers an endpoint, which is the final station where your code runs. Order matters here in the same way it matters at the toll plaza: `UseAuthorization` before `UseAuthentication` means you check permissions before knowing who the user is. [The middleware lesson](#/lesson/m03-kestrel-middleware-routing) covers the correct order in detail.
+Each `Use*` call adds one station to the entry flow. Each `Map*` call registers an endpoint, which is the final station where your code runs. Order matters here in the same way it matters at the gym door: `UseAuthorization` before `UseAuthentication` means you check permissions before knowing who the user is. [The middleware lesson](#/lesson/m03-kestrel-middleware-routing) covers the correct order in detail.
 
 A mental test for this phase: anything that answers "what happens to a request?" belongs after `Build()`.
 
@@ -147,10 +147,12 @@ Why does the framework run requests on other threads if the main thread is block
 
 An **environment** is a single string naming where the app is running. The three conventional values are `Development`, `Staging` and `Production`, but you can invent your own (`UAT`, `Training`). It is read from `ASPNETCORE_ENVIRONMENT` and exposed as `builder.Environment` / `app.Environment` (`IWebHostEnvironment`).
 
+Since .NET 6, `WebApplication` turns on the developer exception page by itself when the environment is `Development`, so you no longer write `UseDeveloperExceptionPage()` in new code.
+
 Two things change with the environment:
 
 1. **Which settings file is layered on top.** `appsettings.Development.json` is loaded only when the environment is `Development`. A typical layout: connection strings and log levels differ per file; everything shared stays in `appsettings.json`.
-2. **Which code paths you choose.** `if (app.Environment.IsDevelopment())` is the normal way to enable detailed error pages, OpenAPI UI, or relaxed CORS. In production those are a security risk.
+2. **Which code paths you choose.** `if (app.Environment.IsDevelopment())` is the normal way to enable the OpenAPI document and UI, seed test data, or relax CORS. In production those are a security risk.
 
 If the variable is not set, the environment is **Production**. That is a deliberate safe default: an app that forgets to set its environment on a server gets production behaviour, not debug pages leaking stack traces.
 
@@ -160,12 +162,14 @@ A sanity rule: if you need more than three or four environment checks in `Progra
 
 Some work is not triggered by HTTP: warming a cache at startup, polling a queue, sending a nightly report. The host offers `IHostedService` for this: two methods, `StartAsync` (called during `Run()`, before the server accepts traffic) and `StopAsync` (called during shutdown). `BackgroundService` is a convenience base class with one `ExecuteAsync` method for long-running loops. [Background services](#/lesson/m03-background-services) goes deep; here we use one to show the start/stop sequence.
 
-An important detail: hosted services start **in registration order**, and the host waits for each `StartAsync` to finish before starting the next. A `StartAsync` that does five minutes of work delays your whole app by five minutes. Kick long work off to a background task and return quickly, or use `BackgroundService` where `ExecuteAsync` runs without blocking startup.
+An important detail: hosted services start **in registration order**, and the host waits for each `StartAsync` to finish before starting the next. A `StartAsync` that does five minutes of work delays your whole app by five minutes. Kick long work off to a background task and return quickly, or use `BackgroundService`, whose `ExecuteAsync` runs without blocking startup. (From .NET 10 the *whole* of `ExecuteAsync` runs in the background; in earlier versions the synchronous part before the first `await` still blocked startup.)
+
+Two newer knobs exist but are rarely needed: `HostOptions.ServicesStartConcurrently` / `ServicesStopConcurrently` (since .NET 8) start or stop hosted services in parallel, and `IHostedLifecycleService` adds `StartingAsync`, `StartedAsync`, `StoppingAsync` and `StoppedAsync` hooks around the normal two. Keep the default sequential start unless you have measured a slow startup.
 
 ### What happens without understanding this
 
 - Developers register a service after `Build()` and get `InvalidOperationException: Cannot modify ServiceCollection after application is built`.
-- A UAT server runs with no `ASPNETCORE_ENVIRONMENT`, so `appsettings.UAT.json` is silently ignored and the app points at the wrong database.
+- A UAT server runs with no `ASPNETCORE_ENVIRONMENT`, so `appsettings.UAT.json` is silently ignored and the app points at the live payment gateway and the wrong database.
 - A `StartAsync` that calls a slow external API makes a Kubernetes pod fail its startup probe and restart forever.
 - A developer puts a cleanup call after `app.Run()` and is confused why it only logs at shutdown.
 
@@ -205,7 +209,7 @@ sequenceDiagram
     participant OS as Operating system
     participant P as Program.cs
     participant H as Host
-    participant S as RateCardWarmup (IHostedService)
+    participant S as PlanCatalogWarmup (IHostedService)
     participant K as Kestrel
     OS->>P: start process with args
     P->>P: CreateBuilder: config, logging, Services
@@ -213,7 +217,7 @@ sequenceDiagram
     P->>P: add middleware and endpoints
     P->>H: Run()
     H->>S: StartAsync()
-    S-->>H: completed (cache loaded)
+    S-->>H: completed (plans loaded)
     H->>K: StartAsync() — bind ports
     K-->>H: listening on :5000
     Note over H,K: requests are served for hours or days
@@ -228,7 +232,7 @@ Notice that `Program.cs` hands control to the host and does not get it back unti
 
 ## Step-by-step example
 
-We will build the toll plaza API in four small steps, matching the four phases.
+We will build a small API for a gym chain's members app (fees, plans, renewals) in four small steps, matching the four phases.
 
 ### Step 1 — settings only
 
@@ -236,7 +240,7 @@ Create `appsettings.json`:
 
 ```json
 {
-  "Toll": { "PlazaName": "Kherki Daula", "CarRate": 120, "LcvRate": 190, "FastagDiscountPercent": 0 },
+  "Membership": { "GymName": "FitZone Indiranagar", "MonthlyFee": 1500, "QuarterlyFee": 4000, "OfferDiscountPercent": 0 },
   "Logging": { "LogLevel": { "Default": "Information" } }
 }
 ```
@@ -245,137 +249,137 @@ And `appsettings.Development.json`, which only lists the differences:
 
 ```json
 {
-  "Toll": { "PlazaName": "Kherki Daula (DEV)" },
+  "Membership": { "GymName": "FitZone Indiranagar (DEV)" },
   "Logging": { "LogLevel": { "Default": "Debug" } }
 }
 ```
 
-Run with `ASPNETCORE_ENVIRONMENT=Development` and the plaza name becomes "Kherki Daula (DEV)"; the rates come from the base file because the Development file did not override them. Configuration is merged key by key, not file by file.
+Run with `ASPNETCORE_ENVIRONMENT=Development` and the gym name becomes "FitZone Indiranagar (DEV)"; the fees come from the base file because the Development file did not override them. Configuration is merged key by key, not file by file.
 
 ### Step 2 — register what the app needs
 
 ```csharp
-builder.Services.Configure<TollOptions>(builder.Configuration.GetSection("Toll"));
-builder.Services.AddSingleton<ITollRateCard, ConfiguredTollRateCard>();
+builder.Services.Configure<MembershipOptions>(builder.Configuration.GetSection("Membership"));
+builder.Services.AddSingleton<IPlanCatalog, ConfiguredPlanCatalog>();
 ```
 
-`Configure<TollOptions>` binds the `Toll` section to a plain C# class so the rest of the code never deals with string keys. `AddSingleton` says one `ConfiguredTollRateCard` is created and shared for the whole app, which is right for a read-only rate card.
+`Configure<MembershipOptions>` binds the `Membership` section to a plain C# class so the rest of the code never deals with string keys. `AddSingleton` says one `ConfiguredPlanCatalog` is created and shared for the whole app, which is right for a read-only list of plans and fees.
 
 ### Step 3 — describe the request path
 
 ```csharp
-app.MapGet("/rates/{vehicle}", (string vehicle, ITollRateCard card) =>
-    card.TryGetRate(vehicle, out var rate) ? Results.Ok(new { vehicle, rate }) : Results.NotFound());
+app.MapGet("/plans/{plan}", (string plan, IPlanCatalog catalog) =>
+    catalog.TryGetFee(plan, out var fee) ? Results.Ok(new { plan, fee }) : Results.NotFound());
 ```
 
-The lambda's `ITollRateCard card` parameter is filled by the container. The `vehicle` parameter comes from the URL. This is the endpoint, the last station in the lane.
+The lambda's `IPlanCatalog catalog` parameter is filled by the container. The `plan` parameter comes from the URL (`/plans/monthly`). This is the endpoint, the last station in the flow.
 
 ### Step 4 — warm up and run
 
 ```csharp
-builder.Services.AddHostedService<RateCardWarmup>();   // registered in phase 1
+builder.Services.AddHostedService<PlanCatalogWarmup>();   // registered in phase 1
 ...
 app.Run();
 ```
 
-`RateCardWarmup.StartAsync` loads the rate card and logs a summary before the server opens. If the configuration is broken (a negative rate, a missing plaza name), it throws, and the app refuses to start. That is the right behaviour: a toll plaza with an unknown rate card should not open at all.
+`PlanCatalogWarmup.StartAsync` loads the plan catalogue and logs a summary before the server opens. If the configuration is broken (a negative fee, a missing gym name), it throws, and the app refuses to start. That is the right behaviour: an app that would charge members an unknown fee should not open at all.
 
 ## Production-style C# implementation
 
 Project layout:
 
 ```text
-TollPlaza.Api/
+GymMembership.Api/
   Program.cs
   appsettings.json
   appsettings.Development.json
-  Toll/TollOptions.cs
-  Toll/ITollRateCard.cs
-  Toll/ConfiguredTollRateCard.cs
-  Toll/RateCardWarmup.cs
+  Plans/MembershipOptions.cs
+  Plans/IPlanCatalog.cs
+  Plans/ConfiguredPlanCatalog.cs
+  Plans/PlanCatalogWarmup.cs
   Hosting/LifetimeLogger.cs
 ```
 
-```csharp file=Toll/TollOptions.cs
-namespace TollPlaza.Toll;
+```csharp file=Plans/MembershipOptions.cs
+namespace GymMembership.Plans;
 
-/// <summary>Bound from the "Toll" configuration section. Plain properties, no logic.</summary>
-public sealed class TollOptions
+/// <summary>Bound from the "Membership" configuration section. Plain properties, no logic.</summary>
+public sealed class MembershipOptions
 {
-    public const string SectionName = "Toll";
+    public const string SectionName = "Membership";
 
-    public string PlazaName { get; set; } = "";
-    public decimal CarRate { get; set; }
-    public decimal LcvRate { get; set; }
-    public decimal FastagDiscountPercent { get; set; }
+    public string GymName { get; set; } = "";
+    public decimal MonthlyFee { get; set; }
+    public decimal QuarterlyFee { get; set; }
+    public decimal OfferDiscountPercent { get; set; }
 }
 ```
 
-```csharp file=Toll/ITollRateCard.cs
-namespace TollPlaza.Toll;
+```csharp file=Plans/IPlanCatalog.cs
+namespace GymMembership.Plans;
 
-public interface ITollRateCard
+public interface IPlanCatalog
 {
-    string PlazaName { get; }
-    IReadOnlyDictionary<string, decimal> Rates { get; }
-    bool TryGetRate(string vehicleClass, out decimal rate);
+    string GymName { get; }
+    IReadOnlyDictionary<string, decimal> Fees { get; }
+    bool TryGetFee(string plan, out decimal fee);
 }
 ```
 
-```csharp file=Toll/ConfiguredTollRateCard.cs
+```csharp file=Plans/ConfiguredPlanCatalog.cs
 using Microsoft.Extensions.Options;
 
-namespace TollPlaza.Toll;
+namespace GymMembership.Plans;
 
-/// <summary>Reads rates once from options. Registered as a singleton because it never changes while running.</summary>
-public sealed class ConfiguredTollRateCard : ITollRateCard
+/// <summary>Reads fees once from options. Registered as a singleton because it never changes while running.</summary>
+public sealed class ConfiguredPlanCatalog : IPlanCatalog
 {
-    private readonly Dictionary<string, decimal> _rates;
+    private readonly Dictionary<string, decimal> _fees;
 
-    public ConfiguredTollRateCard(IOptions<TollOptions> options)
+    public ConfiguredPlanCatalog(IOptions<MembershipOptions> options)
     {
         var o = options.Value;
-        if (string.IsNullOrWhiteSpace(o.PlazaName))
-            throw new InvalidOperationException("Toll:PlazaName is required.");
-        if (o.CarRate <= 0 || o.LcvRate <= 0)
-            throw new InvalidOperationException("Toll rates must be positive.");
+        if (string.IsNullOrWhiteSpace(o.GymName))
+            throw new InvalidOperationException("Membership:GymName is required.");
+        if (o.MonthlyFee <= 0 || o.QuarterlyFee <= 0)
+            throw new InvalidOperationException("Membership fees must be positive.");
 
-        PlazaName = o.PlazaName;
-        var factor = 1m - o.FastagDiscountPercent / 100m;
-        _rates = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase)
+        GymName = o.GymName;
+        var factor = 1m - o.OfferDiscountPercent / 100m;
+        _fees = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase)
         {
-            ["car"] = Math.Round(o.CarRate * factor, 2),
-            ["lcv"] = Math.Round(o.LcvRate * factor, 2),
+            ["monthly"] = Math.Round(o.MonthlyFee * factor, 2),
+            ["quarterly"] = Math.Round(o.QuarterlyFee * factor, 2),
         };
     }
 
-    public string PlazaName { get; }
-    public IReadOnlyDictionary<string, decimal> Rates => _rates;
-    public bool TryGetRate(string vehicleClass, out decimal rate) => _rates.TryGetValue(vehicleClass, out rate);
+    public string GymName { get; }
+    public IReadOnlyDictionary<string, decimal> Fees => _fees;
+    public bool TryGetFee(string plan, out decimal fee) => _fees.TryGetValue(plan, out fee);
 }
 ```
 
-```csharp file=Toll/RateCardWarmup.cs
+```csharp file=Plans/PlanCatalogWarmup.cs
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace TollPlaza.Toll;
+namespace GymMembership.Plans;
 
-/// <summary>Runs before Kestrel starts listening. If the rate card is invalid, startup fails loudly.</summary>
-public sealed class RateCardWarmup(ITollRateCard rateCard, ILogger<RateCardWarmup> logger) : IHostedService
+/// <summary>Runs before Kestrel starts listening. If the plan catalogue is invalid, startup fails loudly.</summary>
+public sealed class PlanCatalogWarmup(IPlanCatalog catalog, ILogger<PlanCatalogWarmup> logger) : IHostedService
 {
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        // Resolving ITollRateCard already validated the options in its constructor.
-        logger.LogInformation("Rate card for {Plaza} loaded with {Count} vehicle classes: {Rates}",
-            rateCard.PlazaName, rateCard.Rates.Count,
-            string.Join(", ", rateCard.Rates.Select(r => $"{r.Key}=₹{r.Value}")));
+        // Resolving IPlanCatalog already validated the options in its constructor.
+        logger.LogInformation("Plan catalogue for {Gym} loaded with {Count} plans: {Fees}",
+            catalog.GymName, catalog.Fees.Count,
+            string.Join(", ", catalog.Fees.Select(f => $"{f.Key}=₹{f.Value}")));
         return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
-        logger.LogInformation("Rate card service stopping for {Plaza}", rateCard.PlazaName);
+        logger.LogInformation("Plan catalogue service stopping for {Gym}", catalog.GymName);
         return Task.CompletedTask;
     }
 }
@@ -385,7 +389,7 @@ public sealed class RateCardWarmup(ITollRateCard rateCard, ILogger<RateCardWarmu
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace TollPlaza.Hosting;
+namespace GymMembership.Hosting;
 
 /// <summary>Subscribes to the three lifetime events so operators can see exactly when the app opened and closed.</summary>
 public sealed class LifetimeLogger(IHostApplicationLifetime lifetime, ILogger<LifetimeLogger> logger, TimeProvider clock) : IHostedService
@@ -406,17 +410,18 @@ public sealed class LifetimeLogger(IHostApplicationLifetime lifetime, ILogger<Li
 ```
 
 ```csharp file=Program.cs
-using TollPlaza.Hosting;
-using TollPlaza.Toll;
+using GymMembership.Hosting;
+using GymMembership.Plans;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // ---------- Phase 1: what exists ----------
-builder.Services.Configure<TollOptions>(builder.Configuration.GetSection(TollOptions.SectionName));
-builder.Services.AddSingleton<ITollRateCard, ConfiguredTollRateCard>();
+builder.Services.Configure<MembershipOptions>(builder.Configuration.GetSection(MembershipOptions.SectionName));
+builder.Services.AddSingleton<IPlanCatalog, ConfiguredPlanCatalog>();
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddHostedService<LifetimeLogger>();   // starts first
-builder.Services.AddHostedService<RateCardWarmup>();   // starts second
+builder.Services.AddProblemDetails();
+builder.Services.AddHostedService<LifetimeLogger>();      // starts first
+builder.Services.AddHostedService<PlanCatalogWarmup>();   // starts second
 
 // Fail fast on a slow shutdown instead of hanging a deployment.
 builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(15));
@@ -424,18 +429,20 @@ builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSe
 var app = builder.Build();
 
 // ---------- Phase 2: what happens to a request ----------
-if (app.Environment.IsDevelopment())
+// In Development, WebApplication already shows the developer exception page.
+// Everywhere else, return a safe Problem Details 500 instead of a stack trace.
+if (!app.Environment.IsDevelopment())
 {
-    app.UseDeveloperExceptionPage();
+    app.UseExceptionHandler();
 }
 
-app.MapGet("/", (IHostEnvironment env, ITollRateCard card) =>
-    Results.Ok(new { plaza = card.PlazaName, environment = env.EnvironmentName }));
+app.MapGet("/", (IHostEnvironment env, IPlanCatalog catalog) =>
+    Results.Ok(new { gym = catalog.GymName, environment = env.EnvironmentName }));
 
-app.MapGet("/rates/{vehicle}", (string vehicle, ITollRateCard card) =>
-    card.TryGetRate(vehicle, out var rate)
-        ? Results.Ok(new { vehicle = vehicle.ToLowerInvariant(), rate })
-        : Results.NotFound(new { error = $"Unknown vehicle class '{vehicle}'" }));
+app.MapGet("/plans/{plan}", (string plan, IPlanCatalog catalog) =>
+    catalog.TryGetFee(plan, out var fee)
+        ? Results.Ok(new { plan = plan.ToLowerInvariant(), fee })
+        : Results.NotFound(new { error = $"Unknown membership plan '{plan}'" }));
 
 // ---------- Phase 3: run until told to stop ----------
 app.Run();
@@ -443,9 +450,10 @@ app.Run();
 
 A few things to notice:
 
-- The comment blocks make the phases visible. In a real codebase, when `Program.cs` passes about 60 lines, move groups of registrations into extension methods such as `builder.Services.AddTollPricing(builder.Configuration)` and keep `Program.cs` as a table of contents.
+- The comment blocks make the phases visible. In a real codebase, when `Program.cs` passes about 60 lines, move groups of registrations into extension methods such as `builder.Services.AddMembershipPlans(builder.Configuration)` and keep `Program.cs` as a table of contents.
 - `TimeProvider.System` is registered so that `LifetimeLogger` can be tested with a fake clock. Avoid `DateTime.UtcNow` inside services.
-- `HostOptions.ShutdownTimeout` is set to 15 seconds. Kubernetes gives a pod 30 seconds by default before killing it; your drain time must be shorter than that.
+- `HostOptions.ShutdownTimeout` is set to 15 seconds. Kubernetes gives a pod 30 seconds by default (`terminationGracePeriodSeconds`) before killing it; your drain time must be shorter than that.
+- There is no `UseDeveloperExceptionPage()` call: `WebApplication` adds it in Development. Outside Development, `UseExceptionHandler()` with `AddProblemDetails()` returns a safe JSON error. [Filters, middleware and exception handling](#/lesson/m03-filters-exceptions) builds on this.
 
 ### Reading the environment at startup
 
@@ -469,8 +477,8 @@ var builder = WebApplication.CreateBuilder(args);
 var app = builder.Build();
 app.UseDeveloperExceptionPage();                        // always on, even in production
 var connection = "Host=prod-db;Username=admin;Password=Pa55w0rd"; // secret in source control
-builder.Services.AddSingleton<ITollRateCard, ConfiguredTollRateCard>(); // after Build(): throws
-app.MapGet("/rates/{v}", (string v) => new ConfiguredTollRateCard(null!).TryGetRate(v, out var r) ? r : 0);
+builder.Services.AddSingleton<IPlanCatalog, ConfiguredPlanCatalog>(); // after Build(): throws
+app.MapGet("/plans/{p}", (string p) => new ConfiguredPlanCatalog(null!).TryGetFee(p, out var f) ? f : 0);
 app.Run();
 Console.WriteLine("Started");                           // prints only at shutdown
 ```
@@ -480,7 +488,7 @@ Five separate problems: a debug page that leaks stack traces to the public, a pa
 **Good**: the implementation above. Phases are separated; secrets come from configuration (user secrets locally, environment variables or a vault on servers); the developer page is gated on the environment; dependencies are injected; startup failures are loud and early.
 
 :::callout type=tip title="A simpler alternative when the app is tiny"
-For a one-endpoint internal tool, a four-line `Program.cs` with no options class and no hosted service is perfectly fine. Add structure when you have a second environment or a second developer. Do not build the toll plaza for a single bicycle.
+For a one-endpoint internal tool, a four-line `Program.cs` with no options class and no hosted service is perfectly fine. Add structure when you have a second environment or a second developer. Do not build a gym chain's back office for one treadmill.
 :::
 
 :::callout type=warning title="Startup should fail fast"
@@ -515,7 +523,7 @@ public static class Program
 
         // Phase 1: what exists. Try swapping these two lines.
         builder.Services.AddSingleton<IHostedService>(_ => new NamedService("LifetimeLogger"));
-        builder.Services.AddSingleton<IHostedService>(_ => new NamedService("RateCardWarmup"));
+        builder.Services.AddSingleton<IHostedService>(_ => new NamedService("PlanCatalogWarmup"));
 
         var host = builder.Build();
         Console.WriteLine($"Environment: {host.Services.GetRequiredService<IHostEnvironment>().EnvironmentName}");
@@ -528,16 +536,16 @@ public static class Program
 ```
 :::
 
-Expected output: `START LifetimeLogger`, `START RateCardWarmup`, the environment name (Production, because nothing set it), `...serving...`, then `STOP RateCardWarmup`, `STOP LifetimeLogger`. Stops run in reverse so that the thing that started last shuts down first.
+Expected output: the environment name (Production, because nothing set it), `START LifetimeLogger`, `START PlanCatalogWarmup`, `...serving...`, then `STOP PlanCatalogWarmup`, `STOP LifetimeLogger`. Stops run in reverse so that the thing that started last shuts down first.
 
 ## Exercises
 
 :::exercise id=m03-startup-ex1 difficulty=beginner kind=code title="Build configuration with the right precedence"
-Implement `TollConfig.Build`, which builds an `IConfigurationRoot` from three in-memory sources in the same order ASP.NET Core uses: base settings, then environment-specific settings, then environment variables. Later sources must win.
+Implement `MembershipConfig.Build`, which builds an `IConfigurationRoot` from three in-memory sources in the same order ASP.NET Core uses: base settings, then environment-specific settings, then environment variables. Later sources must win.
 ::requirements
 - Use `ConfigurationBuilder` with `AddInMemoryCollection` for each source.
 - Environment-specific settings are applied only when `environmentName` is not null or empty.
-- Keys use the `Section:Key` convention, e.g. `Toll:CarRate`.
+- Keys use the `Section:Key` convention, e.g. `Membership:MonthlyFee`.
 ::acceptance
 - A key present only in base settings is returned unchanged.
 - A key in both base and environment settings returns the environment value.
@@ -558,12 +566,12 @@ cb.AddInMemoryCollection(envVars);
 return cb.Build();
 ```
 ::starter
-```csharp file=TollConfig.cs
+```csharp file=MembershipConfig.cs
 using System;
 using System.Collections.Generic;
 using Microsoft.Extensions.Configuration;
 
-public static class TollConfig
+public static class MembershipConfig
 {
     /// <summary>Layers: base → environment-specific (if environmentName set) → environment variables.</summary>
     public static IConfigurationRoot Build(
@@ -577,67 +585,67 @@ public static class TollConfig
 }
 ```
 ::tests
-```csharp file=TollConfigTests.cs
+```csharp file=MembershipConfigTests.cs
 using System.Collections.Generic;
 using Xunit;
 
-public class TollConfigTests
+public class MembershipConfigTests
 {
     private static readonly Dictionary<string, string?> Base = new()
     {
-        ["Toll:PlazaName"] = "Kherki Daula",
-        ["Toll:CarRate"] = "120",
-        ["Toll:LcvRate"] = "190",
+        ["Membership:GymName"] = "FitZone Indiranagar",
+        ["Membership:MonthlyFee"] = "1500",
+        ["Membership:QuarterlyFee"] = "4000",
     };
     private static readonly Dictionary<string, string?> Dev = new()
     {
-        ["Toll:PlazaName"] = "Kherki Daula (DEV)",
-        ["Toll:CarRate"] = "1",
+        ["Membership:GymName"] = "FitZone Indiranagar (DEV)",
+        ["Membership:MonthlyFee"] = "1",
     };
     private static readonly Dictionary<string, string?> EnvVars = new()
     {
-        ["Toll:CarRate"] = "150",
+        ["Membership:MonthlyFee"] = "1800",
     };
 
     [Fact]
     public void Base_only_key_is_returned()
     {
-        var cfg = TollConfig.Build("Development", Base, Dev, EnvVars);
-        Assert.Equal("190", cfg["Toll:LcvRate"]);
+        var cfg = MembershipConfig.Build("Development", Base, Dev, EnvVars);
+        Assert.Equal("4000", cfg["Membership:QuarterlyFee"]);
     }
 
     [Fact]
     public void Environment_file_overrides_base()
     {
-        var cfg = TollConfig.Build("Development", Base, Dev, EnvVars);
-        Assert.Equal("Kherki Daula (DEV)", cfg["Toll:PlazaName"]);
+        var cfg = MembershipConfig.Build("Development", Base, Dev, EnvVars);
+        Assert.Equal("FitZone Indiranagar (DEV)", cfg["Membership:GymName"]);
     }
 
     [Fact]
     public void Environment_variable_overrides_everything()
     {
-        var cfg = TollConfig.Build("Development", Base, Dev, EnvVars);
-        Assert.Equal("150", cfg["Toll:CarRate"]);
+        var cfg = MembershipConfig.Build("Development", Base, Dev, EnvVars);
+        Assert.Equal("1800", cfg["Membership:MonthlyFee"]);
     }
 
     [Fact]
     public void No_environment_means_no_environment_file()
     {
-        var cfg = TollConfig.Build("", Base, Dev, new Dictionary<string, string?>());
-        Assert.Equal("Kherki Daula", cfg["Toll:PlazaName"]);
-        Assert.Equal("120", cfg["Toll:CarRate"]);
+        var cfg = MembershipConfig.Build("", Base, Dev, new Dictionary<string, string?>());
+        Assert.Equal("FitZone Indiranagar", cfg["Membership:GymName"]);
+        Assert.Equal("1500", cfg["Membership:MonthlyFee"]);
     }
 }
 ```
 ::solution
 The order of `Add*` calls is the precedence. This mirrors exactly what `CreateBuilder` does with JSON files and real environment variables.
 
-```csharp file=TollConfig.cs
+```csharp file=MembershipConfig.cs
 using System;
 using System.Collections.Generic;
 using Microsoft.Extensions.Configuration;
 
-public static class TollConfig
+public static class MembershipConfig
 {
     public static IConfigurationRoot Build(
         string? environmentName,
@@ -658,7 +666,7 @@ public static class TollConfig
 - Adding environment variables before the environment file. Then a server-level override loses to a file checked into source control.
 - Forgetting the `environmentName` guard, so `appsettings.Development.json` values leak into production.
 ::extensions
-Add a fourth layer for command-line arguments (`AddCommandLine(args)`) and a test proving `--Toll:CarRate=200` wins over everything.
+Add a fourth layer for command-line arguments (`AddCommandLine(args)`) and a test proving `--Membership:MonthlyFee=2000` wins over everything.
 :::
 
 :::exercise id=m03-startup-ex2 difficulty=beginner kind=written title="Trace a Program.cs line by line"
@@ -666,12 +674,12 @@ Read this `Program.cs` and write, for each numbered line, (a) which phase it bel
 
 ```csharp
 var builder = WebApplication.CreateBuilder(args);                 // 1
-builder.Services.AddScoped<IInvoiceService, InvoiceService>();    // 2
+builder.Services.AddScoped<IMemberService, MemberService>();      // 2
 var app = builder.Build();                                        // 3
 if (app.Environment.IsDevelopment()) app.UseDeveloperExceptionPage(); // 4
 app.UseAuthentication();                                          // 5
 app.UseAuthorization();                                           // 6
-app.MapGet("/invoices/{id}", (int id, IInvoiceService s) => s.Get(id)); // 7
+app.MapGet("/members/{id}", (int id, IMemberService s) => s.Get(id)); // 7
 app.Run();                                                        // 8
 Console.WriteLine("Goodbye");                                     // 9
 ```
@@ -685,14 +693,14 @@ Which object does each line use: `builder` or `app`? That alone tells you the ph
 ::hint
 What does `Build()` do to `builder.Services`?
 ::hint
-Think of middleware as stations in a lane. Does it make sense to check a permit before checking identity?
+Think of middleware as stations at the gym entrance. Does it make sense to check whether someone's plan includes the pool before scanning their card to see who they are?
 ::solution
 - **Line 1**: configuration and host setup. Everything depends on it; nothing can move above it.
 - **Line 2**: service registration (phase 1). Moved below line 3, it throws `InvalidOperationException` because `Build()` has frozen the service collection.
 - **Line 3**: the boundary. Creates the service provider and the host.
-- **Line 4**: pipeline. It must come first in the pipeline so it can catch exceptions from everything after it. Moved below line 7 it would still compile, but an exception thrown by authentication would not reach it.
-- **Lines 5–6**: pipeline. Authentication establishes *who*, authorization decides *allowed or not*. Swapped, every protected endpoint returns 401/403 because the user is anonymous when authorization runs.
-- **Line 7**: an endpoint, the last station. `IInvoiceService` is injected because of line 2.
+- **Line 4**: pipeline. It must come first in the pipeline so it can catch exceptions from everything after it. Moved below line 7 it would still compile, but an exception thrown by authentication would not reach it. (In new code you can delete this line: `WebApplication` adds the developer exception page in Development automatically.)
+- **Lines 5–6**: pipeline. Authentication establishes *who*, authorization decides *allowed or not*. Swapped, every protected endpoint returns 401 because the user is still anonymous when authorization runs.
+- **Line 7**: an endpoint, the last station. `IMemberService` is injected because of line 2.
 - **Line 8**: run. Blocks until shutdown.
 - **Line 9**: executes only after `Run()` returns, i.e. at shutdown. Misleading name; it is really "shutting down".
 ::mistakes
@@ -701,9 +709,9 @@ Think of middleware as stations in a lane. Does it make sense to check a permit 
 :::
 
 :::exercise id=m03-startup-ex3 difficulty=intermediate kind=code title="Validate options at startup with a hosted service"
-Implement `TollOptionsValidator`, an `IHostedService` that checks `TollOptions` when the host starts. If the options are invalid, `StartAsync` must throw `InvalidOperationException` with a message naming every problem, so that the app refuses to start.
+Implement `MembershipOptionsValidator`, an `IHostedService` that checks `MembershipOptions` when the host starts. If the options are invalid, `StartAsync` must throw `InvalidOperationException` with a message naming every problem, so that the app refuses to start.
 ::requirements
-- Problems to detect: empty `PlazaName`; `CarRate <= 0`; `LcvRate <= 0`; `FastagDiscountPercent` outside 0–100.
+- Problems to detect: empty `GymName`; `MonthlyFee <= 0`; `QuarterlyFee <= 0`; `OfferDiscountPercent` outside 0–100.
 - Collect all problems and report them in one exception message, separated by `"; "`.
 - `StopAsync` does nothing.
 ::acceptance
@@ -711,19 +719,19 @@ Implement `TollOptionsValidator`, an `IHostedService` that checks `TollOptions` 
 - Invalid options: `StartAsync` throws `InvalidOperationException` whose message mentions each failing property name.
 - The validator is resolved from a real `ServiceCollection` as an `IHostedService`.
 ::hint
-Inject `IOptions<TollOptions>` and read `.Value` inside `StartAsync`.
+Inject `IOptions<MembershipOptions>` and read `.Value` inside `StartAsync`.
 ::hint
 Build a `List<string>` of problems, then `if (problems.Count > 0) throw new InvalidOperationException(string.Join("; ", problems))`.
 ::hint
-Property names in messages: use `nameof(TollOptions.CarRate)` so renames stay in sync.
+Property names in messages: use `nameof(MembershipOptions.MonthlyFee)` so renames stay in sync.
 ::hint
 ```csharp
 var o = options.Value;
 var problems = new List<string>();
-if (string.IsNullOrWhiteSpace(o.PlazaName)) problems.Add($"{nameof(o.PlazaName)} is required");
+if (string.IsNullOrWhiteSpace(o.GymName)) problems.Add($"{nameof(o.GymName)} is required");
 ```
 ::starter
-```csharp file=TollOptionsValidator.cs
+```csharp file=MembershipOptionsValidator.cs
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -731,25 +739,25 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
-public sealed class TollOptions
+public sealed class MembershipOptions
 {
-    public string PlazaName { get; set; } = "";
-    public decimal CarRate { get; set; }
-    public decimal LcvRate { get; set; }
-    public decimal FastagDiscountPercent { get; set; }
+    public string GymName { get; set; } = "";
+    public decimal MonthlyFee { get; set; }
+    public decimal QuarterlyFee { get; set; }
+    public decimal OfferDiscountPercent { get; set; }
 }
 
-public sealed class TollOptionsValidator : IHostedService
+public sealed class MembershipOptionsValidator : IHostedService
 {
-    private readonly IOptions<TollOptions> _options;
-    public TollOptionsValidator(IOptions<TollOptions> options) => _options = options;
+    private readonly IOptions<MembershipOptions> _options;
+    public MembershipOptionsValidator(IOptions<MembershipOptions> options) => _options = options;
 
     public Task StartAsync(CancellationToken cancellationToken) => throw new NotImplementedException();
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }
 ```
 ::tests
-```csharp file=TollOptionsValidatorTests.cs
+```csharp file=MembershipOptionsValidatorTests.cs
 using System;
 using System.Linq;
 using System.Threading;
@@ -758,45 +766,45 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Xunit;
 
-public class TollOptionsValidatorTests
+public class MembershipOptionsValidatorTests
 {
-    private static IHostedService Resolve(Action<TollOptions> configure)
+    private static IHostedService Resolve(Action<MembershipOptions> configure)
     {
         var services = new ServiceCollection();
-        services.Configure<TollOptions>(configure);
-        services.AddHostedService<TollOptionsValidator>();
+        services.Configure<MembershipOptions>(configure);
+        services.AddHostedService<MembershipOptionsValidator>();
         return services.BuildServiceProvider().GetServices<IHostedService>().Single();
     }
 
     [Fact]
     public async Task Valid_options_start_cleanly()
     {
-        var svc = Resolve(o => { o.PlazaName = "Kherki Daula"; o.CarRate = 120; o.LcvRate = 190; o.FastagDiscountPercent = 0; });
+        var svc = Resolve(o => { o.GymName = "FitZone Indiranagar"; o.MonthlyFee = 1500; o.QuarterlyFee = 4000; o.OfferDiscountPercent = 10; });
         await svc.StartAsync(CancellationToken.None);
     }
 
     [Fact]
-    public async Task Missing_name_and_bad_rate_are_both_reported()
+    public async Task Missing_name_and_bad_fee_are_both_reported()
     {
-        var svc = Resolve(o => { o.PlazaName = ""; o.CarRate = 0; o.LcvRate = 190; });
+        var svc = Resolve(o => { o.GymName = ""; o.MonthlyFee = 0; o.QuarterlyFee = 4000; });
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.StartAsync(CancellationToken.None));
-        Assert.Contains("PlazaName", ex.Message);
-        Assert.Contains("CarRate", ex.Message);
+        Assert.Contains("GymName", ex.Message);
+        Assert.Contains("MonthlyFee", ex.Message);
     }
 
     [Fact]
     public async Task Discount_over_100_is_rejected()
     {
-        var svc = Resolve(o => { o.PlazaName = "X"; o.CarRate = 1; o.LcvRate = 1; o.FastagDiscountPercent = 150; });
+        var svc = Resolve(o => { o.GymName = "X"; o.MonthlyFee = 1; o.QuarterlyFee = 1; o.OfferDiscountPercent = 150; });
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => svc.StartAsync(CancellationToken.None));
-        Assert.Contains("FastagDiscountPercent", ex.Message);
+        Assert.Contains("OfferDiscountPercent", ex.Message);
     }
 }
 ```
 ::solution
 Collect every problem first, then throw once. Operators fixing a broken deployment want the full list, not one problem per restart.
 
-```csharp file=TollOptionsValidator.cs
+```csharp file=MembershipOptionsValidator.cs
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -804,31 +812,31 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
-public sealed class TollOptions
+public sealed class MembershipOptions
 {
-    public string PlazaName { get; set; } = "";
-    public decimal CarRate { get; set; }
-    public decimal LcvRate { get; set; }
-    public decimal FastagDiscountPercent { get; set; }
+    public string GymName { get; set; } = "";
+    public decimal MonthlyFee { get; set; }
+    public decimal QuarterlyFee { get; set; }
+    public decimal OfferDiscountPercent { get; set; }
 }
 
-public sealed class TollOptionsValidator : IHostedService
+public sealed class MembershipOptionsValidator : IHostedService
 {
-    private readonly IOptions<TollOptions> _options;
-    public TollOptionsValidator(IOptions<TollOptions> options) => _options = options;
+    private readonly IOptions<MembershipOptions> _options;
+    public MembershipOptionsValidator(IOptions<MembershipOptions> options) => _options = options;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
         var o = _options.Value;
         var problems = new List<string>();
-        if (string.IsNullOrWhiteSpace(o.PlazaName)) problems.Add($"{nameof(o.PlazaName)} is required");
-        if (o.CarRate <= 0) problems.Add($"{nameof(o.CarRate)} must be positive");
-        if (o.LcvRate <= 0) problems.Add($"{nameof(o.LcvRate)} must be positive");
-        if (o.FastagDiscountPercent < 0 || o.FastagDiscountPercent > 100)
-            problems.Add($"{nameof(o.FastagDiscountPercent)} must be between 0 and 100");
+        if (string.IsNullOrWhiteSpace(o.GymName)) problems.Add($"{nameof(o.GymName)} is required");
+        if (o.MonthlyFee <= 0) problems.Add($"{nameof(o.MonthlyFee)} must be positive");
+        if (o.QuarterlyFee <= 0) problems.Add($"{nameof(o.QuarterlyFee)} must be positive");
+        if (o.OfferDiscountPercent < 0 || o.OfferDiscountPercent > 100)
+            problems.Add($"{nameof(o.OfferDiscountPercent)} must be between 0 and 100");
 
         if (problems.Count > 0)
-            throw new InvalidOperationException("Invalid Toll options: " + string.Join("; ", problems));
+            throw new InvalidOperationException("Invalid Membership options: " + string.Join("; ", problems));
         return Task.CompletedTask;
     }
 
@@ -836,44 +844,45 @@ public sealed class TollOptionsValidator : IHostedService
 }
 ```
 ::alternatives
-The options pattern has this built in: `builder.Services.AddOptions<TollOptions>().Bind(section).ValidateDataAnnotations().ValidateOnStart()`. Use that in real projects; the hosted-service version shows you what it does underneath and lets you run checks that need other services (for example, "does the database contain this plaza?").
+The options pattern has this built in: `builder.Services.AddOptions<MembershipOptions>().Bind(section).ValidateDataAnnotations().ValidateOnStart()`. Use that in real projects; the hosted-service version shows you what it does underneath and lets you run checks that need other services (for example, "does the database contain this gym branch?").
 ::mistakes
 - Throwing on the first problem, so operators fix one, redeploy, hit the next.
-- Doing validation in `ExecuteAsync` of a `BackgroundService`, where an exception does not stop the host by default in older versions and is easy to miss.
+- Doing validation in `ExecuteAsync` of a `BackgroundService`. It runs alongside the server, so Kestrel may already be serving requests with bad settings; since .NET 6 an unhandled exception there stops the host (`BackgroundServiceExceptionBehavior.StopHost`), but only after the fact, and before .NET 6 it was silently ignored.
 :::
 
 :::exercise id=m03-startup-ex4 difficulty=intermediate kind=design title="Design the settings layout for three environments"
-A GST e-invoicing API runs in `Development` (laptops), `UAT` (a shared test server used by the client's accountants) and `Production`. Settings that differ: database connection string, the e-invoice portal URL (sandbox vs live), log level, whether Swagger UI is enabled, and the API key for the SMS provider.
+A gym chain's membership API runs in `Development` (laptops), `UAT` (a shared test server where the chain's front-desk staff try new features) and `Production`. Settings that differ: database connection string, the payment gateway URL and keys (test mode vs live), log level, whether the OpenAPI document and UI are enabled, and the API key for the SMS provider that sends renewal reminders.
 
 Design which settings go in which file or source and justify each choice.
 ::acceptance
 - Shared settings live in `appsettings.json`; only differences go in environment files.
 - No secret (connection password, API key) appears in any JSON file in source control.
 - Explains how UAT is selected (`ASPNETCORE_ENVIRONMENT=UAT`) and what happens if the variable is missing.
-- Explains how Swagger is enabled per environment without an `if` for every environment.
+- Explains how API docs are enabled per environment without an `if` for every environment.
 ::hint
 Separate "differs by environment" from "is secret". They are two different problems with two different solutions.
 ::hint
 Secrets: user secrets on laptops, environment variables or a vault (Azure Key Vault, AWS Secrets Manager) on servers. Both override JSON files.
 ::hint
-Instead of `if (env.IsDevelopment() || env.IsEnvironment("UAT")) app.UseSwagger()`, add a boolean setting `Features:SwaggerEnabled` and set it per environment file.
+Instead of `if (env.IsDevelopment() || env.IsEnvironment("UAT")) app.MapOpenApi()`, add a boolean setting `Features:ApiDocsEnabled` and set it per environment file.
 ::solution
-**`appsettings.json`** (shared): logging format, default log level `Information`, retry counts, `Features:SwaggerEnabled = false`, page sizes.
+**`appsettings.json`** (shared): logging format, default log level `Information`, retry counts, `Features:ApiDocsEnabled = false`, page sizes, renewal-reminder days.
 
-**`appsettings.Development.json`**: `Logging:LogLevel:Default = Debug`, `Features:SwaggerEnabled = true`, `EInvoice:PortalUrl = https://sandbox...`, connection string **host and database name only**, pointing at a local PostgreSQL. Password via `dotnet user-secrets set ConnectionStrings:Main "..."`, which overrides the JSON on that laptop only.
+**`appsettings.Development.json`**: `Logging:LogLevel:Default = Debug`, `Features:ApiDocsEnabled = true`, `Payments:Mode = test`, connection string **host and database name only**, pointing at a local PostgreSQL. Password via `dotnet user-secrets set ConnectionStrings:Main "..."`, which overrides the JSON on that laptop only.
 
-**`appsettings.UAT.json`**: `Features:SwaggerEnabled = true` (accountants test with it), sandbox portal URL, `LogLevel = Information`. No secrets.
+**`appsettings.UAT.json`**: `Features:ApiDocsEnabled = true` (testers use it), `Payments:Mode = test`, `LogLevel = Information`. No secrets.
 
-**`appsettings.Production.json`**: usually nearly empty; live portal URL. No secrets.
+**`appsettings.Production.json`**: usually nearly empty; `Payments:Mode = live`. No secrets.
 
-**Secrets** (`ConnectionStrings:Main`, `Sms:ApiKey`): environment variables on the UAT and Production hosts (`ConnectionStrings__Main` with double underscore), or a Key Vault configuration provider. They override whatever is in JSON, so a placeholder in JSON is harmless.
+**Secrets** (`ConnectionStrings:Main`, `Payments:KeySecret`, `Sms:ApiKey`): environment variables on the UAT and Production hosts (`ConnectionStrings__Main` with double underscore), or a Key Vault configuration provider. They override whatever is in JSON, so a placeholder in JSON is harmless.
 
-**Selection**: the deployment sets `ASPNETCORE_ENVIRONMENT=UAT`. If it is missing, the app runs as Production: Swagger off, live portal URL. That is safe but confusing, so the `/` health endpoint should return the environment name for a quick check.
+**Selection**: the deployment sets `ASPNETCORE_ENVIRONMENT=UAT`. If it is missing, the app runs as Production: API docs off, live payment mode. That is safe for data leaks but dangerous for money (a tester's ₹1,500 test renewal becomes a real charge if live keys are also present), so so the `/` health endpoint should return the environment name for a quick check.
 
-**Swagger**: `if (app.Configuration.GetValue<bool>("Features:SwaggerEnabled")) { app.UseSwagger(); app.UseSwaggerUI(); }`. One line, no environment names in code, and you can enable it temporarily in production by flipping a variable.
+**API docs**: `if (app.Configuration.GetValue<bool>("Features:ApiDocsEnabled")) app.MapOpenApi();` (from the `Microsoft.AspNetCore.OpenApi` package, the default since .NET 9; add a UI such as Swagger UI or Scalar on top). One line, no environment names in code, and you can enable it temporarily elsewhere by flipping a variable.
 ::mistakes
 - Putting the UAT database password in `appsettings.UAT.json` "because UAT is not production".
-- Using `IsDevelopment()` as the switch for everything, so UAT behaves like production and the client cannot see Swagger.
+- Using `IsDevelopment()` as the switch for everything, so UAT behaves like production and testers cannot see the API docs.
+- Keeping live payment keys on the UAT server "just in case", so one missing environment variable turns test renewals into real charges.
 :::
 
 :::exercise id=m03-startup-ex5 difficulty=advanced kind=code title="Ordered startup tasks that fail fast"
@@ -1066,13 +1075,13 @@ public void All_services_resolve()
 {
     var services = new ServiceCollection();
     services.AddLogging();
-    services.Configure<TollOptions>(o => { o.PlazaName = "Test"; o.CarRate = 1; o.LcvRate = 1; });
-    services.AddSingleton<ITollRateCard, ConfiguredTollRateCard>();
+    services.Configure<MembershipOptions>(o => { o.GymName = "Test"; o.MonthlyFee = 1; o.QuarterlyFee = 1; });
+    services.AddSingleton<IPlanCatalog, ConfiguredPlanCatalog>();
     services.AddSingleton(TimeProvider.System);
-    services.AddHostedService<RateCardWarmup>();
+    services.AddHostedService<PlanCatalogWarmup>();
 
     using var sp = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
-    Assert.NotNull(sp.GetRequiredService<ITollRateCard>());
+    Assert.NotNull(sp.GetRequiredService<IPlanCatalog>());
 }
 ```
 
@@ -1080,7 +1089,7 @@ public void All_services_resolve()
 
 **3. Configuration precedence.** Exercise 1 shows the approach: build configuration from in-memory dictionaries and assert which value wins.
 
-For a full end-to-end check (does `/rates/car` return 200?), ASP.NET Core provides `WebApplicationFactory<Program>` in the `Microsoft.AspNetCore.Mvc.Testing` package. It boots your real `Program.cs` in memory with a test HTTP client, no ports needed. We use it in [Health checks and graceful shutdown](#/lesson/m03-health-shutdown).
+For a full end-to-end check (does `/plans/monthly` return 200?), ASP.NET Core provides `WebApplicationFactory<Program>` in the `Microsoft.AspNetCore.Mvc.Testing` package. It boots your real `Program.cs` in memory with a test HTTP client, no ports needed. We use it in [Health checks and graceful shutdown](#/lesson/m03-health-shutdown).
 
 Edge cases worth a test: the environment name is unknown (`"Uat"` vs `"UAT"` — environment names are case-insensitive for `IsEnvironment`, but file names on Linux are case-sensitive, so `appsettings.Uat.json` will not load for `UAT`), `args` containing an unknown switch, and shutdown while a hosted service is still starting.
 
@@ -1088,9 +1097,9 @@ Edge cases worth a test: the environment name is unknown (`"Uat"` vs `"UAT"` —
 
 - **Containers and Kubernetes.** `Run()` blocking until `SIGTERM` is exactly what a container runtime expects. The 30-second default shutdown timeout lines up with Kubernetes' default `terminationGracePeriodSeconds`. Readiness probes depend on your hosted services finishing `StartAsync` before Kestrel opens, which is why the start order matters.
 - **Twelve-factor configuration.** Reading settings from environment variables with overrides is the "config" factor of the twelve-factor app methodology. The same container image runs in UAT and Production; only the variables differ.
-- **Multi-tenant SaaS.** A property-tax collection platform serving 40 municipal corporations might load per-tenant settings at startup through a hosted service that pulls from a database, failing fast if any tenant's configuration is invalid.
+- **Multi-tenant SaaS.** A gym-management platform serving 40 fitness chains (each with its own plans, GST number and payment keys) might load per-tenant settings at startup through a hosted service that pulls from a database, failing fast if any tenant's configuration is invalid.
 - **Worker services.** The same generic host (`Host.CreateApplicationBuilder`) runs queue consumers and schedulers with no web server. Everything in this lesson except Kestrel applies unchanged.
-- **Azure Functions / AWS Lambda for .NET** use a different host, but still expose a `ConfigureServices`-style phase, so the two-phase mental model carries over.
+- **Azure Functions (isolated worker) and AWS Lambda for .NET** build on the same generic host or something close to it, with a services phase and then a run phase, so the two-phase mental model carries over.
 
 ## Interview questions
 
@@ -1098,7 +1107,7 @@ Edge cases worth a test: the environment name is unknown (`"Uat"` vs `"UAT"` —
 ::q beginner
 What does `WebApplication.CreateBuilder(args)` set up for you?
 ::a
-Configuration (JSON files, user secrets in Development, environment variables, command-line arguments, in that precedence order), logging (console and debug providers reading the `Logging` section), the environment name from `ASPNETCORE_ENVIRONMENT`, Kestrel as the web server, and an `IServiceCollection` with the framework's own services pre-registered. It returns a `WebApplicationBuilder` on which you register your services before calling `Build()`.
+Configuration (JSON files, user secrets in Development, environment variables, command-line arguments, in that precedence order, later winning), logging (console and debug providers reading the `Logging` section), the environment name from `ASPNETCORE_ENVIRONMENT`, Kestrel as the web server, and an `IServiceCollection` with the framework's own services pre-registered. It returns a `WebApplicationBuilder` on which you register your services before calling `Build()`.
 ::q beginner
 Why can't you register a service after `builder.Build()`?
 ::a
@@ -1118,7 +1127,7 @@ First measure: add timing logs around each hosted service's `StartAsync`, or use
 ::q advanced
 Compare validating options in a hosted service versus `ValidateOnStart()`. When is each appropriate?
 ::a
-`AddOptions<T>().Validate(...).ValidateOnStart()` is declarative, runs before any hosted service, and covers pure-data checks (ranges, required fields). A hosted service is better when validation needs other services or I/O: checking that the database contains the configured tenant, that an API key is accepted by the provider, or that a file path exists on this host. Use both: data validation via options, environment validation via a startup task. In either case failures should throw so the orchestrator sees a crashed start, not a healthy pod returning 500s.
+`AddOptions<T>().Validate(...).ValidateOnStart()` is declarative, runs before any hosted service, and covers pure-data checks (ranges, required fields). A hosted service is better when validation needs other services or I/O: checking that the database contains the configured gym branch, that an API key is accepted by the provider, or that a file path exists on this host. Use both: data validation via options, environment validation via a startup task. In either case failures should throw so the orchestrator sees a crashed start, not a healthy pod returning 500s.
 :::
 
 ## Summary and revision
@@ -1163,11 +1172,11 @@ A teammate adds `builder.Services.AddScoped<IReceiptPrinter, ThermalPrinter>();`
 - [ ] The app starts but `/print` returns 404.
 > `Build()` freezes the service list and creates the provider. Registrations belong before it.
 ::q single
-Your UAT server shows live e-invoice portal URLs although `appsettings.UAT.json` points at the sandbox. What is the most likely cause?
+Your UAT server charges real money through the live payment gateway although `appsettings.UAT.json` sets `Payments:Mode` to `test`. What is the most likely cause?
 - [ ] `appsettings.UAT.json` has a syntax error.
 - [x] `ASPNETCORE_ENVIRONMENT` is not set on the server, so the app runs as Production and never loads the UAT file.
 - [ ] Environment-specific files are only loaded in Development.
-- [ ] The sandbox URL must be set with a command-line argument.
+- [ ] Test mode must be set with a command-line argument.
 > With no environment variable the default is Production. The UAT file is simply not in the configuration chain.
 ::q single
 Where does code placed after `app.Run();` execute?
@@ -1178,31 +1187,31 @@ Where does code placed after `app.Run();` execute?
 > `Run()` blocks until shutdown completes, then returns.
 ::q multi
 Which of these belong in the phase *before* `Build()`? (Select all that apply.)
-- [x] `builder.Services.AddHostedService<RateCardWarmup>()`
+- [x] `builder.Services.AddHostedService<PlanCatalogWarmup>()`
 - [ ] `app.UseAuthorization()`
-- [x] `builder.Services.Configure<TollOptions>(...)`
+- [x] `builder.Services.Configure<MembershipOptions>(...)`
 - [ ] `app.MapGet("/", ...)`
-- [x] `builder.Configuration.AddJsonFile("rates.json")`
+- [x] `builder.Configuration.AddJsonFile("plans.json")`
 > Anything on `builder` (services, configuration, logging, host settings) is phase 1. Anything on `app` is phase 2.
 ::q single
-A hosted service's `StartAsync` downloads a 2 GB rate file and takes four minutes. What is the effect?
+A hosted service's `StartAsync` loads two years of member check-in history (2 GB) into a cache and takes four minutes. What is the effect?
 - [ ] No effect; hosted services run in parallel with the server.
-- [x] Kestrel does not start listening until the download completes, so the app is unavailable for four minutes.
+- [x] Kestrel does not start listening until the load completes, so the app is unavailable for four minutes.
 - [ ] The host times out after 30 seconds and skips the service.
-- [ ] Requests are queued and served after the download.
+- [ ] Requests are queued and served after the load.
 > Hosted services start sequentially before the server. Move long work into `BackgroundService.ExecuteAsync` and expose readiness separately.
 ::q single
-`appsettings.json` has `"Toll:CarRate": 120`, `appsettings.Development.json` has `"Toll:CarRate": 1`, and the server has environment variable `Toll__CarRate=150`. The app runs in Development. What is `CarRate`?
-- [ ] 120
+`appsettings.json` has `"Membership:MonthlyFee": 1500`, `appsettings.Development.json` has `"Membership:MonthlyFee": 1`, and the server has environment variable `Membership__MonthlyFee=1800`. The app runs in Development. What is `MonthlyFee`?
+- [ ] 1500
 - [ ] 1
-- [x] 150
+- [x] 1800
 - [ ] The app throws because of conflicting values.
-> Environment variables come after both JSON files in the chain, so 150 wins. The double underscore maps to the `:` separator.
+> Environment variables come after both JSON files in the chain, so 1800 wins. The double underscore maps to the `:` separator.
 ::q single
-Which is the safest way to enable Swagger UI in Development and UAT but not Production?
+Which is the safest way to enable the OpenAPI document and UI in Development and UAT but not Production?
 - [ ] `if (app.Environment.IsDevelopment() || app.Environment.EnvironmentName == "UAT")`
-- [x] A `Features:SwaggerEnabled` setting set to true in the Development and UAT settings files.
-- [ ] Enable it everywhere; Swagger is harmless.
+- [x] A `Features:ApiDocsEnabled` setting set to true in the Development and UAT settings files.
+- [ ] Enable it everywhere; API docs are harmless.
 - [ ] Enable it only via a command-line flag at deploy time.
 > A setting keeps environment names out of code, is testable, and can be flipped on a running environment without a rebuild.
 :::

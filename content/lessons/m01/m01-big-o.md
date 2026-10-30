@@ -191,7 +191,7 @@ With 10 lakh existing invoices and a 5,000-row upload, the first version does up
 | `list.Remove(x)` / `Insert(0, x)` in a loop | O(n) per call → O(n²) | `Queue<T>`, `LinkedList<T>`, or build a new list |
 | `s += part` in a loop | Copies the whole string each time → O(n²) characters | `StringBuilder` or `string.Join` |
 | `query.Count()` called in a loop condition | Re-runs the whole query each time | Materialise once with `ToList()` |
-| `items.OrderBy(...).First()` | O(n log n) to find one item | `MinBy` / `MaxBy`, O(n) |
+| `items.OrderBy(...).Take(10)` or `.First()` | Reads the whole input; `Take(10)` buffers all of it to partially sort (O(n) memory). Modern .NET special-cases `OrderBy(...).First()` to a single scan, but the intent is hidden | `MinBy` / `MaxBy` for one item (O(n), O(1) memory); a size-k heap for top k |
 | One database query per item (N+1) | n network round trips | One query with `WHERE id = ANY(@ids)` or a join |
 
 The last row deserves emphasis. A database round trip inside the same data centre typically costs **in the order of 0.5–2 ms** (estimate; it varies widely). That is the time of roughly a million in-memory steps. So 1,000 queries in a loop cost about one to two seconds, even though the "Big O" is only O(n). When input/output (disk, network, database) is involved, **count round trips first**; they usually dominate. The [N+1 lesson](#/lesson/m09-n-plus-one) covers this for EF Core.
@@ -515,8 +515,8 @@ builder.Services.AddSingleton<DuplicateInvoiceFinder>();
 builder.Services.AddSingleton<PaymentMatcher>();
 builder.Services.AddSingleton<IVendorDirectory>(_ => new InMemoryVendorDirectory(
 [
-    new Vendor("06AABCU9603R1ZX", "Aravalli Aggregates", "Haryana"),
-    new Vendor("27AAECS1234F1Z5", "Sahyadri Steel", "Maharashtra"),
+    new Vendor("06AABCU9603R1ZX", "Aravalli Office Supplies", "Haryana"),
+    new Vendor("27AAECS1234F1Z5", "Sahyadri Packaging", "Maharashtra"),
 ]));
 builder.Services.AddSingleton<ReconciliationService>();
 
@@ -935,8 +935,8 @@ Sort the amounts (keeping original indices) and use two pointers from both ends:
 Return all pairs. Allow a tolerance of ±₹1 for bank rounding (hint: round amounts to the nearest rupee before using them as keys, and check the key on either side).
 :::
 
-:::exercise id=m01-big-o-ex4 difficulty=intermediate kind=code title="Busiest week of site deliveries"
-A construction site logs how many truck deliveries arrived each day. The planner wants the busiest run of `k` consecutive days. Compute it in O(n) time and O(1) extra space with a sliding window.
+:::exercise id=m01-big-o-ex4 difficulty=intermediate kind=code title="Busiest week of pharmacy deliveries"
+An online pharmacy logs how many orders it delivered each day. The operations planner wants the busiest run of `k` consecutive days, to plan how many delivery riders to hire for festival weeks. Compute it in O(n) time and O(1) extra space with a sliding window.
 ::requirements
 - `BusiestWindow.Find(dailyCounts, k)` returns `(Start, Total)`: the index of the first day of the window and the window's total.
 - On a tie, return the earliest window.
@@ -1236,7 +1236,7 @@ Choose thresholds that separate complexity classes by a wide margin (a factor of
 [Fact]
 public async Task Reconciliation_makes_one_vendor_round_trip()
 {
-    var vendors = new InMemoryVendorDirectory([new Vendor("06AABCU9603R1ZX", "Aravalli", "Haryana")]);
+    var vendors = new InMemoryVendorDirectory([new Vendor("06AABCU9603R1ZX", "Aravalli Office Supplies", "Haryana")]);
     var svc = new ReconciliationService(new DuplicateInvoiceFinder(), new PaymentMatcher(), vendors);
     var invoices = Enumerable.Range(0, 1_000).Select(i => new Invoice($"INV-{i}", "06AABCU9603R1ZX", 100m)).ToList();
 
@@ -1362,7 +1362,7 @@ Which of these are typically O(n) or worse, even though they look like a single 
 - [x] `list.Contains(x)`
 - [x] `items.OrderBy(i => i.Amount).First()`
 - [ ] `dictionary.TryGetValue(key, out var v)`
-- [x] `list.Insert(0, item)`
+> `Contains` scans; `OrderBy(...).First()` must read every item (a full sort would be O(n log n); modern .NET optimises this exact pair to one O(n) scan, but `MinBy` says what you mean); and `Insert(0, ...)` shifts every element. Dictionary lookup is O(1) on average.
 > `Contains` scans, `OrderBy` sorts (O(n log n)) just to find one item, and `Insert(0, ...)` shifts every element. Dictionary lookup is O(1) on average.
 ::q single
 You need to check membership against 10 lakh product codes in an API that serves 300 requests a second. Building a `HashSet` takes ~80 MB (estimate). What is the sensible design?

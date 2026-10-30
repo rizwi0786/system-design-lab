@@ -22,11 +22,11 @@ references:
     url: https://learn.microsoft.com/ef/core/miscellaneous/connection-resiliency
 ---
 
-You now have aggregates that protect their rules, repositories that load and store them, domain services for rules that span aggregates, and domain events for reactions. Something still has to **run a use case from start to finish**: "a site engineer places an order for 200 bags of cement and 3 tonnes of steel". Who checks that this engineer may order for this customer account? Who loads the customer, fetches current prices, asks the domain to create the order, commits the transaction and returns something the API can serialise?
+You now have aggregates that protect their rules, repositories that load and store them, domain services for rules that span aggregates, and domain events for reactions. Something still has to **run a use case from start to finish**: "a chemist shop places an order for 200 boxes of paracetamol and 3 cartons of insulin pens". Who checks that this user may order for this pharmacy's account? Who loads the customer, fetches current prices, asks the domain to create the order, commits the transaction and returns something the API can serialise?
 
 That is the **application service**. It is the conductor of the orchestra: it does not play any instrument (no business rules), but without it nobody starts on time. Get it right and your domain stays clean and your API stays thin. Get it wrong and the application service quietly becomes the place where all the business logic lives, and your "domain model" turns into a set of data bags.
 
-The example is a B2B order-management system for a building-materials distributor. Contractors' site offices order against a customer account that has a credit limit. Prices come from a catalogue. Orders below ₹5,000 are not accepted.
+The example is a B2B order-management system for a medicine distributor. Chemist shops and small clinics order through an app against a customer account that has a credit limit (they pay the distributor every 30 days). Prices come from a catalogue. Orders below ₹5,000 are not accepted, because a delivery van run costs more than the margin on a tiny order.
 
 ## Learning objectives
 
@@ -60,7 +60,7 @@ Picture a hospital reception desk. A patient arrives and says "I need my follow-
 
 The receptionist does not decide medical rules. If she started saying "actually, I think you need a 45-minute slot because of your condition", she would be doing the doctor's job, badly, and differently from the receptionist at the next desk.
 
-An application service is that receptionist. One method per use case (`PlaceOrder`, `CancelOrder`, `ApproveVariation`). It coordinates; it does not decide business rules. Those live in the aggregates and domain services, where every use case shares them.
+An application service is that receptionist. One method per use case (`PlaceOrder`, `CancelOrder`, `ApproveRefund`). It coordinates; it does not decide business rules. Those live in the aggregates and domain services, where every use case shares them.
 
 ## First-principles explanation
 
@@ -120,7 +120,7 @@ Authorization comes in two flavours:
 
 Resource-based checks belong in the application service, through a **hook**: a small interface owned by the application layer, such as `IOrderAccessPolicy.CanActForCustomerAsync(customerId)`. The web layer implements it with ASP.NET Core's `IAuthorizationService` and the current `ClaimsPrincipal`. The application layer stays free of `HttpContext`, and tests use a fake that returns `true` or `false`.
 
-Is authorization a business rule? Partly. "Only the customer's own users, or our sales admins, can order for an account" is a *security policy*, not a domain invariant: the `Order` aggregate does not care who clicked the button. Keep it out of the aggregate. A rule like "orders above ₹10 lakh need a second approver" *is* a business rule and belongs in the domain (as an approval state on the order).
+Is authorization a business rule? Partly. "Only the customer's own users, or our sales admins, can order for an account" is a *security policy*, not a domain invariant: the `Order` aggregate does not care who clicked the button. Keep it out of the aggregate. A rule like "orders above ₹2 lakh need a second approver" *is* a business rule and belongs in the domain (as an approval state on the order).
 
 ### Error handling: results at the boundary
 
@@ -142,7 +142,7 @@ All three are valid. The responsibilities are the same; only the packaging diffe
 
 ### When it is unnecessary
 
-- **Pure CRUD**: a "units of measure" admin screen. An endpoint that maps a DTO to an EF entity and saves is honest. Adding a command, a handler and a result type triples the code for no benefit.
+- **Pure CRUD**: a "dosage forms" admin screen (tablet, syrup, injection). An endpoint that maps a DTO to an EF entity and saves is honest. Adding a command, a handler and a result type triples the code for no benefit.
 - **Queries**: reads do not need aggregates, transactions or domain rules. A query handler that projects straight from the database to a DTO is better than loading aggregates in an application service (see [CQRS fundamentals](#/lesson/m08-cqrs-fundamentals)).
 
 ### Trade-offs
@@ -247,11 +247,11 @@ sequenceDiagram
     Auth-->>App: true
     App->>CR: GetAsync(C-1042)
     CR-->>App: customer
-    App->>Cat: GetPricesAsync(CEM-OPC53, TMT-12)
-    Cat-->>App: 380 and 61000
+    App->>Cat: GetPricesAsync(PCM-500, INS-PEN-5)
+    Cat-->>App: 380 and 6100
     App->>Dom: Order.Place(lines with server prices)
-    Dom-->>App: order total 259000
-    App->>Dom: CreditPolicy.EnsureCanOrder(customer, 259000)
+    Dom-->>App: order total 94300
+    App->>Dom: CreditPolicy.EnsureCanOrder(customer, 94300)
     Dom-->>App: ok
     App->>OR: Add(order)
     App->>UoW: SaveChangesAsync()
@@ -407,12 +407,13 @@ namespace Ordering.Application;
 
 public enum ErrorKind { Validation, NotFound, Forbidden, BusinessRule, Conflict }
 
-public interface IResult
+/// <summary>Named to avoid confusion with ASP.NET Core's Microsoft.AspNetCore.Http.IResult.</summary>
+public interface IOperationResult
 {
     bool IsSuccess { get; }
 }
 
-public sealed record Result<T> : IResult
+public sealed record Result<T> : IOperationResult
 {
     private Result(bool ok, T? value, ErrorKind? error, string? message)
     {
@@ -834,12 +835,12 @@ public static class Program
     public static void Main()
     {
         var c = new Customer(Guid.NewGuid(), limit: 500_000m, outstanding: 300_000m);
-        var prices = new Dictionary<string, decimal> { ["CEM-OPC53"] = 380m, ["TMT-12"] = 61_000m };
+        var prices = new Dictionary<string, decimal> { ["PCM-500"] = 380m, ["INS-PEN-5"] = 6_100m };
         var svc = new OrderApplicationService(new() { [c.Id] = c }, prices, canActFor: id => true);
 
-        Console.WriteLine(svc.PlaceOrder(new PlaceOrderCommand(c.Id, new[] { ("CEM-OPC53", 200) })));
-        Console.WriteLine(svc.PlaceOrder(new PlaceOrderCommand(c.Id, new[] { ("CEM-OPC53", 10) })));
-        Console.WriteLine(svc.PlaceOrder(new PlaceOrderCommand(c.Id, new[] { ("TMT-12", 4) })));
+        Console.WriteLine(svc.PlaceOrder(new PlaceOrderCommand(c.Id, new[] { ("PCM-500", 200) })));
+        Console.WriteLine(svc.PlaceOrder(new PlaceOrderCommand(c.Id, new[] { ("PCM-500", 10) })));
+        Console.WriteLine(svc.PlaceOrder(new PlaceOrderCommand(c.Id, new[] { ("INS-PEN-5", 40) })));
         Console.WriteLine($"orders saved: {svc.SavedCount}");
     }
 }
@@ -972,7 +973,7 @@ public class CancelOrderTests
     public async Task Cancels_and_commits_once()
     {
         var o = Seed();
-        var r = await Svc().CancelAsync(new CancelOrderCommand(o.Id, "Site postponed"));
+        var r = await Svc().CancelAsync(new CancelOrderCommand(o.Id, "Duplicate order placed by mistake"));
         Assert.True(r.IsSuccess);
         Assert.Equal(new OrderStatusDto(o.Id, "Cancelled"), r.Value);
         Assert.Equal(1, _uow.Saves);
@@ -1102,54 +1103,54 @@ Notice the order of checks: validation first (cheap, no I/O), then load, then au
 :::
 
 :::exercise id=m08-application-services-ex2 difficulty=beginner kind=written title="Find the business rules hiding in the application service"
-A contract-management team wrote this application service for approving a variation (a change to the scope or price of a signed contract). List every line that is a business rule, explain why, and say where it should move.
+The customer-support team of an online store wrote this application service for approving a refund request (an agent asks to give money back on a delivered order: a damaged item, a late delivery). List every line that is a business rule, explain why, and say where it should move.
 
 ```csharp
-public async Task<Result<VariationDto>> ApproveAsync(Guid variationId, Guid approverId)
+public async Task<Result<RefundDto>> ApproveAsync(Guid refundId, Guid approverId)
 {
-    var v = await variations.GetAsync(variationId);
-    if (v is null) return NotFound();
-    var contract = await contracts.GetAsync(v.ContractId);
-    if (v.Status != "Submitted") return Fail("Only submitted variations can be approved");
-    if (v.Amount > contract.Value * 0.10m && !await users.IsInRoleAsync(approverId, "Director"))
-        return Fail("Variations above 10 % need a director");
-    if (v.CreatedBy == approverId) return Fail("You cannot approve your own variation");
-    v.Status = "Approved";
-    v.ApprovedBy = approverId;
-    contract.Value += v.Amount;
+    var r = await refunds.GetAsync(refundId);
+    if (r is null) return NotFound();
+    var order = await orders.GetAsync(r.OrderId);
+    if (r.Status != "Requested") return Fail("Only requested refunds can be approved");
+    if (r.Amount > order.PaidAmount * 0.10m && !await users.IsInRoleAsync(approverId, "Supervisor"))
+        return Fail("Refunds above 10 % of the order value need a supervisor");
+    if (r.RequestedBy == approverId) return Fail("You cannot approve your own refund request");
+    r.Status = "Approved";
+    r.ApprovedBy = approverId;
+    order.RefundedAmount += r.Amount;
     await uow.SaveChangesAsync();
-    await email.SendAsync(contract.VendorEmail, "Variation approved");
-    return Ok(Map(v));
+    await email.SendAsync(order.CustomerEmail, "Your refund is approved");
+    return Ok(Map(r));
 }
 ```
 ::acceptance
-- Identifies the status check, the 10 % threshold, and the self-approval rule as business rules, and moves them into the `Variation` aggregate (or a domain service for the threshold).
-- Notes that `v.Status = "Approved"` and `contract.Value += ...` use public setters and bypass invariants.
-- Points out that changing both the variation and the contract in one transaction crosses aggregate boundaries, and suggests a domain event.
+- Identifies the status check, the 10 % threshold, and the self-approval rule as business rules, and moves them into the `RefundRequest` aggregate (or a domain service for the threshold).
+- Notes that `r.Status = "Approved"` and `order.RefundedAmount += ...` use public setters and bypass invariants.
+- Points out that changing both the refund request and the order in one transaction crosses aggregate boundaries, and suggests a domain event.
 - Points out that the email is sent after the commit but outside any outbox, so it can be lost, and in the wrong layer.
 ::hint
-For each `if`, ask: would a batch import of approved variations need the same check?
+For each `if`, ask: would a nightly job that auto-approves small refunds for late deliveries need the same check?
 ::hint
-Is "director" a security role or a business authority level? Can it be passed into the domain as a value?
+Is "supervisor" a security role or a business approval limit? Can it be passed into the domain as a value?
 ::hint
 How many aggregates are modified? What does the [Transaction boundaries lesson](#/lesson/m08-transaction-boundaries) say about that?
 ::solution
 **Business rules that must move into the domain:**
 
-1. `v.Status != "Submitted"`: a state-transition rule of the variation. Move into `Variation.Approve(...)`, which throws if the variation is not submitted.
-2. The 10 % threshold with a director: a business authority rule ("delegation of financial powers", common in Indian public-sector contracts). It spans the variation and the contract value. Make it explicit: `Variation.Approve(ApproverAuthority authority, decimal contractValue)`, where the application service builds `ApproverAuthority` (for example `Director` or `Manager`) from the user directory. The domain decides whether that authority suffices. Alternatively a domain service `VariationApprovalPolicy`.
-3. `v.CreatedBy == approverId`: segregation of duties, a business rule. Move into `Approve`, which receives the approver id.
+1. `r.Status != "Requested"`: a state-transition rule of the refund request. Move into `RefundRequest.Approve(...)`, which throws if the request is not in `Requested`.
+2. The 10 % threshold with a supervisor: an approval-limit rule (agents may approve small refunds, larger ones need someone with more authority). It spans the refund and the order's paid amount. Make it explicit: `RefundRequest.Approve(Guid approverId, ApprovalLimit limit, decimal orderPaidAmount)`, where the application service builds `ApprovalLimit` (for example `Agent` or `Supervisor`) from the user directory. The domain decides whether that limit suffices. Alternatively a domain service `RefundApprovalPolicy`.
+3. `r.RequestedBy == approverId`: segregation of duties (the "four-eyes" rule), a business rule. Move into `Approve`, which receives the approver id.
 
-**Encapsulation problems:** `v.Status = "Approved"` and `contract.Value += v.Amount` use public setters. Status should be an enum changed only by `Approve`. Contract value should change only through a contract method such as `ApplyApprovedVariation(variationId, amount)`, which can enforce its own rules (for example "cumulative variations may not exceed 25 % without re-tender").
+**Encapsulation problems:** `r.Status = "Approved"` and `order.RefundedAmount += r.Amount` use public setters. Status should be an enum changed only by `Approve`. The order's refunded amount should change only through an order method such as `ApplyRefund(refundId, amount)`, which can enforce its own rules (for example "total refunds may never exceed the amount the customer paid").
 
-**Transaction boundary:** the service changes two aggregates in one transaction. Under load, two variations approved at the same time on the same contract conflict on the contract row. Better: `Variation.Approve` raises `VariationApproved`; a handler (via the outbox) calls `contract.ApplyApprovedVariation(...)` in its own transaction, idempotent on the variation id.
+**Transaction boundary:** the service changes two aggregates in one transaction. During a sale, two refunds approved at the same time on the same order conflict on the order row. Better: `RefundRequest.Approve` raises `RefundApproved`; a handler (via the outbox) calls `order.ApplyRefund(...)` in its own transaction, idempotent on the refund id, and another handler asks the payment gateway to send the money back.
 
-**Side effect:** the email is sent after commit, in process, with no retry. If the process dies right after the commit, the vendor is never told. Raise the event and let an outbox-backed consumer send the email.
+**Side effect:** the email is sent after commit, in process, with no retry. If the process dies right after the commit, the customer is never told. Raise the event and let an outbox-backed consumer send the email.
 
-**What stays in the application service:** load the variation, look up the approver's authority, call `variation.Approve(...)`, commit, map the DTO. About ten lines.
+**What stays in the application service:** load the refund request and the order's paid amount, look up the approver's limit, call `refund.Approve(...)`, commit, map the DTO. About ten lines.
 ::mistakes
-- Treating the "director" check as pure authorization and leaving it in an endpoint attribute. It depends on the amount, which is domain data.
-- Moving rules into a "VariationValidator" class in the application layer. That is still the application layer.
+- Treating the "supervisor" check as pure authorization and leaving it in an endpoint attribute. It depends on the amount, which is domain data.
+- Moving rules into a "RefundValidator" class in the application layer. That is still the application layer.
 :::
 
 :::exercise id=m08-application-services-ex3 difficulty=intermediate kind=code title="Orchestrate PlaceOrder without owning any rule"
@@ -1313,8 +1314,8 @@ public class PlaceOrderTests
         _customers = new Customers(_log);
         _catalog = new Catalog(_log);
         _customers.Items[_customer.Id] = _customer;
-        _catalog.Prices["CEM"] = 380m;
-        _catalog.Prices["TMT"] = 61_000m;
+        _catalog.Prices["PCM"] = 380m;
+        _catalog.Prices["INS"] = 6_100m;
     }
 
     private PlaceOrderService Svc() => new PlaceOrderService(_access, _customers, _catalog, _orders, _uow, new CreditPolicy());
@@ -1323,9 +1324,9 @@ public class PlaceOrderTests
     [Fact]
     public async Task Places_order_with_catalogue_prices()
     {
-        var r = await Svc().PlaceAsync(Cmd(new PlaceOrderLine("CEM", 200), new PlaceOrderLine("TMT", 3)));
+        var r = await Svc().PlaceAsync(Cmd(new PlaceOrderLine("PCM", 200), new PlaceOrderLine("INS", 3)));
         Assert.True(r.IsSuccess);
-        Assert.Equal(76_000m + 183_000m, r.Value!.Total);
+        Assert.Equal(76_000m + 18_300m, r.Value!.Total);
         Assert.Equal(2, r.Value.LineCount);
         Assert.Single(_orders.Added);
         Assert.Equal(1, _uow.Saves);
@@ -1334,7 +1335,7 @@ public class PlaceOrderTests
     [Fact]
     public async Task Invalid_input_calls_no_port()
     {
-        var r = await Svc().PlaceAsync(Cmd(new PlaceOrderLine("CEM", 0)));
+        var r = await Svc().PlaceAsync(Cmd(new PlaceOrderLine("PCM", 0)));
         Assert.Equal(ErrorKind.Validation, r.Error);
         Assert.Empty(_log.Calls);
         var r2 = await Svc().PlaceAsync(Cmd());
@@ -1348,7 +1349,7 @@ public class PlaceOrderTests
     public async Task Forbidden_before_loading()
     {
         _access.Allow = false;
-        var r = await Svc().PlaceAsync(Cmd(new PlaceOrderLine("CEM", 200)));
+        var r = await Svc().PlaceAsync(Cmd(new PlaceOrderLine("PCM", 200)));
         Assert.Equal(ErrorKind.Forbidden, r.Error);
         Assert.Equal(new[] { "access" }, _log.Calls);
     }
@@ -1356,7 +1357,7 @@ public class PlaceOrderTests
     [Fact]
     public async Task Unknown_customer()
     {
-        var r = await Svc().PlaceAsync(new PlaceOrderCommand(Guid.NewGuid(), new[] { new PlaceOrderLine("CEM", 200) }));
+        var r = await Svc().PlaceAsync(new PlaceOrderCommand(Guid.NewGuid(), new[] { new PlaceOrderLine("PCM", 200) }));
         Assert.Equal(ErrorKind.NotFound, r.Error);
         Assert.Equal(0, _uow.Saves);
     }
@@ -1364,25 +1365,25 @@ public class PlaceOrderTests
     [Fact]
     public async Task Missing_skus_are_listed()
     {
-        var r = await Svc().PlaceAsync(Cmd(new PlaceOrderLine("CEM", 200), new PlaceOrderLine("SAND", 2), new PlaceOrderLine("GRAVEL", 1)));
+        var r = await Svc().PlaceAsync(Cmd(new PlaceOrderLine("PCM", 200), new PlaceOrderLine("ORS-200", 2), new PlaceOrderLine("VIT-D3", 1)));
         Assert.Equal(ErrorKind.Validation, r.Error);
-        Assert.Contains("SAND", r.Message);
-        Assert.Contains("GRAVEL", r.Message);
+        Assert.Contains("ORS-200", r.Message);
+        Assert.Contains("VIT-D3", r.Message);
         Assert.Empty(_orders.Added);
     }
 
     [Fact]
     public async Task Catalogue_called_once_with_distinct_skus()
     {
-        await Svc().PlaceAsync(Cmd(new PlaceOrderLine("CEM", 100), new PlaceOrderLine("CEM", 100)));
+        await Svc().PlaceAsync(Cmd(new PlaceOrderLine("PCM", 100), new PlaceOrderLine("PCM", 100)));
         var req = Assert.Single(_catalog.Requests);
-        Assert.Equal(new[] { "CEM" }, req);
+        Assert.Equal(new[] { "PCM" }, req);
     }
 
     [Fact]
     public async Task Below_minimum_is_business_rule()
     {
-        var r = await Svc().PlaceAsync(Cmd(new PlaceOrderLine("CEM", 5)));
+        var r = await Svc().PlaceAsync(Cmd(new PlaceOrderLine("PCM", 5)));
         Assert.Equal(ErrorKind.BusinessRule, r.Error);
         Assert.Contains("Minimum", r.Message);
         Assert.Empty(_orders.Added);
@@ -1392,7 +1393,7 @@ public class PlaceOrderTests
     [Fact]
     public async Task Credit_exceeded_is_business_rule()
     {
-        var r = await Svc().PlaceAsync(Cmd(new PlaceOrderLine("TMT", 7)));
+        var r = await Svc().PlaceAsync(Cmd(new PlaceOrderLine("INS", 70)));
         Assert.Equal(ErrorKind.BusinessRule, r.Error);
         Assert.Contains("Credit", r.Message);
         Assert.Equal(0, _uow.Saves);
@@ -1530,30 +1531,30 @@ Instead of `try/catch`, the domain could return `Result` values (`Order.TryPlace
 - Calling `_orders.Add` before the domain checks, then "removing" it on failure.
 :::
 
-:::exercise id=m08-application-services-ex4 difficulty=intermediate kind=design title="Design the application layer for contract variations"
-Design the application layer for a contract-management module with three use cases: **SubmitVariation**, **ApproveVariation** and **GetVariationsForContract**. Use the LLD designer.
+:::exercise id=m08-application-services-ex4 difficulty=intermediate kind=design title="Design the application layer for refund requests"
+Design the application layer for the refunds module of an online store with three use cases: **RequestRefund**, **ApproveRefund** and **GetPendingRefunds**. Use the LLD designer.
 
-Constraints: approvers' authority levels come from an HR directory (external); approvals above 10 % of contract value need a Director; vendors must be told about approvals; the "variations for contract" screen shows 200 rows with vendor names and running totals.
+Constraints: agents' approval limits come from the support tool's user directory (external); refunds above 10 % of the order's paid amount need a Supervisor; customers must be told when a refund is approved; the "pending refunds" queue screen shows 200 rows with customer names, order numbers and a running total of money awaiting approval.
 ::acceptance
 - Commands and result DTOs are separate records; no aggregate appears in a public method signature.
 - Each command use case depends on ports (repositories, directory, unit of work, access policy), not on concrete infrastructure.
-- Business rules (status transitions, authority threshold, self-approval) are in the `Variation` aggregate or a domain service, not in the application layer.
+- Business rules (status transitions, approval threshold, self-approval) are in the `RefundRequest` aggregate or a domain service, not in the application layer.
 - The query use case reads through a query port that returns DTOs and does not load aggregates.
-- Vendor notification happens through a domain event, not a direct call in the approve use case.
+- Customer notification and the actual money movement happen through a domain event, not a direct call in the approve use case.
 ::hint
 Start from the use cases: what does each one need to *read*, *decide* and *write*?
 ::hint
-The HR directory gives you an authority level. Represent it as a domain value (`ApproverAuthority`) so the domain can decide.
+The directory gives you an approval limit. Represent it as a domain value (`ApprovalLimit`) so the domain can decide.
 ::hint
-For the screen, a separate `IVariationQueries` returning `VariationRowDto` avoids loading 200 aggregates and joining vendor names in memory.
+For the queue screen, a separate `IRefundQueries` returning `RefundRowDto` avoids loading 200 aggregates and joining customer names in memory.
 ::hint
-Classes to include: `SubmitVariationCommand`, `ApproveVariationCommand`, `VariationDto`, `VariationRowDto`, `VariationApplicationService` (or two handlers), `IVariationRepository`, `IContractRepository`, `IApproverDirectory`, `IVariationQueries`, `IUnitOfWork`, `IContractAccessPolicy`, `Variation`, `ApproverAuthority`, `VariationApproved`.
+Classes to include: `RequestRefundCommand`, `ApproveRefundCommand`, `RefundDto`, `RefundRowDto`, `RefundApplicationService` (or two handlers), `IRefundRepository`, `IOrderReadPort`, `IApproverDirectory`, `IRefundQueries`, `IUnitOfWork`, `IRefundAccessPolicy`, `RefundRequest`, `ApprovalLimit`, `RefundApproved`.
 ::starter
 ```json
 {
   "classes": [
-    { "id": "VariationApplicationService", "name": "VariationApplicationService", "kind": "class", "fields": [], "methods": ["+Task Approve(...)"], "responsibility": "TODO" },
-    { "id": "Variation", "name": "Variation", "kind": "class", "fields": ["-Guid Id", "-Guid ContractId", "-decimal Amount"], "methods": [], "responsibility": "Aggregate root" }
+    { "id": "RefundApplicationService", "name": "RefundApplicationService", "kind": "class", "fields": [], "methods": ["+Task Approve(...)"], "responsibility": "TODO" },
+    { "id": "RefundRequest", "name": "RefundRequest", "kind": "class", "fields": ["-Guid Id", "-Guid OrderId", "-decimal Amount"], "methods": [], "responsibility": "Aggregate root" }
   ],
   "relations": []
 }
@@ -1562,48 +1563,48 @@ Classes to include: `SubmitVariationCommand`, `ApproveVariationCommand`, `Variat
 ```json
 {
   "classes": [
-    { "id": "Submit", "name": "SubmitVariationCommand", "kind": "record", "fields": ["+Guid ContractId", "+decimal Amount", "+string Description"], "methods": [] },
-    { "id": "Approve", "name": "ApproveVariationCommand", "kind": "record", "fields": ["+Guid VariationId"], "methods": [], "responsibility": "Approver id comes from the current user, not the body" },
-    { "id": "Dto", "name": "VariationDto", "kind": "record", "fields": ["+Guid Id", "+string Status", "+decimal Amount"], "methods": [] },
-    { "id": "Row", "name": "VariationRowDto", "kind": "record", "fields": ["+Guid Id", "+string VendorName", "+decimal Amount", "+decimal RunningTotal", "+string Status"], "methods": [] },
-    { "id": "App", "name": "VariationApplicationService", "kind": "class", "fields": [],
-      "methods": ["+Task~Result~VariationDto~~ SubmitAsync(SubmitVariationCommand c)", "+Task~Result~VariationDto~~ ApproveAsync(ApproveVariationCommand c)"],
+    { "id": "Request", "name": "RequestRefundCommand", "kind": "record", "fields": ["+Guid OrderId", "+decimal Amount", "+string Reason"], "methods": [] },
+    { "id": "Approve", "name": "ApproveRefundCommand", "kind": "record", "fields": ["+Guid RefundId"], "methods": [], "responsibility": "Approver id comes from the current user, not the body" },
+    { "id": "Dto", "name": "RefundDto", "kind": "record", "fields": ["+Guid Id", "+string Status", "+decimal Amount"], "methods": [] },
+    { "id": "Row", "name": "RefundRowDto", "kind": "record", "fields": ["+Guid Id", "+string OrderNumber", "+string CustomerName", "+decimal Amount", "+decimal RunningTotal", "+string Status"], "methods": [] },
+    { "id": "App", "name": "RefundApplicationService", "kind": "class", "fields": [],
+      "methods": ["+Task~Result~RefundDto~~ RequestAsync(RequestRefundCommand c)", "+Task~Result~RefundDto~~ ApproveAsync(ApproveRefundCommand c)"],
       "responsibility": "Orchestration only: validate, authorize, load, call domain, commit once, map" },
-    { "id": "Queries", "name": "IVariationQueries", "kind": "interface", "fields": [], "methods": ["Task~IReadOnlyList~VariationRowDto~~ ForContractAsync(Guid contractId)"], "responsibility": "Read side. SQL projection, no aggregates" },
-    { "id": "VarRepo", "name": "IVariationRepository", "kind": "interface", "fields": [], "methods": ["Task~Variation~ GetAsync(Guid id)", "void Add(Variation v)"] },
-    { "id": "ConRepo", "name": "IContractRepository", "kind": "interface", "fields": [], "methods": ["Task~Contract~ GetAsync(Guid id)"] },
-    { "id": "Dir", "name": "IApproverDirectory", "kind": "interface", "fields": [], "methods": ["Task~ApproverAuthority~ GetAuthorityAsync(Guid userId)"], "responsibility": "Port to the HR directory" },
-    { "id": "Access", "name": "IContractAccessPolicy", "kind": "interface", "fields": [], "methods": ["Task~bool~ CanManageAsync(Guid contractId)"], "responsibility": "Authorization hook implemented in the web layer" },
+    { "id": "Queries", "name": "IRefundQueries", "kind": "interface", "fields": [], "methods": ["Task~IReadOnlyList~RefundRowDto~~ PendingAsync(int page)"], "responsibility": "Read side. SQL projection, no aggregates" },
+    { "id": "RefRepo", "name": "IRefundRepository", "kind": "interface", "fields": [], "methods": ["Task~RefundRequest~ GetAsync(Guid id)", "void Add(RefundRequest r)"] },
+    { "id": "OrderPort", "name": "IOrderReadPort", "kind": "interface", "fields": [], "methods": ["Task~decimal~ GetPaidAmountAsync(Guid orderId)"], "responsibility": "Reads the order's paid amount; does not change the order" },
+    { "id": "Dir", "name": "IApproverDirectory", "kind": "interface", "fields": [], "methods": ["Task~ApprovalLimit~ GetLimitAsync(Guid userId)"], "responsibility": "Port to the support tool's user directory" },
+    { "id": "Access", "name": "IRefundAccessPolicy", "kind": "interface", "fields": [], "methods": ["Task~bool~ CanHandleAsync(Guid orderId)"], "responsibility": "Authorization hook implemented in the web layer (agent's region, merchant)" },
     { "id": "Uow", "name": "IUnitOfWork", "kind": "interface", "fields": [], "methods": ["Task SaveChangesAsync()"] },
-    { "id": "Variation", "name": "Variation", "kind": "class",
-      "fields": ["-Guid Id", "-Guid ContractId", "-decimal Amount", "-Guid CreatedBy", "-VariationStatus Status"],
-      "methods": ["+static Variation Submit(Guid contractId, decimal amount, string description, Guid by)", "+void Approve(Guid approverId, ApproverAuthority authority, decimal contractValue)"],
-      "responsibility": "Aggregate root. Rules: only Submitted can be approved; no self-approval; above 10 % of contract value needs Director. Raises VariationApproved" },
-    { "id": "Authority", "name": "ApproverAuthority", "kind": "enum", "fields": ["Engineer", "Manager", "Director"], "methods": [], "responsibility": "Domain value built from the directory" },
-    { "id": "Event", "name": "VariationApproved", "kind": "record", "fields": ["+Guid VariationId", "+Guid ContractId", "+decimal Amount"], "methods": [], "responsibility": "Domain event. Mapped to an integration event for vendor notification and contract value update via outbox" }
+    { "id": "Refund", "name": "RefundRequest", "kind": "class",
+      "fields": ["-Guid Id", "-Guid OrderId", "-decimal Amount", "-Guid RequestedBy", "-RefundStatus Status"],
+      "methods": ["+static RefundRequest Create(Guid orderId, decimal amount, string reason, Guid by)", "+void Approve(Guid approverId, ApprovalLimit limit, decimal orderPaidAmount)"],
+      "responsibility": "Aggregate root. Rules: only Requested can be approved; no self-approval; above 10 % of paid amount needs Supervisor. Raises RefundApproved" },
+    { "id": "Limit", "name": "ApprovalLimit", "kind": "enum", "fields": ["Agent", "TeamLead", "Supervisor"], "methods": [], "responsibility": "Domain value built from the directory" },
+    { "id": "Event", "name": "RefundApproved", "kind": "record", "fields": ["+Guid RefundId", "+Guid OrderId", "+decimal Amount"], "methods": [], "responsibility": "Domain event. Mapped to an integration event for the payment refund, the order's refunded total and the customer email, via outbox" }
   ],
   "relations": [
-    { "from": "App", "to": "VarRepo", "kind": "dependency" },
-    { "from": "App", "to": "ConRepo", "kind": "dependency" },
+    { "from": "App", "to": "RefRepo", "kind": "dependency" },
+    { "from": "App", "to": "OrderPort", "kind": "dependency" },
     { "from": "App", "to": "Dir", "kind": "dependency" },
     { "from": "App", "to": "Access", "kind": "dependency" },
     { "from": "App", "to": "Uow", "kind": "dependency" },
-    { "from": "App", "to": "Submit", "kind": "dependency", "label": "accepts" },
+    { "from": "App", "to": "Request", "kind": "dependency", "label": "accepts" },
     { "from": "App", "to": "Approve", "kind": "dependency", "label": "accepts" },
     { "from": "App", "to": "Dto", "kind": "dependency", "label": "returns" },
-    { "from": "App", "to": "Variation", "kind": "dependency", "label": "calls" },
-    { "from": "Variation", "to": "Authority", "kind": "dependency" },
-    { "from": "Variation", "to": "Event", "kind": "dependency", "label": "raises" },
+    { "from": "App", "to": "Refund", "kind": "dependency", "label": "calls" },
+    { "from": "Refund", "to": "Limit", "kind": "dependency" },
+    { "from": "Refund", "to": "Event", "kind": "dependency", "label": "raises" },
     { "from": "Queries", "to": "Row", "kind": "dependency", "label": "returns" }
   ]
 }
 ```
 
-**Reasoning.** The approve use case reads the variation (to change it) and the contract (only for its value; it does not change it), asks the directory for the approver's authority, and passes both as values into `Variation.Approve`. All three rules live there, so a batch approval job gets them for free. The approver id comes from the authenticated user, never from the request body. The vendor email and the contract-value update react to `VariationApproved` through the outbox, so the approve transaction touches one aggregate. The screen uses `IVariationQueries`, a single SQL query with a window function for the running total (`sum(amount) over (order by submitted_at)`), instead of loading 200 aggregates.
+**Reasoning.** The approve use case reads the refund request (to change it) and the order's paid amount (only to read it; it does not change the order), asks the directory for the approver's limit, and passes both as values into `RefundRequest.Approve`. All three rules live there, so a batch job that auto-approves small late-delivery refunds gets them for free. The approver id comes from the authenticated user, never from the request body. The payment-gateway refund, the order's refunded total and the customer email react to `RefundApproved` through the outbox, so the approve transaction touches one aggregate. The gateway call must be idempotent on the refund id, because outbox delivery is at least once. The queue screen uses `IRefundQueries`, a single SQL query with a window function for the running total (`sum(amount) over (order by requested_at)`), instead of loading 200 aggregates.
 ::mistakes
-- Putting `ApproverId` in the approve command body, which lets a user approve as someone else.
-- Returning `Variation` from `IVariationQueries` "to reuse the mapping".
-- Making `ApproveAsync` also call `contract.ApplyVariation(...)` in the same transaction.
+- Putting `ApproverId` in the approve command body, which lets an agent approve as someone else.
+- Returning `RefundRequest` from `IRefundQueries` "to reuse the mapping".
+- Making `ApproveAsync` also call `order.ApplyRefund(...)` and the payment gateway in the same transaction.
 :::
 
 :::exercise id=m08-application-services-ex5 difficulty=advanced kind=code title="Transaction and idempotency decorators for command handlers"
@@ -1695,7 +1696,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-public sealed record PlaceOrder(string IdempotencyKey, Guid CustomerId, int Bags) : IHasIdempotencyKey;
+public sealed record PlaceOrder(string IdempotencyKey, Guid CustomerId, int Boxes) : IHasIdempotencyKey;
 
 public class DecoratorTests
 {
@@ -1952,16 +1953,16 @@ Application services are tested with **fakes for every port** and the **real dom
 public async Task PlaceOrder_commits_once_and_returns_dto()
 {
     var store = new InMemoryOrderingStore();
-    var customer = new Customer(Guid.NewGuid(), "Shree Infra", creditLimit: 1_000_000m);
+    var customer = new Customer(Guid.NewGuid(), "City Care Pharmacy", creditLimit: 300_000m);
     store.Customers[customer.Id] = customer;
-    store.Prices["CEM-OPC53"] = 380m;
+    store.Prices["PCM-500"] = 380m;
     var uow = new InMemoryUnitOfWork();
 
     var service = new OrderApplicationService(new AllowAll(), new InMemoryCustomerRepository(store),
         new InMemoryOrderRepository(store, uow), new InMemoryProductCatalog(store), new CreditPolicy(),
         uow, TimeProvider.System, NullLogger<OrderApplicationService>.Instance);
 
-    var result = await service.PlaceOrderAsync(new PlaceOrderCommand(customer.Id, new[] { new PlaceOrderLine("CEM-OPC53", 200) }));
+    var result = await service.PlaceOrderAsync(new PlaceOrderCommand(customer.Id, new[] { new PlaceOrderLine("PCM-500", 200) }));
 
     Assert.True(result.IsSuccess);
     Assert.Equal(76_000m, result.Value!.Total);
@@ -1979,11 +1980,11 @@ What to cover for each use case:
 
 ## Real-world application
 
-- **B2B ordering portals** for building materials, pharma distribution or FMCG run exactly this flow: account-level authorization, server-side pricing, credit checks, one commit.
-- **Public-sector procurement platforms** (e-tendering, GeM-style marketplaces) separate "who may act" (department, role, delegation of financial powers) from "what is allowed" (tender rules), and the application layer is where the two meet.
+- **B2B ordering apps** for medicine distribution, restaurant wholesale groceries or FMCG retail run exactly this flow: account-level authorization, server-side pricing, credit checks, one commit.
+- **Hospital and clinic systems** separate "who may act" (doctor, nurse, front desk, which branch) from "what is allowed" (only a registered doctor can sign a prescription; a follow-up must be within 30 days), and the application layer is where the two meet.
 - **Microsoft's eShop reference application** uses command handlers in its ordering service with pipeline behaviours for logging, validation and transactions, which is the decorator approach from exercise 5.
 - **Payment APIs** (Stripe, Razorpay and others publicly document this) accept an idempotency key per request so client retries are safe; the same idea applies to your own command handlers.
-- **Infrastructure project systems**: "submit a running-account bill", "approve a measurement book entry" and "release retention" are each one application-service method over rich aggregates.
+- **Food-delivery and ride-hailing back offices**: "issue a refund", "reassign an order to another rider" and "block a fraudulent account" are each one application-service method over rich aggregates.
 
 ## Interview questions
 
@@ -1999,7 +2000,7 @@ Accepting entities allows over-posting (clients setting fields like `Status`) an
 ::q intermediate
 Where does authorization belong in a DDD application?
 ::a
-Coarse checks (authenticated, has the right scope) go on the endpoint. Resource-based checks ("may this user act for this customer") go in the application service, through a hook interface the application layer owns, implemented in the web layer with `IAuthorizationService`. Business authority rules that depend on domain data, like "variations above 10 % need a director", go in the domain, with the authority level passed in as a value.
+Coarse checks (authenticated, has the right scope) go on the endpoint. Resource-based checks ("may this user act for this customer") go in the application service, through a hook interface the application layer owns, implemented in the web layer with `IAuthorizationService`. Business authority rules that depend on domain data, like "refunds above 10 % of the order need a supervisor", go in the domain, with the authority level passed in as a value.
 ::q intermediate
 A use case calls `SaveChangesAsync` twice. What can go wrong and how do you fix it?
 ::a

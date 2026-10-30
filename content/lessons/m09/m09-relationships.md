@@ -51,9 +51,9 @@ The whole lesson comes down to two questions you ask about every link: *how many
 
 ## First-principles explanation
 
-### The scenario: SiteTalk
+### The scenario: Huddle
 
-**SiteTalk** is a messaging app for construction project teams: a contractor's engineers, the client's project management consultant and the designers share one workspace per project. Inside a workspace there are channels (`#structural`, `#site-safety`, `#rfi-queue`), and in channels people post messages, reply in threads, attach drawings and react with emoji. A small deployment: 400 workspaces, 25,000 users, about 3 million messages a year. Requirements, phrased the way a product manager would:
+**Huddle** is a Slack-style team chat app used by companies and college clubs. At a food-delivery startup, for example, the engineers, the product managers and an outside design agency share one workspace. Inside a workspace there are channels (`#backend`, `#incidents`, `#hiring`), and in channels people post messages, reply in threads, attach screenshots and react with emoji. A small deployment: 400 workspaces, 25,000 users, about 3 million messages a year. Requirements, phrased the way a product manager would:
 
 1. A user has one profile with avatar, designation and notification settings.
 2. A workspace has many channels; a channel belongs to exactly one workspace.
@@ -89,7 +89,7 @@ CREATE INDEX channels_workspace_idx ON channels (workspace_id);
 Three details carry most of the design:
 
 - **`NOT NULL` on the foreign key** encodes "exactly one". If a channel could exist without a workspace (a draft, say), the column would be nullable and the shape would be "zero-or-one to many".
-- **The composite unique `(workspace_id, name)`** says channel names are unique *within a workspace*, not globally. Two projects can both have `#site-safety`. Scoping uniqueness to the parent is one of the most common modelling needs and one of the most commonly forgotten.
+- **The composite unique `(workspace_id, name)`** says channel names are unique *within a workspace*, not globally. Two workspaces (a startup and a college club) can both have `#backend`. Scoping uniqueness to the parent is one of the most common modelling needs and one of the most commonly forgotten.
 - **The index on the foreign key.** PostgreSQL creates an index for primary keys and unique constraints automatically, but **not for foreign keys**. Without `channels_workspace_idx`, "list channels in workspace 42" scans the whole table, and deleting a workspace scans `channels` to check for children. Index every foreign key you will join or filter on, which is nearly all of them.
 
 The "many" side can also point at several parents at once. `messages` points at a channel *and* an author:
@@ -219,7 +219,7 @@ A reliable method for any sentence of the form "A ... B":
 | many | one | 1:N | On the "many" side (the child), `NOT NULL` if the parent is required |
 | many | many | M:N | New junction table with composite PK and one index per direction |
 
-Watch for sentences that hide a many-to-many. "Each message has one author" is 1:N. "Each message is seen by its readers" is M:N (`message_reads`, with a `read_at` attribute). "Each attachment belongs to a message" is 1:N, until a product manager says "we want to attach the same drawing to several messages", at which point `attachments` becomes `files` plus a `message_files` junction. Shapes change when requirements change; the cost of the change is why you name the shape explicitly in design reviews.
+Watch for sentences that hide a many-to-many. "Each message has one author" is 1:N. "Each message is seen by its readers" is M:N (`message_reads`, with a `read_at` attribute). "Each attachment belongs to a message" is 1:N, until a product manager says "we want to attach the same file to several messages", at which point `attachments` becomes `files` plus a `message_files` junction. Shapes change when requirements change; the cost of the change is why you name the shape explicitly in design reviews.
 
 ### Anti-patterns and why they fail
 
@@ -246,7 +246,7 @@ If a relationship is read only ever as part of one parent, is never queried from
 
 ## Visual explanation
 
-### The SiteTalk model
+### The Huddle model
 
 ```mermaid
 erDiagram
@@ -354,7 +354,7 @@ JOIN channel_reads r ON r.channel_id = m.channel_id AND r.user_id = 17
 WHERE m.channel_id = 7 AND m.message_id > r.last_read_message_id;
 ```
 
-"Who has read message 5001?" is now harder (anyone whose cursor is at or past it), which is the trade: the cursor design makes "my unread" cheap and "who read this" approximate. For a work tool with channels of 20 to 200 people, SiteTalk keeps `message_reads` and gets exact receipts. For a 10,000-member channel it would switch to cursors.
+"Who has read message 5001?" is now harder (anyone whose cursor is at or past it), which is the trade: the cursor design makes "my unread" cheap and "who read this" approximate. For a work tool with channels of 20 to 200 people, Huddle keeps `message_reads` and gets exact receipts. For a 10,000-member channel it would switch to cursors.
 
 **Step 5 — Map to code.** `message_reads` is a pure junction with one attribute; in C# it is a record `MessageRead(long MessageId, long UserId, DateTimeOffset ReadAt)`, and in EF Core it is a skip navigation with a payload entity. The important point: the model in code should mirror the shape, not hide it. A `List<long> ReaderIds` on `Message` loses `read_at` and invites loading 12 million ids into memory.
 
@@ -363,7 +363,7 @@ WHERE m.channel_id = 7 AND m.message_id > r.last_read_message_id;
 The compiled code models the shapes as plain C# and implements two pieces of pure logic a messaging service needs: an in-memory membership set with composite-key semantics and role rules, and a thread builder that turns flat `(message_id, parent_id)` rows into a tree. Database access is shown separately as Dapper and EF Core snippets, which the checker cannot compile.
 
 ```text
-SiteTalk.Api/
+Huddle.Api/
   Program.cs
   Domain/Models.cs
   Domain/MembershipSet.cs
@@ -371,7 +371,7 @@ SiteTalk.Api/
 ```
 
 ```csharp file=Domain/Models.cs
-namespace SiteTalk.Domain;
+namespace Huddle.Domain;
 
 public enum Role { Guest, Member, Admin, Owner }
 
@@ -396,7 +396,7 @@ public sealed record Reaction(long MessageId, long UserId, string Emoji, DateTim
 ```
 
 ```csharp file=Domain/MembershipSet.cs
-namespace SiteTalk.Domain;
+namespace Huddle.Domain;
 
 /// <summary>
 /// In-memory model of the memberships junction table: composite key (workspace, user), role attribute,
@@ -411,7 +411,7 @@ public sealed class MembershipSet
     /// <summary>Insert. Returns false on a duplicate pair, like SQLSTATE 23505.</summary>
     public bool TryAdd(Membership m)
     {
-        if (m.Role == Role.Guest && m.JoinedAt == default) throw new ArgumentException("joined_at required", nameof(m));
+        if (m.JoinedAt == default) throw new ArgumentException("joined_at required", nameof(m));
         return _rows.TryAdd((m.WorkspaceId, m.UserId), m);
     }
 
@@ -457,7 +457,7 @@ public sealed class MembershipSet
 ```
 
 ```csharp file=Domain/ThreadBuilder.cs
-namespace SiteTalk.Domain;
+namespace Huddle.Domain;
 
 public sealed class ThreadNode(Message message)
 {
@@ -509,7 +509,7 @@ public static class ThreadBuilder
 ```
 
 ```csharp file=Program.cs
-using SiteTalk.Domain;
+using Huddle.Domain;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<MembershipSet>();
@@ -601,7 +601,7 @@ A `jsonb` array of ids on the parent is simpler for one-directional, constraint-
 
 ## Practical playground
 
-The playground seeds SiteTalk with two workspaces, a handful of users and a threaded conversation. Try these:
+The playground seeds Huddle with two workspaces, a handful of users and a threaded conversation. Try these:
 
 1. Insert a duplicate membership `(1, 2, 'admin')` and read the error. Then do the same with `ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = EXCLUDED.role` and check the row.
 2. Run the recursive CTE on `message_id = 1` and confirm the depth column.
@@ -609,7 +609,7 @@ The playground seeds SiteTalk with two workspaces, a handful of users and a thre
 4. Count reactions per message per emoji, and try inserting the same `(message, user, emoji)` twice.
 5. Delete channel 1 and watch messages, reactions and attachments cascade. Then try deleting user 2 and see the author foreign key block it.
 
-:::playground type=sql title="SiteTalk: three relationship shapes"
+:::playground type=sql title="Huddle: three relationship shapes"
 ```sql
 CREATE TABLE users (
   user_id   bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -664,27 +664,27 @@ CREATE TABLE attachments (
 );
 
 INSERT INTO users (email, full_name) VALUES
-  ('asha@rodic.example', 'Asha Deshpande'), ('vikram@contractor.example', 'Vikram Singh'),
-  ('meera@client.example', 'Meera Iyer'), ('john@design.example', 'John Carter'), ('neha@rodic.example', 'Neha Gupta');
-INSERT INTO user_profiles (user_id, designation) VALUES (1, 'Resident Engineer'), (2, 'Project Manager'), (3, 'Client PMC Lead');
-INSERT INTO workspaces (name, slug) VALUES ('NH-44 Widening Package 3', 'nh44-p3'), ('Metro Depot Civil Works', 'metro-depot');
+  ('asha@zestly.example', 'Asha Deshpande'), ('vikram@zestly.example', 'Vikram Singh'),
+  ('meera@zestly.example', 'Meera Iyer'), ('john@agency.example', 'John Carter'), ('neha@punecoders.example', 'Neha Gupta');
+INSERT INTO user_profiles (user_id, designation) VALUES (1, 'Engineering Manager'), (2, 'Backend Developer'), (3, 'Product Manager');
+INSERT INTO workspaces (name, slug) VALUES ('Zestly Foods Engineering', 'zestly-eng'), ('Pune Coders Club', 'pune-coders');
 INSERT INTO memberships (workspace_id, user_id, role, joined_at) VALUES
   (1, 1, 'owner',  '2026-01-10'), (1, 2, 'member', '2026-01-12'), (1, 3, 'admin', '2026-01-15'), (1, 4, 'guest', '2026-02-01'),
   (2, 1, 'admin',  '2026-03-01'), (2, 5, 'owner',  '2026-03-01'), (2, 2, 'member', '2026-03-05');
 INSERT INTO channels (workspace_id, name, is_private) VALUES
-  (1, 'structural', false), (1, 'site-safety', false), (1, 'rfi-queue', true), (2, 'structural', false);
+  (1, 'backend', false), (1, 'incidents', false), (1, 'hiring', true), (2, 'backend', false);
 INSERT INTO messages (channel_id, author_id, parent_id, body, posted_at) VALUES
-  (1, 2, NULL, 'Pier P14 rebar inspection done, photos attached.', '2026-10-18 09:00+05:30'),
-  (1, 1, 1,    'Cover looks short on the east face. Can you measure?', '2026-10-18 09:12+05:30'),
-  (1, 2, 2,    'Measured 38 mm against 40 mm spec. Raising an NCR.', '2026-10-18 09:40+05:30'),
-  (1, 3, 1,    'Please copy the client QA team on the NCR.', '2026-10-18 10:05+05:30'),
-  (2, 1, NULL, 'Toolbox talk at 7:30 tomorrow, topic: working at height.', '2026-10-18 17:00+05:30'),
-  (3, 3, NULL, 'RFI-212: bearing type confirmation needed by Friday.', '2026-10-17 11:00+05:30'),
-  (4, 5, NULL, 'Depot slab pour scheduled for Monday.', '2026-10-18 08:00+05:30');
+  (1, 2, NULL, 'Order API p95 jumped to 2 s after the 10:00 deploy, graphs attached.', '2026-10-18 10:20+05:30'),
+  (1, 1, 1,    'Looks like the new coupon query. Can you check its plan?', '2026-10-18 10:32+05:30'),
+  (1, 2, 2,    'Seq scan on coupons, 380 ms per call. Adding an index now.', '2026-10-18 10:55+05:30'),
+  (1, 3, 1,    'Please post a status update in #incidents for support.', '2026-10-18 11:05+05:30'),
+  (2, 1, NULL, 'Incident review tomorrow at 11:00, add notes to the doc.', '2026-10-18 17:00+05:30'),
+  (3, 3, NULL, 'Backend shortlist needs interview feedback by Friday.', '2026-10-17 11:00+05:30'),
+  (4, 5, NULL, 'Hackathon venue confirmed for Saturday.', '2026-10-18 08:00+05:30');
 INSERT INTO reactions (message_id, user_id, emoji) VALUES
   (1, 1, 'thumbs_up'), (1, 3, 'thumbs_up'), (1, 3, 'eyes'), (3, 1, 'check'), (5, 2, 'thumbs_up'), (5, 4, 'thumbs_up');
 INSERT INTO attachments (message_id, file_url, size_bytes) VALUES
-  (1, 's3://sitetalk/p14-rebar-1.jpg', 2411000), (1, 's3://sitetalk/p14-rebar-2.jpg', 2208000), (6, 's3://sitetalk/rfi-212.pdf', 512000);
+  (1, 's3://huddle/latency-p95.png', 241100), (1, 's3://huddle/error-rate.png', 220800), (6, 's3://huddle/shortlist.pdf', 512000);
 ```
 :::
 
@@ -701,7 +701,7 @@ CREATE TABLE memberships (
   PRIMARY KEY (workspace_id, user_id)
 );
 INSERT INTO users VALUES (1,'Asha'),(2,'Vikram'),(3,'Meera'),(4,'John'),(5,'Neha');
-INSERT INTO workspaces VALUES (1,'NH-44 Widening Package 3'),(2,'Metro Depot Civil Works'),(3,'Archive: Bypass 2021');
+INSERT INTO workspaces VALUES (1,'Zestly Foods Engineering'),(2,'Pune Coders Club'),(3,'Archive: Hackathon 2021');
 INSERT INTO memberships VALUES (1,1,'owner'),(1,2,'member'),(1,3,'admin'),(1,4,'guest'),(2,1,'admin'),(2,5,'owner'),(2,2,'member'),(2,3,'owner');
 ```
 ::check
@@ -716,7 +716,7 @@ ORDER BY w.name;
 ```
 ::acceptance
 - Three rows: the archive workspace shows 0 and 0.
-- NH-44 shows 4 members and 1 owner; Metro Depot shows 4 members and 2 owners.
+- Zestly Foods Engineering shows 4 members and 1 owner; Pune Coders Club shows 4 members and 2 owners.
 - Columns named exactly `workspace_name`, `member_count`, `owner_count`.
 ::hint
 "Include workspaces with no members" means an outer join from `workspaces`, not an inner join.
@@ -890,11 +890,11 @@ CREATE TABLE memberships (workspace_id bigint REFERENCES workspaces, user_id big
 CREATE TABLE channels (channel_id bigint PRIMARY KEY, workspace_id bigint NOT NULL REFERENCES workspaces, name text NOT NULL, is_private boolean NOT NULL, UNIQUE (workspace_id, name));
 CREATE TABLE channel_members (channel_id bigint REFERENCES channels, user_id bigint REFERENCES users, PRIMARY KEY (channel_id, user_id));
 INSERT INTO users VALUES (1,'Asha'),(2,'Vikram'),(3,'Meera'),(4,'John'),(5,'Neha');
-INSERT INTO workspaces VALUES (1,'NH-44 Widening Package 3'),(2,'Metro Depot Civil Works');
+INSERT INTO workspaces VALUES (1,'Zestly Foods Engineering'),(2,'Pune Coders Club');
 INSERT INTO memberships VALUES (1,1,'owner'),(1,2,'member'),(1,3,'admin'),(1,4,'guest'),(2,1,'admin'),(2,5,'owner'),(2,2,'member');
 INSERT INTO channels VALUES
-  (1,1,'structural',false),(2,1,'site-safety',false),(3,1,'rfi-queue',true),(4,1,'commercial',true),
-  (5,2,'structural',false),(6,2,'depot-mep',true);
+  (1,1,'backend',false),(2,1,'incidents',false),(3,1,'hiring',true),(4,1,'payroll',true),
+  (5,2,'backend',false),(6,2,'organisers',true);
 INSERT INTO channel_members VALUES (3,1),(3,3),(4,1),(4,2),(6,1),(6,5);
 ```
 ::check
@@ -1112,13 +1112,13 @@ CREATE TABLE channels (channel_id bigint PRIMARY KEY, workspace_id bigint NOT NU
 CREATE TABLE messages (message_id bigint PRIMARY KEY, channel_id bigint NOT NULL REFERENCES channels, author_id bigint NOT NULL REFERENCES users, parent_id bigint REFERENCES messages, body text NOT NULL);
 CREATE TABLE reactions (message_id bigint REFERENCES messages, user_id bigint REFERENCES users, emoji text NOT NULL, PRIMARY KEY (message_id, user_id, emoji));
 INSERT INTO users VALUES (1,'Asha Deshpande'),(2,'Vikram Singh'),(3,'Meera Iyer'),(4,'John Carter'),(5,'Neha Gupta');
-INSERT INTO workspaces VALUES (1,'NH-44 Widening Package 3'),(2,'Metro Depot Civil Works');
+INSERT INTO workspaces VALUES (1,'Zestly Foods Engineering'),(2,'Pune Coders Club');
 INSERT INTO memberships VALUES (1,1,'owner'),(1,2,'member'),(1,3,'admin'),(1,4,'guest'),(2,1,'admin'),(2,5,'owner'),(2,2,'member');
-INSERT INTO channels VALUES (1,1,'structural'),(2,1,'site-safety'),(3,1,'rfi-queue'),(4,2,'structural');
+INSERT INTO channels VALUES (1,1,'backend'),(2,1,'incidents'),(3,1,'hiring'),(4,2,'backend');
 INSERT INTO messages VALUES
-  (1,1,2,NULL,'Pier P14 rebar inspection done.'),(2,1,1,1,'Cover looks short on the east face.'),(3,1,2,2,'Measured 38 mm. Raising an NCR.'),
-  (4,1,3,1,'Copy the client QA team.'),(5,2,1,NULL,'Toolbox talk at 7:30.'),(6,3,3,NULL,'RFI-212 bearing confirmation.'),
-  (7,4,5,NULL,'Depot slab pour Monday.'),(8,4,1,7,'Noted, will attend.');
+  (1,1,2,NULL,'Order API p95 jumped after the deploy.'),(2,1,1,1,'Check the coupon query plan.'),(3,1,2,2,'Seq scan on coupons. Adding an index.'),
+  (4,1,3,1,'Post an update in #incidents.'),(5,2,1,NULL,'Incident review at 11:00.'),(6,3,3,NULL,'Backend shortlist feedback.'),
+  (7,4,5,NULL,'Hackathon venue confirmed.'),(8,4,1,7,'Noted, will attend.');
 INSERT INTO reactions VALUES (1,1,'thumbs_up'),(1,3,'thumbs_up'),(1,3,'eyes'),(3,1,'check'),(5,2,'thumbs_up'),(5,4,'thumbs_up'),(7,1,'thumbs_up');
 ```
 ::check
@@ -1202,7 +1202,7 @@ This query touches every shape in the lesson: the M:N junction (`memberships`) i
 
 **3. Query tests with a hand-checked dataset.** The exercises above are exactly such tests: seed, run, compare to known numbers. Keep them as integration tests so a future "optimisation" that introduces a fan-out bug is caught by a count that doubles.
 
-**4. Index checks.** For every foreign key, assert an index exists whose leading column is that key. A query against `pg_indexes` and `information_schema.table_constraints` can do this generically and fail the build when someone adds a foreign key without an index:
+**4. Index checks.** For every foreign key, assert an index exists whose leading column is that key. A query against the catalogs `pg_constraint` and `pg_index` can do this generically and fail the build when someone adds a foreign key without an index:
 
 ```sql
 SELECT c.conrelid::regclass AS table_name, a.attname AS fk_column
@@ -1219,7 +1219,7 @@ WHERE c.contype = 'f'
 
 - **Team collaboration tools** (chat, issue trackers, document workspaces) are almost entirely relationship modelling: memberships with roles, nested comments, labels as many-to-many, watchers as many-to-many with notification preferences.
 - **E-commerce catalogues** use many-to-many for products ↔ categories and products ↔ tags, one-to-many for product ↔ variants, and one-to-one for product ↔ SEO metadata that is rarely read.
-- **Infrastructure project systems** model contractors ↔ projects (M:N with contract value and dates), project → work packages → activities (1:N chains), and activity predecessor links (self-referencing M:N, the basis of a schedule network).
+- **Food-delivery platforms** model restaurants ↔ cuisines and delivery partners ↔ zones (M:N, the second with shift times as relationship attributes), restaurant → menu sections → items (1:N chains), and customer referrals (`referred_by_user_id`, a self-referencing 1:N).
 - **Identity and access** is the canonical M:N: users ↔ roles ↔ permissions, two junction tables, and the "effective permissions" query is a join across all five tables.
 - **Social graphs** (followers) are a self-referencing many-to-many: `follows (follower_id, followee_id)` with a composite key and an index in each direction.
 

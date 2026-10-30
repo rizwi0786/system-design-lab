@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 75
 prerequisites: [m01-interfaces-abstract, m04-srp, m04-lsp]
-related: [m04-dip, m04-ocp, m07-interfaces-abstractions, m06-adapter, m03-dependency-injection]
+related: [m04-solid-in-practice, m04-dip, m04-ocp, m07-interfaces-abstractions, m06-adapter, m03-dependency-injection]
 tags: [solid, interfaces, clean-code, payments]
 patterns: []
 summary: Give each client a small interface that contains only what it uses, so a change for one client never forces work on another — and know when splitting goes too far.
@@ -68,7 +68,16 @@ When a client depends on members it doesn't use, three costs appear.
 2. **Forced change.** When a member changes (a new parameter, a new return type), every implementer and every test fake must change, including the ones whose clients never call that member. In a compiled language this also means more projects rebuild and redeploy than necessary.
 3. **Hidden coupling and unclear intent.** A constructor that takes `IPaymentGateway` tells you nothing about what the class does with it. A constructor that takes `IRefundProcessor` tells you exactly.
 
-Martin's original example came from a printer system where one huge `Job` class served print, staple and fax tasks, so a change for one task forced all of them to rebuild.
+Martin's original example came from a printer system at Xerox where one huge `Job` class served print, staple and fax tasks, so a change for one task forced all of them to rebuild.
+
+### The classic interview examples
+
+Two textbook examples come up in almost every interview about ISP. Know them, then move on to a real one like the payments example in this lesson.
+
+- **The multifunction machine.** `IMachine { Print(); Scan(); Fax(); }` is fine for an office all-in-one. A basic home printer must implement `Scan` and `Fax` and throws. Fix: `IPrinter`, `IScanner`, `IFax`; the all-in-one implements all three, the basic printer only `IPrinter`, and the "print invoice" screen asks for `IPrinter`.
+- **The worker and the robot.** `IWorker { Work(); TakeLunchBreak(); }` works for employees. A warehouse robot can't take lunch. Fix: `IWorkable` and `IBreakTaker`; the shift scheduler that plans breaks depends only on `IBreakTaker`.
+
+Both show the same thing: the split follows **what each client needs** (the print screen, the break scheduler), not how many methods the interface has.
 
 ### How it works internally
 
@@ -89,7 +98,7 @@ You get "god interfaces": `IUserService` with 40 members, or `IRepository<T>` wi
 - Members **change at different rates** or for different stakeholders (a regulator changes settlement reporting yearly; checkout changes weekly).
 - You want **cheap test doubles**. A one-method fake is three lines.
 
-### When it is unnecessary
+### When it is unnecessary (overkill)
 
 - The interface is small and **cohesive**: every client uses every member (`IClock` with `Now`, `IUnitOfWork` with `SaveChangesAsync`).
 - There is **one client and one implementation** inside one module, and both change together.
@@ -192,7 +201,7 @@ This shows the part beginners often miss: splitting interfaces doesn't mean spli
 
 ## Step-by-step example
 
-We'll refactor a payment layer for an online store that sells construction safety gear (helmets, harnesses, reflective jackets) to contractors across India.
+We'll refactor the payment layer of an online store that sells kitchen and home appliances (mixer grinders, air fryers, water purifiers) to customers across India. It accepts cards, UPI and cash on delivery.
 
 ### Step 1 — list the clients and what they call
 
@@ -656,124 +665,124 @@ public static class Program
 
 ## Exercises
 
-:::exercise id=m04-isp-ex1 difficulty=beginner kind=code title="Give the drawing viewer a read-only interface"
-A construction-project portal stores drawings (PDF/DWG files) for each site. `DrawingViewer` only reads drawings, but it depends on the full `IProjectDocumentStore`, which also uploads and deletes. A new read-only cache for site tablets implements only `IDocumentReader`, and it can't be passed to the viewer.
+:::exercise id=m04-isp-ex1 difficulty=beginner kind=code title="Give the notes viewer a read-only interface"
+An online-learning platform stores course materials (PDF notes and slides) for each course. `NotesViewer` in the student app only reads materials, but it depends on the full `ICourseDocumentStore`, which also uploads and deletes. A new read-only offline cache in the mobile app implements only `IDocumentReader`, and it can't be passed to the viewer.
 
-Change `DrawingViewer` so it depends only on `IDocumentReader`, and implement `TitleBlock`.
+Change `NotesViewer` so it depends only on `IDocumentReader`, and implement `Heading`.
 ::requirements
-- `DrawingViewer` has one constructor taking `IDocumentReader`.
-- `TitleBlock(string documentId)` returns `"<Title> (rev <Revision>)"`, for example `"GA Drawing Pier P12 (rev C)"`.
+- `NotesViewer` has one constructor taking `IDocumentReader`.
+- `Heading(string documentId)` returns `"<Title> (rev <Revision>)"`, for example `"Week 3: Binary search trees (rev 2)"`.
 - If the document doesn't exist, throw `KeyNotFoundException`.
-- Don't change `IDocumentReader` or `IProjectDocumentStore`.
+- Don't change `IDocumentReader` or `ICourseDocumentStore`.
 ::acceptance
-- A fake that implements only `IDocumentReader` can be passed to `DrawingViewer`.
-- `TitleBlock` formats title and revision correctly.
+- A fake that implements only `IDocumentReader` can be passed to `NotesViewer`.
+- `Heading` formats title and revision correctly.
 - A missing document throws `KeyNotFoundException`.
 ::hint
-Look at which members of `IProjectDocumentStore` the viewer actually calls.
+Look at which members of `ICourseDocumentStore` the viewer actually calls.
 ::hint
-The viewer only calls `Find`. `Find` already lives on `IDocumentReader`, which `IProjectDocumentStore` inherits.
+The viewer only calls `Find`. `Find` already lives on `IDocumentReader`, which `ICourseDocumentStore` inherits.
 ::hint
-Change the constructor parameter type. Because `IProjectDocumentStore` inherits `IDocumentReader`, existing callers that pass a full store still compile.
+Change the constructor parameter type. Because `ICourseDocumentStore` inherits `IDocumentReader`, existing callers that pass a full store still compile.
 ::hint
 ```csharp
-public sealed class DrawingViewer(IDocumentReader reader)
+public sealed class NotesViewer(IDocumentReader reader)
 {
-    public string TitleBlock(string id) => reader.Find(id) is { } d ? $"{d.Title} (rev {d.Revision})" : throw new KeyNotFoundException(id);
+    public string Heading(string id) => reader.Find(id) is { } d ? $"{d.Title} (rev {d.Revision})" : throw new KeyNotFoundException(id);
 }
 ```
 ::starter
-```csharp file=DrawingViewer.cs
+```csharp file=NotesViewer.cs
 using System;
 using System.Collections.Generic;
 
-public sealed record ProjectDocument(string Id, string Title, string Revision, byte[] Content);
+public sealed record CourseDocument(string Id, string Title, string Revision, byte[] Content);
 
 public interface IDocumentReader
 {
-    ProjectDocument? Find(string documentId);
-    IReadOnlyList<ProjectDocument> ListBySite(string siteCode);
+    CourseDocument? Find(string documentId);
+    IReadOnlyList<CourseDocument> ListByCourse(string courseCode);
 }
 
-public interface IProjectDocumentStore : IDocumentReader
+public interface ICourseDocumentStore : IDocumentReader
 {
-    void Upload(string siteCode, ProjectDocument document);
+    void Upload(string courseCode, CourseDocument document);
     void Delete(string documentId);
 }
 
-public sealed class DrawingViewer
+public sealed class NotesViewer
 {
-    private readonly IProjectDocumentStore _store;
-    public DrawingViewer(IProjectDocumentStore store) => _store = store;
+    private readonly ICourseDocumentStore _store;
+    public NotesViewer(ICourseDocumentStore store) => _store = store;
 
-    public string TitleBlock(string documentId) => throw new NotImplementedException();
+    public string Heading(string documentId) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=DrawingViewerTests.cs
+```csharp file=NotesViewerTests.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using Xunit;
 
-public class DrawingViewerTests
+public class NotesViewerTests
 {
-    private sealed class TabletCache : IDocumentReader
+    private sealed class OfflineCache : IDocumentReader
     {
-        private readonly Dictionary<string, ProjectDocument> _docs = new()
+        private readonly Dictionary<string, CourseDocument> _docs = new()
         {
-            ["D-12"] = new ProjectDocument("D-12", "GA Drawing Pier P12", "C", Array.Empty<byte>()),
+            ["DSA-W3"] = new CourseDocument("DSA-W3", "Week 3: Binary search trees", "2", Array.Empty<byte>()),
         };
-        public ProjectDocument? Find(string documentId) => _docs.GetValueOrDefault(documentId);
-        public IReadOnlyList<ProjectDocument> ListBySite(string siteCode) => _docs.Values.ToList();
+        public CourseDocument? Find(string documentId) => _docs.GetValueOrDefault(documentId);
+        public IReadOnlyList<CourseDocument> ListByCourse(string courseCode) => _docs.Values.ToList();
     }
 
-    private static DrawingViewer CreateViewer(IDocumentReader reader) =>
-        (DrawingViewer)Activator.CreateInstance(typeof(DrawingViewer), reader)!;
+    private static NotesViewer CreateViewer(IDocumentReader reader) =>
+        (NotesViewer)Activator.CreateInstance(typeof(NotesViewer), reader)!;
 
     [Fact]
     public void Constructor_takes_only_the_reader_role()
     {
-        var parameter = typeof(DrawingViewer).GetConstructors().Single().GetParameters().Single();
+        var parameter = typeof(NotesViewer).GetConstructors().Single().GetParameters().Single();
         Assert.Equal(typeof(IDocumentReader), parameter.ParameterType);
     }
 
     [Fact]
-    public void Formats_title_block() =>
-        Assert.Equal("GA Drawing Pier P12 (rev C)", CreateViewer(new TabletCache()).TitleBlock("D-12"));
+    public void Formats_heading() =>
+        Assert.Equal("Week 3: Binary search trees (rev 2)", CreateViewer(new OfflineCache()).Heading("DSA-W3"));
 
     [Fact]
     public void Missing_document_throws() =>
-        Assert.Throws<KeyNotFoundException>(() => CreateViewer(new TabletCache()).TitleBlock("NOPE"));
+        Assert.Throws<KeyNotFoundException>(() => CreateViewer(new OfflineCache()).Heading("NOPE"));
 }
 ```
 ::solution
 The viewer only needs `Find`, so it should depend on the role that offers `Find` and nothing more.
 
-```csharp file=DrawingViewer.cs
+```csharp file=NotesViewer.cs
 using System;
 using System.Collections.Generic;
 
-public sealed record ProjectDocument(string Id, string Title, string Revision, byte[] Content);
+public sealed record CourseDocument(string Id, string Title, string Revision, byte[] Content);
 
 public interface IDocumentReader
 {
-    ProjectDocument? Find(string documentId);
-    IReadOnlyList<ProjectDocument> ListBySite(string siteCode);
+    CourseDocument? Find(string documentId);
+    IReadOnlyList<CourseDocument> ListByCourse(string courseCode);
 }
 
-public interface IProjectDocumentStore : IDocumentReader
+public interface ICourseDocumentStore : IDocumentReader
 {
-    void Upload(string siteCode, ProjectDocument document);
+    void Upload(string courseCode, CourseDocument document);
     void Delete(string documentId);
 }
 
-public sealed class DrawingViewer
+public sealed class NotesViewer
 {
     private readonly IDocumentReader _reader;
-    public DrawingViewer(IDocumentReader reader) => _reader = reader;
+    public NotesViewer(IDocumentReader reader) => _reader = reader;
 
-    public string TitleBlock(string documentId)
+    public string Heading(string documentId)
     {
         var doc = _reader.Find(documentId) ?? throw new KeyNotFoundException($"Document '{documentId}' not found.");
         return $"{doc.Title} (rev {doc.Revision})";
@@ -781,10 +790,10 @@ public sealed class DrawingViewer
 }
 ```
 
-Existing code that passes a full `IProjectDocumentStore` still compiles, because the store *is* a reader. The tablet cache now fits too. That's ISP's promise: narrowing a dependency widens the set of things that can satisfy it.
+Existing code that passes a full `ICourseDocumentStore` still compiles, because the store *is* a reader. The offline cache now fits too. That's ISP's promise: narrowing a dependency widens the set of things that can satisfy it.
 ::mistakes
 - Adding a second constructor that takes `IDocumentReader` and keeping the old one. Now there are two ways to build the viewer, and the fat dependency is still there.
-- Making the tablet cache implement `IProjectDocumentStore` with throwing `Upload`/`Delete`. That's the exact problem ISP removes.
+- Making the offline cache implement `ICourseDocumentStore` with throwing `Upload`/`Delete`. That's the exact problem ISP removes.
 - Returning `null` or an empty string for a missing document, which hides data errors from the user.
 :::
 
@@ -849,7 +858,7 @@ Proposed roles:
 :::
 
 :::exercise id=m04-isp-ex3 difficulty=intermediate kind=code title="One instance, many roles in DI"
-`FuelCardProvider` (fuel cards for a construction fleet) implements `IFuelPurchaseAuthoriser` and `IFuelStatementSource`. It keeps an in-memory count of authorisations, so both roles **must** see the same instance. Implement `FleetRegistration.AddFuelCards` so that:
+`FuelCardProvider` (fuel cards for a parcel-delivery company's vans and trucks) implements `IFuelPurchaseAuthoriser` and `IFuelStatementSource`. It keeps an in-memory count of authorisations, so both roles **must** see the same instance. Implement `FleetRegistration.AddFuelCards` so that:
 
 1. `FuelCardProvider` is registered as a singleton.
 2. Both interfaces resolve to that same instance.
@@ -930,7 +939,7 @@ public class FleetRegistrationTests
     public void Purchase_through_one_role_is_visible_through_the_other()
     {
         using var sp = Build();
-        Assert.True(sp.GetRequiredService<IFuelPurchaseAuthoriser>().Authorise(new FuelPurchase("HR26-AB-1234", 120m, 11_400m)));
+        Assert.True(sp.GetRequiredService<IFuelPurchaseAuthoriser>().Authorise(new FuelPurchase("KA01-AB-1234", 60m, 5_700m)));
         Assert.Single(sp.GetRequiredService<IFuelStatementSource>().Statement());
     }
 
@@ -1007,13 +1016,13 @@ The container caches singletons **per registration**. Two `AddSingleton<IX, Fuel
 :::
 
 :::exercise id=m04-isp-ex4 difficulty=intermediate kind=code title="Replace a capability flag with a role interface"
-A site-equipment telemetry system talks to devices from several vendors. Some devices can be remotely immobilised (for theft), others can't. The old code used `bool CanImmobilise` plus a method that threw. You now have role interfaces. Implement `SecurityDesk.ImmobiliseAll` so that it:
+A self-drive car and bike rental company tracks its fleet with devices from several vendors. Some devices can remotely immobilise a vehicle that is reported stolen, others (cheap GPS tags on rental bicycles) can't. The old code used `bool CanImmobilise` plus a method that threw. You now have role interfaces. Implement `SecurityDesk.ImmobiliseAll` so that it:
 
 - immobilises every device that implements `IRemoteImmobiliser`,
 - reports every other device as `"<id>: manual"` — no exceptions, no flags,
 - returns results in input order.
 ::acceptance
-- An excavator tracker (`IRemoteImmobiliser`) returns `"EX-07: immobilised"`.
+- A connected-car tracker (`IRemoteImmobiliser`) returns `"CAR-07: immobilised"`.
 - A basic GPS tag returns `"TAG-3: manual"`.
 - The method never throws for unsupported devices.
 - `IRemoteImmobiliser` has no `CanImmobilise` flag.
@@ -1044,7 +1053,7 @@ public interface IRemoteImmobiliser : ITelemetryDevice
     bool Immobilise(string reason);
 }
 
-public sealed class ExcavatorTracker(string id) : IRemoteImmobiliser
+public sealed class ConnectedCarTracker(string id) : IRemoteImmobiliser
 {
     public bool Immobilised { get; private set; }
     public string DeviceId => id;
@@ -1073,14 +1082,14 @@ public class SecurityDeskTests
     [Fact]
     public void Immobilises_capable_devices_and_reports_others_as_manual()
     {
-        var ex = new ExcavatorTracker("EX-07");
+        var car = new ConnectedCarTracker("CAR-07");
         var tag = new GpsTag("TAG-3");
-        ITelemetryDevice[] devices = { ex, tag };
+        ITelemetryDevice[] devices = { car, tag };
 
         var results = SecurityDesk.ImmobiliseAll(devices, "reported stolen");
 
-        Assert.Equal(new[] { "EX-07: immobilised", "TAG-3: manual" }, results);
-        Assert.True(ex.Immobilised);
+        Assert.Equal(new[] { "CAR-07: immobilised", "TAG-3: manual" }, results);
+        Assert.True(car.Immobilised);
     }
 
     [Fact]
@@ -1108,7 +1117,7 @@ public interface IRemoteImmobiliser : ITelemetryDevice
     bool Immobilise(string reason);
 }
 
-public sealed class ExcavatorTracker(string id) : IRemoteImmobiliser
+public sealed class ConnectedCarTracker(string id) : IRemoteImmobiliser
 {
     public bool Immobilised { get; private set; }
     public string DeviceId => id;
@@ -1149,13 +1158,13 @@ If the desk *only* handles immobilisers, inject `IEnumerable<IRemoteImmobiliser>
 - Adding `CanImmobilise` "just in case" — two facts to keep in sync.
 :::
 
-:::exercise id=m04-isp-ex5 difficulty=advanced kind=design title="Segregate a 28-method project repository"
-An infrastructure project-management platform has `IProjectRepository` with 28 methods. Five clients use it: the **monthly progress report (MPR) generator**, the **site mobile app API**, **contractor billing**, the **admin console** and a **nightly data-warehouse export**. Profiling shows the MPR generator's queries are slow and the team wants to move its reads to a read replica.
+:::exercise id=m04-isp-ex5 difficulty=advanced kind=design title="Segregate a 28-method order repository"
+An online marketplace has `IOrderRepository` with 28 methods. Five clients use it: the **monthly seller sales report generator**, the **customer mobile app API**, **seller payouts**, the **admin console** and a **nightly analytics export**. Profiling shows the sales-report queries are slow and the team wants to move its reads to a read replica.
 
 Design the replacement: role interfaces, which class implements which, how DI wires them, and how you migrate without a big-bang change. Say explicitly where you would *not* split.
 ::acceptance
 - Interfaces grouped by client role, with read and write sides separated where it helps.
-- A plan that lets MPR reads go to a replica without touching billing.
+- A plan that lets sales-report reads go to a replica without touching payouts.
 - A migration path (expand → migrate → contract) with small steps.
 - At least two places where you deliberately keep members together, with reasons.
 ::hint
@@ -1163,46 +1172,46 @@ Start with the usage matrix. The replica requirement is a strong hint about read
 ::hint
 Reads for reporting rarely need the same shape as writes. Consider query interfaces that return read models (DTOs) instead of entities.
 ::hint
-Different implementations can now sit behind different roles: `ReplicaProjectQueries` for reporting, `ProjectStore` (primary) for writes.
+Different implementations can now sit behind different roles: `ReplicaSalesQueries` for reporting, `OrderStore` (primary) for writes.
 ::hint
-Bridge step: `IProjectRepository : IProjectQueries, IProjectCommands, ...` so all old callers compile while you move them one by one.
+Bridge step: `IOrderRepository : IOrderQueries, IOrderCommands, ...` so all old callers compile while you move them one by one.
 ::hint
-Keep together: methods that form one transaction, such as `SubmitBill` + `AttachMeasurementSheet`, and methods every client uses, such as `GetProjectHeader`.
+Keep together: methods that form one transaction, such as `CreatePayout` + `AttachCommissionInvoice`, and methods every client uses, such as `GetOrderHeader`.
 ::solution
 **Roles (by client):**
 
-- `IProgressReportQueries` (MPR): `GetPhysicalProgress(projectId, month)`, `GetFinancialProgress(projectId, month)`, `GetMilestones(projectId)`. Returns read models. Implemented by `ReplicaProgressQueries`, which uses a connection string pointing at the replica.
-- `ISiteActivityCommands` (mobile app): `RecordDailyProgress`, `UploadSitePhoto`, `RaiseHindrance`. Implemented by `ProjectStore` on the primary.
-- `IBillingStore` (billing): `GetBillableItems`, `SubmitBill`, `AttachMeasurementSheet`. Kept together because they happen in one transaction. Primary.
-- `IProjectAdministration` (admin): `CreateProject`, `AssignEngineer`, `Archive`. Primary.
-- `IWarehouseExportSource` (export): `StreamChangesSince(DateTimeOffset)`. Replica, ideally later replaced by change data capture.
-- `IProjectHeaderLookup`: `GetHeader(projectId)` — shared by everyone, kept as one tiny interface rather than copied five times.
+- `ISalesReportQueries` (sales report): `GetDailySales(sellerId, month)`, `GetReturnRates(sellerId, month)`, `GetTopProducts(sellerId, month)`. Returns read models. Implemented by `ReplicaSalesQueries`, which uses a connection string pointing at the replica.
+- `ICustomerOrderCommands` (mobile app): `PlaceOrder`, `CancelOrder`, `RequestReturn`. Implemented by `OrderStore` on the primary.
+- `ISellerPayoutStore` (payouts): `GetPayableOrders`, `CreatePayout`, `AttachCommissionInvoice`. Kept together because they happen in one transaction. Primary.
+- `IOrderAdministration` (admin): `ForceCancel`, `ReassignFulfilmentCentre`, `Archive`. Primary.
+- `IAnalyticsExportSource` (export): `StreamChangesSince(DateTimeOffset)`. Replica, ideally later replaced by change data capture (PostgreSQL logical replication).
+- `IOrderHeaderLookup`: `GetHeader(orderId)` — shared by everyone, kept as one tiny interface rather than copied five times.
 
-**Wiring:** `ProjectStore` implements the four primary roles and is registered once (scoped, because it holds a database connection) with forwarding registrations. `ReplicaProgressQueries` is a separate class registered against `IProgressReportQueries` and `IWarehouseExportSource`.
+**Wiring:** `OrderStore` implements the four primary roles and is registered once (scoped, because it holds a database connection) with forwarding registrations. `ReplicaSalesQueries` is a separate class registered against `ISalesReportQueries` and `IAnalyticsExportSource`.
 
 ```mermaid
 classDiagram
-  class IProgressReportQueries { <<interface>> }
-  class ISiteActivityCommands { <<interface>> }
-  class IBillingStore { <<interface>> }
-  class IProjectAdministration { <<interface>> }
-  class IWarehouseExportSource { <<interface>> }
-  class ProjectStore
-  class ReplicaProgressQueries
-  ISiteActivityCommands <|.. ProjectStore
-  IBillingStore <|.. ProjectStore
-  IProjectAdministration <|.. ProjectStore
-  IProgressReportQueries <|.. ReplicaProgressQueries
-  IWarehouseExportSource <|.. ReplicaProgressQueries
+  class ISalesReportQueries { <<interface>> }
+  class ICustomerOrderCommands { <<interface>> }
+  class ISellerPayoutStore { <<interface>> }
+  class IOrderAdministration { <<interface>> }
+  class IAnalyticsExportSource { <<interface>> }
+  class OrderStore
+  class ReplicaSalesQueries
+  ICustomerOrderCommands <|.. OrderStore
+  ISellerPayoutStore <|.. OrderStore
+  IOrderAdministration <|.. OrderStore
+  ISalesReportQueries <|.. ReplicaSalesQueries
+  IAnalyticsExportSource <|.. ReplicaSalesQueries
 ```
 
 The diagram shows two implementations behind five roles: the primary store behind the write-heavy roles, and the replica-backed class behind the read-only reporting roles.
 
-**Migration:** (1) Add the roles and make `IProjectRepository` inherit them all. (2) Move MPR to `IProgressReportQueries` in one PR. (3) Swap its registration to `ReplicaProgressQueries` behind a feature flag and compare one month's reports. (4) Move the other clients one at a time. (5) Delete `IProjectRepository`.
+**Migration:** (1) Add the roles and make `IOrderRepository` inherit them all. (2) Move the sales report to `ISalesReportQueries` in one PR. (3) Swap its registration to `ReplicaSalesQueries` behind a feature flag and compare one month's reports from both. (4) Move the other clients one at a time. (5) Delete `IOrderRepository`.
 
-**Not split:** the billing trio (one transaction, one client) and the header lookup (used by all, stable). The mobile app's reads stay on the primary because replica lag would hide a user's just-written progress.
+**Not split:** the payout trio (one transaction, one client) and the header lookup (used by all, stable). The mobile app's reads stay on the primary because replica lag would hide an order the customer placed a second ago from their "My orders" screen.
 ::mistakes
-- Splitting by entity (`IProjectReader`, `IBillReader`) instead of by client role.
+- Splitting by entity (`IOrderReader`, `IPayoutReader`) instead of by client role.
 - Moving everything to the replica, so a user's write isn't visible on their next screen.
 - A big-bang rename across all five clients in one release.
 :::
@@ -1233,7 +1242,7 @@ public class RefundDeskTests
         public Task<ChargeResult> ChargeAsync(ChargeRequest r, CancellationToken ct) => throw new InvalidOperationException("not used");
     }
 
-    private static readonly RefundRequest Request = new("ch_81", Money.Inr(2_499m), "damaged helmet");
+    private static readonly RefundRequest Request = new("ch_81", Money.Inr(2_499m), "mixer grinder arrived damaged");
 
     [Fact]
     public async Task Refunds_through_provider_that_supports_it()
@@ -1328,6 +1337,7 @@ Keep one interface when all clients use most members, the members form a protoco
 - One class can implement many roles. In DI, register it once and **forward** each interface to it.
 - Migrate with **expand → migrate → contract**: the old fat interface inherits the new roles until nobody uses it.
 - Over-segregation ("interface soup") is a real cost. Stop when each interface reads like one sentence about one client's need.
+- See ISP working alongside the other four principles on one real feature in [SOLID in practice](#/lesson/m04-solid-in-practice).
 
 **Terminology**: client, fat interface, header interface, role interface, capability flag, forwarding registration, expand–migrate–contract.
 
@@ -1344,6 +1354,8 @@ Q: Name three symptoms of an ISP violation.
 A: NotSupportedException stubs; silent no-op implementations; fakes with many unused members; changes forcing edits in unrelated clients.
 Q: How do you make three interfaces resolve to one instance in .NET DI?
 A: Register the concrete type once, then AddX<IRole>(sp => sp.GetRequiredService<Concrete>()) for each role.
+Q: What is the classic multifunction-printer example of ISP?
+A: IMachine { Print, Scan, Fax } forces a basic printer to throw on Scan and Fax; split into IPrinter, IScanner and IFax so each device implements only what it can do.
 Q: What is "interface soup"?
 A: Over-segregation into many one-method interfaces, which scatters one concept and bloats constructors.
 :::

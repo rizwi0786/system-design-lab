@@ -287,7 +287,7 @@ The client completes a **TLS handshake with the gateway**, not with the orders s
 
 ## Step-by-step example
 
-**Scenario.** ShramSetu, a fictional platform connecting construction workers with contractors across Indian cities, has grown from one ASP.NET Core app into four services: identity, jobs, payments and notifications. Mobile apps currently call four different host names. Peak traffic is 6,000 requests per second during the morning hiring window (7–9 a.m.).
+**Scenario.** QuickHire, a fictional job portal connecting shop, warehouse and delivery workers with employers across Indian cities, has grown from one ASP.NET Core app into four services: identity, jobs, payments and notifications. Mobile apps currently call four different host names. Peak traffic is 6,000 requests per second during the morning hiring window (7–9 a.m.).
 
 ### Step 1 — Count the work at the edge
 
@@ -308,7 +308,7 @@ The interesting number is 150,000 client connections versus 480 concurrent reque
 
 ### Step 3 — Place TLS
 
-Terminate at the gateway (public certificate for `api.shramsetu.in`), re-encrypt to services using internal certificates. Payments traffic must stay encrypted on every hop for the payment partner's compliance review.
+Terminate at the gateway (public certificate for `api.quickhire.example`), re-encrypt to services using internal certificates. Payments traffic must stay encrypted on every hop for the payment partner's compliance review.
 
 ### Step 4 — Decide gateway responsibilities
 
@@ -513,15 +513,20 @@ public static class TrustedProxySetup
 {
     /// <summary>For services that sit behind the gateway: honour X-Forwarded-For/Proto/Host,
     /// but only when the immediate caller is one of our proxies.</summary>
-    public static IServiceCollection AddTrustedProxies(this IServiceCollection services, IEnumerable<IPAddress> proxies)
+    public static IServiceCollection AddTrustedProxies(this IServiceCollection services, IEnumerable<IPAddress> proxies,
+        IEnumerable<System.Net.IPNetwork>? networks = null)
     {
         services.Configure<ForwardedHeadersOptions>(o =>
         {
             o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost;
             o.ForwardLimit = 2;   // CDN + gateway; ignore anything further left in the chain
             o.KnownProxies.Clear();
+            o.KnownIPNetworks.Clear();   // .NET 10 name; KnownNetworks is obsolete
             foreach (var p in proxies) o.KnownProxies.Add(p);
-            o.AllowedHosts = ["api.shramsetu.in"];   // reject spoofed X-Forwarded-Host values
+            // The middleware only walks past an X-Forwarded-For entry when the hop that added it is trusted.
+            // With a CDN in front, its published egress ranges must be listed too, or the CDN's IP becomes "the client".
+            foreach (var n in networks ?? []) o.KnownIPNetworks.Add(n);
+            o.AllowedHosts = ["api.quickhire.example"];   // reject spoofed X-Forwarded-Host values
         });
         return services;
     }
@@ -570,7 +575,9 @@ builder.Services.AddRateLimiter(o =>
 });
 
 // The same project shows the backend-side setting a service behind this gateway would use.
-builder.Services.AddTrustedProxies([IPAddress.Parse("10.0.1.10"), IPAddress.Parse("10.0.2.10")]);
+builder.Services.AddTrustedProxies(
+    [IPAddress.Parse("10.0.1.10"), IPAddress.Parse("10.0.2.10")],          // the gateway instances
+    [System.Net.IPNetwork.Parse("198.51.100.0/24")]);                      // example CDN egress range
 
 var app = builder.Build();
 
@@ -623,7 +630,7 @@ Problems:
 builder.Services.Configure<ForwardedHeadersOptions>(o =>
 {
     o.ForwardedHeaders = ForwardedHeaders.All;
-    o.KnownNetworks.Clear();   // "it didn't work, so I cleared these"
+    o.KnownIPNetworks.Clear(); // "it didn't work, so I cleared these"
     o.KnownProxies.Clear();    // now ANY caller can set X-Forwarded-For
 });
 ```
@@ -747,7 +754,7 @@ For each scenario, choose an L4 load balancer, an L7 load balancer (or gateway),
 1. Spreading connections from 40 application servers across three PgBouncer instances.
 2. Sending `/api/*` to an ASP.NET Core cluster and `/` to a static React site origin.
 3. A gRPC service where each client opens one long-lived HTTP/2 connection and sends thousands of calls on it.
-4. An MQTT broker cluster receiving telemetry from 200,000 road-sensor devices.
+4. An MQTT broker cluster receiving readings from 200,000 smart electricity meters.
 5. A bank partner that requires mutual TLS and wants your service (not a proxy) to verify its client certificate.
 6. A public API that needs per-customer rate limits by API key.
 ::acceptance
@@ -1028,14 +1035,14 @@ Why remove `Transfer-Encoding` and `Upgrade`? They describe how bytes move on *t
 Also strip incoming `X-Internal-*` headers that only your gateway is allowed to set (for example, an authenticated user id), so clients cannot impersonate the gateway.
 :::
 
-:::exercise id=m10-gateways-proxies-lb-ex5 difficulty=advanced kind=hld title="Design the edge for a public infrastructure-data API"
-A national highway data platform exposes a public API for contractors, consultants and app developers: project progress, chainage-wise road condition, and tender documents. Requirements:
+:::exercise id=m10-gateways-proxies-lb-ex5 difficulty=advanced kind=hld title="Design the edge for a public college-admissions API"
+A national college-admissions platform exposes a public API for colleges, coaching and comparison apps, and independent developers: the live seat matrix, last year's cut-off ranks, and college information brochures. Requirements:
 
-- 25,000 RPS peak (mostly GETs), 1,500 RPS of authenticated writes from field apps.
+- 25,000 RPS peak (mostly GETs), 1,500 RPS of authenticated writes from college admin apps (seat updates, admission confirmations).
 - 3,000 third-party API keys with per-key quotas; a developer portal.
-- Partner banks submit payment confirmations over mutual TLS.
-- Tender PDFs (average 8 MB) are downloaded heavily on the last day of a bid.
-- Five backend services owned by three teams; one gRPC service for map tiles.
+- Partner banks submit application-fee payment confirmations over mutual TLS.
+- Brochure PDFs (average 8 MB) are downloaded heavily on the last day of registration.
+- Five backend services owned by three teams; one gRPC service for campus and exam-centre map tiles.
 - 99.95 % availability target across two zones.
 
 The starter has a single nginx box in front of everything. Design the edge: layers, where TLS terminates, which component does what, and how teams change routes safely. Show your arithmetic.
@@ -1049,7 +1056,7 @@ The starter has a single nginx box in front of everything. Design the edge: laye
 ::hint
 What fraction of the 25,000 GETs and the PDF bytes can a CDN absorb?
 ::hint
-Bandwidth for tender day: downloads per second × 8 MB. Should that ever reach your gateway?
+Bandwidth on the last registration day: downloads per second × 8 MB. Should that ever reach your gateway?
 ::hint
 Who verifies the bank's client certificate, and what does the backend need to know about it?
 ::hint
@@ -1060,21 +1067,21 @@ API keys and quotas for 3,000 developers is an API management feature. Do you bu
   "nodes": [
     { "id": "clients", "type": "client", "label": "Apps, partners, developers", "props": { "rps": 26500 } },
     { "id": "nginx", "type": "load-balancer", "label": "Single nginx VM" },
-    { "id": "progress", "type": "app-server", "label": "Progress API" },
-    { "id": "tenders", "type": "app-server", "label": "Tender API" },
+    { "id": "seats", "type": "app-server", "label": "Seat-matrix API" },
+    { "id": "brochures", "type": "app-server", "label": "Brochure API" },
     { "id": "payments", "type": "app-server", "label": "Payments API" },
     { "id": "tiles", "type": "app-server", "label": "Map tiles (gRPC)" },
     { "id": "db", "type": "database", "label": "PostgreSQL" },
-    { "id": "files", "type": "object-storage", "label": "Tender PDFs" }
+    { "id": "files", "type": "object-storage", "label": "Brochure PDFs" }
   ],
   "edges": [
     { "from": "clients", "to": "nginx", "kind": "sync" },
-    { "from": "nginx", "to": "progress", "kind": "sync" },
-    { "from": "nginx", "to": "tenders", "kind": "sync" },
+    { "from": "nginx", "to": "seats", "kind": "sync" },
+    { "from": "nginx", "to": "brochures", "kind": "sync" },
     { "from": "nginx", "to": "payments", "kind": "sync" },
     { "from": "nginx", "to": "tiles", "kind": "sync" },
-    { "from": "progress", "to": "db", "kind": "sync" },
-    { "from": "tenders", "to": "files", "kind": "sync", "label": "stream PDF through API" }
+    { "from": "seats", "to": "db", "kind": "sync" },
+    { "from": "brochures", "to": "files", "kind": "sync", "label": "stream PDF through API" }
   ]
 }
 ```
@@ -1089,13 +1096,13 @@ API keys and quotas for 3,000 developers is an API management feature. Do you bu
     { "id": "apim", "type": "api-gateway", "label": "API management (keys, quotas, portal)", "props": { "instances": 2, "multiAz": true } },
     { "id": "nlb", "type": "load-balancer", "label": "L4 load balancer (zone-redundant, TLS passthrough for banks)", "props": { "multiAz": true } },
     { "id": "yarp", "type": "api-gateway", "label": "YARP gateway (routing, JWT, per-route limits)", "props": { "instances": 4, "multiAz": true } },
-    { "id": "progress", "type": "app-server", "label": "Progress API", "props": { "instances": 6, "multiAz": true } },
-    { "id": "tenders", "type": "app-server", "label": "Tender API (issues signed URLs)", "props": { "instances": 3, "multiAz": true } },
+    { "id": "seats", "type": "app-server", "label": "Seat-matrix API", "props": { "instances": 6, "multiAz": true } },
+    { "id": "brochures", "type": "app-server", "label": "Brochure API (issues signed URLs)", "props": { "instances": 3, "multiAz": true } },
     { "id": "payments", "type": "app-server", "label": "Payments API (verifies client cert)", "props": { "instances": 3, "multiAz": true } },
     { "id": "tiles", "type": "app-server", "label": "Map tiles (gRPC, per-call balancing)", "props": { "instances": 4, "multiAz": true } },
-    { "id": "cache", "type": "cache", "label": "Redis (progress read cache)", "props": { "ttlSeconds": 60 } },
+    { "id": "cache", "type": "cache", "label": "Redis (seat-matrix read cache)", "props": { "ttlSeconds": 60 } },
     { "id": "db", "type": "database", "label": "PostgreSQL HA", "props": { "replicas": 2, "multiAz": true } },
-    { "id": "files", "type": "object-storage", "label": "Tender PDFs (zone-redundant)", "props": { "multiAz": true } },
+    { "id": "files", "type": "object-storage", "label": "Brochure PDFs (zone-redundant)", "props": { "multiAz": true } },
     { "id": "mon", "type": "monitoring", "label": "Per-route latency, 5xx, 502 vs 504" }
   ],
   "edges": [
@@ -1107,12 +1114,12 @@ API keys and quotas for 3,000 developers is an API management feature. Do you bu
     { "from": "banks", "to": "nlb", "kind": "sync", "label": "mTLS, passthrough" },
     { "from": "nlb", "to": "yarp", "kind": "sync" },
     { "from": "nlb", "to": "payments", "kind": "sync", "label": "bank traffic, TLS end-to-end" },
-    { "from": "yarp", "to": "progress", "kind": "sync" },
-    { "from": "yarp", "to": "tenders", "kind": "sync" },
+    { "from": "yarp", "to": "seats", "kind": "sync" },
+    { "from": "yarp", "to": "brochures", "kind": "sync" },
     { "from": "yarp", "to": "tiles", "kind": "sync", "label": "HTTP/2, per-request" },
-    { "from": "progress", "to": "cache", "kind": "sync" },
-    { "from": "progress", "to": "db", "kind": "sync" },
-    { "from": "tenders", "to": "db", "kind": "sync" },
+    { "from": "seats", "to": "cache", "kind": "sync" },
+    { "from": "seats", "to": "db", "kind": "sync" },
+    { "from": "brochures", "to": "db", "kind": "sync" },
     { "from": "payments", "to": "db", "kind": "sync" },
     { "from": "yarp", "to": "mon", "kind": "async" }
   ]
@@ -1126,16 +1133,16 @@ Public GETs: 25,000 RPS; assume 70 % are cacheable at the CDN for 30–60 s → 
 Writes: 1,500 RPS, never cached → about 9,000 RPS through the gateway tier at peak
 YARP: assume ~3,000 RPS per instance at comfortable CPU → 3 needed; 4 across 2 zones, so one zone (2 instances)
       still carries ~6,000 RPS; add autoscaling to cover full peak after a zone loss
-Tender day: 400 downloads/s × 8 MB = 3.2 GB/s ≈ 25.6 Gbit/s → must be served by the CDN from object storage,
+Last registration day: 400 downloads/s × 8 MB = 3.2 GB/s ≈ 25.6 Gbit/s → must be served by the CDN from object storage,
       never streamed through the API (the old design would saturate the nginx VM's network many times over)
 ```
 
 **Responsibilities.**
 
-- **CDN + WAF**: TLS for public clients near the user, caching of public GETs and PDFs, bot and WAF rules. The tender API returns a short-lived **signed URL**; the CDN fetches the PDF from object storage once and serves it to thousands.
+- **CDN + WAF**: TLS for public clients near the user, caching of public GETs and PDFs, bot and WAF rules. The brochure API returns a short-lived **signed URL**; the CDN fetches the PDF from object storage once and serves it to thousands.
 - **API management**: API keys, per-key quotas for 3,000 developers, the developer portal and usage analytics. Buying this beats rebuilding it in YARP.
 - **L4 load balancer**: zone-redundant entry to the private network; **TLS passthrough** for banks, so the payments service verifies the client certificate itself and the certificate never has to be trusted from a header.
-- **YARP gateway**: internal routing by path, JWT validation for field apps, per-route concurrency limits, re-encryption to services, correlation ids. gRPC tiles are routed over HTTP/2 with **per-request** balancing, fixing the L4 per-connection pinning problem.
+- **YARP gateway**: internal routing by path, JWT validation for college admin apps, per-route concurrency limits, re-encryption to services, correlation ids. gRPC tiles are routed over HTTP/2 with **per-request** balancing, fixing the L4 per-connection pinning problem.
 - **No business rules** at any edge layer. Route definitions live in each team's repository as YARP config fragments, validated in CI and loaded by a config provider; a bad route affects only that team's prefix.
 
 **Availability.** Every edge layer runs in two zones with at least two instances. Serial chain for a cached GET: CDN only. For an uncached request: CDN 0.9999 × APIM 0.9995 × L4 0.9999 × YARP tier 0.99995 × service tier 0.9999 × DB 0.9995 ≈ 0.9987, which misses 99.95 %. Closing the gap: serve reads from Redis and CDN so the DB is off most read paths, use APIM and DB tiers with higher SLAs (or multi-region for APIM), and lean on fast failover (MTTR). Stating that the first draft misses the target, and how to close it, is part of the answer.
@@ -1161,7 +1168,7 @@ Tender day: 400 downloads/s × 8 MB = 3.2 GB/s ≈ 25.6 Gbit/s → must be serve
 
 **Configuration tests.** Gateways fail most often because of configuration, not code. In CI: load the YARP JSON, assert every route's `ClusterId` exists, no two routes have identical match criteria, every cluster has at least two destinations in production, and every route has an authorisation policy or is explicitly marked public.
 
-**Load tests.** Run a short load test (k6, JMeter, Azure Load Testing) through the full edge before major events, such as a bid deadline, and watch p99 latency per hop.
+**Load tests.** Run a short load test (k6, JMeter, Azure Load Testing) through the full edge before major events, such as the last day of a registration window, and watch p99 latency per hop.
 
 ## Real-world application
 
@@ -1169,7 +1176,7 @@ Tender day: 400 downloads/s × 8 MB = 3.2 GB/s ≈ 25.6 Gbit/s → must be serve
 - **Envoy, nginx, HAProxy and Traefik** are widely used open-source reverse proxies; Envoy also powers service meshes and several managed gateways.
 - **YARP** is used to build gateways and BFFs in .NET shops, and to migrate legacy systems gradually: route `/new/*` to the rewritten service and everything else to the old app (the [strangler fig](#/lesson/m16-strangler-acl) approach).
 - **Kubernetes ingress controllers and the Gateway API** are reverse proxies configured with Kubernetes resources, so each team can own its `HTTPRoute` objects. That is per-team route ownership built into the platform.
-- **Government and infrastructure platforms** often expose many departmental systems under one domain; a gateway with per-department routes, one identity provider and central rate limiting is a common modernisation step before any service is rewritten.
+- **Government and university platforms** often expose many departmental systems under one domain; a gateway with per-department routes, one identity provider and central rate limiting is a common modernisation step before any service is rewritten.
 
 ## Interview questions
 
@@ -1246,7 +1253,8 @@ You need to spread connections from 60 app servers across three PgBouncer instan
 - [ ] A forward proxy.
 > PostgreSQL's protocol is not HTTP, so L7 HTTP features cannot help. L4 balances TCP connections.
 ::q single
-A backend enables forwarded headers and clears `KnownProxies` and `KnownNetworks` so that "the real IP shows up". What risk did it create?
+A backend enables forwarded headers and clears `KnownProxies` and `KnownIPNetworks` so that
+ "the real IP shows up". What risk did it create?
 - [ ] Higher latency.
 - [x] Any client that can reach the backend can spoof its IP and scheme via X-Forwarded-* headers.
 - [ ] TLS stops working.

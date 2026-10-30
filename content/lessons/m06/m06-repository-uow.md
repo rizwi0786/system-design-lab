@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 80
 prerequisites: [m06-facade, m06-specification, m04-dip]
-related: [m06-specification, m06-dependency-injection-pattern, m06-memento, m04-over-under-engineering]
+related: [m06-specification, m06-dependency-injection-pattern, m04-over-under-engineering]
 tags: [enterprise, persistence, ef-core, transactions, ddd]
 patterns: [Repository, Unit of Work, Identity Map, Query Object]
 summary: A repository makes stored objects look like an in-memory collection; a unit of work saves every change from one business operation together or not at all. Learn how they work, why EF Core's DbContext already gives you both, and when a repository still earns its place.
@@ -45,19 +45,21 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Think of a construction site's **material store**. A truck arrives with 200 bags of cement against a purchase order. The storekeeper must do three things:
+Think of a neighbourhood **pharmacy** that is part of a chain. A distributor delivers 200 strips of paracetamol 500 mg against a purchase order. The pharmacist must do three things:
 
-1. Mark 200 bags as received on the purchase order.
-2. Add 200 bags to the site's stock register.
-3. Write a Goods Receipt Note (GRN) so accounts can pay the supplier.
+1. Mark 200 strips as received on the purchase order.
+2. Add 200 strips to this store's stock register.
+3. Write a Goods Receipt Note (GRN) so head-office accounts can pay the distributor.
+
+(A real pharmacy also records the batch number and expiry date of every receipt. We leave that out to keep the code small; it doesn't change the patterns.)
 
 Two ideas keep this sane.
 
-**The store counter (Repository).** Engineers don't dig through the godown's shelves. They ask at the counter: "Give me purchase order 4512." The counter hides *where* and *how* things are stored; to the engineer it's a simple collection.
+**The stockroom desk (Repository).** Staff at the billing counter don't dig through the stockroom shelves or the filing cabinet. They ask at the desk: "Give me purchase order 4512." The desk hides *where* and *how* things are stored; to the staff it's a simple collection.
 
 **The worksheet (Unit of Work).** Updating three registers one at a time means a power cut after step 1 leaves the PO "received" with no stock. So every change goes on a worksheet first, and the whole worksheet is copied into the registers in one go. If anything is wrong (someone else already received that PO), **nothing** is copied.
 
-- The counter is the **repository**: it makes stored objects look like an in-memory collection.
+- The desk is the **repository**: it makes stored objects look like an in-memory collection.
 - The worksheet is the **unit of work**: it records every change in one business operation and commits them together.
 - "Have I already fetched PO 4512 today? Then use the same file" is the **identity map**.
 
@@ -73,7 +75,7 @@ Two ideas keep this sane.
 
 1. **Leaking persistence.** Business rules ("can't receive more than ordered") get tangled with SQL and mapping code, so testing the rule means touching all of it.
 2. **Half-finished operations.** If each step saves immediately, a failure between steps leaves the PO received but no stock and no GRN.
-3. **Lost updates.** Two storekeepers both read "300 remaining", both receive 200, both save. The PO shows 100 remaining when the second receipt should have been rejected.
+3. **Lost updates.** Two pharmacists both read "300 remaining", both receive 200, both save. The PO shows 100 remaining when the second receipt should have been rejected.
 
 ### How they work internally
 
@@ -122,9 +124,9 @@ classDiagram
         +GetAsync(Guid id) PurchaseOrder
         +Add(PurchaseOrder po)
     }
-    class ISiteStockRepository {
+    class IStoreStockRepository {
         <<interface>>
-        +GetOrCreateAsync(Guid siteId, string code) SiteStock
+        +GetOrCreateAsync(Guid storeId, string code) StoreStock
     }
     class IGoodsReceiptRepository {
         <<interface>>
@@ -148,7 +150,7 @@ classDiagram
         +ToSnapshot() PurchaseOrderSnapshot
     }
     ReceiveGoodsHandler --> IPurchaseOrderRepository
-    ReceiveGoodsHandler --> ISiteStockRepository
+    ReceiveGoodsHandler --> IStoreStockRepository
     ReceiveGoodsHandler --> IGoodsReceiptRepository
     ReceiveGoodsHandler --> IUnitOfWork
     IUnitOfWork <|.. InMemoryUnitOfWork
@@ -178,7 +180,7 @@ sequenceDiagram
     DB-->>R: snapshot, version 3
     R->>U: Track(po, version 3)
     R-->>H: PurchaseOrder
-    H->>H: po.Receive(cement, 200)
+    H->>H: po.Receive(paracetamol, 200)
     H->>H: stock.Add(200) and new GoodsReceipt
     H->>U: SaveChangesAsync()
     U->>U: diff snapshots, build 3 writes
@@ -205,7 +207,7 @@ public async Task ReceiveAsync(Guid poId, string code, decimal qty)
 {
     var po = await _db.QuerySingleAsync<PoRow>("select * from purchase_orders where id = @poId", new { poId });
     await _db.ExecuteAsync("update po_lines set received = received + @qty where po_id = @poId and code = @code", ...);
-    await _db.ExecuteAsync("update site_stock set on_hand = on_hand + @qty where ...", ...);   // crash here?
+    await _db.ExecuteAsync("update store_stock set on_hand = on_hand + @qty where ...", ...);   // crash here?
     await _db.ExecuteAsync("insert into goods_receipts ...", ...);
 }
 ```
@@ -229,9 +231,9 @@ The handler makes all its changes, then calls `SaveChangesAsync()` once. Either 
 Because EF Core isn't available to this course's code checker, the compiled implementation below uses an **in-memory database and unit of work that work the way EF Core does internally**. EF Core equivalents follow as clearly labelled snippets.
 
 ```text
-SiteStores.Api/
+PharmacyStores.Api/
   Program.cs
-  Domain/PurchaseOrder.cs, SiteStock.cs, GoodsReceipt.cs, Abstractions.cs
+  Domain/PurchaseOrder.cs, StoreStock.cs, GoodsReceipt.cs, Abstractions.cs
   Infrastructure/InMemoryDatabase.cs, InMemoryUnitOfWork.cs, InMemoryRepositories.cs, LowStockQuery.cs
   Application/ReceiveGoodsHandler.cs
 ```
@@ -239,87 +241,87 @@ SiteStores.Api/
 ### Domain
 
 ```csharp file=Domain/PurchaseOrder.cs
-namespace SiteStores.Domain;
+namespace PharmacyStores.Domain;
 
 public sealed class DomainRuleException(string message) : Exception(message);
 
-public sealed record PurchaseOrderLineSnapshot(string MaterialCode, decimal OrderedQty, decimal ReceivedQty);
-public sealed record PurchaseOrderSnapshot(Guid Id, Guid SiteId, string Supplier, IReadOnlyList<PurchaseOrderLineSnapshot> Lines);
+public sealed record PurchaseOrderLineSnapshot(string ItemCode, decimal OrderedQty, decimal ReceivedQty);
+public sealed record PurchaseOrderSnapshot(Guid Id, Guid StoreId, string Supplier, IReadOnlyList<PurchaseOrderLineSnapshot> Lines);
 
 /// <summary>Aggregate root. Lines are only changed through Receive, so the over-receipt rule can't be bypassed.</summary>
 public sealed class PurchaseOrder
 {
     private readonly List<Line> _lines;
 
-    private PurchaseOrder(Guid id, Guid siteId, string supplier, List<Line> lines)
-    { Id = id; SiteId = siteId; Supplier = supplier; _lines = lines; }
+    private PurchaseOrder(Guid id, Guid storeId, string supplier, List<Line> lines)
+    { Id = id; StoreId = storeId; Supplier = supplier; _lines = lines; }
 
     public Guid Id { get; }
-    public Guid SiteId { get; }
+    public Guid StoreId { get; }
     public string Supplier { get; }
-    public IReadOnlyList<(string MaterialCode, decimal Ordered, decimal Received)> Lines =>
-        _lines.Select(l => (l.MaterialCode, l.Ordered, l.Received)).ToList();
+    public IReadOnlyList<(string ItemCode, decimal Ordered, decimal Received)> Lines =>
+        _lines.Select(l => (l.ItemCode, l.Ordered, l.Received)).ToList();
 
-    public static PurchaseOrder Create(Guid siteId, string supplier, IEnumerable<(string Code, decimal Qty)> lines)
+    public static PurchaseOrder Create(Guid storeId, string supplier, IEnumerable<(string Code, decimal Qty)> lines)
     {
         var list = lines.Select(l => l.Qty > 0 ? new Line(l.Code, l.Qty, 0m) : throw new DomainRuleException("Ordered quantity must be positive.")).ToList();
         if (list.Count == 0) throw new DomainRuleException("A purchase order needs at least one line.");
-        return new PurchaseOrder(Guid.NewGuid(), siteId, supplier, list);
+        return new PurchaseOrder(Guid.NewGuid(), storeId, supplier, list);
     }
 
-    public void Receive(string materialCode, decimal quantity)
+    public void Receive(string itemCode, decimal quantity)
     {
         if (quantity <= 0) throw new DomainRuleException("Received quantity must be positive.");
-        var line = _lines.FirstOrDefault(l => l.MaterialCode == materialCode)
-                   ?? throw new DomainRuleException($"Material {materialCode} is not on this purchase order.");
+        var line = _lines.FirstOrDefault(l => l.ItemCode == itemCode)
+                   ?? throw new DomainRuleException($"Item {itemCode} is not on this purchase order.");
         if (line.Received + quantity > line.Ordered)
-            throw new DomainRuleException($"Cannot receive {quantity}; only {line.Ordered - line.Received} {materialCode} remaining.");
+            throw new DomainRuleException($"Cannot receive {quantity}; only {line.Ordered - line.Received} {itemCode} remaining.");
         line.Received += quantity;
     }
 
-    // Snapshot/restore (a Memento) lets the infrastructure store the aggregate without public setters.
+    // Snapshot/restore methods let the infrastructure store the aggregate without public setters.
     public PurchaseOrderSnapshot ToSnapshot() =>
-        new(Id, SiteId, Supplier, _lines.Select(l => new PurchaseOrderLineSnapshot(l.MaterialCode, l.Ordered, l.Received)).ToList());
+        new(Id, StoreId, Supplier, _lines.Select(l => new PurchaseOrderLineSnapshot(l.ItemCode, l.Ordered, l.Received)).ToList());
 
     public static PurchaseOrder Restore(PurchaseOrderSnapshot s) =>
-        new(s.Id, s.SiteId, s.Supplier, s.Lines.Select(l => new Line(l.MaterialCode, l.OrderedQty, l.ReceivedQty)).ToList());
+        new(s.Id, s.StoreId, s.Supplier, s.Lines.Select(l => new Line(l.ItemCode, l.OrderedQty, l.ReceivedQty)).ToList());
 
     private sealed class Line(string code, decimal ordered, decimal received)
     {
-        public string MaterialCode { get; } = code;
+        public string ItemCode { get; } = code;
         public decimal Ordered { get; } = ordered;
         public decimal Received { get; set; } = received;
     }
 }
 ```
 
-```csharp file=Domain/SiteStock.cs
-namespace SiteStores.Domain;
+```csharp file=Domain/StoreStock.cs
+namespace PharmacyStores.Domain;
 
-public sealed record SiteStockSnapshot(Guid SiteId, string MaterialCode, decimal OnHand, decimal ReorderLevel);
+public sealed record StoreStockSnapshot(Guid StoreId, string ItemCode, decimal OnHand, decimal ReorderLevel);
 
-public sealed class SiteStock
+public sealed class StoreStock
 {
-    private SiteStock(Guid siteId, string code, decimal onHand, decimal reorderLevel)
-    { SiteId = siteId; MaterialCode = code; OnHand = onHand; ReorderLevel = reorderLevel; }
+    private StoreStock(Guid storeId, string code, decimal onHand, decimal reorderLevel)
+    { StoreId = storeId; ItemCode = code; OnHand = onHand; ReorderLevel = reorderLevel; }
 
-    public Guid SiteId { get; }
-    public string MaterialCode { get; }
+    public Guid StoreId { get; }
+    public string ItemCode { get; }
     public decimal OnHand { get; private set; }
     public decimal ReorderLevel { get; private set; }
 
-    public static SiteStock Empty(Guid siteId, string code) => new(siteId, code, 0m, 0m);
+    public static StoreStock Empty(Guid storeId, string code) => new(storeId, code, 0m, 0m);
     public void Add(decimal qty) { if (qty <= 0) throw new DomainRuleException("Quantity must be positive."); OnHand += qty; }
 
-    public SiteStockSnapshot ToSnapshot() => new(SiteId, MaterialCode, OnHand, ReorderLevel);
-    public static SiteStock Restore(SiteStockSnapshot s) => new(s.SiteId, s.MaterialCode, s.OnHand, s.ReorderLevel);
+    public StoreStockSnapshot ToSnapshot() => new(StoreId, ItemCode, OnHand, ReorderLevel);
+    public static StoreStock Restore(StoreStockSnapshot s) => new(s.StoreId, s.ItemCode, s.OnHand, s.ReorderLevel);
 }
 
-public sealed record GoodsReceipt(Guid Id, Guid PurchaseOrderId, Guid SiteId, string MaterialCode, decimal Quantity, DateTimeOffset ReceivedAt);
+public sealed record GoodsReceipt(Guid Id, Guid PurchaseOrderId, Guid StoreId, string ItemCode, decimal Quantity, DateTimeOffset ReceivedAt);
 ```
 
 ```csharp file=Domain/Abstractions.cs
-namespace SiteStores.Domain;
+namespace PharmacyStores.Domain;
 
 // Owned by the domain/application layer; implemented by infrastructure (Dependency Inversion).
 public interface IPurchaseOrderRepository
@@ -328,9 +330,9 @@ public interface IPurchaseOrderRepository
     void Add(PurchaseOrder purchaseOrder);
 }
 
-public interface ISiteStockRepository
+public interface IStoreStockRepository
 {
-    Task<SiteStock> GetOrCreateAsync(Guid siteId, string materialCode, CancellationToken ct);
+    Task<StoreStock> GetOrCreateAsync(Guid storeId, string itemCode, CancellationToken ct);
 }
 
 public interface IGoodsReceiptRepository
@@ -354,9 +356,9 @@ public sealed class ConcurrencyConflictException(string key) : Exception($"Row {
 ### Infrastructure: the in-memory database and unit of work
 
 ```csharp file=Infrastructure/InMemoryDatabase.cs
-using SiteStores.Domain;
+using PharmacyStores.Domain;
 
-namespace SiteStores.Infrastructure;
+namespace PharmacyStores.Infrastructure;
 
 public sealed record VersionedRow(object Row, int Version);
 /// <summary>ExpectedVersion 0 means "must not exist yet" (an insert).</summary>
@@ -396,9 +398,9 @@ public sealed class InMemoryDatabase
 
 ```csharp file=Infrastructure/InMemoryUnitOfWork.cs
 using System.Text.Json;
-using SiteStores.Domain;
+using PharmacyStores.Domain;
 
-namespace SiteStores.Infrastructure;
+namespace PharmacyStores.Infrastructure;
 
 /// <summary>Identity map + snapshot change tracking + atomic commit. Registered as scoped: one per request.</summary>
 public sealed class InMemoryUnitOfWork(InMemoryDatabase db) : IUnitOfWork
@@ -455,14 +457,14 @@ public sealed class InMemoryUnitOfWork(InMemoryDatabase db) : IUnitOfWork
 ### Infrastructure: repositories and a query object
 
 ```csharp file=Infrastructure/InMemoryRepositories.cs
-using SiteStores.Domain;
+using PharmacyStores.Domain;
 
-namespace SiteStores.Infrastructure;
+namespace PharmacyStores.Infrastructure;
 
 internal static class Keys
 {
     public static string Po(Guid id) => $"po:{id}";
-    public static string Stock(Guid siteId, string code) => $"stock:{siteId}:{code}";
+    public static string Stock(Guid storeId, string code) => $"stock:{storeId}:{code}";
     public static string Receipt(Guid id) => $"grn:{id}";
 }
 
@@ -483,15 +485,15 @@ public sealed class InMemoryPurchaseOrderRepository(InMemoryUnitOfWork uow, InMe
         uow.Track(Keys.Po(purchaseOrder.Id), purchaseOrder, 0, () => purchaseOrder.ToSnapshot());
 }
 
-public sealed class InMemorySiteStockRepository(InMemoryUnitOfWork uow, InMemoryDatabase db) : ISiteStockRepository
+public sealed class InMemoryStoreStockRepository(InMemoryUnitOfWork uow, InMemoryDatabase db) : IStoreStockRepository
 {
-    public Task<SiteStock> GetOrCreateAsync(Guid siteId, string materialCode, CancellationToken ct)
+    public Task<StoreStock> GetOrCreateAsync(Guid storeId, string itemCode, CancellationToken ct)
     {
-        var key = Keys.Stock(siteId, materialCode);
-        if (uow.TryGetTracked<SiteStock>(key, out var tracked)) return Task.FromResult(tracked);
+        var key = Keys.Stock(storeId, itemCode);
+        if (uow.TryGetTracked<StoreStock>(key, out var tracked)) return Task.FromResult(tracked);
 
         var row = db.Find(key);
-        var stock = row is { Row: SiteStockSnapshot s } ? SiteStock.Restore(s) : SiteStock.Empty(siteId, materialCode);
+        var stock = row is { Row: StoreStockSnapshot s } ? StoreStock.Restore(s) : StoreStock.Empty(storeId, itemCode);
         uow.Track(key, stock, row?.Version ?? 0, () => stock.ToSnapshot());
         return Task.FromResult(stock);
     }
@@ -504,23 +506,23 @@ public sealed class InMemoryGoodsReceiptRepository(InMemoryUnitOfWork uow) : IGo
 ```
 
 ```csharp file=Infrastructure/LowStockQuery.cs
-namespace SiteStores.Infrastructure;
+namespace PharmacyStores.Infrastructure;
 
-public sealed record LowStockRow(string MaterialCode, decimal OnHand, decimal ReorderLevel, decimal Shortfall);
+public sealed record LowStockRow(string ItemCode, decimal OnHand, decimal ReorderLevel, decimal Shortfall);
 
 /// <summary>Query object: one read, one DTO shape. No aggregates, no change tracking, no repository.</summary>
 public interface ILowStockQuery
 {
-    Task<IReadOnlyList<LowStockRow>> RunAsync(Guid siteId, CancellationToken ct);
+    Task<IReadOnlyList<LowStockRow>> RunAsync(Guid storeId, CancellationToken ct);
 }
 
 public sealed class InMemoryLowStockQuery(InMemoryDatabase db) : ILowStockQuery
 {
-    public Task<IReadOnlyList<LowStockRow>> RunAsync(Guid siteId, CancellationToken ct)
+    public Task<IReadOnlyList<LowStockRow>> RunAsync(Guid storeId, CancellationToken ct)
     {
-        IReadOnlyList<LowStockRow> rows = db.Scan<SiteStores.Domain.SiteStockSnapshot>($"stock:{siteId}:")
+        IReadOnlyList<LowStockRow> rows = db.Scan<PharmacyStores.Domain.StoreStockSnapshot>($"stock:{storeId}:")
             .Where(s => s.OnHand < s.ReorderLevel)
-            .Select(s => new LowStockRow(s.MaterialCode, s.OnHand, s.ReorderLevel, s.ReorderLevel - s.OnHand))
+            .Select(s => new LowStockRow(s.ItemCode, s.OnHand, s.ReorderLevel, s.ReorderLevel - s.OnHand))
             .OrderByDescending(r => r.Shortfall)
             .ToList();
         return Task.FromResult(rows);
@@ -531,11 +533,11 @@ public sealed class InMemoryLowStockQuery(InMemoryDatabase db) : ILowStockQuery
 ### Application service
 
 ```csharp file=Application/ReceiveGoodsHandler.cs
-using SiteStores.Domain;
+using PharmacyStores.Domain;
 
-namespace SiteStores.Application;
+namespace PharmacyStores.Application;
 
-public sealed record ReceiveGoodsCommand(Guid PurchaseOrderId, string MaterialCode, decimal Quantity);
+public sealed record ReceiveGoodsCommand(Guid PurchaseOrderId, string ItemCode, decimal Quantity);
 
 public abstract record ReceiveGoodsOutcome
 {
@@ -547,7 +549,7 @@ public abstract record ReceiveGoodsOutcome
 
 public sealed class ReceiveGoodsHandler(
     IPurchaseOrderRepository purchaseOrders,
-    ISiteStockRepository stock,
+    IStoreStockRepository stock,
     IGoodsReceiptRepository receipts,
     IUnitOfWork unitOfWork,
     TimeProvider clock)
@@ -557,13 +559,13 @@ public sealed class ReceiveGoodsHandler(
         var po = await purchaseOrders.GetAsync(cmd.PurchaseOrderId, ct);
         if (po is null) return new ReceiveGoodsOutcome.NotFound();
 
-        try { po.Receive(cmd.MaterialCode, cmd.Quantity); }
+        try { po.Receive(cmd.ItemCode, cmd.Quantity); }
         catch (DomainRuleException ex) { return new ReceiveGoodsOutcome.Rejected(ex.Message); }
 
-        var siteStock = await stock.GetOrCreateAsync(po.SiteId, cmd.MaterialCode, ct);
-        siteStock.Add(cmd.Quantity);
+        var storeStock = await stock.GetOrCreateAsync(po.StoreId, cmd.ItemCode, ct);
+        storeStock.Add(cmd.Quantity);
 
-        var receipt = new GoodsReceipt(Guid.NewGuid(), po.Id, po.SiteId, cmd.MaterialCode, cmd.Quantity, clock.GetUtcNow());
+        var receipt = new GoodsReceipt(Guid.NewGuid(), po.Id, po.StoreId, cmd.ItemCode, cmd.Quantity, clock.GetUtcNow());
         receipts.Add(receipt);
 
         try { await unitOfWork.SaveChangesAsync(ct); }          // one commit for PO + stock + GRN
@@ -577,9 +579,9 @@ public sealed class ReceiveGoodsHandler(
 ### Composition root
 
 ```csharp file=Program.cs
-using SiteStores.Application;
-using SiteStores.Domain;
-using SiteStores.Infrastructure;
+using PharmacyStores.Application;
+using PharmacyStores.Domain;
+using PharmacyStores.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -588,7 +590,7 @@ builder.Services.AddSingleton<InMemoryDatabase>();                     // in pro
 builder.Services.AddScoped<InMemoryUnitOfWork>();                       // one unit of work per HTTP request
 builder.Services.AddScoped<IUnitOfWork>(sp => sp.GetRequiredService<InMemoryUnitOfWork>());   // same instance
 builder.Services.AddScoped<IPurchaseOrderRepository, InMemoryPurchaseOrderRepository>();
-builder.Services.AddScoped<ISiteStockRepository, InMemorySiteStockRepository>();
+builder.Services.AddScoped<IStoreStockRepository, InMemoryStoreStockRepository>();
 builder.Services.AddScoped<IGoodsReceiptRepository, InMemoryGoodsReceiptRepository>();
 builder.Services.AddScoped<ILowStockQuery, InMemoryLowStockQuery>();
 builder.Services.AddScoped<ReceiveGoodsHandler>();
@@ -605,8 +607,8 @@ app.MapPost("/purchase-orders/{id:guid}/receipts", async (Guid id, ReceiveGoodsC
         _ => Results.StatusCode(500),
     });
 
-app.MapGet("/sites/{siteId:guid}/low-stock", async (Guid siteId, ILowStockQuery query, CancellationToken ct) =>
-    Results.Ok(await query.RunAsync(siteId, ct)));
+app.MapGet("/stores/{storeId:guid}/low-stock", async (Guid storeId, ILowStockQuery query, CancellationToken ct) =>
+    Results.Ok(await query.RunAsync(storeId, ct)));
 
 app.Run();
 ```
@@ -622,13 +624,14 @@ With EF Core, most of the infrastructure above disappears:
 public sealed class StoresDbContext(DbContextOptions<StoresDbContext> o) : DbContext(o), IUnitOfWork
 {
     public DbSet<PurchaseOrder> PurchaseOrders => Set<PurchaseOrder>();
-    public DbSet<SiteStock> SiteStock => Set<SiteStock>();
+    public DbSet<StoreStock> StoreStock => Set<StoreStock>();
     public DbSet<GoodsReceipt> GoodsReceipts => Set<GoodsReceipt>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
-        b.Entity<PurchaseOrder>().OwnsMany(p => p.Lines);              // lines live and die with the PO
-        b.Entity<PurchaseOrder>().Property<uint>("xmin").IsRowVersion(); // Npgsql: PostgreSQL xmin as concurrency token
+        b.Entity<PurchaseOrder>().OwnsMany(p => p.Lines);   // lines live and die with the PO; assumes Lines is an
+                                                        // IReadOnlyCollection<PurchaseOrderLine> backed by the _lines field
+        b.Entity<PurchaseOrder>().Property<uint>("Version").IsRowVersion(); // Npgsql maps a uint row version to PostgreSQL's xmin
     }
     // SaveChangesAsync(ct) already exists: DbContext IS the unit of work.
 }
@@ -636,7 +639,8 @@ public sealed class StoresDbContext(DbContextOptions<StoresDbContext> o) : DbCon
 public sealed class EfPurchaseOrderRepository(StoresDbContext db) : IPurchaseOrderRepository
 {
     public Task<PurchaseOrder?> GetAsync(Guid id, CancellationToken ct) =>
-        db.PurchaseOrders.Include(p => p.Lines).FirstOrDefaultAsync(p => p.Id == id, ct);  // aggregate always complete
+        db.PurchaseOrders.FirstOrDefaultAsync(p => p.Id == id, ct);   // owned Lines load with the owner automatically;
+                                                                 // non-owned children would need Include here
     public void Add(PurchaseOrder po) => db.PurchaseOrders.Add(po);
 }
 ```
@@ -651,7 +655,7 @@ var strategy = db.Database.CreateExecutionStrategy();
 await strategy.ExecuteAsync(async () =>
 {
     await using var tx = await db.Database.BeginTransactionAsync(ct);
-    await db.Database.ExecuteSqlInterpolatedAsync($"select pg_advisory_xact_lock({siteLockId})", ct);
+    await db.Database.ExecuteSqlInterpolatedAsync($"select pg_advisory_xact_lock({storeLockId})", ct);
     // ... changes ...
     await db.SaveChangesAsync(ct);
     await tx.CommitAsync(ct);
@@ -729,23 +733,23 @@ public static class Program
     public static void Main()
     {
         var store = new Store();
-        store.Commit(new[] { ("po:4512:cement-remaining", 300m, 0), ("stock:cement", 50m, 0) });
+        store.Commit(new[] { ("po:4512:paracetamol-remaining", 300m, 0), ("stock:paracetamol", 50m, 0) });
 
-        var storekeeperA = new UnitOfWork(store);
-        var storekeeperB = new UnitOfWork(store);
+        var pharmacistA = new UnitOfWork(store);
+        var pharmacistB = new UnitOfWork(store);
 
-        foreach (var uow in new[] { storekeeperA, storekeeperB })
+        foreach (var uow in new[] { pharmacistA, pharmacistB })
         {
-            uow.Set("po:4512:cement-remaining", uow.Get("po:4512:cement-remaining") - 200m);
-            uow.Set("stock:cement", uow.Get("stock:cement") + 200m);
+            uow.Set("po:4512:paracetamol-remaining", uow.Get("po:4512:paracetamol-remaining") - 200m);
+            uow.Set("stock:paracetamol", uow.Get("stock:paracetamol") + 200m);
         }
 
-        storekeeperB.Commit();
+        pharmacistB.Commit();
         Console.WriteLine("B committed.");
-        try { storekeeperA.Commit(); }
+        try { pharmacistA.Commit(); }
         catch (ConflictException ex) { Console.WriteLine($"A rejected as a whole: {ex.Message}"); }
 
-        Console.WriteLine($"Remaining on PO: {store.Read("po:4512:cement-remaining").Value}, stock: {store.Read("stock:cement").Value}");
+        Console.WriteLine($"Remaining on PO: {store.Read("po:4512:paracetamol-remaining").Value}, stock: {store.Read("stock:paracetamol").Value}");
     }
 }
 ```
@@ -754,7 +758,7 @@ public static class Program
 ## Exercises
 
 :::exercise id=m06-repository-uow-ex1 difficulty=beginner kind=code title="All-or-nothing commit"
-Implement `SimpleUnitOfWork`, which records changes to a `Dictionary<string, decimal>` (a site's stock ledger) and applies them only on `Commit()`, all or nothing.
+Implement `SimpleUnitOfWork`, which records changes to a `Dictionary<string, decimal>` (a pharmacy's stock ledger) and applies them only on `Commit()`, all or nothing.
 ::requirements
 - `RegisterNew(key, value)`: the key must not already exist in the ledger at commit time.
 - `RegisterUpdate(key, value)`: the key must exist at commit time.
@@ -800,20 +804,20 @@ using Xunit;
 
 public class SimpleUnitOfWorkTests
 {
-    private static Dictionary<string, decimal> Ledger() => new() { ["cement"] = 100m, ["steel"] = 5m };
+    private static Dictionary<string, decimal> Ledger() => new() { ["paracetamol"] = 100m, ["insulin"] = 5m };
 
     [Fact]
     public void Changes_invisible_until_commit()
     {
         var ledger = Ledger();
         var uow = new SimpleUnitOfWork(ledger);
-        uow.RegisterUpdate("cement", 300m);
-        uow.RegisterNew("sand", 40m);
-        Assert.Equal(100m, ledger["cement"]);
-        Assert.False(ledger.ContainsKey("sand"));
+        uow.RegisterUpdate("paracetamol", 300m);
+        uow.RegisterNew("cetirizine", 40m);
+        Assert.Equal(100m, ledger["paracetamol"]);
+        Assert.False(ledger.ContainsKey("cetirizine"));
         uow.Commit();
-        Assert.Equal(300m, ledger["cement"]);
-        Assert.Equal(40m, ledger["sand"]);
+        Assert.Equal(300m, ledger["paracetamol"]);
+        Assert.Equal(40m, ledger["cetirizine"]);
         Assert.Equal(0, uow.PendingCount);
     }
 
@@ -822,10 +826,10 @@ public class SimpleUnitOfWorkTests
     {
         var ledger = Ledger();
         var uow = new SimpleUnitOfWork(ledger);
-        uow.RegisterUpdate("cement", 999m);
-        uow.RegisterDelete("bricks");          // does not exist
+        uow.RegisterUpdate("paracetamol", 999m);
+        uow.RegisterDelete("amoxicillin");     // does not exist
         Assert.Throws<InvalidOperationException>(() => uow.Commit());
-        Assert.Equal(100m, ledger["cement"]);
+        Assert.Equal(100m, ledger["paracetamol"]);
         Assert.Equal(2, ledger.Count);
     }
 
@@ -834,9 +838,9 @@ public class SimpleUnitOfWorkTests
     {
         var ledger = Ledger();
         var uow = new SimpleUnitOfWork(ledger);
-        uow.RegisterNew("steel", 1m);
+        uow.RegisterNew("insulin", 1m);
         Assert.Throws<InvalidOperationException>(() => uow.Commit());
-        Assert.Equal(5m, ledger["steel"]);
+        Assert.Equal(5m, ledger["insulin"]);
     }
 
     [Fact]
@@ -844,14 +848,14 @@ public class SimpleUnitOfWorkTests
     {
         var ledger = Ledger();
         var uow = new SimpleUnitOfWork(ledger);
-        uow.RegisterDelete("steel");
+        uow.RegisterDelete("insulin");
         uow.Discard();
         Assert.Equal(0, uow.PendingCount);
         uow.Commit();
-        Assert.True(ledger.ContainsKey("steel"));
-        uow.RegisterDelete("steel");
+        Assert.True(ledger.ContainsKey("insulin"));
+        uow.RegisterDelete("insulin");
         uow.Commit();
-        Assert.False(ledger.ContainsKey("steel"));
+        Assert.False(ledger.ContainsKey("insulin"));
     }
 }
 ```
@@ -899,9 +903,9 @@ Validate-then-apply is how you get atomicity without a database. A real database
 :::
 
 :::exercise id=m06-repository-uow-ex2 difficulty=beginner kind=code title="Identity map in a repository"
-`MaterialRepository.Get(code)` loads a `Material` from an `IMaterialSource`. Within one repository instance (one unit of work), the same code must always return the **same object**, and the source must be hit only once per code.
+`MedicineRepository.Get(code)` loads a `Medicine` from an `IMedicineSource`. Within one repository instance (one unit of work), the same code must always return the **same object**, and the source must be hit only once per code.
 ::requirements
-- Two `Get("CEM-OPC53")` calls on one repository return the same instance (`Assert.Same`).
+- Two `Get("PCM-500")` calls on one repository return the same instance (`Assert.Same`).
 - The source's `Load` is called once per distinct code per repository instance.
 - A new repository instance (a new request) loads again.
 - `Get` for an unknown code returns `null`, and a second call doesn't hit the source again.
@@ -909,44 +913,44 @@ Validate-then-apply is how you get atomicity without a database. A real database
 - Tests with a counting fake source pass.
 - Edits made through one reference are visible through the other, because it's the same object.
 ::hint
-A `Dictionary<string, Material?>` inside the repository is the identity map.
+A `Dictionary<string, Medicine?>` inside the repository is the identity map.
 ::hint
 Remember misses too: store `null` for an unknown code so you don't query again.
 ::hint
 `if (_map.TryGetValue(code, out var m)) return m; m = source.Load(code); _map[code] = m; return m;`
 ::starter
-```csharp file=MaterialRepository.cs
+```csharp file=MedicineRepository.cs
 using System;
 using System.Collections.Generic;
 
-public sealed class Material(string code, string name, decimal ratePerUnit)
+public sealed class Medicine(string code, string name, decimal pricePerStrip)
 {
     public string Code { get; } = code;
     public string Name { get; } = name;
-    public decimal RatePerUnit { get; set; } = ratePerUnit;
+    public decimal PricePerStrip { get; set; } = pricePerStrip;
 }
 
-public interface IMaterialSource { Material? Load(string code); }
+public interface IMedicineSource { Medicine? Load(string code); }
 
-public sealed class MaterialRepository(IMaterialSource source)
+public sealed class MedicineRepository(IMedicineSource source)
 {
-    public Material? Get(string code) => throw new NotImplementedException();
+    public Medicine? Get(string code) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=MaterialRepositoryTests.cs
+```csharp file=MedicineRepositoryTests.cs
 using System.Collections.Generic;
 using Xunit;
 
-public class MaterialRepositoryTests
+public class MedicineRepositoryTests
 {
-    private sealed class CountingSource : IMaterialSource
+    private sealed class CountingSource : IMedicineSource
     {
         public int Loads;
-        public Material? Load(string code)
+        public Medicine? Load(string code)
         {
             Loads++;
-            return code == "CEM-OPC53" ? new Material(code, "OPC 53 cement", 410m) : null;   // new object each load, like a DB
+            return code == "PCM-500" ? new Medicine(code, "Paracetamol 500 mg, strip of 10", 30m) : null;   // new object each load, like a DB
         }
     }
 
@@ -954,9 +958,9 @@ public class MaterialRepositoryTests
     public void Same_instance_within_one_repository()
     {
         var src = new CountingSource();
-        var repo = new MaterialRepository(src);
-        var a = repo.Get("CEM-OPC53");
-        var b = repo.Get("CEM-OPC53");
+        var repo = new MedicineRepository(src);
+        var a = repo.Get("PCM-500");
+        var b = repo.Get("PCM-500");
         Assert.Same(a, b);
         Assert.Equal(1, src.Loads);
     }
@@ -964,17 +968,17 @@ public class MaterialRepositoryTests
     [Fact]
     public void Edits_visible_through_both_references()
     {
-        var repo = new MaterialRepository(new CountingSource());
-        repo.Get("CEM-OPC53")!.RatePerUnit = 425m;
-        Assert.Equal(425m, repo.Get("CEM-OPC53")!.RatePerUnit);
+        var repo = new MedicineRepository(new CountingSource());
+        repo.Get("PCM-500")!.PricePerStrip = 32m;
+        Assert.Equal(32m, repo.Get("PCM-500")!.PricePerStrip);
     }
 
     [Fact]
     public void New_repository_loads_again()
     {
         var src = new CountingSource();
-        var first = new MaterialRepository(src).Get("CEM-OPC53");
-        var second = new MaterialRepository(src).Get("CEM-OPC53");
+        var first = new MedicineRepository(src).Get("PCM-500");
+        var second = new MedicineRepository(src).Get("PCM-500");
         Assert.NotSame(first, second);
         Assert.Equal(2, src.Loads);
     }
@@ -983,7 +987,7 @@ public class MaterialRepositoryTests
     public void Misses_are_remembered()
     {
         var src = new CountingSource();
-        var repo = new MaterialRepository(src);
+        var repo = new MedicineRepository(src);
         Assert.Null(repo.Get("UNKNOWN"));
         Assert.Null(repo.Get("UNKNOWN"));
         Assert.Equal(1, src.Loads);
@@ -991,24 +995,24 @@ public class MaterialRepositoryTests
 }
 ```
 ::solution
-```csharp file=MaterialRepository.cs
+```csharp file=MedicineRepository.cs
 using System;
 using System.Collections.Generic;
 
-public sealed class Material(string code, string name, decimal ratePerUnit)
+public sealed class Medicine(string code, string name, decimal pricePerStrip)
 {
     public string Code { get; } = code;
     public string Name { get; } = name;
-    public decimal RatePerUnit { get; set; } = ratePerUnit;
+    public decimal PricePerStrip { get; set; } = pricePerStrip;
 }
 
-public interface IMaterialSource { Material? Load(string code); }
+public interface IMedicineSource { Medicine? Load(string code); }
 
-public sealed class MaterialRepository(IMaterialSource source)
+public sealed class MedicineRepository(IMedicineSource source)
 {
-    private readonly Dictionary<string, Material?> _identityMap = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Medicine?> _identityMap = new(StringComparer.Ordinal);
 
-    public Material? Get(string code)
+    public Medicine? Get(string code)
     {
         if (_identityMap.TryGetValue(code, out var cached)) return cached;
         var loaded = source.Load(code);
@@ -1018,14 +1022,14 @@ public sealed class MaterialRepository(IMaterialSource source)
 }
 ```
 
-Why it matters: without an identity map, two parts of one request could each load "OPC 53 cement", change different fields, and the second save would overwrite the first. EF Core's change tracker does this for you: `FindAsync` checks tracked entities before querying, and every tracked query resolves each row to the same instance.
+Why it matters: without an identity map, two parts of one request could each load "Paracetamol 500 mg", change different fields, and the second save would overwrite the first. EF Core's change tracker does this for you: `FindAsync` checks tracked entities before querying, and every tracked query resolves each row to the same instance.
 ::mistakes
 - Making the map `static`. It then becomes a process-wide cache shared across requests and threads, with stale data and race conditions. An identity map lives exactly as long as one unit of work.
 - Using a case-insensitive comparer when the database key is case-sensitive, or the other way round.
 :::
 
 :::exercise id=m06-repository-uow-ex3 difficulty=intermediate kind=code title="Optimistic concurrency in a unit of work"
-Two storekeepers receive cement against the same PO at the same time. Implement `VersionedUnitOfWork` so the second commit is rejected and nothing it wrote is applied.
+Two pharmacists receive paracetamol against the same PO at the same time. Implement `VersionedUnitOfWork` so the second commit is rejected and nothing it wrote is applied.
 ::requirements
 - `VersionedStore` (given) holds `(decimal Value, int Version)` per key. `Read` returns version 0 for a missing key.
 - `Get(key)` reads through an identity map and remembers the version read.
@@ -1081,8 +1085,8 @@ public class VersionedUnitOfWorkTests
     {
         var s = new VersionedStore();
         s.Write("po:4512:remaining", 300m, 1);
-        s.Write("stock:cement", 50m, 1);
-        s.Write("stock:steel", 8m, 1);
+        s.Write("stock:paracetamol", 50m, 1);
+        s.Write("stock:insulin", 8m, 1);
         return s;
     }
 
@@ -1093,15 +1097,15 @@ public class VersionedUnitOfWorkTests
         var a = new VersionedUnitOfWork(store);
         var b = new VersionedUnitOfWork(store);
         a.Set("po:4512:remaining", a.Get("po:4512:remaining") - 200m);
-        a.Set("stock:cement", a.Get("stock:cement") + 200m);
+        a.Set("stock:paracetamol", a.Get("stock:paracetamol") + 200m);
         b.Set("po:4512:remaining", b.Get("po:4512:remaining") - 200m);
-        b.Set("stock:cement", b.Get("stock:cement") + 200m);
+        b.Set("stock:paracetamol", b.Get("stock:paracetamol") + 200m);
 
         a.Commit();
         Assert.Throws<ConcurrencyException>(() => b.Commit());
         Assert.Equal(100m, store.Read("po:4512:remaining").Value);
-        Assert.Equal(250m, store.Read("stock:cement").Value);
-        Assert.Equal(2, store.Read("stock:cement").Version);
+        Assert.Equal(250m, store.Read("stock:paracetamol").Value);
+        Assert.Equal(2, store.Read("stock:paracetamol").Version);
     }
 
     [Fact]
@@ -1110,11 +1114,11 @@ public class VersionedUnitOfWorkTests
         var store = Seed();
         var a = new VersionedUnitOfWork(store);
         var b = new VersionedUnitOfWork(store);
-        a.Set("stock:cement", 60m);
-        b.Set("stock:steel", 9m);
+        a.Set("stock:paracetamol", 60m);
+        b.Set("stock:insulin", 9m);
         a.Commit(); b.Commit();
-        Assert.Equal(60m, store.Read("stock:cement").Value);
-        Assert.Equal(9m, store.Read("stock:steel").Value);
+        Assert.Equal(60m, store.Read("stock:paracetamol").Value);
+        Assert.Equal(9m, store.Read("stock:insulin").Value);
     }
 
     [Fact]
@@ -1122,14 +1126,14 @@ public class VersionedUnitOfWorkTests
     {
         var store = Seed();
         var reader = new VersionedUnitOfWork(store);
-        _ = reader.Get("stock:cement");
-        reader.Set("stock:steel", 10m);
+        _ = reader.Get("stock:paracetamol");
+        reader.Set("stock:insulin", 10m);
         var writer = new VersionedUnitOfWork(store);
-        writer.Set("stock:cement", 70m);
+        writer.Set("stock:paracetamol", 70m);
         writer.Commit();
-        reader.Commit();     // only steel changed in reader; cement was merely read
-        Assert.Equal(10m, store.Read("stock:steel").Value);
-        Assert.Equal(70m, store.Read("stock:cement").Value);
+        reader.Commit();     // only insulin changed in reader; paracetamol was merely read
+        Assert.Equal(10m, store.Read("stock:insulin").Value);
+        Assert.Equal(70m, store.Read("stock:paracetamol").Value);
     }
 
     [Fact]
@@ -1137,9 +1141,9 @@ public class VersionedUnitOfWorkTests
     {
         var store = Seed();
         var u = new VersionedUnitOfWork(store);
-        u.Set("stock:sand", 40m);
+        u.Set("stock:cetirizine", 40m);
         u.Commit();
-        Assert.Equal((40m, 1), store.Read("stock:sand"));
+        Assert.Equal((40m, 1), store.Read("stock:cetirizine"));
     }
 }
 ```
@@ -1204,11 +1208,11 @@ In SQL this is `UPDATE ... SET version = version + 1 WHERE key = @k AND version 
 - Validating outside the lock (a time-of-check/time-of-use race).
 - Not refreshing `Version` after commit, so a second `Commit()` conflicts with itself.
 ::extensions
-Instead of throwing, return a list of conflicting keys so the API can tell the user exactly which material changed.
+Instead of throwing, return a list of conflicting keys so the API can tell the user exactly which item changed.
 :::
 
 :::exercise id=m06-repository-uow-ex4 difficulty=intermediate kind=written title="Refactor: should this repository exist?"
-A five-person team's internal tool for a highway project office (ASP.NET Core, EF Core, PostgreSQL) has this data layer:
+A five-person team's internal tool for a pharmacy chain's head office (ASP.NET Core, EF Core, PostgreSQL) has this data layer:
 
 ```csharp
 public interface IRepository<T> where T : class
@@ -1222,18 +1226,18 @@ public interface IRepository<T> where T : class
 public class Repository<T>(AppDbContext db) : IRepository<T> where T : class { /* forwards to db.Set<T>() */ }
 ```
 
-There are 31 `IRepository<X>` registrations. `MeasurementBookService` adds a measurement entry, updates the bill total and writes an audit row through three repositories. Last month an exception after the second call left a bill total that didn't match its entries. Write a refactoring proposal (300–500 words): what to remove, keep and add, and why.
+There are 31 `IRepository<X>` registrations. `SupplierInvoiceService` adds an invoice line, updates the invoice total and writes an audit row through three repositories. Last month an exception after the second call left an invoice total that didn't match its lines. Write a refactoring proposal (300–500 words): what to remove, keep and add, and why.
 ::acceptance
-- Identify why the bill total got out of sync (per-call `SaveChangesAsync`).
+- Identify why the invoice total got out of sync (per-call `SaveChangesAsync`).
 - Explain what `GetAll(): IQueryable<T>` does to the abstraction.
 - Recommend a concrete target design and migration steps that can be done incrementally.
 - State at least one situation where you **would** keep a repository.
 ::hint
-Count the number of database transactions `MeasurementBookService` performs today.
+Count the number of database transactions `SupplierInvoiceService` performs today.
 ::hint
 Who already tracks changes and saves atomically in this app?
 ::hint
-Separate the write side (aggregates such as the measurement book) from the read side (31 list screens).
+Separate the write side (aggregates such as the supplier invoice) from the read side (31 list screens).
 ::hint
 An incremental plan: stop the per-call saves first, because it's the bug, and only then remove the generic layer feature by feature.
 ::solution
@@ -1242,7 +1246,7 @@ An incremental plan: stop the per-call saves first, because it's the bug, and on
 **Abstraction leak.** Services write `Include` and projections against `GetAll()`'s `IQueryable<T>`, so they depend on EF Core anyway. The interface hides nothing; it adds 31 registrations and an extra hop.
 
 **Target design.**
-1. *Write side*: specific repositories for the 3–5 real aggregates (`IMeasurementBookRepository.GetAsync(id)` with the right `Include`s), with no save methods. Save once via `IUnitOfWork`, implemented by `AppDbContext`. Move "bill total equals sum of entries" into the aggregate.
+1. *Write side*: specific repositories for the 3–5 real aggregates (`ISupplierInvoiceRepository.GetAsync(id)` with the right `Include`s), with no save methods. Save once via `IUnitOfWork`, implemented by `AppDbContext`. Move "invoice total equals sum of lines" into the aggregate.
 2. *Read side*: query objects, or `AppDbContext` with `AsNoTracking()` and `Select` into DTOs.
 3. *Simple CRUD* (lookups, settings): `AppDbContext` directly.
 
@@ -1251,7 +1255,7 @@ An incremental plan: stop the per-call saves first, because it's the bug, and on
 2. Add an integration test (Testcontainers PostgreSQL) that injects a failure mid-operation and asserts nothing was saved.
 3. Introduce aggregate repositories feature by feature; move read paths to queries; delete the generic repository when unused.
 
-**When to keep a repository.** For aggregates whose loading rules matter, when the domain must not reference EF Core, or when data also lives elsewhere (measurement photos in object storage).
+**When to keep a repository.** For aggregates whose loading rules matter, when the domain must not reference EF Core, or when data also lives elsewhere (scanned invoice PDFs in object storage).
 ::mistakes
 - A big-bang PR deleting all repositories at once.
 - Keeping `SaveChangesAsync` inside repositories "for convenience".
@@ -1259,48 +1263,48 @@ An incremental plan: stop the per-call saves first, because it's the bug, and on
 :::
 
 :::exercise id=m06-repository-uow-ex5 difficulty=intermediate kind=sql title="Write the low-stock query object in SQL"
-The low-stock report doesn't need aggregates or change tracking. It's a read model. Write the query a query object would run: for **site 1**, list materials whose `on_hand` is below `reorder_level`, with the material name, `on_hand`, `reorder_level` and `shortfall` (`reorder_level - on_hand`). Order by shortfall descending, then material code ascending.
+The low-stock report doesn't need aggregates or change tracking. It's a read model. Write the query a query object would run: for **store 1**, list medicines whose `on_hand` is below `reorder_level`, with the medicine name, `on_hand`, `reorder_level` and `shortfall` (`reorder_level - on_hand`). Order by shortfall descending, then medicine code ascending.
 ::acceptance
-- Only site 1, and only rows with `on_hand < reorder_level`.
-- Columns in order: `material_code`, `name`, `on_hand`, `reorder_level`, `shortfall`.
-- Ordered by `shortfall` descending, then `material_code`.
+- Only store 1, and only rows with `on_hand < reorder_level`.
+- Columns in order: `medicine_code`, `name`, `on_hand`, `reorder_level`, `shortfall`.
+- Ordered by `shortfall` descending, then `medicine_code`.
 ::hint
-You need a join between `site_stock` and `materials`.
+You need a join between `store_stock` and `medicines`.
 ::hint
-Filter with `WHERE s.site_id = 1 AND s.on_hand < s.reorder_level`.
+Filter with `WHERE s.store_id = 1 AND s.on_hand < s.reorder_level`.
 ::hint
 Compute `s.reorder_level - s.on_hand AS shortfall` in the `SELECT` and order by it.
 ::setup
 ```sql
-CREATE TABLE materials (code text PRIMARY KEY, name text NOT NULL, unit text NOT NULL);
-CREATE TABLE site_stock (site_id int NOT NULL, material_code text NOT NULL REFERENCES materials(code),
-  on_hand numeric(12,2) NOT NULL, reorder_level numeric(12,2) NOT NULL, PRIMARY KEY (site_id, material_code));
-INSERT INTO materials VALUES ('CEM-OPC53','OPC 53 cement','bag'),('STL-FE500','TMT bar Fe500','tonne'),
-  ('AGG-20','20 mm aggregate','cum'),('SND-RIV','River sand','cum'),('BIT-VG30','Bitumen VG-30','tonne');
-INSERT INTO site_stock VALUES (1,'CEM-OPC53',120,500),(1,'STL-FE500',18,15),(1,'AGG-20',40,80),
-  (1,'SND-RIV',60,100),(1,'BIT-VG30',2,10),(2,'CEM-OPC53',10,400);
+CREATE TABLE medicines (code text PRIMARY KEY, name text NOT NULL, unit text NOT NULL);
+CREATE TABLE store_stock (store_id int NOT NULL, medicine_code text NOT NULL REFERENCES medicines(code),
+  on_hand numeric(12,2) NOT NULL, reorder_level numeric(12,2) NOT NULL, PRIMARY KEY (store_id, medicine_code));
+INSERT INTO medicines VALUES ('PCM-500','Paracetamol 500 mg','strip'),('INS-GLA','Insulin glargine pen','pen'),
+  ('AMX-500','Amoxicillin 500 mg','strip'),('CTZ-10','Cetirizine 10 mg','strip'),('ORS-1L','ORS sachet','sachet');
+INSERT INTO store_stock VALUES (1,'PCM-500',120,500),(1,'INS-GLA',18,15),(1,'AMX-500',40,80),
+  (1,'CTZ-10',60,100),(1,'ORS-1L',2,10),(2,'PCM-500',10,400);
 ```
 ::check
 ```sql
-SELECT s.material_code, m.name, s.on_hand, s.reorder_level, s.reorder_level - s.on_hand AS shortfall
-FROM site_stock s
-JOIN materials m ON m.code = s.material_code
-WHERE s.site_id = 1 AND s.on_hand < s.reorder_level
-ORDER BY shortfall DESC, s.material_code;
+SELECT s.medicine_code, m.name, s.on_hand, s.reorder_level, s.reorder_level - s.on_hand AS shortfall
+FROM store_stock s
+JOIN medicines m ON m.code = s.medicine_code
+WHERE s.store_id = 1 AND s.on_hand < s.reorder_level
+ORDER BY shortfall DESC, s.medicine_code;
 ```
 ::solution
 ```sql
-SELECT s.material_code, m.name, s.on_hand, s.reorder_level, s.reorder_level - s.on_hand AS shortfall
-FROM site_stock s
-JOIN materials m ON m.code = s.material_code
-WHERE s.site_id = 1 AND s.on_hand < s.reorder_level
-ORDER BY shortfall DESC, s.material_code;
+SELECT s.medicine_code, m.name, s.on_hand, s.reorder_level, s.reorder_level - s.on_hand AS shortfall
+FROM store_stock s
+JOIN medicines m ON m.code = s.medicine_code
+WHERE s.store_id = 1 AND s.on_hand < s.reorder_level
+ORDER BY shortfall DESC, s.medicine_code;
 ```
 
-The result has four rows: cement (380), aggregate (40), sand (40) and bitumen (8). Aggregate and sand tie, so they are ordered by code. Steel is above its reorder level, and site 2's cement is excluded. In C#, the query object would run this with Dapper, or with EF Core using `AsNoTracking()` plus `Select` into `LowStockRow`. No repository, no aggregate and no unit of work are involved.
+The result has four rows: paracetamol (380), amoxicillin (40), cetirizine (40) and ORS (8). Amoxicillin and cetirizine tie, so they are ordered by code. Insulin is above its reorder level, and store 2's paracetamol is excluded. In C#, the query object would run this with Dapper, or with EF Core using `AsNoTracking()` plus `Select` into `LowStockRow`. No repository, no aggregate and no unit of work are involved.
 ::mistakes
 - Forgetting the tie-breaker. Equal shortfalls then come back in an unpredictable order.
-- Loading `SiteStock` aggregates through the repository and filtering in C#. That's correct, but wasteful, and it tracks entities you'll never save.
+- Loading `StoreStock` aggregates through the repository and filtering in C#. That's correct, but wasteful, and it tracks entities you'll never save.
 :::
 
 :::exercise id=m06-repository-uow-ex6 difficulty=advanced kind=code title="Transactional outbox in the unit of work"
@@ -1311,7 +1315,7 @@ Accounts must be notified of each receipt via a message broker. Publishing after
 - If the store rejects the commit (`ConcurrencyException`), there are no outbox rows and the events are **not** cleared, so the caller can retry.
 - After a successful commit, events are cleared, and committing again writes nothing new.
 ::acceptance
-- Receiving cement produces one `outbox:` row containing the event text.
+- Receiving paracetamol produces one `outbox:` row containing the event text.
 - A conflicting commit leaves zero outbox rows and the store unchanged.
 - A second `Commit()` after success writes no duplicate outbox rows.
 ::hint
@@ -1362,22 +1366,22 @@ public interface IHasDomainEvents
     string Serialize();
 }
 
-public sealed class StockItem(string siteCode, string material, decimal onHand) : IHasDomainEvents
+public sealed class StockItem(string storeCode, string item, decimal onHand) : IHasDomainEvents
 {
     private readonly List<string> _events = new();
-    public string Key => $"stock:{siteCode}:{material}";
+    public string Key => $"stock:{storeCode}:{item}";
     public decimal OnHand { get; private set; } = onHand;
     public IReadOnlyList<string> DomainEvents => _events;
     public void ClearDomainEvents() => _events.Clear();
     public string Serialize() => OnHand.ToString(System.Globalization.CultureInfo.InvariantCulture);
-    public void Receive(decimal qty, string grn) { OnHand += qty; _events.Add($"GoodsReceived {grn} {material} {qty}"); }
-    public static StockItem Parse(string siteCode, string material, string value) => new(siteCode, material, decimal.Parse(value, System.Globalization.CultureInfo.InvariantCulture));
+    public void Receive(decimal qty, string grn) { OnHand += qty; _events.Add($"GoodsReceived {grn} {item} {qty}"); }
+    public static StockItem Parse(string storeCode, string item, string value) => new(storeCode, item, decimal.Parse(value, System.Globalization.CultureInfo.InvariantCulture));
 }
 
 public sealed class OutboxUnitOfWork(OutboxStore store)
 {
     /// <summary>Loads (or returns the already-tracked) stock item; version 0 if it doesn't exist yet.</summary>
-    public StockItem GetStock(string siteCode, string material) => throw new NotImplementedException();
+    public StockItem GetStock(string storeCode, string item) => throw new NotImplementedException();
     public void Commit() => throw new NotImplementedException();
 }
 ```
@@ -1390,7 +1394,7 @@ public class OutboxTests
     private static OutboxStore Seed()
     {
         var s = new OutboxStore();
-        s.CommitAll(new[] { new Write("stock:GGN:cement", "100", 0) });
+        s.CommitAll(new[] { new Write("stock:BLR01:paracetamol", "100", 0) });
         return s;
     }
 
@@ -1399,11 +1403,11 @@ public class OutboxTests
     {
         var store = Seed();
         var uow = new OutboxUnitOfWork(store);
-        uow.GetStock("GGN", "cement").Receive(200m, "GRN-77");
+        uow.GetStock("BLR01", "paracetamol").Receive(200m, "GRN-77");
         uow.Commit();
-        Assert.Equal("300", store.Read("stock:GGN:cement")!.Value.Value);
+        Assert.Equal("300", store.Read("stock:BLR01:paracetamol")!.Value.Value);
         var key = Assert.Single(store.Keys("outbox:"));
-        Assert.Equal("GoodsReceived GRN-77 cement 200", store.Read(key)!.Value.Value);
+        Assert.Equal("GoodsReceived GRN-77 paracetamol 200", store.Read(key)!.Value.Value);
     }
 
     [Fact]
@@ -1412,13 +1416,13 @@ public class OutboxTests
         var store = Seed();
         var a = new OutboxUnitOfWork(store);
         var b = new OutboxUnitOfWork(store);
-        var stockA = a.GetStock("GGN", "cement");
-        b.GetStock("GGN", "cement").Receive(50m, "GRN-1");
+        var stockA = a.GetStock("BLR01", "paracetamol");
+        b.GetStock("BLR01", "paracetamol").Receive(50m, "GRN-1");
         stockA.Receive(200m, "GRN-2");
         b.Commit();
         Assert.Throws<ConcurrencyException>(() => a.Commit());
         Assert.Single(store.Keys("outbox:"));                 // only B's event
-        Assert.Equal("150", store.Read("stock:GGN:cement")!.Value.Value);
+        Assert.Equal("150", store.Read("stock:BLR01:paracetamol")!.Value.Value);
         Assert.Single(stockA.DomainEvents);                   // kept for retry
     }
 
@@ -1427,18 +1431,18 @@ public class OutboxTests
     {
         var store = Seed();
         var uow = new OutboxUnitOfWork(store);
-        uow.GetStock("GGN", "cement").Receive(10m, "GRN-9");
+        uow.GetStock("BLR01", "paracetamol").Receive(10m, "GRN-9");
         uow.Commit();
         uow.Commit();
         Assert.Single(store.Keys("outbox:"));
-        Assert.Equal(2, store.Read("stock:GGN:cement")!.Value.Version);
+        Assert.Equal(2, store.Read("stock:BLR01:paracetamol")!.Value.Version);
     }
 
     [Fact]
     public void Same_instance_returned_within_unit_of_work()
     {
         var uow = new OutboxUnitOfWork(Seed());
-        Assert.Same(uow.GetStock("GGN", "cement"), uow.GetStock("GGN", "cement"));
+        Assert.Same(uow.GetStock("BLR01", "paracetamol"), uow.GetStock("BLR01", "paracetamol"));
     }
 }
 ```
@@ -1476,16 +1480,16 @@ public interface IHasDomainEvents
     string Serialize();
 }
 
-public sealed class StockItem(string siteCode, string material, decimal onHand) : IHasDomainEvents
+public sealed class StockItem(string storeCode, string item, decimal onHand) : IHasDomainEvents
 {
     private readonly List<string> _events = new();
-    public string Key => $"stock:{siteCode}:{material}";
+    public string Key => $"stock:{storeCode}:{item}";
     public decimal OnHand { get; private set; } = onHand;
     public IReadOnlyList<string> DomainEvents => _events;
     public void ClearDomainEvents() => _events.Clear();
     public string Serialize() => OnHand.ToString(System.Globalization.CultureInfo.InvariantCulture);
-    public void Receive(decimal qty, string grn) { OnHand += qty; _events.Add($"GoodsReceived {grn} {material} {qty}"); }
-    public static StockItem Parse(string siteCode, string material, string value) => new(siteCode, material, decimal.Parse(value, System.Globalization.CultureInfo.InvariantCulture));
+    public void Receive(decimal qty, string grn) { OnHand += qty; _events.Add($"GoodsReceived {grn} {item} {qty}"); }
+    public static StockItem Parse(string storeCode, string item, string value) => new(storeCode, item, decimal.Parse(value, System.Globalization.CultureInfo.InvariantCulture));
 }
 
 public sealed class OutboxUnitOfWork(OutboxStore store)
@@ -1499,14 +1503,14 @@ public sealed class OutboxUnitOfWork(OutboxStore store)
 
     private readonly Dictionary<string, Entry> _tracked = new();
 
-    public StockItem GetStock(string siteCode, string material)
+    public StockItem GetStock(string storeCode, string item)
     {
-        var key = $"stock:{siteCode}:{material}";
+        var key = $"stock:{storeCode}:{item}";
         if (_tracked.TryGetValue(key, out var e)) return (StockItem)e.Aggregate;
         var row = store.Read(key);
-        var item = row is { } r ? StockItem.Parse(siteCode, material, r.Value) : new StockItem(siteCode, material, 0m);
-        _tracked[key] = new Entry(item, row?.Version ?? 0, row?.Value);
-        return item;
+        var stock = row is { } r ? StockItem.Parse(storeCode, item, r.Value) : new StockItem(storeCode, item, 0m);
+        _tracked[key] = new Entry(stock, row?.Version ?? 0, row?.Value);
+        return stock;
     }
 
     public void Commit()
@@ -1537,7 +1541,7 @@ Add a `OutboxDispatcher` that reads `outbox:` rows in order, calls an `IPublishe
 
 ## Automated testing
 
-**Domain rules without any persistence.** `PurchaseOrder.Receive` is plain C#, so test over-receipt, unknown material and zero quantities directly. These tests are fast and stable.
+**Domain rules without any persistence.** `PurchaseOrder.Receive` is plain C#, so test over-receipt, unknown items and zero quantities directly. These tests are fast and stable.
 
 **Application services with in-memory repositories.** Use the lesson's `InMemoryUnitOfWork` and friends, or hand-written fakes, to test `ReceiveGoodsHandler`:
 
@@ -1547,15 +1551,15 @@ public async Task Receipt_updates_po_stock_and_grn_atomically()
 {
     var db = new InMemoryDatabase();
     var seed = new InMemoryUnitOfWork(db);
-    var po = PurchaseOrder.Create(siteId, "UltraTech dealer, Gurgaon", new[] { ("CEM-OPC53", 500m) });
+    var po = PurchaseOrder.Create(storeId, "Sri Sai Pharma Distributors, Hyderabad", new[] { ("PCM-500", 500m) });
     new InMemoryPurchaseOrderRepository(seed, db).Add(po);
     await seed.SaveChangesAsync(default);
 
     var uow = new InMemoryUnitOfWork(db);
     var handler = new ReceiveGoodsHandler(new InMemoryPurchaseOrderRepository(uow, db),
-        new InMemorySiteStockRepository(uow, db), new InMemoryGoodsReceiptRepository(uow), uow, TimeProvider.System);
+        new InMemoryStoreStockRepository(uow, db), new InMemoryGoodsReceiptRepository(uow), uow, TimeProvider.System);
 
-    var outcome = await handler.HandleAsync(new ReceiveGoodsCommand(po.Id, "CEM-OPC53", 200m), default);
+    var outcome = await handler.HandleAsync(new ReceiveGoodsCommand(po.Id, "PCM-500", 200m), default);
 
     Assert.IsType<ReceiveGoodsOutcome.Received>(outcome);
     Assert.Single(db.Scan<GoodsReceipt>("grn:"));
@@ -1570,7 +1574,7 @@ public async Task Receipt_updates_po_stock_and_grn_atomically()
 
 ## Real-world application
 
-- **ERP and construction-management platforms**: goods receipts, measurement books and running bills update several tables per operation. Unit of work, and optimistic concurrency on high-contention rows such as stock, prevent the classic month-end reconciliation mess.
+- **Pharmacy, grocery and retail inventory systems**: a goods receipt updates the purchase order, stock per store, batch and expiry records and the supplier's payable in one operation. Unit of work, and optimistic concurrency on high-contention rows such as stock, prevent the classic month-end reconciliation mess.
 - **E-commerce checkouts**: order, payment intent and inventory reservation commit together. Notifications go through an outbox.
 - **Clean-architecture templates** commonly put repository interfaces in the domain or application layer and EF Core implementations in infrastructure. Vertical-slice templates often use `DbContext` directly. Both are common in production .NET.
 - **Ledgers** often use hand-written SQL in explicit transactions; the unit-of-work *idea* still applies without the classes.
@@ -1595,7 +1599,7 @@ When does a repository over EF Core genuinely add value?
 ::a
 For aggregate roots (guaranteed complete loading, only invariant-respecting operations), when the domain must not depend on EF Core, for fast unit tests of application services, and when an aggregate spans several stores. Reads use query objects or `DbContext` projections.
 ::q advanced
-Two users receive goods against the same purchase order simultaneously. Walk through how you'd prevent the lost update in PostgreSQL with EF Core.
+Two pharmacists receive goods against the same purchase order simultaneously. Walk through how you'd prevent the lost update in PostgreSQL with EF Core.
 ::a
 Optimistic concurrency: map PostgreSQL's `xmin` (Npgsql `IsRowVersion()`) or a `version` column as a concurrency token. EF Core adds `WHERE xmin = @original`; the second save affects zero rows and throws `DbUpdateConcurrencyException`. Return 409, or reload and retry if safe; the over-receipt rule in the aggregate re-checks fresh data. Under extreme contention, use `SELECT ... FOR UPDATE` in an explicit transaction, or append receipt rows instead of updating a shared counter.
 ::q advanced
@@ -1667,7 +1671,7 @@ A dashboard shows 12 KPIs computed from five tables. How should it read data?
 - [ ] Open a unit of work and call `SaveChanges` afterwards.
 > Read models don't need aggregates or change tracking. A focused query is faster and clearer.
 ::q single
-Two storekeepers save receipts for the same PO at the same moment. Which mechanism makes the second save fail instead of silently overwriting?
+Two pharmacists save receipts for the same PO at the same moment. Which mechanism makes the second save fail instead of silently overwriting?
 - [ ] The identity map.
 - [x] An optimistic concurrency token checked in the UPDATE's WHERE clause.
 - [ ] A generic repository.

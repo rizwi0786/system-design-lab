@@ -24,7 +24,7 @@ references:
     url: https://learn.microsoft.com/aspnet/core/fundamentals/host/hosted-services
 ---
 
-Twenty minutes into a design interview, just as your diagram looks finished, the interviewer says: "Now the client says all data must stay in India." Or "traffic is 50x what we said." Or "site engineers need to work offline for a week." This is not bad luck. It is the most deliberate part of the interview: the interviewer wants to see which parts of your design depend on which assumptions, and whether you can change course without panicking or starting over. In real projects the same thing happens over months instead of minutes, and the system is already running, so the second half of the skill is migration: getting from the old design to the new one without downtime or data loss. This lesson covers both.
+Twenty minutes into a design interview, just as your diagram looks finished, the interviewer says: "Now the client says all data must stay in India." Or "traffic is 50x what we said." Or "home-visit nurses need to work offline for a week." This is not bad luck. It is the most deliberate part of the interview: the interviewer wants to see which parts of your design depend on which assumptions, and whether you can change course without panicking or starting over. In real projects the same thing happens over months instead of minutes, and the system is already running, so the second half of the skill is migration: getting from the old design to the new one without downtime or data loss. This lesson covers both.
 
 ## Learning objectives
 
@@ -50,7 +50,7 @@ You are driving from Delhi to Jaipur with the map app open. Halfway there, a mes
 1. **Restate** the change: "We now need Ajmer, not Jaipur, by the same time."
 2. **Re-estimate**: "Ajmer is about 130 km further. Can we still make it? Fuel?"
 3. **Check what is affected** (the ripple): "The hotel booking in Jaipur and the lunch stop are affected. The car, the route as far as Jaipur, and the driver are not."
-4. **Revise** the plan: "Keep driving to Jaipur, then continue on the highway to Ajmer, refuel at Kishangarh."
+4. **Revise** the plan: "Keep driving to Jaipur, then carry on along the same road to Ajmer, refuel at Kishangarh."
 5. **Route** from where you are to the new plan: "Cancel the hotel now while it is free to cancel, call ahead for lunch."
 
 That last step matters most in real systems. You are never starting from an empty road. Your system is already running with real data, and you must move it to the new design while users keep using it. That move is a migration, and the safe way to do it is in small, reversible steps (like changing lanes one at a time, signalling first).
@@ -109,14 +109,16 @@ When a running system must change, these principles keep it safe:
 5. **Verify before trusting.** Shadow reads (read both, serve the old, compare) give evidence that the new store is correct.
 6. **Cut over gradually.** By tenant, by percentage, or by region, so a problem affects a few users first.
 7. **Keep the way back open** until a soak period has passed. Contracting (deleting the old) is the last, irreversible step.
+8. **Budget for running both.** During a migration you pay for two copies of the data, extra write load and extra monitoring. Give the migration an owner and an end date, or the "temporary" dual state becomes permanent.
+9. **Keep old clients working.** Mobile apps and partner integrations upgrade slowly, so the API must accept the old shape until usage of it (measured, not guessed) drops to near zero.
 
 ### Expand and contract for schema changes
 
-Example: contractors had a single `phone` column; the new requirement is multiple contacts with types (office, site, accounts). The safe sequence (also called parallel change):
+Example: in a clinic system, patients had a single `phone` column; the new requirement is multiple contacts with types (mobile, home, emergency contact). The safe sequence (also called parallel change):
 
-1. **Expand**: create `contractor_contacts`. Deploy code that ignores it. No risk.
-2. **Dual write**: deploy code that writes contacts to both `contractors.phone` and `contractor_contacts`, behind a flag. Turn the flag on.
-3. **Backfill**: copy existing phones into `contractor_contacts` in small batches, idempotently, with a checkpoint.
+1. **Expand**: create `patient_contacts`. Deploy code that ignores it. No risk.
+2. **Dual write**: deploy code that writes contacts to both `patients.phone` and `patient_contacts`, behind a flag. Turn the flag on.
+3. **Backfill**: copy existing phones into `patient_contacts` in small batches, idempotently, with a checkpoint.
 4. **Verify**: shadow-read contacts from the new table, compare with the old column, count mismatches.
 5. **Switch reads**: serve contacts from the new table (flag). Keep dual writes on.
 6. **Soak**: wait (for example a week, or one full billing cycle) watching errors.
@@ -227,20 +229,20 @@ We follow one interview where the requirement changes three times, then turn one
 
 ### The starting design
 
-Prompt: "Design a document management system for an engineering consultancy's projects: 80 projects, 3,000 users, drawings and reports uploaded, versioned, reviewed and approved."
+Prompt: "Design a patient records system for a chain of 80 clinics: 3,000 staff users; lab reports, scans and prescriptions uploaded, versioned, reviewed and signed off by doctors."
 
 Assumptions written on the board:
 
 - A1: single country of operation, no residency rule.
-- A2: about 3,000 users, peak 50 requests per second, 300 writes per second at most during bulk uploads.
+- A2: about 3,000 staff users, peak 50 requests per second, 300 writes per second at most during bulk uploads (a lab pushing a day's results at once).
 - A3: users are online when they work.
-- A4: one company (single tenant).
+- A4: one clinic chain (single tenant).
 
-Design: a modular monolith (documents, reviews, users modules), PostgreSQL with a standby for metadata, object storage for files, a queue for thumbnail and PDF rendering jobs, a search index for document titles and text (fed from an outbox), and SSO. Decisions annotated with assumptions: one region (A1), single primary (A2), server-generated ids (A3), no tenant column (A4).
+Design: a modular monolith (records, reviews, users modules), PostgreSQL with a standby for metadata, object storage for files, a queue for thumbnail and PDF rendering jobs, a search index for document titles and text (fed from an outbox), and SSO. Decisions annotated with assumptions: one region (A1), single primary (A2), server-generated ids (A3), no tenant column (A4).
 
-### Change 1 — "All project data must remain in India"
+### Change 1 — "All patient data must remain in India"
 
-*Restate:* "All documents, metadata, backups and logs stored and processed in India? Can staff abroad view documents?" Interviewer: "Yes to all storage; staff abroad can view through the application."
+*Restate:* "All patient documents, metadata, backups and logs stored and processed in India? Can doctors abroad (for second opinions) view records?" Interviewer: "Yes to all storage; doctors abroad can view through the application."
 
 *Re-estimate:* no change in numbers.
 
@@ -248,13 +250,13 @@ Design: a modular monolith (documents, reviews, users modules), PostgreSQL with 
 
 *Revise:* deploy in an Indian cloud region with backups to a second Indian region; keep logs in a region-local log store; choose an email provider with Indian processing or send only links without document content. Users abroad access through the application; no replication abroad.
 
-*Route:* "If this were live: stand up the new region with infrastructure as code, replicate PostgreSQL with logical replication, copy object storage in the background, verify with checksums per project, then cut over during a low-traffic window with DNS. Old-region data deleted after verification, with a deletion certificate if the client needs one."
+*Route:* "If this were live: stand up the new region with infrastructure as code, replicate PostgreSQL with logical replication, copy object storage in the background, verify with checksums per clinic, then cut over during a low-traffic window with DNS. Old-region data deleted after verification, with a deletion certificate if the client needs one."
 
 Classification: **mostly additive**, because the architecture already had clean boundaries; the work is in placement, not structure.
 
-### Change 2 — "Sell this to 200 other consultancies"
+### Change 2 — "Sell this to 200 other clinic chains"
 
-*Restate:* "So it becomes multi-tenant SaaS. Do tenants need isolation guarantees, like separate databases for some?" Interviewer: "Most are small; two large ones want dedicated databases."
+*Restate:* "So it becomes multi-tenant SaaS for clinic chains and hospitals. Do tenants need isolation guarantees, like separate databases for some?" Interviewer: "Most are small; two large hospital groups want dedicated databases."
 
 *Re-estimate:* 200 tenants, perhaps 150,000 users, peak 2,500 requests per second, up to 15,000 writes per second during bulk uploads across tenants. Storage grows to hundreds of terabytes of files.
 
@@ -266,15 +268,15 @@ Classification: **mostly additive**, because the architecture already had clean 
 
 Classification: **invalidating**, and the answer says so: "this is the biggest change so far; it touches every table."
 
-### Change 3 — "Site engineers must work offline for up to a week"
+### Change 3 — "Home-visit nurses must work offline for up to a week"
 
-*Restate:* "Offline viewing only, or offline edits and approvals too?" Interviewer: "Viewing assigned drawings and adding markups and inspection notes offline."
+*Restate:* "Offline viewing only, or offline edits and sign-offs too?" Interviewer: "Viewing assigned patients' records and adding visit notes and vital signs offline; prescriptions still need a connection."
 
-*Ripple:* A3 is invalidated. Server-generated ids no longer work for records created offline; markups created offline may conflict with changes on the server; files must be cached on devices; sync needs a protocol.
+*Ripple:* A3 is invalidated. Server-generated ids no longer work for records created offline; notes created offline may conflict with changes on the server; files must be cached on devices, which are now a place where patient data lives (encryption at rest, remote wipe); sync needs a protocol.
 
-*Revise:* client-generated ids (UUIDs) for markups and notes; markups are append-only, so conflicts are rare (two engineers adding notes don't conflict); edits to the same note use last-writer-wins with the conflict kept as a history entry; a sync API with "changes since version N" per project; devices download assigned drawings with a size budget.
+*Revise:* client-generated ids (UUIDs) for visit notes and vitals; these are append-only, so conflicts are rare (two nurses adding notes don't conflict); edits to the same note use last-writer-wins with the conflict kept as a history entry; a sync API with "changes since version N" per patient list; devices download only assigned patients' records, encrypted, with a size budget and an expiry.
 
-*Route:* "Markups move from integer ids to UUIDs: expand with a `uuid` column, backfill, dual-write, switch the API to accept and return UUIDs, keep integer ids internal until all clients are on the new app version, then contract."
+*Route:* "Visit notes move from integer ids to UUIDs: expand with a `uuid` column, backfill, dual-write, switch the API to accept and return UUIDs, keep integer ids internal until all clients are on the new app version, then contract."
 
 ### Turning change 2 into an execution plan
 
@@ -516,7 +518,7 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<ContactStores>();
 builder.Services.AddSingleton<ICheckpointStore, InMemoryCheckpointStore>();
 builder.Services.AddSingleton<ShadowReadComparer>();
-builder.Services.AddSingleton(sp => new MigrationPlan("contractor-contacts",
+builder.Services.AddSingleton(sp => new MigrationPlan("patient-contacts",
     sp.GetRequiredService<IOptions<MigrationOptions>>().Value, sp.GetRequiredService<TimeProvider>()));
 builder.Services.AddSingleton(sp =>
 {
@@ -530,7 +532,7 @@ app.MapGet("/migrations/contacts", (MigrationPlan plan, ShadowReadComparer shado
     Results.Ok(new { plan.Name, Phase = plan.Phase.ToString(), shadow.Samples, shadow.MismatchRate, plan.History }));
 
 app.MapPost("/migrations/contacts/backfill", async (Backfiller backfiller, CancellationToken ct) =>
-    Results.Ok(await backfiller.RunAsync("contractor-contacts", 5_000, ct)));
+    Results.Ok(await backfiller.RunAsync("patient-contacts", 5_000, ct)));
 
 app.MapPost("/migrations/contacts/advance", (MigrationPlan plan, ShadowReadComparer shadow, ContactStores stores) =>
 {
@@ -593,17 +595,17 @@ After a requirement change, explicitly listing what does **not** change ("the da
 
 ## Practical playground
 
-The starter is the document management system after change 1 (single tenant, India region). Apply change 2 (multi-tenant SaaS, 200 tenants, two with dedicated databases) in the canvas: add the tenant catalogue, route the two large tenants to dedicated databases, put bulk uploads on the queue, and label every changed node with the assumption that changed (A2 or A4). Then list, outside the canvas, the migration phases and their gates.
+The starter is the patient records system after change 1 (single tenant, India region). Apply change 2 (multi-tenant SaaS, 200 tenants, two with dedicated databases) in the canvas: add the tenant catalogue, route the two large tenants to dedicated databases, put bulk uploads on the queue, and label every changed node with the assumption that changed (A2 or A4). Then list, outside the canvas, the migration phases and their gates.
 
-:::playground type=hld title="Apply the multi-tenant change to the document system"
+:::playground type=hld title="Apply the multi-tenant change to the records system"
 ```json
 {
   "nodes": [
-    { "id": "u", "type": "client", "label": "3,000 users (one company)", "props": { "rps": 50 } },
+    { "id": "u", "type": "client", "label": "3,000 staff (one clinic chain)", "props": { "rps": 50 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer", "props": { "region": "India (A1 revised)" } },
-    { "id": "app", "type": "app-server", "label": "Document app: documents, reviews, users modules", "props": { "instances": 2 } },
+    { "id": "app", "type": "app-server", "label": "Records app: records, reviews, users modules", "props": { "instances": 2 } },
     { "id": "db", "type": "database", "label": "PostgreSQL metadata, no tenant column (A4)", "props": { "multiAz": true } },
-    { "id": "obj", "type": "object-storage", "label": "Drawings and reports" },
+    { "id": "obj", "type": "object-storage", "label": "Lab reports and scans" },
     { "id": "q", "type": "queue", "label": "Rendering jobs" },
     { "id": "w", "type": "worker", "label": "Thumbnail and PDF workers" },
     { "id": "s", "type": "search", "label": "Search index (titles and text)" }
@@ -996,7 +998,7 @@ Take a backup, then `ALTER TABLE invoices DROP COLUMN amount_rupees;` Rollback: 
 :::
 
 :::exercise id=m19-changing-requirements-ex5 difficulty=advanced kind=hld title="The data must now stay in India, and the system is live"
-A SaaS for construction project scheduling runs in a single region in Singapore: two app instances, managed PostgreSQL with a replica, object storage, a Redis cache, a queue with workers, and logs shipped to a global log SaaS. A new law requires all data of Indian customers (60 % of tenants) to be stored and processed in India within six months; other customers stay where they are. Design the target architecture and the migration path, tenant by tenant, without downtime for anyone.
+A SaaS for gym membership and class booking runs in a single region in Singapore: two app instances, managed PostgreSQL with a replica, object storage (member photos and documents), a Redis cache, a queue with workers, and logs shipped to a global log SaaS. A new law requires all data of Indian customers (60 % of tenants) to be stored and processed in India within six months; other customers stay where they are. Design the target architecture and the migration path, tenant by tenant, without downtime for anyone.
 ::acceptance
 - Two deployments ("cells"): India and Singapore, each with its own data stores; a tenant catalogue routes each tenant to its cell.
 - Logs, backups, caches and queues for Indian tenants also stay in India.
@@ -1017,7 +1019,7 @@ Shape: global DNS and edge router → tenant catalogue lookup (cached) → cell 
   "nodes": [
     { "id": "u", "type": "client", "label": "Users (all tenants)", "props": { "rps": 400 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer (Singapore)" },
-    { "id": "app", "type": "app-server", "label": "Scheduling app", "props": { "instances": 2, "region": "Singapore" } },
+    { "id": "app", "type": "app-server", "label": "Gym booking app", "props": { "instances": 2, "region": "Singapore" } },
     { "id": "db", "type": "database", "label": "PostgreSQL (all tenants)", "props": { "replicas": 1, "region": "Singapore" } },
     { "id": "obj", "type": "object-storage", "label": "Attachments", "props": { "region": "Singapore" } },
     { "id": "cache", "type": "cache", "label": "Redis" },
@@ -1343,7 +1345,7 @@ Beyond unit tests:
 - **Single-tenant to multi-tenant.** Products built for one client and then sold to many go through exactly change 2: tenant ids everywhere, backfilled to tenant 1, then tenant-scoped queries behind a flag.
 - **Money and units.** Changing currency precision (rupees to paise), time zones (local to UTC) or measurement units is a classic expand-and-contract migration where verification queries are simple and essential.
 - **Re-platforming.** Moving from one database or broker to another uses dual writes or CDC, backfill, shadow reads and a gradual cutover; the strangler-fig pattern does the same for code paths.
-- **Infrastructure projects.** Contract variations change scope mid-project, and project-management systems must absorb new measurement items, new approval levels or new reporting formats without losing history, which is the same discipline at the data-model level.
+- **Policy changes in commerce.** A marketplace that adds a new returns policy, a new GST invoice format or a new seller approval level must absorb new fields and workflow steps without losing order history, which is the same discipline at the data-model level.
 
 ## Interview questions
 

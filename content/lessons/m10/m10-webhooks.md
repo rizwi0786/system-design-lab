@@ -104,7 +104,7 @@ Webhooks also give **no ordering guarantee**. Attempt 1 of `payment.captured` ma
 - anyone with the secret can recompute, and
 - nobody without the secret can forge, even after seeing millions of valid signatures.
 
-When the consumer registers the endpoint, the provider generates a random secret (at least 24 bytes, typically 32) and shows it once. For every delivery, the provider computes:
+When the consumer registers the endpoint, the provider generates a random secret (at least 24 bytes, typically 32) and shows it once. Standard Webhooks presents it as `whsec_` followed by the base64 of the key bytes; the HMAC key is the *decoded* bytes, not the string. Store it like a password: in a secret store, never in source control. For every delivery, the provider computes:
 
 ```text
 signed_content = webhook-id + "." + webhook-timestamp + "." + raw_body
@@ -131,6 +131,8 @@ The defence has two layers:
 
 1. **Timestamp tolerance.** Reject any request whose signed timestamp is more than, say, **5 minutes** from your clock, in either direction. A replay next week fails. Five minutes allows for clock skew between servers (keep your servers on NTP) without leaving a long window.
 2. **Seen-id check.** Inside the 5-minute window, remember each `webhook-id` you processed. A replay within the window is a duplicate and is ignored. This is the same table that gives you idempotency, so you get it almost for free.
+
+Do not confuse the two time spans. For *replay* protection, remembering ids for the 5-minute tolerance is enough, because anything older fails the timestamp check. For *idempotency*, it is not: a genuine retry 10 hours later carries the same id with a fresh timestamp and passes the window. So the inbox must remember ids for at least the sender's whole retry horizon plus manual resends (keep them 7–30 days, then drop old partitions).
 
 Note what tolerance does to retries: the sender must **re-sign every attempt with a fresh timestamp**. The id stays the same across retries (that is how the receiver spots duplicates), but the timestamp changes.
 
@@ -264,13 +266,13 @@ Attempt 1 hits the consumer mid-deploy and gets **503**, a retryable status, so 
 
 ## Step-by-step example
 
-**Scenario.** NirmanPay is a fictional payment platform used by construction-material suppliers. Suppliers' ERPs need to know when a contractor's payment is captured or refunded. NirmanPay has 12,000 supplier endpoints and handles about 3 M payment events a day, with month-end peaks.
+**Scenario.** PaySetu is a fictional payment gateway used by online shops, food-delivery kitchens and coaching institutes. Each merchant's server needs to know when a customer's UPI or card payment is captured or refunded, so it can confirm the order, start the delivery or unlock the course. PaySetu has 12,000 merchant endpoints and handles about 3 M payment events a day, with big peaks during festival sales.
 
 ### Step 1 — Estimate the load
 
 ```text
 3,000,000 events/day ÷ 86,400 s ≈ 35 events/s average
-Month-end peak, assume ×6          ≈ 210 events/s
+Festival-sale peak, assume ×6      ≈ 210 events/s
 Assume 1.3 attempts per event       ≈ 270 HTTP requests/s at peak
 ```
 
@@ -280,15 +282,15 @@ Concurrent requests = arrival rate × time each takes. If healthy endpoints answ
 
 ### Step 3 — Choose a retry schedule
 
-Supplier ERPs are often on-premises and restart overnight. NirmanPay picks 8 attempts with full jitter over about 24 hours, and disables an endpoint after 5 days of continuous failure, with emails at day 1 and day 3.
+Many small merchants run their shop on a single virtual machine or shared hosting that goes down for an hour during a deploy, or overnight. A 2-hour exponential window is too short for them, so PaySetu publishes a fixed schedule: 8 attempts, with gaps of 5 s, 5 min, 30 min, 2 h, 5 h, 10 h and 10 h (about 28 hours in total), each gap with ±20 % jitter. It disables an endpoint after 5 days of continuous failure, with emails to the merchant at day 1 and day 3.
 
 ### Step 4 — Define the contract
 
 Headers `webhook-id`, `webhook-timestamp`, `webhook-signature`; HMAC-SHA256 over `id.timestamp.body`; 5-minute tolerance; JSON body with `type`, `id`, `created_at` and a `data` object containing the payment's current state and a `version` number so receivers can ignore stale updates.
 
-### Step 5 — Build the receiver (for the supplier ERP team)
+### Step 5 — Build the receiver (for the merchant's team)
 
-Read raw bytes, verify, insert into inbox, return `200` within 1 s, process in the background. The code is in the next section.
+Read raw bytes, verify, insert into inbox, return `200` within 1 s, process in the background (mark the order paid, then send the receipt). The code is in the next section.
 
 ### Step 6 — Size the delivery log
 
@@ -671,6 +673,7 @@ public sealed class WebhookDispatcher(
 
 ```csharp file=Program.cs
 using System.Text;
+using Microsoft.AspNetCore.Http.Features;
 using Webhooks.Receiving;
 using Webhooks.Sending;
 using Webhooks.Signing;
@@ -703,6 +706,9 @@ app.MapPost("/webhooks/payments", async (HttpRequest request, WebhookVerifier ve
     InboxWorkQueue work, TimeProvider clock, ILogger<Program> log, CancellationToken ct) =>
 {
     if (request.ContentLength is > MaxBodyBytes) return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+    // Content-Length can be absent (chunked); this cap makes the server stop reading past the limit either way.
+    if (request.HttpContext.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } sizeLimit)
+        sizeLimit.MaxRequestBodySize = MaxBodyBytes;
 
     // Read the RAW bytes before anything parses them; the signature covers these exact bytes.
     using var buffer = new MemoryStream();
@@ -738,7 +744,25 @@ app.Run();
 public sealed record OutgoingTestRequest(string EndpointId, Uri Url, string Secret, string Json);
 ```
 
-`AllowAutoRedirect = false` enforces the "do not follow redirects" rule. A complete SSRF guard also needs a `SocketsHttpHandler.ConnectCallback` that resolves the host and refuses private address ranges before connecting.
+`AllowAutoRedirect = false` enforces the "do not follow redirects" rule. A complete SSRF guard also needs a `SocketsHttpHandler.ConnectCallback` that resolves the host and refuses private address ranges before connecting. Doing it in the callback means the check runs on every connection, against the IP actually used, which defeats DNS rebinding (a snippet; `IsPublic` is your own helper that rejects loopback, private, link-local, CGNAT and metadata ranges for IPv4 and IPv6):
+
+```csharp
+var handler = new SocketsHttpHandler
+{
+    AllowAutoRedirect = false,
+    ConnectCallback = async (ctx, ct) =>
+    {
+        IPAddress[] addresses = await Dns.GetHostAddressesAsync(ctx.DnsEndPoint.Host, ct);
+        IPAddress target = addresses.FirstOrDefault(IsPublic)
+            ?? throw new HttpRequestException($"Blocked non-public destination {ctx.DnsEndPoint.Host}");
+        var socket = new Socket(target.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+        try { await socket.ConnectAsync(target, ctx.DnsEndPoint.Port, ct); return new NetworkStream(socket, ownsSocket: true); }
+        catch { socket.Dispose(); throw; }
+    }
+};
+```
+
+One more thing a reviewer will ask: why not just add `AddStandardResilienceHandler()` (Microsoft.Extensions.Http.Resilience) to the `webhooks` client and let it retry? Because webhook retries must survive a process restart, wait minutes to hours, be recorded in the delivery log and be re-signed with a fresh timestamp. In-process retries do none of that and would multiply attempts on top of the durable schedule. Keep the HTTP client to a single attempt with a timeout, and let the durable queue own retries.
 
 The production inbox insert is one statement (Npgsql, shown as a snippet because it is not compiled offline):
 
@@ -1021,7 +1045,7 @@ public sealed class ReplayGuard(TimeSpan tolerance)
 }
 ```
 
-The window bounds memory: at 200 webhooks per second and a 5-minute window, the guard holds at most about 60,000 ids (200 × 300). With several receiver instances, this set must live in a shared store (a PostgreSQL inbox table or Redis `SET NX EX 300`), otherwise a replay sent to a different instance gets through.
+The window bounds memory: at 200 webhooks per second and a 5-minute window, the guard holds at most about 60,000 ids (200 × 300). With several receiver instances, this set must live in a shared store (a PostgreSQL inbox table or Redis `SET NX EX 300`), otherwise a replay sent to a different instance gets through. Note that this guard stops *replays*, not *retries*: a genuine retry hours later has a fresh timestamp, passes the window, and is caught only by the longer-lived inbox from exercise 4.
 ::mistakes
 - Checking only "too old" and forgetting "too far in the future". A sender with a clock 2 days ahead would create signatures that stay valid for 2 days.
 - Keeping ids forever in memory, which is a slow memory leak.
@@ -1334,7 +1358,7 @@ Handle out-of-order events: add `long Version` to `WebhookEvent` and per-resourc
 :::
 
 :::exercise id=m10-webhooks-ex5 difficulty=advanced kind=hld title="Design a webhook delivery platform"
-A B2B SaaS for infrastructure projects (contracts, measurement books, bills) wants to offer webhooks to its customers' ERPs. Requirements:
+A B2B subscription-billing SaaS (it raises GST invoices, collects card and UPI AutoPay payments and manages plans for thousands of businesses, from gyms to software companies) wants to offer webhooks such as `invoice.created`, `payment.succeeded` and `subscription.cancelled` to its customers' ERPs and accounting systems. Requirements:
 
 - 40,000 subscribed endpoints. 20 M events a day, with month-end billing peaks of about 6× average.
 - p95 delivery under 5 s for healthy endpoints. Retries for 24 hours. A dashboard showing every attempt for 30 days, with a resend button.
@@ -1363,7 +1387,7 @@ Customer URLs mean the workers make requests to arbitrary addresses. Where shoul
 ```json
 {
   "nodes": [
-    { "id": "users", "type": "client", "label": "Project users", "props": { "rps": 600 } },
+    { "id": "users", "type": "client", "label": "Finance users and billing jobs", "props": { "rps": 600 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
     { "id": "api", "type": "app-server", "label": "Billing API", "props": { "instances": 4 } },
     { "id": "db", "type": "database", "label": "PostgreSQL" },
@@ -1372,7 +1396,7 @@ Customer URLs mean the workers make requests to arbitrary addresses. Where shoul
   "edges": [
     { "from": "users", "to": "lb", "kind": "sync" },
     { "from": "lb", "to": "api", "kind": "sync" },
-    { "from": "api", "to": "db", "kind": "sync", "label": "save bill" },
+    { "from": "api", "to": "db", "kind": "sync", "label": "save invoice" },
     { "from": "api", "to": "erp", "kind": "sync", "label": "POST webhook inline" }
   ]
 }
@@ -1381,7 +1405,7 @@ Customer URLs mean the workers make requests to arbitrary addresses. Where shoul
 ```json
 {
   "nodes": [
-    { "id": "users", "type": "client", "label": "Project users", "props": { "rps": 600 } },
+    { "id": "users", "type": "client", "label": "Finance users and billing jobs", "props": { "rps": 600 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
     { "id": "api", "type": "app-server", "label": "Billing API", "props": { "instances": 4 } },
     { "id": "db", "type": "database", "label": "PostgreSQL (business tables + outbox)", "props": { "replicas": 1, "multiAz": true } },
@@ -1398,7 +1422,7 @@ Customer URLs mean the workers make requests to arbitrary addresses. Where shoul
   "edges": [
     { "from": "users", "to": "lb", "kind": "sync" },
     { "from": "lb", "to": "api", "kind": "sync" },
-    { "from": "api", "to": "db", "kind": "sync", "label": "bill + outbox row, one transaction" },
+    { "from": "api", "to": "db", "kind": "sync", "label": "invoice + outbox row, one transaction" },
     { "from": "db", "to": "relay", "kind": "async", "label": "poll outbox" },
     { "from": "relay", "to": "q", "kind": "async", "label": "one delivery per subscription" },
     { "from": "q", "to": "disp", "kind": "async" },
@@ -1427,9 +1451,9 @@ Delivery log: 20 M × 1.25 × 400 B ≈ 10 GB/day → 30 days ≈ 300 GB
 
 **Reasoning.**
 
-- **Capture**: the bill and the outbox row commit together, so a webhook exists exactly when the bill does. The API no longer waits on any ERP, and its latency no longer depends on 40,000 strangers' servers.
+- **Capture**: the invoice and the outbox row commit together, so a webhook exists exactly when the invoice does. The API no longer waits on any ERP, and its latency no longer depends on 40,000 strangers' servers.
 - **Isolation**: the delivery queue is partitioned by endpoint, and each endpoint has a concurrency cap (say 10 in flight) and its own circuit breaker. A dead endpoint fills only its own partition. The arithmetic shows why: 5 % of slow traffic consumes more than half of all connections, so without caps they would starve everyone else.
-- **Retries**: 8 attempts over about 24 hours with full jitter, re-signed each time. 410 disables immediately; continuous failure for 3 days disables with an email to the customer.
+- **Retries**: 8 attempts on a fixed schedule spanning about a day, with jitter on every gap, re-signed each time. 410 disables immediately; continuous failure for 3 days disables with an email to the customer.
 - **Delivery log**: append-only, partitioned by day, `DROP TABLE` on partitions older than 30 days (instant, no vacuum debt). Index by `(endpoint_id, created_at)` for the dashboard and by `message_id` for support lookups. Response bodies truncated to 1 KB.
 - **Security**: dispatchers run in a subnet with no route to internal services, behind an egress proxy that blocks private, loopback, link-local and metadata ranges after DNS resolution. Redirects are not followed. Each endpoint has its own secret with rotation (two valid secrets during a 24-hour overlap).
 - **What breaks first**: connection count to slow endpoints, then delivery-log write volume. Batch log inserts (for example `COPY` every 200 ms) before scaling the database.
@@ -1486,7 +1510,7 @@ Edge cases worth a test each: an empty body, a body over the size limit, non-ASC
 - **Payment gateways** (card, UPI, wallets) announce captures, failures, refunds and disputes by webhook. Their public docs consistently stress verifying signatures on the raw body and handling duplicates. Merchants still run a periodic reconciliation against the gateway's API, because a webhook can be missed if an endpoint was disabled.
 - **Git hosting platforms** send push and pull-request events to CI systems. Signatures (`X-Hub-Signature-256` style), a delivery log with a "redeliver" button, and an event-id header are standard features.
 - **Messaging platforms** (WhatsApp Business style APIs, SMS gateways) send delivery receipts and inbound messages by webhook, often at thousands per second for large senders, which is why receivers queue first and process later.
-- **Government and infrastructure systems**: a grievance portal can notify department systems when a complaint is assigned or escalated. A project-monitoring platform can notify a contractor's ERP when a running bill is approved, replacing nightly CSV exports. Here volume is low, and a simple outbox plus one worker is enough.
+- **Healthcare and public services**: a hospital's appointment system can notify a diagnostics lab when a test is ordered, and the lab can call back when the report is ready, replacing nightly CSV exports. A grievance portal can notify department systems when a complaint is assigned or escalated. Here volume is low, and a simple outbox plus one worker is enough.
 - **Open standards**: the Standard Webhooks specification and CloudEvents (a CNCF format for event metadata) exist so that providers stop inventing incompatible header schemes.
 
 ## Interview questions
@@ -1524,7 +1548,7 @@ Customer-supplied URLs mean your servers make requests to attacker-chosen addres
 
 - A webhook is a provider-initiated HTTP POST to a consumer's URL. It is faster and cheaper than polling, but delivery is at-least-once and unordered.
 - Sign `id.timestamp.raw-body` with HMAC-SHA256; verify the raw bytes with `CryptographicOperations.FixedTimeEquals`; accept several signatures during secret rotation.
-- Reject timestamps outside about 5 minutes and remember ids inside that window to stop replays.
+- Reject timestamps outside about 5 minutes and remember ids inside that window to stop replays; keep inbox ids for the sender's whole retry and resend horizon (days, not minutes) for idempotency.
 - Senders retry with exponential backoff and full jitter, re-sign every attempt, classify responses, dead-letter at the end, and isolate endpoints from each other.
 - Receivers insert the id into an inbox, return 200 fast, and process in the background idempotently.
 - Delivery logs plus a resend button turn "you never sent it" into a 10-second support answer. Partition them by day.

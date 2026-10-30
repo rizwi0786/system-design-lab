@@ -24,7 +24,7 @@ references:
 
 The [introductory lesson](#/lesson/m02-vertical-slice) showed the idea: one folder per feature instead of one folder per technical layer. This lesson is about what happens when you use it for a real system with real business rules, a few dozen endpoints and a team of six. Where do the rules go when two slices need them? How big may the shared folder grow? How do you add logging, validation and transactions once? And can you have slices *and* Clean Architecture at the same time? (Yes, and it is often the best combination.)
 
-The running example is a **plant and machinery hire system** for a construction company. It owns about 400 machines (cranes, excavators, transit mixers, pavers) that move between project sites. Site managers book machines for date ranges. The yard team registers new machines and retires old ones. Management wants utilisation reports: how many days each machine earned money last month.
+The running example is a **self-drive car rental system**. The company owns about 400 cars (hatchbacks, sedans, SUVs and electric cars) parked at pickup hubs across Bengaluru. Customers book a car at a hub for a date range. The fleet team registers new cars and retires old ones. Management wants utilisation reports: how many days each car earned money last month.
 
 ## Learning objectives
 
@@ -58,7 +58,7 @@ But kitchen B still shares some things. Everyone uses the same **pantry** of bas
 Software works the same way:
 
 - Kitchen A is a **layered** codebase: Controllers, Services, Repositories folders.
-- Kitchen B is **vertical slices**: one folder per feature (`BookEquipment`, `CancelBooking`, `GetUtilisation`).
+- Kitchen B is **vertical slices**: one folder per feature (`BookCar`, `CancelBooking`, `GetUtilisation`).
 - The pantry is the **shared kernel**: a few small, stable helpers (a `Result` type, the database access, the clock).
 - The food-safety rules are the **domain model** plus **cross-cutting behaviours** (validation, logging, transactions) that apply to every slice.
 
@@ -68,13 +68,13 @@ Software works the same way:
 
 A **vertical slice** is everything one request needs, from the HTTP route down to the database, kept together. In practice that is one file (or one small folder) per endpoint containing:
 
-| Part | Example for `BookEquipment` |
+| Part | Example for `BookCar` |
 |---|---|
-| Request (command or query) | `Command(Guid EquipmentId, string SiteCode, DateOnly From, DateOnly To)` |
-| Validation of input shape | Dates present, site code format, range ≤ 90 days |
-| Handler | Loads the `Equipment` aggregate, calls `Book(...)`, saves |
-| Response | `Response(Guid BookingId, decimal EstimatedCost)` |
-| Endpoint | `POST /equipment/{id}/bookings`, maps the result to HTTP |
+| Request (command or query) | `Command(Guid CarId, string HubCode, DateOnly From, DateOnly To)` |
+| Validation of input shape | Dates present, hub code present |
+| Handler | Loads the `Car` aggregate, calls `Book(...)` (which enforces the 90-day limit and overlaps), saves |
+| Response | `Response(Guid BookingId, int Days, decimal EstimatedCost)` |
+| Endpoint | `POST /cars/{id}/bookings`, maps the result to HTTP |
 
 The organising principle, in Jimmy Bogard's phrase, is to **minimise coupling between slices and maximise coupling within a slice**. Things that change together live together.
 
@@ -89,7 +89,7 @@ In a layered codebase with 60 endpoints:
 
 ### How slices fix it, and what they cost
 
-- **Each feature can choose its own approach.** The booking command uses the rich `Equipment` aggregate. The utilisation report runs a hand-written SQL query. A simple "list sites" lookup reads a table directly. Nobody forces all three through one repository.
+- **Each feature can choose its own approach.** The booking command uses the rich `Car` aggregate. The utilisation report runs a hand-written SQL query. A simple "list hubs" lookup reads a table directly. Nobody forces all three through one repository.
 - **Changes are local.** "Extend a booking" is one new file plus one new domain method.
 - **Deleting a feature is easy.** Remove the folder. Nothing else referenced it.
 
@@ -97,13 +97,13 @@ The cost is **some duplication**. Two slices may each have a 3-line query that l
 
 ### Where the business rules go
 
-This is the question that makes or breaks slices in a DDD system. If each slice re-implements "a machine cannot be double-booked", the rule will drift. The answer:
+This is the question that makes or breaks slices in a DDD system. If each slice re-implements "a car cannot be double-booked", the rule will drift. The answer:
 
 > **Slices share the domain model. Slices do not share each other.**
 
-- Rules about one aggregate live **on the aggregate**: `Equipment.Book(...)` rejects overlapping bookings. Every slice that books calls it.
+- Rules about one aggregate live **on the aggregate**: `Car.Book(...)` rejects overlapping bookings. Every slice that books calls it.
 - Rules across aggregates live in a **domain service** in the domain folder.
-- A slice never calls another slice's handler. If `ExtendBooking` needs logic from `BookEquipment`, that logic belongs in the domain (or, rarely, in the shared kernel), not in `BookEquipment`.
+- A slice never calls another slice's handler. If `ExtendBooking` needs logic from `BookCar`, that logic belongs in the domain (or, rarely, in the shared kernel), not in `BookCar`.
 
 ### The shared kernel: small on purpose
 
@@ -138,7 +138,7 @@ Slices and Clean Architecture answer different questions:
 So the combination is natural:
 
 ```text
-Fleet.Domain           Equipment aggregate, Booking, domain exceptions      (no references)
+Fleet.Domain           Car aggregate, Booking, domain exceptions      (no references)
 Fleet.Application      Features/  <- the slices: requests, handlers, validation
                        Shared/    <- Result, pipeline, ports such as IFleetDb
 Fleet.Infrastructure   EF Core DbContext, SQL for reports, external adapters
@@ -177,8 +177,8 @@ In smaller systems, put the endpoint inside the slice in one project, and keep t
 ```mermaid
 flowchart LR
     subgraph Slices["Features (application layer, grouped by use case)"]
-        S1["RegisterEquipment"]
-        S2["BookEquipment"]
+        S1["RegisterCar"]
+        S2["BookCar"]
         S3["CancelBooking"]
         S4["GetUtilisation"]
     end
@@ -188,7 +188,7 @@ flowchart LR
         K3["Pipeline behaviours"]
         K4["FleetDb and TimeProvider"]
     end
-    DOM["Domain: Equipment aggregate, Booking, rules"]
+    DOM["Domain: Car aggregate, Booking, rules"]
     DB[("PostgreSQL")]
     S1 --> DOM
     S2 --> DOM
@@ -200,29 +200,29 @@ flowchart LR
     K4 -.-> DB
 ```
 
-Each slice is a column. Three of them depend on the domain model, because they change state and must obey its rules. `GetUtilisation` is a query and skips the domain entirely, reading data through the shared database access. All slices use the shared kernel. There are **no arrows between slices**: `CancelBooking` doesn't call `BookEquipment`. The domain has no outgoing arrows, which is the Clean Architecture dependency rule, still intact.
+Each slice is a column. Three of them depend on the domain model, because they change state and must obey its rules. `GetUtilisation` is a query and skips the domain entirely, reading data through the shared database access. All slices use the shared kernel. There are **no arrows between slices**: `CancelBooking` doesn't call `BookCar`. The domain has no outgoing arrows, which is the Clean Architecture dependency rule, still intact.
 
 ### One request through a slice and its pipeline
 
 ```mermaid
 sequenceDiagram
-    participant M as Site manager app
-    participant E as BookEquipment endpoint
+    participant M as Customer app
+    participant E as BookCar endpoint
     participant L as LoggingBehaviour
     participant V as ValidationBehaviour
     participant T as TransactionBehaviour
-    participant H as BookEquipment handler
-    participant Q as Equipment aggregate
+    participant H as BookCar handler
+    participant Q as Car aggregate
     participant D as FleetDb
-    M->>E: POST equipment 7 bookings for site NH48-P3
+    M->>E: POST car 7 bookings at hub BLR-KOR
     E->>L: send Command
     L->>V: next()
-    V->>V: check dates and site code
+    V->>V: check dates and hub code
     V->>T: next()
     T->>D: begin transaction
     T->>H: next()
-    H->>D: load Equipment 7 with bookings
-    H->>Q: Book(site, from, to, today)
+    H->>D: load Car 7 with bookings
+    H->>Q: Book(hub, from, to, today)
     Q-->>H: Booking or overlap error
     H-->>T: Result with BookingId
     T->>D: commit
@@ -238,13 +238,13 @@ The endpoint turns HTTP into a `Command` and hands it to the pipeline. Logging i
 
 ```mermaid
 classDiagram
-    class BookEquipment {
+    class BookCar {
         <<static>>
     }
     class Command {
         <<record>>
-        +Guid EquipmentId
-        +string SiteCode
+        +Guid CarId
+        +string HubCode
         +DateOnly From
         +DateOnly To
     }
@@ -263,31 +263,31 @@ classDiagram
         <<interface>>
         +Map(IEndpointRouteBuilder app)
     }
-    class Equipment {
-        +Book(string site, DateOnly from, DateOnly to, DateOnly today) Booking
+    class Car {
+        +Book(string hub, DateOnly from, DateOnly to, DateOnly today) Booking
     }
-    BookEquipment *-- Command
-    BookEquipment *-- Response
-    BookEquipment *-- Handler
-    BookEquipment *-- Endpoint
+    BookCar *-- Command
+    BookCar *-- Response
+    BookCar *-- Handler
+    BookCar *-- Endpoint
     IEndpoint <|.. Endpoint
-    Handler --> Equipment : uses domain rules
+    Handler --> Car : uses domain rules
     Endpoint --> Handler : sends Command
 ```
 
-The static class `BookEquipment` is just a container that gives the slice a name and stops its nested types (`Command`, `Handler`, `Endpoint`) from clashing with other slices' types of the same name. `Endpoint` implements the shared `IEndpoint` interface so it can be discovered automatically. The only arrow leaving the slice goes to the domain.
+The static class `BookCar` is just a container that gives the slice a name and stops its nested types (`Command`, `Handler`, `Endpoint`) from clashing with other slices' types of the same name. `Endpoint` implements the shared `IEndpoint` interface so it can be discovered automatically. The only arrow leaving the slice goes to the domain.
 
 ## Step-by-step example
 
 ### Step 1 — the layered starting point
 
 ```csharp
-// Controllers/EquipmentController.cs: 14 actions
-// Services/EquipmentService.cs: 1,100 lines, 31 public methods
-public async Task<BookingDto> BookAsync(Guid equipmentId, BookingDto dto)
+// Controllers/CarsController.cs: 14 actions
+// Services/CarService.cs: 1,100 lines, 31 public methods
+public async Task<BookingDto> BookAsync(Guid carId, BookingDto dto)
 {
-    var eq = await _repo.GetByIdAsync(equipmentId);
-    var bookings = await _bookingRepo.GetForEquipmentAsync(equipmentId);
+    var eq = await _repo.GetByIdAsync(carId);
+    var bookings = await _bookingRepo.GetForCarAsync(carId);
     if (bookings.Any(b => b.From <= dto.To && dto.From <= b.To && !b.Cancelled))   // rule copy #1
         throw new ValidationException("Overlap");
     ...
@@ -297,15 +297,15 @@ public async Task<BookingDto> BookAsync(Guid equipmentId, BookingDto dto)
 
 ### Step 2 — move the rule into the domain first
 
-Before slicing anything, move "no overlapping active bookings" into `Equipment.Book` and `Equipment.Extend`. This is the most important step. Slicing code whose rules are still in services just spreads the rules across more files.
+Before slicing anything, move "no overlapping active bookings" into `Car.Book` and `Car.Extend`. This is the most important step. Slicing code whose rules are still in services just spreads the rules across more files.
 
 ### Step 3 — carve out one slice
 
-Create `Features/Bookings/BookEquipment.cs` with `Command`, `Validator`, `Handler`, `Response` and `Endpoint`. Point the existing controller action at the new handler (or delete the action and map the new endpoint at the same route). Run the tests. Nothing else changes.
+Create `Features/Bookings/BookCar.cs` with `Command`, `Validator`, `Handler`, `Response` and `Endpoint`. Point the existing controller action at the new handler (or delete the action and map the new endpoint at the same route). Run the tests. Nothing else changes.
 
 ### Step 4 — repeat, and watch the service shrink
 
-Each migrated feature removes a method from `EquipmentService`. When it is empty, delete it. This is the **strangler** approach applied inside one codebase: new slices grow around the old layers until the layers disappear. You never need a big-bang rewrite.
+Each migrated feature removes a method from `CarService`. When it is empty, delete it. This is the **strangler** approach applied inside one codebase: new slices grow around the old layers until the layers disappear. You never need a big-bang rewrite.
 
 ### Step 5 — extract shared pieces only when they hurt
 
@@ -316,56 +316,56 @@ After ten slices you notice every endpoint maps `Result` to HTTP the same way. N
 ```text
 Fleet.Api/
   Program.cs
-  Domain/Equipment.cs
+  Domain/Car.cs
   Shared/Result.cs
   Shared/Endpoints.cs
   Shared/Pipeline.cs
   Shared/FleetDb.cs
-  Features/Equipment/RegisterEquipment.cs
-  Features/Bookings/BookEquipment.cs
+  Features/Cars/RegisterCar.cs
+  Features/Bookings/BookCar.cs
   Features/Bookings/CancelBooking.cs
   Features/Reports/GetUtilisation.cs
 ```
 
 ### The domain, shared by every slice
 
-```csharp file=Domain/Equipment.cs
+```csharp file=Domain/Car.cs
 namespace Fleet.Domain;
 
-public enum EquipmentKind { Crane, Excavator, TransitMixer, Paver, Roller }
+public enum CarKind { Hatchback, Sedan, Suv, Electric, Van }
 
 public sealed class FleetRuleException(string code, string message) : Exception(message)
 {
     public string Code { get; } = code;
 }
 
-public sealed record Booking(Guid Id, string SiteCode, DateOnly From, DateOnly To, bool Cancelled = false)
+public sealed record Booking(Guid Id, string HubCode, DateOnly From, DateOnly To, bool Cancelled = false)
 {
     public int Days => To.DayNumber - From.DayNumber + 1;
     public bool Overlaps(DateOnly from, DateOnly to) => !Cancelled && From <= to && from <= To;
 }
 
 /// <summary>Aggregate root. Every slice that changes bookings goes through these methods.</summary>
-public sealed class Equipment
+public sealed class Car
 {
     public const int MaxBookingDays = 90;
     private readonly List<Booking> _bookings = new();
 
     public Guid Id { get; }
     public string Code { get; }
-    public EquipmentKind Kind { get; }
+    public CarKind Kind { get; }
     public decimal DailyRate { get; }
     public bool Retired { get; private set; }
     public IReadOnlyList<Booking> Bookings => _bookings;
 
-    public Equipment(Guid id, string code, EquipmentKind kind, decimal dailyRate)
+    public Car(Guid id, string code, CarKind kind, decimal dailyRate)
     {
-        if (string.IsNullOrWhiteSpace(code)) throw new FleetRuleException("equipment.code", "Equipment code is required.");
-        if (dailyRate <= 0) throw new FleetRuleException("equipment.rate", "Daily rate must be positive.");
+        if (string.IsNullOrWhiteSpace(code)) throw new FleetRuleException("car.code", "Car code is required.");
+        if (dailyRate <= 0) throw new FleetRuleException("car.rate", "Daily rate must be positive.");
         Id = id; Code = code.Trim().ToUpperInvariant(); Kind = kind; DailyRate = dailyRate;
     }
 
-    public Booking Book(string siteCode, DateOnly from, DateOnly to, DateOnly today)
+    public Booking Book(string hubCode, DateOnly from, DateOnly to, DateOnly today)
     {
         if (Retired) throw new FleetRuleException("booking.retired", $"{Code} is retired.");
         if (from < today) throw new FleetRuleException("booking.past", "Bookings cannot start in the past.");
@@ -374,9 +374,9 @@ public sealed class Equipment
             throw new FleetRuleException("booking.too-long", $"A booking can be at most {MaxBookingDays} days.");
         var clash = _bookings.FirstOrDefault(b => b.Overlaps(from, to));
         if (clash is not null)
-            throw new FleetRuleException("booking.overlap", $"{Code} is already booked for {clash.SiteCode} from {clash.From} to {clash.To}.");
+            throw new FleetRuleException("booking.overlap", $"{Code} is already booked at {clash.HubCode} from {clash.From} to {clash.To}.");
 
-        var booking = new Booking(Guid.NewGuid(), siteCode.Trim().ToUpperInvariant(), from, to);
+        var booking = new Booking(Guid.NewGuid(), hubCode.Trim().ToUpperInvariant(), from, to);
         _bookings.Add(booking);
         return booking;
     }
@@ -384,18 +384,18 @@ public sealed class Equipment
     public void CancelBooking(Guid bookingId, DateOnly today)
     {
         var index = _bookings.FindIndex(b => b.Id == bookingId);
-        if (index < 0) throw new FleetRuleException("booking.not-found", "No such booking on this equipment.");
+        if (index < 0) throw new FleetRuleException("booking.not-found", "No such booking on this car.");
         var booking = _bookings[index];
         if (booking.Cancelled) return;                         // idempotent
         if (booking.From <= today)
-            throw new FleetRuleException("booking.started", "A booking that has started cannot be cancelled. Release the machine instead.");
+            throw new FleetRuleException("booking.started", "A booking that has started cannot be cancelled. End the rental early instead.");
         _bookings[index] = booking with { Cancelled = true };
     }
 
     public void Retire(DateOnly today)
     {
         if (_bookings.Any(b => !b.Cancelled && b.To >= today))
-            throw new FleetRuleException("equipment.has-bookings", "Cancel or finish future bookings before retiring.");
+            throw new FleetRuleException("car.has-bookings", "Cancel or finish future bookings before retiring.");
         Retired = true;
     }
 }
@@ -571,7 +571,7 @@ namespace Fleet.Shared;
 /// <summary>Stands in for an EF Core DbContext over PostgreSQL. Slices use it directly; no generic repository.</summary>
 public sealed class FleetDb
 {
-    public ConcurrentDictionary<Guid, Equipment> Equipment { get; } = new();
+    public ConcurrentDictionary<Guid, Car> Cars { get; } = new();
     public int Commits { get; private set; }
 
     public FleetTransaction BeginTransaction() => new(this);
@@ -585,25 +585,25 @@ public sealed class FleetDb
 }
 ```
 
-There is deliberately no `IEquipmentRepository`. With EF Core the `DbContext` already is a unit of work with repositories (`DbSet<T>`). Slices can use it directly: commands load aggregates with `Include`, queries project with `Select`. Add a repository only where a slice benefits from hiding a complicated load. This is a common and defensible choice in slice-based codebases, and it is the opposite of what the [repository lesson](#/lesson/m06-repository-uow) recommends for layered systems, so make it consciously and write it down in an ADR.
+There is deliberately no `ICarRepository`. With EF Core the `DbContext` already is a unit of work with repositories (`DbSet<T>`). Slices can use it directly: commands load aggregates with `Include`, queries project with `Select`. Add a repository only where a slice benefits from hiding a complicated load. This is a common and defensible choice in slice-based codebases, and it is the opposite of what the [repository lesson](#/lesson/m06-repository-uow) recommends for layered systems, so make it consciously and write it down in an ADR.
 
 ### The slices
 
-```csharp file=Features/Equipment/RegisterEquipment.cs
+```csharp file=Features/Cars/RegisterCar.cs
 using Fleet.Domain;
 using Fleet.Shared;
 
-namespace Fleet.Features.Equipment;
+namespace Fleet.Features.Cars;
 
-public static class RegisterEquipment
+public static class RegisterCar
 {
-    public sealed record Command(string Code, EquipmentKind Kind, decimal DailyRate) : IValidatable, ITransactional
+    public sealed record Command(string Code, CarKind Kind, decimal DailyRate) : IValidatable, ITransactional
     {
         public IReadOnlyDictionary<string, string[]> Validate()
         {
             var errors = new Dictionary<string, string[]>();
             if (string.IsNullOrWhiteSpace(Code) || Code.Length > 20) errors["code"] = ["Code is required, up to 20 characters."];
-            if (DailyRate is <= 0 or > 5_00_000m) errors["dailyRate"] = ["Daily rate must be between 1 and 5,00,000."];
+            if (DailyRate is <= 0 or > 50_000m) errors["dailyRate"] = ["Daily rate must be between 1 and 50,000."];
             return errors;
         }
     }
@@ -614,43 +614,43 @@ public static class RegisterEquipment
     {
         public Task<Result<Response>> HandleAsync(Command c, CancellationToken ct)
         {
-            if (db.Equipment.Values.Any(e => e.Code == c.Code.Trim().ToUpperInvariant()))
-                return Task.FromResult<Result<Response>>(Error.Conflict("equipment.duplicate", $"{c.Code} already exists."));
-            var equipment = new Fleet.Domain.Equipment(Guid.NewGuid(), c.Code, c.Kind, c.DailyRate);
-            db.Equipment[equipment.Id] = equipment;
-            return Task.FromResult(Result<Response>.Ok(new Response(equipment.Id, equipment.Code)));
+            if (db.Cars.Values.Any(e => e.Code == c.Code.Trim().ToUpperInvariant()))
+                return Task.FromResult<Result<Response>>(Error.Conflict("car.duplicate", $"{c.Code} already exists."));
+            var car = new Car(Guid.NewGuid(), c.Code, c.Kind, c.DailyRate);
+            db.Cars[car.Id] = car;
+            return Task.FromResult(Result<Response>.Ok(new Response(car.Id, car.Code)));
         }
     }
 
     public sealed class Endpoint : IEndpoint
     {
         public void Map(IEndpointRouteBuilder app) =>
-            app.MapPost("/equipment", async (Command command, Handler handler, Sender sender, CancellationToken ct) =>
+            app.MapPost("/cars", async (Command command, Handler handler, Sender sender, CancellationToken ct) =>
                 (await sender.SendAsync<Command, Response>(command, handler.HandleAsync, ct))
-                    .ToHttp(r => Results.Created($"/api/equipment/{r.Id}", r)))
-               .WithTags("Equipment");
+                    .ToHttp(r => Results.Created($"/api/cars/{r.Id}", r)))
+               .WithTags("Cars");
     }
 }
 ```
 
-The namespace `Fleet.Features.Equipment` shares a name with the domain class `Fleet.Domain.Equipment`, so the handler writes the full name. In a real codebase you might name the folder `Fleet` or `Machines` to avoid that.
+The feature folder is called `Cars` (plural) on purpose: a namespace `Fleet.Features.Car` would clash with the domain class `Fleet.Domain.Car`, and every handler would have to write the full type name. Plural feature folders avoid that common annoyance.
 
-```csharp file=Features/Bookings/BookEquipment.cs
+```csharp file=Features/Bookings/BookCar.cs
 using Fleet.Domain;
 using Fleet.Shared;
 
 namespace Fleet.Features.Bookings;
 
-public static class BookEquipment
+public static class BookCar
 {
-    public sealed record Request(string SiteCode, DateOnly From, DateOnly To);
+    public sealed record Request(string HubCode, DateOnly From, DateOnly To);
 
-    public sealed record Command(Guid EquipmentId, string SiteCode, DateOnly From, DateOnly To) : IValidatable, ITransactional
+    public sealed record Command(Guid CarId, string HubCode, DateOnly From, DateOnly To) : IValidatable, ITransactional
     {
         public IReadOnlyDictionary<string, string[]> Validate()
         {
             var errors = new Dictionary<string, string[]>();
-            if (string.IsNullOrWhiteSpace(SiteCode)) errors["siteCode"] = ["Site code is required."];
+            if (string.IsNullOrWhiteSpace(HubCode)) errors["hubCode"] = ["Hub code is required."];
             if (From == default || To == default) errors["dates"] = ["Both dates are required."];
             return errors;   // shape only: overlap, past dates and length are domain rules
         }
@@ -662,13 +662,13 @@ public static class BookEquipment
     {
         public Task<Result<Response>> HandleAsync(Command c, CancellationToken ct)
         {
-            if (!db.Equipment.TryGetValue(c.EquipmentId, out var equipment))
-                return Task.FromResult<Result<Response>>(Error.NotFound("equipment.not-found", "No such equipment."));
+            if (!db.Cars.TryGetValue(c.CarId, out var car))
+                return Task.FromResult<Result<Response>>(Error.NotFound("car.not-found", "No such car."));
             try
             {
                 var today = DateOnly.FromDateTime(clock.GetLocalNow().DateTime);
-                var booking = equipment.Book(c.SiteCode, c.From, c.To, today);
-                return Task.FromResult(Result<Response>.Ok(new Response(booking.Id, booking.Days, booking.Days * equipment.DailyRate)));
+                var booking = car.Book(c.HubCode, c.From, c.To, today);
+                return Task.FromResult(Result<Response>.Ok(new Response(booking.Id, booking.Days, booking.Days * car.DailyRate)));
             }
             catch (FleetRuleException ex)
             {
@@ -680,15 +680,15 @@ public static class BookEquipment
     public sealed class Endpoint : IEndpoint
     {
         public void Map(IEndpointRouteBuilder app) =>
-            app.MapPost("/equipment/{id:guid}/bookings", async (Guid id, Request body, Handler handler, Sender sender, CancellationToken ct) =>
-                (await sender.SendAsync<Command, Response>(new Command(id, body.SiteCode, body.From, body.To), handler.HandleAsync, ct))
-                    .ToHttp(r => Results.Created($"/api/equipment/{id}/bookings/{r.BookingId}", r)))
+            app.MapPost("/cars/{id:guid}/bookings", async (Guid id, Request body, Handler handler, Sender sender, CancellationToken ct) =>
+                (await sender.SendAsync<Command, Response>(new Command(id, body.HubCode, body.From, body.To), handler.HandleAsync, ct))
+                    .ToHttp(r => Results.Created($"/api/cars/{id}/bookings/{r.BookingId}", r)))
                .WithTags("Bookings");
     }
 }
 ```
 
-Notice the split of checks. The command's `Validate` checks only the **shape** of the input (required fields). Everything that is a **business rule** (no past dates, no overlaps, 90-day limit) is decided by `Equipment.Book`, so the upcoming `ExtendBooking` slice can't forget any of them.
+Notice the split of checks. The command's `Validate` checks only the **shape** of the input (required fields). Everything that is a **business rule** (no past dates, no overlaps, 90-day limit) is decided by `Car.Book`, so the upcoming `ExtendBooking` slice can't forget any of them.
 
 ```csharp file=Features/Bookings/CancelBooking.cs
 using Fleet.Domain;
@@ -698,18 +698,18 @@ namespace Fleet.Features.Bookings;
 
 public static class CancelBooking
 {
-    public sealed record Command(Guid EquipmentId, Guid BookingId) : ITransactional;
+    public sealed record Command(Guid CarId, Guid BookingId) : ITransactional;
     public sealed record Response(Guid BookingId, bool Cancelled);
 
     public sealed class Handler(FleetDb db, TimeProvider clock)
     {
         public Task<Result<Response>> HandleAsync(Command c, CancellationToken ct)
         {
-            if (!db.Equipment.TryGetValue(c.EquipmentId, out var equipment))
-                return Task.FromResult<Result<Response>>(Error.NotFound("equipment.not-found", "No such equipment."));
+            if (!db.Cars.TryGetValue(c.CarId, out var car))
+                return Task.FromResult<Result<Response>>(Error.NotFound("car.not-found", "No such car."));
             try
             {
-                equipment.CancelBooking(c.BookingId, DateOnly.FromDateTime(clock.GetLocalNow().DateTime));
+                car.CancelBooking(c.BookingId, DateOnly.FromDateTime(clock.GetLocalNow().DateTime));
                 return Task.FromResult(Result<Response>.Ok(new Response(c.BookingId, true)));
             }
             catch (FleetRuleException ex) when (ex.Code == "booking.not-found")
@@ -726,7 +726,7 @@ public static class CancelBooking
     public sealed class Endpoint : IEndpoint
     {
         public void Map(IEndpointRouteBuilder app) =>
-            app.MapDelete("/equipment/{id:guid}/bookings/{bookingId:guid}", async (Guid id, Guid bookingId, Handler handler, Sender sender, CancellationToken ct) =>
+            app.MapDelete("/cars/{id:guid}/bookings/{bookingId:guid}", async (Guid id, Guid bookingId, Handler handler, Sender sender, CancellationToken ct) =>
                 (await sender.SendAsync<Command, Response>(new Command(id, bookingId), handler.HandleAsync, ct))
                     .ToHttp(_ => Results.NoContent()))
                .WithTags("Bookings");
@@ -757,7 +757,7 @@ public static class GetUtilisation
         public Task<Result<IReadOnlyList<Row>>> HandleAsync(Query q, CancellationToken ct)
         {
             var periodDays = q.To.DayNumber - q.From.DayNumber + 1;
-            IReadOnlyList<Row> rows = db.Equipment.Values
+            IReadOnlyList<Row> rows = db.Cars.Values
                 .Where(e => !e.Retired)
                 .Select(e =>
                 {
@@ -789,7 +789,7 @@ public static class GetUtilisation
 }
 ```
 
-In production this handler would be a single SQL query with `GREATEST`/`LEAST` for the overlap and `GROUP BY equipment_id`, run through Dapper or EF Core's `SqlQuery`. Because it is its own slice, choosing raw SQL here doesn't force anything on the command slices.
+In production this handler would be a single SQL query with `GREATEST`/`LEAST` for the overlap and `GROUP BY car_id`, run through Dapper or EF Core's `SqlQuery`. Because it is its own slice, choosing raw SQL here doesn't force anything on the command slices.
 
 ```csharp file=Program.cs
 using Fleet.Shared;
@@ -814,9 +814,9 @@ app.Run();
 
 ## Bad design vs good design
 
-**Bad: slices calling slices.** `ExtendBooking.Handler` creates a `BookEquipment.Handler` and calls it "to reuse the overlap check". Now changing `BookEquipment`'s response breaks `ExtendBooking`, and the pipeline runs twice (two log lines, a nested transaction). Shared rules belong in the domain.
+**Bad: slices calling slices.** `ExtendBooking.Handler` creates a `BookCar.Handler` and calls it "to reuse the overlap check". Now changing `BookCar`'s response breaks `ExtendBooking`, and the pipeline runs twice (two log lines, a nested transaction). Shared rules belong in the domain.
 
-**Bad: the shared kernel that ate the slices.** `Shared/BookingHelpers.cs` grows `CalculateCost`, `IsOverlapping`, `MapToDto`, `GetActiveBookingsForSite`. Each slice uses two or three of them. You have rebuilt `BookingService` under a new name, with the same merge conflicts and fear.
+**Bad: the shared kernel that ate the slices.** `Shared/BookingHelpers.cs` grows `CalculateCost`, `IsOverlapping`, `MapToDto`, `GetActiveBookingsForHub`. Each slice uses two or three of them. You have rebuilt `BookingService` under a new name, with the same merge conflicts and fear.
 
 **Bad: anaemic slices.** Each slice has a perfect folder structure, but every rule is written inline in each handler. Four handlers have four slightly different overlap checks. Vertical slices without a domain model only move the duplication around.
 
@@ -834,7 +834,7 @@ Two query slices with similar 5-line `Where` clauses are fine. Extract only when
 
 ## Practical playground
 
-This playground runs the pipeline idea in one file: a logging behaviour, a validation behaviour, and two slices sharing one domain rule. Run it, then add a third slice, `ExtendBooking`, that reuses `Machine.Book`'s overlap rule without calling the other slice.
+This playground runs the pipeline idea in one file: a logging behaviour, a validation behaviour, and two slices sharing one domain rule. Run it, then add a third slice, `ExtendBooking`, that reuses `Car.Book`'s overlap rule without calling the other slice.
 
 :::playground type=csharp title="Slices, a shared domain and a pipeline"
 ```csharp file=Program.cs
@@ -844,16 +844,16 @@ using System.Linq;
 using System.Threading.Tasks;
 
 // ----- Domain shared by all slices -----
-public sealed record Booking(string Site, DateOnly From, DateOnly To);
-public sealed class Machine(string code)
+public sealed record Booking(string Hub, DateOnly From, DateOnly To);
+public sealed class Car(string code)
 {
     public string Code { get; } = code;
     public List<Booking> Bookings { get; } = new();
-    public Booking Book(string site, DateOnly from, DateOnly to)
+    public Booking Book(string hub, DateOnly from, DateOnly to)
     {
         if (to < from) throw new InvalidOperationException("End before start");
         if (Bookings.Any(b => b.From <= to && from <= b.To)) throw new InvalidOperationException($"{Code} is already booked");
-        var booking = new Booking(site, from, to);
+        var booking = new Booking(hub, from, to);
         Bookings.Add(booking);
         return booking;
     }
@@ -866,7 +866,7 @@ public static class Pipeline
     public static readonly List<Func<object, Next, Task<string>>> Behaviours = new()
     {
         async (req, next) => { var r = await next(); Console.WriteLine($"  [log] {req.GetType().Name} -> {r}"); return r; },
-        (req, next) => req is BookMachine { Site: "" } ? Task.FromResult("400 site required") : next(),
+        (req, next) => req is BookCar { Hub: "" } ? Task.FromResult("400 hub required") : next(),
     };
 
     public static Task<string> Send(object request, Func<Task<string>> handler)
@@ -882,12 +882,12 @@ public static class Pipeline
 }
 
 // ----- Slice 1 -----
-public sealed record BookMachine(string Code, string Site, DateOnly From, DateOnly To);
-public static class BookMachineSlice
+public sealed record BookCar(string Code, string Hub, DateOnly From, DateOnly To);
+public static class BookCarSlice
 {
-    public static Task<string> Handle(BookMachine c, Dictionary<string, Machine> db)
+    public static Task<string> Handle(BookCar c, Dictionary<string, Car> db)
     {
-        try { var b = db[c.Code].Book(c.Site, c.From, c.To); return Task.FromResult($"201 booked {b.From}..{b.To}"); }
+        try { var b = db[c.Code].Book(c.Hub, c.From, c.To); return Task.FromResult($"201 booked {b.From}..{b.To}"); }
         catch (InvalidOperationException ex) { return Task.FromResult($"409 {ex.Message}"); }
     }
 }
@@ -896,35 +896,35 @@ public static class BookMachineSlice
 public sealed record GetBookings(string Code);
 public static class GetBookingsSlice
 {
-    public static Task<string> Handle(GetBookings q, Dictionary<string, Machine> db) =>
-        Task.FromResult("200 " + string.Join(", ", db[q.Code].Bookings.Select(b => $"{b.Site} {b.From:dd MMM}-{b.To:dd MMM}")));
+    public static Task<string> Handle(GetBookings q, Dictionary<string, Car> db) =>
+        Task.FromResult("200 " + string.Join(", ", db[q.Code].Bookings.Select(b => $"{b.Hub} {b.From:dd MMM}-{b.To:dd MMM}")));
 }
 
 public static class Program
 {
     public static async Task Main()
     {
-        var db = new Dictionary<string, Machine> { ["CR-25T-007"] = new Machine("CR-25T-007") };
+        var db = new Dictionary<string, Car> { ["KA01AB1234"] = new Car("KA01AB1234") };
         var nov3 = new DateOnly(2026, 11, 3);
 
         var requests = new object[]
         {
-            new BookMachine("CR-25T-007", "NH48-P3", nov3, nov3.AddDays(9)),
-            new BookMachine("CR-25T-007", "SH12-P1", nov3.AddDays(5), nov3.AddDays(12)),
-            new BookMachine("CR-25T-007", "", nov3.AddDays(20), nov3.AddDays(21)),
-            new GetBookings("CR-25T-007"),
+            new BookCar("KA01AB1234", "BLR-KOR", nov3, nov3.AddDays(9)),
+            new BookCar("KA01AB1234", "BLR-WFD", nov3.AddDays(5), nov3.AddDays(12)),
+            new BookCar("KA01AB1234", "", nov3.AddDays(20), nov3.AddDays(21)),
+            new GetBookings("KA01AB1234"),
         };
         foreach (var r in requests)
         {
             Func<Task<string>> handler = r switch
             {
-                BookMachine c => () => BookMachineSlice.Handle(c, db),
+                BookCar c => () => BookCarSlice.Handle(c, db),
                 GetBookings q => () => GetBookingsSlice.Handle(q, db),
                 _ => () => Task.FromResult("404")
             };
             await Pipeline.Send(r, handler);
         }
-        // Challenge: add ExtendBooking(Code, Site, OldTo, NewTo) as a third slice that reuses Machine's rule.
+        // Challenge: add ExtendBooking(Code, Hub, OldTo, NewTo) as a third slice that reuses Car's rule.
     }
 }
 ```
@@ -933,9 +933,9 @@ public static class Program
 ## Exercises
 
 :::exercise id=m08-vertical-slice-ex1 difficulty=beginner kind=code title="Cancel-booking slice: map domain errors to results"
-Write the handler for the `CancelBooking` slice. The domain method `Machine.CancelBooking` already contains the rules. Your handler must turn its outcomes into a `Result` that the endpoint can map to HTTP.
+Write the handler for the `CancelBooking` slice. The domain method `Car.CancelBooking` already contains the rules. Your handler must turn its outcomes into a `Result` that the endpoint can map to HTTP.
 ::requirements
-- Unknown machine id: `NotFound` with code `machine.not-found`.
+- Unknown car id: `NotFound` with code `car.not-found`.
 - The domain throws `FleetRuleException` with code `booking.not-found`: return `NotFound` with that code.
 - Any other `FleetRuleException`: return `Conflict` with the exception's code and message.
 - Success: return `Ok` with the booking id.
@@ -944,7 +944,7 @@ Write the handler for the `CancelBooking` slice. The domain method `Machine.Canc
 - Cancelling a future booking succeeds and the booking is marked cancelled.
 - Cancelling a booking that has started returns `Conflict` with code `booking.started`.
 - An unknown booking id returns `NotFound`.
-- An unknown machine id returns `NotFound` with code `machine.not-found`.
+- An unknown car id returns `NotFound` with code `car.not-found`.
 ::hint
 The handler has three jobs: find, delegate, translate.
 ::hint
@@ -953,8 +953,8 @@ Use `catch (FleetRuleException ex) when (ex.Code == "booking.not-found")` for th
 `today` is passed in through the command, so the test controls it.
 ::hint
 ```csharp
-if (!db.TryGetValue(c.MachineId, out var machine)) return Result.Fail(new Error("machine.not-found", "...", ErrorKind.NotFound));
-try { machine.CancelBooking(c.BookingId, c.Today); return Result.Ok(c.BookingId); }
+if (!db.TryGetValue(c.CarId, out var car)) return Result.Fail(new Error("car.not-found", "...", ErrorKind.NotFound));
+try { car.CancelBooking(c.BookingId, c.Today); return Result.Ok(c.BookingId); }
 ```
 ::starter
 ```csharp file=CancelBooking.cs
@@ -974,7 +974,7 @@ public sealed class FleetRuleException(string code, string message) : Exception(
 
 public sealed record Booking(Guid Id, DateOnly From, DateOnly To, bool Cancelled = false);
 
-public sealed class Machine(Guid id)
+public sealed class Car(Guid id)
 {
     public Guid Id { get; } = id;
     public List<Booking> Bookings { get; } = new();
@@ -990,9 +990,9 @@ public sealed class Machine(Guid id)
 
 public static class CancelBookingSlice
 {
-    public sealed record Command(Guid MachineId, Guid BookingId, DateOnly Today);
+    public sealed record Command(Guid CarId, Guid BookingId, DateOnly Today);
 
-    public sealed class Handler(Dictionary<Guid, Machine> db)
+    public sealed class Handler(Dictionary<Guid, Car> db)
     {
         public Result Handle(Command c) => throw new NotImplementedException();
     }
@@ -1008,13 +1008,13 @@ public class CancelBookingTests
 {
     private static readonly DateOnly Today = new(2026, 10, 20);
 
-    private static (CancelBookingSlice.Handler H, Machine M, Guid Future, Guid Started) Setup()
+    private static (CancelBookingSlice.Handler H, Car M, Guid Future, Guid Started) Setup()
     {
-        var m = new Machine(Guid.NewGuid());
+        var m = new Car(Guid.NewGuid());
         var future = new Booking(Guid.NewGuid(), Today.AddDays(5), Today.AddDays(9));
         var started = new Booking(Guid.NewGuid(), Today.AddDays(-2), Today.AddDays(3));
         m.Bookings.Add(future); m.Bookings.Add(started);
-        return (new CancelBookingSlice.Handler(new Dictionary<Guid, Machine> { [m.Id] = m }), m, future.Id, started.Id);
+        return (new CancelBookingSlice.Handler(new Dictionary<Guid, Car> { [m.Id] = m }), m, future.Id, started.Id);
     }
 
     [Fact]
@@ -1046,11 +1046,11 @@ public class CancelBookingTests
     }
 
     [Fact]
-    public void Unknown_machine_is_not_found()
+    public void Unknown_car_is_not_found()
     {
         var (h, _, future, _) = Setup();
         var r = h.Handle(new(Guid.NewGuid(), future, Today));
-        Assert.Equal("machine.not-found", r.Error!.Code);
+        Assert.Equal("car.not-found", r.Error!.Code);
         Assert.Equal(ErrorKind.NotFound, r.Error.Kind);
     }
 }
@@ -1073,7 +1073,7 @@ public sealed class FleetRuleException(string code, string message) : Exception(
 
 public sealed record Booking(Guid Id, DateOnly From, DateOnly To, bool Cancelled = false);
 
-public sealed class Machine(Guid id)
+public sealed class Car(Guid id)
 {
     public Guid Id { get; } = id;
     public List<Booking> Bookings { get; } = new();
@@ -1089,17 +1089,17 @@ public sealed class Machine(Guid id)
 
 public static class CancelBookingSlice
 {
-    public sealed record Command(Guid MachineId, Guid BookingId, DateOnly Today);
+    public sealed record Command(Guid CarId, Guid BookingId, DateOnly Today);
 
-    public sealed class Handler(Dictionary<Guid, Machine> db)
+    public sealed class Handler(Dictionary<Guid, Car> db)
     {
         public Result Handle(Command c)
         {
-            if (!db.TryGetValue(c.MachineId, out var machine))
-                return Result.Fail(new Error("machine.not-found", "No such machine.", ErrorKind.NotFound));
+            if (!db.TryGetValue(c.CarId, out var car))
+                return Result.Fail(new Error("car.not-found", "No such car.", ErrorKind.NotFound));
             try
             {
-                machine.CancelBooking(c.BookingId, c.Today);   // all rules live here
+                car.CancelBooking(c.BookingId, c.Today);   // all rules live here
                 return Result.Ok(c.BookingId);
             }
             catch (FleetRuleException ex) when (ex.Code == "booking.not-found")
@@ -1115,7 +1115,7 @@ public static class CancelBookingSlice
 }
 ```
 
-The handler is translation only. If the rule changes ("bookings can be cancelled up to 24 hours before start"), only `Machine.CancelBooking` changes, and every slice that cancels (this one, and perhaps a future bulk-cancel slice) picks it up.
+The handler is translation only. If the rule changes ("bookings can be cancelled up to 24 hours before start"), only `Car.CancelBooking` changes, and every slice that cancels (this one, and perhaps a future bulk-cancel slice) picks it up.
 ::mistakes
 - Copying `if (booking.From <= today)` into the handler "to return a nicer error".
 - Catching `Exception` and returning 500-style errors for rule violations.
@@ -1125,16 +1125,16 @@ Make the domain return a result instead of throwing, and compare the two handler
 :::
 
 :::exercise id=m08-vertical-slice-ex2 difficulty=beginner kind=code title="The utilisation query slice"
-Management wants machine utilisation for a period. Write the query handler. It reads data directly and uses no domain behaviour.
+Management wants car utilisation for a period. Write the query handler. It reads data directly and uses no domain behaviour.
 ::requirements
 - Input: `From` and `To` (inclusive). Period days = `To - From + 1`.
-- For each machine that is not retired, booked days = total days of non-cancelled bookings that fall inside the period (clip bookings that start before or end after it).
+- For each car that is not retired, booked days = total days of non-cancelled bookings that fall inside the period (clip bookings that start before or end after it).
 - `UtilisationPercent = round(100 × booked / period, 1)`.
-- Sort by utilisation ascending (idle machines first), then by code.
+- Sort by utilisation ascending (idle cars first), then by code.
 ::acceptance
-- A 10-day booking fully inside a 30-day period gives 33.3 %.
-- A booking from 25 Sep to 5 Oct, for a 1–31 Oct period, counts 5 days.
-- Cancelled bookings and retired machines are ignored.
+- A 10-day booking fully inside a 30-day period (1–30 Oct) gives 33.3 %.
+- A booking from 25 Sep to 5 Oct, for the same 1–30 Oct period, counts 5 days.
+- Cancelled bookings and retired cars are ignored.
 - Rows are sorted idle first.
 ::hint
 The only tricky part is clipping a booking to the period. Draw two ranges on a line.
@@ -1155,14 +1155,14 @@ using System.Collections.Generic;
 using System.Linq;
 
 public sealed record BookingRow(DateOnly From, DateOnly To, bool Cancelled);
-public sealed record MachineRow(string Code, bool Retired, IReadOnlyList<BookingRow> Bookings);
+public sealed record CarRow(string Code, bool Retired, IReadOnlyList<BookingRow> Bookings);
 
 public static class GetUtilisationSlice
 {
     public sealed record Query(DateOnly From, DateOnly To);
     public sealed record Row(string Code, int BookedDays, decimal UtilisationPercent);
 
-    public sealed class Handler(IReadOnlyList<MachineRow> machines)
+    public sealed class Handler(IReadOnlyList<CarRow> cars)
     {
         public IReadOnlyList<Row> Handle(Query q) => throw new NotImplementedException();
     }
@@ -1181,7 +1181,7 @@ public class UtilisationTests
     [Fact]
     public void Ten_days_in_thirty_is_33_3_percent()
     {
-        var m = new MachineRow("EX-01", false, new[] { new BookingRow(new(2026, 10, 5), new(2026, 10, 14), false) });
+        var m = new CarRow("CAR-01", false, new[] { new BookingRow(new(2026, 10, 5), new(2026, 10, 14), false) });
         var row = new GetUtilisationSlice.Handler(new[] { m }).Handle(October).Single();
         Assert.Equal(10, row.BookedDays);
         Assert.Equal(33.3m, row.UtilisationPercent);
@@ -1190,26 +1190,26 @@ public class UtilisationTests
     [Fact]
     public void Bookings_are_clipped_to_the_period()
     {
-        var m = new MachineRow("CR-07", false, new[] { new BookingRow(new(2026, 9, 25), new(2026, 10, 5), false) });
+        var m = new CarRow("CAR-07", false, new[] { new BookingRow(new(2026, 9, 25), new(2026, 10, 5), false) });
         Assert.Equal(5, new GetUtilisationSlice.Handler(new[] { m }).Handle(October).Single().BookedDays);
     }
 
     [Fact]
     public void Cancelled_and_retired_are_ignored()
     {
-        var a = new MachineRow("A", false, new[] { new BookingRow(new(2026, 10, 1), new(2026, 10, 30), true) });
-        var b = new MachineRow("B", true, new[] { new BookingRow(new(2026, 10, 1), new(2026, 10, 30), false) });
+        var a = new CarRow("A", false, new[] { new BookingRow(new(2026, 10, 1), new(2026, 10, 30), true) });
+        var b = new CarRow("B", true, new[] { new BookingRow(new(2026, 10, 1), new(2026, 10, 30), false) });
         var rows = new GetUtilisationSlice.Handler(new[] { a, b }).Handle(October);
         Assert.Equal("A", rows.Single().Code);
         Assert.Equal(0, rows.Single().BookedDays);
     }
 
     [Fact]
-    public void Idle_machines_first_then_code()
+    public void Idle_cars_first_then_code()
     {
-        var busy = new MachineRow("Z-BUSY", false, new[] { new BookingRow(new(2026, 10, 1), new(2026, 10, 30), false) });
-        var idle2 = new MachineRow("B-IDLE", false, Array.Empty<BookingRow>());
-        var idle1 = new MachineRow("A-IDLE", false, Array.Empty<BookingRow>());
+        var busy = new CarRow("Z-BUSY", false, new[] { new BookingRow(new(2026, 10, 1), new(2026, 10, 30), false) });
+        var idle2 = new CarRow("B-IDLE", false, Array.Empty<BookingRow>());
+        var idle1 = new CarRow("A-IDLE", false, Array.Empty<BookingRow>());
         var codes = new GetUtilisationSlice.Handler(new[] { busy, idle2, idle1 }).Handle(October).Select(r => r.Code).ToArray();
         Assert.Equal(new[] { "A-IDLE", "B-IDLE", "Z-BUSY" }, codes);
     }
@@ -1222,19 +1222,19 @@ using System.Collections.Generic;
 using System.Linq;
 
 public sealed record BookingRow(DateOnly From, DateOnly To, bool Cancelled);
-public sealed record MachineRow(string Code, bool Retired, IReadOnlyList<BookingRow> Bookings);
+public sealed record CarRow(string Code, bool Retired, IReadOnlyList<BookingRow> Bookings);
 
 public static class GetUtilisationSlice
 {
     public sealed record Query(DateOnly From, DateOnly To);
     public sealed record Row(string Code, int BookedDays, decimal UtilisationPercent);
 
-    public sealed class Handler(IReadOnlyList<MachineRow> machines)
+    public sealed class Handler(IReadOnlyList<CarRow> cars)
     {
         public IReadOnlyList<Row> Handle(Query q)
         {
             var periodDays = q.To.DayNumber - q.From.DayNumber + 1;
-            return machines
+            return cars
                 .Where(m => !m.Retired)
                 .Select(m =>
                 {
@@ -1259,13 +1259,14 @@ public static class GetUtilisationSlice
 In PostgreSQL, the whole handler becomes one query, which is exactly why reports deserve their own slices:
 
 ```sql
-SELECT e.code,
+SELECT c.code,
        COALESCE(SUM(GREATEST(0, LEAST(b.to_date, @to) - GREATEST(b.from_date, @from) + 1)), 0) AS booked_days
-FROM equipment e
-LEFT JOIN bookings b ON b.equipment_id = e.id AND NOT b.cancelled
-WHERE NOT e.retired
-GROUP BY e.code
-ORDER BY booked_days, e.code;
+FROM cars c
+LEFT JOIN bookings b ON b.car_id = c.id AND NOT b.cancelled
+                    AND b.from_date <= @to AND b.to_date >= @from   -- lets an index on (car_id, from_date) skip old bookings
+WHERE NOT c.retired
+GROUP BY c.code
+ORDER BY booked_days, c.code;
 ```
 ::mistakes
 - Counting whole bookings instead of clipping them to the period.
@@ -1275,22 +1276,22 @@ ORDER BY booked_days, e.code;
 Add an optional `Kind` filter and a `Revenue` column (booked days × daily rate), and decide whether the rate should be the rate at booking time (a fact stored on the booking) or today's rate.
 :::
 
-:::exercise id=m08-vertical-slice-ex3 difficulty=intermediate kind=design title="Slices plus Clean Architecture for a tender module"
-A company's tender module is currently layered: `TenderController`, `TenderService` (2,000 lines), `TenderRepository`, `BidService`, `BidRepository`. Features: publish a tender, amend a tender (corrigendum), submit a bid, withdraw a bid, open bids after the deadline, list tenders by status, and a comparative statement report of all bids for a tender.
+:::exercise id=m08-vertical-slice-ex3 difficulty=intermediate kind=design title="Slices plus Clean Architecture for a used-car auction module"
+The rental company sells its retired cars to registered dealers through sealed-bid online auctions. The auction module is currently layered: `AuctionController`, `AuctionService` (2,000 lines), `AuctionRepository`, `BidService`, `BidRepository`. Features: publish an auction, amend an auction (an amendment notice), submit a bid, withdraw a bid, open bids after the deadline, list auctions by status, and a bid comparison report of all bids for an auction.
 
-Rules: bids only before the deadline; one active bid per bidder per tender; a corrigendum can extend but never shorten the deadline; bids are sealed (nobody can read amounts) until opening.
+Rules: bids only before the deadline; one active bid per dealer per auction; an amendment can extend but never shorten the deadline; bids are sealed (nobody can read amounts) until opening.
 
 Design the target structure: domain, slices and shared kernel, combined with Clean Architecture's dependency rule. Use the LLD designer.
 ::acceptance
 - The four rules each live on a named domain class, not in slices.
 - One slice per feature (at least 7), each marked as command or query.
-- The shared kernel holds only plumbing (no tender-specific helpers).
+- The shared kernel holds only plumbing (no auction-specific helpers).
 - No slice depends on another slice.
-- The comparative statement is a query slice that can use SQL directly, and still respects the "sealed until opening" rule.
+- The bid comparison is a query slice that can use SQL directly, and still respects the "sealed until opening" rule.
 ::hint
-Which object must be loaded to check "one active bid per bidder" and "before the deadline" together? That decides the aggregate boundary.
+Which object must be loaded to check "one active bid per dealer" and "before the deadline" together? That decides the aggregate boundary.
 ::hint
-For a tender with 40 bids, holding bids inside the `Tender` aggregate is fine. For 4,000 it might not be. State your assumption.
+For an auction with 40 bids, holding bids inside the `Auction` aggregate is fine. For 4,000 it might not be. State your assumption.
 ::hint
 "Sealed until opening" is a read-side rule too. Where can a query slice check it without loading the aggregate?
 ::hint
@@ -1299,42 +1300,42 @@ Model slices as classes with a responsibility like "Command slice: Features/Bids
 ```json
 {
   "classes": [
-    { "id": "Tender", "name": "Tender", "kind": "class", "fields": ["-TenderId Id", "-DateTimeOffset Deadline"], "methods": [], "responsibility": "Aggregate root. TODO: rules" },
+    { "id": "Auction", "name": "Auction", "kind": "class", "fields": ["-AuctionId Id", "-DateTimeOffset Deadline"], "methods": [], "responsibility": "Aggregate root. TODO: rules" },
     { "id": "SubmitBid", "name": "SubmitBid", "kind": "class", "fields": [], "methods": ["+Task~Result~ HandleAsync(Command c)"], "responsibility": "Command slice" }
   ],
-  "relations": [ { "from": "SubmitBid", "to": "Tender", "kind": "dependency" } ]
+  "relations": [ { "from": "SubmitBid", "to": "Auction", "kind": "dependency" } ]
 }
 ```
 ::solution
 ```json
 {
   "classes": [
-    { "id": "Tender", "name": "Tender", "kind": "class",
-      "fields": ["-TenderId Id", "-string Title", "-DateTimeOffset Deadline", "-TenderStatus Status", "-List~Bid~ _bids", "-List~Corrigendum~ _corrigenda"],
-      "methods": ["+void Publish(DateTimeOffset now)", "+void Amend(Corrigendum c, DateTimeOffset now)", "+BidId SubmitBid(BidderId bidder, Money amount, DateTimeOffset now)", "+void WithdrawBid(BidderId bidder, DateTimeOffset now)", "+void OpenBids(DateTimeOffset now)"],
-      "responsibility": "Domain aggregate root (Fleet-style Domain project). Rules: bids before deadline; one active bid per bidder; corrigendum may only extend deadline; open only after deadline" },
-    { "id": "Bid", "name": "Bid", "kind": "class", "fields": ["-BidId Id", "-BidderId Bidder", "-Money Amount", "-bool Withdrawn"], "methods": [], "responsibility": "Child entity of Tender. Amount sealed until Tender.Status = Opened" },
-    { "id": "Corr", "name": "Corrigendum", "kind": "record", "fields": ["+string Text", "+DateTimeOffset NewDeadline"], "methods": [], "responsibility": "Value object" },
-    { "id": "Publish", "name": "PublishTender", "kind": "class", "fields": [], "methods": ["+Task~Result~ HandleAsync(Command c)"], "responsibility": "Command slice: Features/Tenders/PublishTender" },
-    { "id": "Amend", "name": "AmendTender", "kind": "class", "fields": [], "methods": ["+Task~Result~ HandleAsync(Command c)"], "responsibility": "Command slice: Features/Tenders/AmendTender" },
+    { "id": "Auction", "name": "Auction", "kind": "class",
+      "fields": ["-AuctionId Id", "-string Title", "-DateTimeOffset Deadline", "-AuctionStatus Status", "-List~Bid~ _bids", "-List~Amendment~ _amendments"],
+      "methods": ["+void Publish(DateTimeOffset now)", "+void Amend(Amendment c, DateTimeOffset now)", "+BidId SubmitBid(BidderId bidder, Money amount, DateTimeOffset now)", "+void WithdrawBid(BidderId bidder, DateTimeOffset now)", "+void OpenBids(DateTimeOffset now)"],
+      "responsibility": "Domain aggregate root (Fleet-style Domain project). Rules: bids before deadline; one active bid per dealer; an amendment may only extend the deadline; open only after deadline" },
+    { "id": "Bid", "name": "Bid", "kind": "class", "fields": ["-BidId Id", "-BidderId Bidder", "-Money Amount", "-bool Withdrawn"], "methods": [], "responsibility": "Child entity of Auction. Amount sealed until Auction.Status = Opened" },
+    { "id": "Corr", "name": "Amendment", "kind": "record", "fields": ["+string Text", "+DateTimeOffset NewDeadline"], "methods": [], "responsibility": "Value object" },
+    { "id": "Publish", "name": "PublishAuction", "kind": "class", "fields": [], "methods": ["+Task~Result~ HandleAsync(Command c)"], "responsibility": "Command slice: Features/Auctions/PublishAuction" },
+    { "id": "Amend", "name": "AmendAuction", "kind": "class", "fields": [], "methods": ["+Task~Result~ HandleAsync(Command c)"], "responsibility": "Command slice: Features/Auctions/AmendAuction" },
     { "id": "Submit", "name": "SubmitBid", "kind": "class", "fields": [], "methods": ["+Task~Result~ HandleAsync(Command c)"], "responsibility": "Command slice: Features/Bids/SubmitBid" },
     { "id": "Withdraw", "name": "WithdrawBid", "kind": "class", "fields": [], "methods": ["+Task~Result~ HandleAsync(Command c)"], "responsibility": "Command slice: Features/Bids/WithdrawBid" },
     { "id": "Open", "name": "OpenBids", "kind": "class", "fields": [], "methods": ["+Task~Result~ HandleAsync(Command c)"], "responsibility": "Command slice: Features/Bids/OpenBids" },
-    { "id": "List", "name": "ListTenders", "kind": "class", "fields": [], "methods": ["+Task~Result~ HandleAsync(Query q)"], "responsibility": "Query slice: Features/Tenders/ListTenders, SQL with paging" },
-    { "id": "Cs", "name": "GetComparativeStatement", "kind": "class", "fields": [], "methods": ["+Task~Result~ HandleAsync(Query q)"], "responsibility": "Query slice: SQL joins bids; WHERE tender.status = 'Opened' enforces sealing" },
+    { "id": "List", "name": "ListAuctions", "kind": "class", "fields": [], "methods": ["+Task~Result~ HandleAsync(Query q)"], "responsibility": "Query slice: Features/Auctions/ListAuctions, SQL with paging" },
+    { "id": "Cs", "name": "GetBidComparison", "kind": "class", "fields": [], "methods": ["+Task~Result~ HandleAsync(Query q)"], "responsibility": "Query slice: SQL joins bids; WHERE auction.status = 'Opened' enforces sealing" },
     { "id": "Result", "name": "Result~T~", "kind": "class", "fields": [], "methods": [], "responsibility": "Shared kernel" },
     { "id": "Pipe", "name": "IPipelineBehaviour", "kind": "interface", "fields": [], "methods": [], "responsibility": "Shared kernel: logging, validation, transactions, audit" },
-    { "id": "Db", "name": "TenderDbContext", "kind": "class", "fields": [], "methods": [], "responsibility": "Infrastructure: EF Core over PostgreSQL, used directly by slices" },
+    { "id": "Db", "name": "AuctionDbContext", "kind": "class", "fields": [], "methods": [], "responsibility": "Infrastructure: EF Core over PostgreSQL, used directly by slices" },
     { "id": "Clock", "name": "TimeProvider", "kind": "abstract", "fields": [], "methods": [], "responsibility": "Shared: injected so deadline rules are testable" }
   ],
   "relations": [
-    { "from": "Tender", "to": "Bid", "kind": "composition", "multiplicity": "0..*" },
-    { "from": "Tender", "to": "Corr", "kind": "composition", "multiplicity": "0..*" },
-    { "from": "Publish", "to": "Tender", "kind": "dependency" },
-    { "from": "Amend", "to": "Tender", "kind": "dependency" },
-    { "from": "Submit", "to": "Tender", "kind": "dependency" },
-    { "from": "Withdraw", "to": "Tender", "kind": "dependency" },
-    { "from": "Open", "to": "Tender", "kind": "dependency" },
+    { "from": "Auction", "to": "Bid", "kind": "composition", "multiplicity": "0..*" },
+    { "from": "Auction", "to": "Corr", "kind": "composition", "multiplicity": "0..*" },
+    { "from": "Publish", "to": "Auction", "kind": "dependency" },
+    { "from": "Amend", "to": "Auction", "kind": "dependency" },
+    { "from": "Submit", "to": "Auction", "kind": "dependency" },
+    { "from": "Withdraw", "to": "Auction", "kind": "dependency" },
+    { "from": "Open", "to": "Auction", "kind": "dependency" },
     { "from": "List", "to": "Db", "kind": "dependency" },
     { "from": "Cs", "to": "Db", "kind": "dependency" },
     { "from": "Submit", "to": "Clock", "kind": "dependency" },
@@ -1346,25 +1347,25 @@ Model slices as classes with a responsibility like "Command slice: Features/Bids
 Structure and reasoning:
 
 ```text
-Tenders.Domain          Tender, Bid, Corrigendum, TenderRuleException      (no references)
-Tenders.Application     Features/Tenders/{PublishTender, AmendTender, ListTenders}.cs
-                        Features/Bids/{SubmitBid, WithdrawBid, OpenBids, GetComparativeStatement}.cs
+Auctions.Domain          Auction, Bid, Amendment, AuctionRuleException      (no references)
+Auctions.Application     Features/Auctions/{PublishAuction, AmendAuction, ListAuctions}.cs
+                        Features/Bids/{SubmitBid, WithdrawBid, OpenBids, GetBidComparison}.cs
                         Shared/{Result, IPipelineBehaviour, IEndpoint}.cs
-Tenders.Infrastructure  TenderDbContext, EF mappings, SQL for reports
-Tenders.Api             Program.cs (AddSlices, MapSlices)
+Auctions.Infrastructure  AuctionDbContext, EF mappings, SQL for reports
+Auctions.Api             Program.cs (AddSlices, MapSlices)
 ```
 
-- **Aggregate:** `Tender` holds its bids, because "one active bid per bidder" and "before the deadline" must be checked together. Assumption: a few hundred bids at most per tender. If tenders routinely drew thousands, `Bid` could become its own aggregate with a unique index on (tender, bidder) and a deadline check using a snapshot of the deadline.
-- **Five command slices** each load `Tender` and call one method. None contains a rule.
-- **Two query slices** use SQL. The comparative statement filters on `status = 'Opened'`, so the sealing rule holds on the read side too. A unit test for that query slice is mandatory, because a mistake leaks commercial information.
-- **Shared kernel:** `Result`, the pipeline (including an audit behaviour that writes who did what, a common need in public procurement), `IEndpoint`. Nothing tender-specific.
+- **Aggregate:** `Auction` holds its bids, because "one active bid per dealer" and "before the deadline" must be checked together. Assumption: a few hundred bids at most per auction. If auctions routinely drew thousands, `Bid` could become its own aggregate with a unique index on (auction, bidder) and a deadline check using a snapshot of the deadline.
+- **Five command slices** each load `Auction` and call one method. None contains a rule.
+- **Two query slices** use SQL. The bid comparison filters on `status = 'Opened'`, so the sealing rule holds on the read side too. A unit test for that query slice is mandatory, because a mistake leaks commercial information.
+- **Shared kernel:** `Result`, the pipeline (including an audit behaviour that writes who did what, a common need wherever bids and money are involved), `IEndpoint`. Nothing auction-specific.
 - **Dependency rule:** slices depend on Domain and Shared. Domain depends on nothing. Infrastructure implements the database access.
 ::alternatives
 For a small team, one project with `Domain`, `Features` and `Shared` folders plus an architecture test is enough. Split into projects when several teams contribute or when the rule keeps being broken.
 ::mistakes
-- A `TenderHelpers` class in the shared kernel with `IsBeforeDeadline` used by three slices. That is a domain rule.
-- A comparative-statement query that reads bid amounts without checking the tender's status.
-- `SubmitBid` calling `GetTender`'s handler to load the tender.
+- A `AuctionHelpers` class in the shared kernel with `IsBeforeDeadline` used by three slices. That is a domain rule.
+- A bid-comparison query that reads bid amounts without checking the auction's status.
+- `SubmitBid` calling `GetAuction`'s handler to load the auction.
 :::
 
 :::exercise id=m08-vertical-slice-ex4 difficulty=intermediate kind=code title="Discover endpoints by convention"
@@ -1697,7 +1698,7 @@ Why the ordering matters in practice: put **logging outermost** (it sees validat
 :::
 
 :::exercise id=m08-vertical-slice-ex6 difficulty=advanced kind=written title="Two slices need the same logic"
-Three slices now need "is this machine available for this date range at this site?": `BookEquipment`, `ExtendBooking`, and a new query `FindAvailableMachines` that lists available cranes for a site manager. A developer proposes an `AvailabilityHelper` in `Shared/`. Evaluate the options and recommend one.
+Three slices now need "is this car available for this date range?": `BookCar`, `ExtendBooking`, and a new query `FindAvailableCars` that lists the SUVs a customer can book at a hub. A developer proposes an `AvailabilityHelper` in `Shared/`. Evaluate the options and recommend one.
 ::acceptance
 - Distinguishes the write-side check (a rule that must hold) from the read-side search (a convenience that may be approximate).
 - Evaluates at least three options, including the shared helper.
@@ -1706,19 +1707,19 @@ Three slices now need "is this machine available for this date range at this sit
 ::hint
 Is "no overlap" a business invariant or a query concern? It is both, in different ways.
 ::hint
-The query must be fast across 400 machines. The command must be correct for one machine.
+The query must be fast across 400 cars. The command must be correct for one car.
 ::hint
-What stops two simultaneous `BookEquipment` requests from both passing the check?
+What stops two simultaneous `BookCar` requests from both passing the check?
 ::solution
 **Options:**
 
 1. **`Shared/AvailabilityHelper`.** One method used by all three slices. Simple, but it puts a business rule in the shared kernel, which then changes whenever the rule changes and is coupled to all three slices. It also tempts the query slice to load full aggregates to call it.
-2. **Domain only.** `Equipment.IsAvailable(from, to)` and `Equipment.Book(...)`. The command slices use it. The query slice would have to load all 400 aggregates with their bookings to call it, which is slow.
-3. **Split by side (recommended).** The *rule* lives on the aggregate: `Equipment.Book` and `Equipment.Extend` both call a private `EnsureNoOverlap`. That is the only authoritative check. The *search* lives in the `FindAvailableMachines` query slice as SQL: `NOT EXISTS (SELECT 1 FROM bookings b WHERE b.equipment_id = e.id AND NOT b.cancelled AND b.from_date <= @to AND @from <= b.to_date)`. It is a convenience: if it shows a machine that gets booked a second later, the booking command will still reject the clash.
+2. **Domain only.** `Car.IsAvailable(from, to)` and `Car.Book(...)`. The command slices use it. The query slice would have to load all 400 aggregates with their bookings to call it, which is slow.
+3. **Split by side (recommended).** The *rule* lives on the aggregate: `Car.Book` and `Car.Extend` both call a private `EnsureNoOverlap`. That is the only authoritative check. The *search* lives in the `FindAvailableCars` query slice as SQL: `NOT EXISTS (SELECT 1 FROM bookings b WHERE b.car_id = c.id AND NOT b.cancelled AND b.from_date <= @to AND @from <= b.to_date)`. It is a convenience: if it shows a car that gets booked a second later, the booking command will still reject the clash.
 
-**Concurrency:** the domain check alone doesn't stop two requests that load the same `Equipment` at the same time from both passing. Protect the aggregate with an optimistic concurrency token (a version column), so the second save fails and is retried or rejected. In PostgreSQL you can add a database-level guarantee too: an exclusion constraint, `EXCLUDE USING gist (equipment_id WITH =, daterange(from_date, to_date, '[]') WITH &&) WHERE (NOT cancelled)`, using the `btree_gist` extension.
+**Concurrency:** the domain check alone doesn't stop two requests that load the same `Car` at the same time from both passing. Protect the aggregate with an optimistic concurrency token (a version column), so the second save fails and is retried or rejected. In PostgreSQL you can add a database-level guarantee too: an exclusion constraint, `EXCLUDE USING gist (car_id WITH =, daterange(from_date, to_date, '[]') WITH &&) WHERE (NOT cancelled)`, using the `btree_gist` extension.
 
-**Where the code lives:** `Domain/Equipment.cs` (rule), `Features/Bookings/BookEquipment.cs` and `ExtendBooking.cs` (call the rule), `Features/Availability/FindAvailableMachines.cs` (SQL search), and a migration for the exclusion constraint in Infrastructure. Nothing in `Shared/`.
+**Where the code lives:** `Domain/Car.cs` (rule), `Features/Bookings/BookCar.cs` and `ExtendBooking.cs` (call the rule), `Features/Availability/FindAvailableCars.cs` (SQL search), and a migration for the exclusion constraint in Infrastructure. Nothing in `Shared/`.
 
 The general lesson: when slices need the same *rule*, move it into the domain. When they need the same *data shape*, let each slice query it in its own way, and accept small duplication.
 ::mistakes
@@ -1735,7 +1736,7 @@ Slices change how you organise tests, too: **test per slice, through its public 
 **2. Slice handler tests.** Construct the handler with a `FleetDb` and a fixed `TimeProvider`, send a request, assert on the `Result` and the stored state:
 
 ```csharp
-public class BookEquipmentTests
+public class BookCarTests
 {
     private sealed class FixedClock(DateTimeOffset now) : TimeProvider
     {
@@ -1747,15 +1748,15 @@ public class BookEquipmentTests
     public async Task Overlapping_booking_is_a_conflict()
     {
         var db = new FleetDb();
-        var crane = new Equipment(Guid.NewGuid(), "CR-25T-007", EquipmentKind.Crane, 18_000m);
-        db.Equipment[crane.Id] = crane;
-        var handler = new BookEquipment.Handler(db, new FixedClock(new(2026, 10, 20, 9, 0, 0, TimeSpan.Zero)));
+        var suv = new Car(Guid.NewGuid(), "KA01AB1234", CarKind.Suv, 2_500m);
+        db.Cars[suv.Id] = suv;
+        var handler = new BookCar.Handler(db, new FixedClock(new(2026, 10, 20, 9, 0, 0, TimeSpan.Zero)));
 
-        var first = await handler.HandleAsync(new(crane.Id, "NH48-P3", new(2026, 11, 3), new(2026, 11, 12)), default);
-        var second = await handler.HandleAsync(new(crane.Id, "SH12-P1", new(2026, 11, 8), new(2026, 11, 15)), default);
+        var first = await handler.HandleAsync(new(suv.Id, "BLR-KOR", new(2026, 11, 3), new(2026, 11, 12)), default);
+        var second = await handler.HandleAsync(new(suv.Id, "BLR-WFD", new(2026, 11, 8), new(2026, 11, 15)), default);
 
         Assert.True(first.IsSuccess);
-        Assert.Equal(10 * 18_000m, first.Value!.EstimatedCost);
+        Assert.Equal(10 * 2_500m, first.Value!.EstimatedCost);
         Assert.Equal("booking.overlap", second.Error!.Code);
     }
 }
@@ -1773,7 +1774,7 @@ public void Every_slice_handler_resolves()
         .AddSingleton(TimeProvider.System).AddSingleton<FleetDb>().AddLogging()
         .AddSlices(typeof(FleetDb).Assembly);
     using var sp = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
-    Assert.NotNull(sp.GetRequiredService<BookEquipment.Handler>());
+    Assert.NotNull(sp.GetRequiredService<BookCar.Handler>());
     Assert.True(sp.GetServices<IEndpoint>().Count() >= 4);
 }
 ```
@@ -1784,10 +1785,10 @@ public void Every_slice_handler_resolves()
 
 ## Real-world application
 
-- **Large line-of-business APIs** (ERP modules, project-management platforms, procurement systems) commonly reach hundreds of endpoints. Feature folders with one handler per endpoint keep teams working in parallel without a shared service bottleneck.
+- **Large line-of-business APIs** (ERP modules, travel-booking platforms, food-delivery back offices) commonly reach hundreds of endpoints. Feature folders with one handler per endpoint keep teams working in parallel without a shared service bottleneck.
 - **Combining with modular monoliths.** Each module (bounded context) has its own `Domain`, `Features` and `Shared` folders. Slices never cross module boundaries; modules talk through public contracts or events.
 - **Incremental modernisation.** Teams moving an old MVC application with fat service classes to minimal APIs often migrate one endpoint at a time into slices, deleting service methods as they go, rather than rewriting.
-- **Libraries in the .NET ecosystem**, such as MediatR, Wolverine and FastEndpoints, are popular ways to build slices. Each adds conventions (handlers, pipelines, endpoint classes). The structure in this lesson works without them; adopt a library when its features (messaging, source-generated registration, OpenAPI integration) are worth the dependency.
+- **Libraries in the .NET ecosystem**, such as MediatR, Wolverine and FastEndpoints, are popular ways to build slices. Each adds conventions (handlers, pipelines, endpoint classes). The structure in this lesson works without them; adopt a library when its features (messaging, source-generated registration, OpenAPI integration) are worth the dependency, and check its licence: MediatR, for example, moved to a commercial licence for larger organisations from version 13 (2025).
 
 ## Interview questions
 
@@ -1795,7 +1796,7 @@ public void Every_slice_handler_resolves()
 ::q beginner
 What is a vertical slice?
 ::a
-Everything one use case needs, from the HTTP endpoint to data access, grouped together: request, validation, handler, response and route mapping. Code is organised by feature (`BookEquipment`) instead of by technical layer (controllers, services, repositories). Coupling is high inside a slice and low between slices.
+Everything one use case needs, from the HTTP endpoint to data access, grouped together: request, validation, handler, response and route mapping. Code is organised by feature (`BookCar`) instead of by technical layer (controllers, services, repositories). Coupling is high inside a slice and low between slices.
 ::q beginner
 What goes in the shared kernel?
 ::a
@@ -1855,14 +1856,14 @@ A: One feature at a time: move rules into the domain, carve out a slice, delete 
 
 :::quiz pass=70
 ::q single
-`ExtendBooking`'s handler creates a `BookEquipment.Handler` and calls it to reuse the overlap check. What is the best fix?
-- [ ] Make `BookEquipment.Handler` static so it is cheaper to call.
-- [x] Move the overlap rule onto the `Equipment` aggregate and have both slices call it.
+`ExtendBooking`'s handler creates a `BookCar.Handler` and calls it to reuse the overlap check. What is the best fix?
+- [ ] Make `BookCar.Handler` static so it is cheaper to call.
+- [x] Move the overlap rule onto the `Car` aggregate and have both slices call it.
 - [ ] Copy the overlap check into `ExtendBooking`.
 - [ ] Merge the two slices into one.
 > Slices share the domain, not each other. The rule belongs on the aggregate.
 ::q single
-After a year, `Shared/` contains `BookingHelpers`, `CostCalculator` and `SiteRules`, each used by two or three slices. What has happened?
+After a year, `Shared/` contains `BookingHelpers`, `CostCalculator` and `HubRules`, each used by two or three slices. What has happened?
 - [ ] The architecture is working as intended.
 - [x] The shared kernel has become a service layer; business logic should move to the domain.
 - [ ] The team needs more shared helpers.
@@ -1883,10 +1884,10 @@ A request is malformed. Which behaviour order avoids opening a database transact
 - [ ] The order does not matter.
 > Validation must run before the transaction to short-circuit cheaply. Logging outermost sees everything.
 ::q single
-A utilisation report needs a grouped query over 400 machines and 20,000 bookings. How should its slice read data?
-- [ ] Load every `Equipment` aggregate and compute in memory.
+A utilisation report needs a grouped query over 400 cars and 20,000 bookings. How should its slice read data?
+- [ ] Load every `Car` aggregate and compute in memory.
 - [x] Run a dedicated SQL query (or EF Core projection) inside the query slice.
-- [ ] Call the booking command slice for each machine.
+- [ ] Call the booking command slice for each car.
 - [ ] Add a method to the shared kernel used by all slices.
 > Query slices may choose the data access that suits them. Reports rarely need the domain model.
 ::q single

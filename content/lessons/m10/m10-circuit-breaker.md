@@ -479,28 +479,38 @@ using System.Net;
 
 namespace Orders.Resilience;
 
-/// <summary>Counts 5xx, 408, 429, timeouts and connection failures as failures. Other responses are
+/// <summary>Counts 5xx, 408, 429, attempt timeouts and connection failures as failures. Other responses are
 /// successes from the breaker's point of view, because the dependency answered.</summary>
-public sealed class CircuitBreakerHandler(CircuitBreaker breaker) : DelegatingHandler
+public sealed class CircuitBreakerHandler(CircuitBreaker breaker, TimeSpan attemptTimeout) : DelegatingHandler
 {
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         if (!breaker.TryAcquire(out var permit, out var retryAfter))
             throw new BrokenCircuitException(breaker.Name, retryAfter);
 
+        // The handler owns the attempt timeout. HttpClient.Timeout cancels the SAME token the caller passed in,
+        // so inside a handler an HttpClient timeout is indistinguishable from the caller giving up.
+        using var attemptCts = new CancellationTokenSource(attemptTimeout);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, attemptCts.Token);
+
         HttpResponseMessage response;
         try
         {
-            response = await base.SendAsync(request, cancellationToken);
+            response = await base.SendAsync(request, linked.Token);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (attemptCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            breaker.RecordIgnored(permit);       // the caller gave up
+            breaker.RecordFailure(permit);       // our attempt timeout fired: the dependency is slow
+            throw new TimeoutException($"'{breaker.Name}' did not answer within {attemptTimeout.TotalMilliseconds} ms.");
+        }
+        catch (OperationCanceledException)
+        {
+            breaker.RecordIgnored(permit);       // the caller (or an outer deadline) gave up: no verdict
             throw;
         }
-        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or TimeoutException)
+        catch (HttpRequestException)
         {
-            breaker.RecordFailure(permit);       // connection failure or HttpClient/attempt timeout
+            breaker.RecordFailure(permit);       // connection refused, reset, DNS failure
             throw;
         }
 
@@ -508,7 +518,6 @@ public sealed class CircuitBreakerHandler(CircuitBreaker breaker) : DelegatingHa
         else breaker.RecordSuccess(permit);
         return response;
     }
-
     public static bool IsFailure(HttpStatusCode status) =>
         (int)status >= 500 || status is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests;
 }
@@ -595,9 +604,10 @@ builder.Services.AddKeyedSingleton("loyalty", (sp, _) =>
 builder.Services.AddHttpClient<LoyaltyClient>(c =>
     {
         c.BaseAddress = new Uri("https://loyalty.internal/");
-        c.Timeout = TimeSpan.FromSeconds(1);
+        c.Timeout = TimeSpan.FromSeconds(3);                  // outer backstop only; the attempt timeout is below
     })
-    .AddHttpMessageHandler(sp => new CircuitBreakerHandler(sp.GetRequiredKeyedService<CircuitBreaker>("loyalty")));
+    .AddHttpMessageHandler(sp => new CircuitBreakerHandler(
+        sp.GetRequiredKeyedService<CircuitBreaker>("loyalty"), attemptTimeout: TimeSpan.FromSeconds(1)));
 
 var app = builder.Build();
 
@@ -616,6 +626,8 @@ app.Run();
 
 **Why a keyed singleton?** `IHttpClientFactory` recycles message handlers every couple of minutes. If the breaker lived inside the handler, its state would be thrown away with it. Keeping the breaker as a singleton and passing it into each new handler preserves state across rotations.
 
+**Why does the handler own the attempt timeout?** A common bug: relying on `HttpClient.Timeout` and treating every `OperationCanceledException` as a failure, or (the opposite bug) treating every cancellation as "the caller gave up". `HttpClient` implements its timeout by cancelling the token it hands to the handler chain, so the handler cannot tell a timeout from a user who closed the app. With its own timer, the handler knows exactly which one happened: its own timeout is a failure, anything else is ignored. Polly's timeout strategy solves the same problem by throwing `TimeoutRejectedException`.
+
 ### With the library
 
 In production you would usually let `Microsoft.Extensions.Http.Resilience` (Polly v8) do this. A custom pipeline for Loyalty (not compiled here):
@@ -626,6 +638,8 @@ builder.Services.AddHttpClient<LoyaltyClient>(c => c.BaseAddress = new Uri("http
     {
         pipeline.AddCircuitBreaker(new HttpCircuitBreakerStrategyOptions
         {
+            // The default ShouldHandle already counts 5xx, 408, 429, HttpRequestException and
+            // TimeoutRejectedException, and ignores other 4xx responses.
             FailureRatio = 0.5,
             MinimumThroughput = 20,
             SamplingDuration = TimeSpan.FromSeconds(10),
@@ -1423,7 +1437,8 @@ Breakers are state machines driven by time and outcomes: test them as such.
 public async Task Not_found_does_not_trip_the_breaker()
 {
     var breaker = new CircuitBreaker("t", new CircuitBreakerOptions { MinimumThroughput = 2 }, TimeProvider.System);
-    var handler = new CircuitBreakerHandler(breaker) { InnerHandler = new StatusHandler(HttpStatusCode.NotFound) };
+    var handler = new CircuitBreakerHandler(breaker, TimeSpan.FromSeconds(1)) { InnerHandler = new StatusHandler(HttpStatusCode.NotFound) };
+
     var client = new HttpClient(handler) { BaseAddress = new Uri("http://test/") };
     for (var i = 0; i < 10; i++) await client.GetAsync("x");
     Assert.Equal(CircuitState.Closed, breaker.State);

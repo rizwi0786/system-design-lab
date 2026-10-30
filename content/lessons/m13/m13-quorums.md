@@ -179,7 +179,7 @@ If what you need is "exactly one winner" (leases, configuration, money), you wan
 
 ```mermaid
 flowchart LR
-    C["Toll plaza app"] --> LB["Load balancer"]
+    C["Card payment switch"] --> LB["Load balancer"]
     LB --> CO["Coordinator (any node)"]
     CO -->|"write to N=3"| A["Replica A (zone a)"]
     CO -->|"write to N=3"| B["Replica B (zone b)"]
@@ -191,7 +191,7 @@ flowchart LR
     AE -.-> Cc
 ```
 
-The toll plaza app sends a request through the load balancer to any node, which acts as the **coordinator** for that request. The coordinator hashes the key to find its three replicas, one per availability zone, and sends the write to all three (solid arrows). It replies to the client once W of them acknowledge. If replica C is down, the coordinator records a hint (dotted arrow to the hint store) and replays it when C returns. Separately, an anti-entropy job compares replicas using Merkle trees to fix anything that hints and read repair missed, such as data written long ago and never read.
+The card payment switch sends a request through the load balancer to any node, which acts as the **coordinator** for that request. The coordinator hashes the key to find its three replicas, one per availability zone, and sends the write to all three (solid arrows). It replies to the client once W of them acknowledge. If replica C is down, the coordinator records a hint (dotted arrow to the hint store) and replays it when C returns. Separately, an anti-entropy job compares replicas using Merkle trees to fix anything that hints and read repair missed, such as data written long ago and never read.
 
 ### Sequence: a write with one replica down, then a read that repairs
 
@@ -202,7 +202,7 @@ sequenceDiagram
     participant A as Replica A
     participant B as Replica B
     participant C as Replica C
-    App->>Co: PUT tag:KA01 = BLOCKED (W=2)
+    App->>Co: PUT card:4111 = BLOCKED (W=2)
     Co->>A: put v=1001
     Co->>B: put v=1001
     Co->>C: put v=1001
@@ -212,7 +212,7 @@ sequenceDiagram
     Co->>Co: store hint for C
     Co-->>App: 200 OK (2 of 3 acks)
     Note over C: C restarts with old v=990
-    App->>Co: GET tag:KA01 (R=2)
+    App->>Co: GET card:4111 (R=2)
     Co->>B: get
     Co->>C: get
     B-->>Co: BLOCKED v=1001
@@ -251,19 +251,19 @@ During a partition, B and C are unreachable. With a sloppy quorum the coordinato
 
 ## Step-by-step example
 
-**Scenario.** A national electronic toll system keeps the status of every vehicle tag (`ACTIVE`, `LOW_BALANCE`, `BLOCKED`) so that toll plazas can decide in milliseconds whether to lift the barrier. The issuing banks update status; plazas read it.
+**Scenario.** A card payment switch keeps the status of every debit and credit card it routes (`ACTIVE`, `LOCKED` by the customer in their banking app, `BLOCKED` after a stolen-card report) so that a checkout can decline a blocked card in milliseconds, before the request even reaches the issuer. The issuing banks update status; the switch reads it on every payment.
 
 ### Step 1: estimate the load
 
-Assume (illustrative figures) 80 million active tags and 25 million toll transactions per day, with a strong evening peak.
+Assume (illustrative figures) 80 million active cards and 25 million card payments per day, with a strong evening and festival-sale peak.
 
 ```text
 Reads:  25 M ÷ 86,400 s ≈ 290 reads/s average; × 4 for peak ≈ 1,200 reads/s
-Writes: assume 5 M status changes/day ÷ 86,400 ≈ 58 writes/s; × 4 ≈ 230 writes/s
-Data:   80 M tags × ~200 bytes ≈ 16 GB per copy; × N=3 ≈ 48 GB
+Writes: assume 1 M status changes/day (new cards, app locks and unlocks, blocks) ÷ 86,400 ≈ 12 writes/s; × 4 ≈ 46 writes/s
+Data:   80 M cards × ~200 bytes ≈ 16 GB per copy; × N=3 ≈ 48 GB
 ```
 
-This is a small dataset and a modest load. A single PostgreSQL primary could serve it. The reason to consider a quorum store is not volume; it is that plazas must keep working if one zone fails, and the plaza must never wait on a slow zone.
+This is a small dataset and a modest load. A single PostgreSQL primary could serve it. The reason to consider a quorum store is not volume; it is that card payments must keep working if one zone fails, and a checkout must never wait on a slow zone.
 
 ### Step 2: choose N
 
@@ -271,33 +271,33 @@ Three zones in the region, one replica per zone: **N = 3**. Losing a zone loses 
 
 ### Step 3: choose R and W from the business risk
 
-- A missed `BLOCKED` means a blacklisted vehicle passes once. Costly but bounded.
-- A false `BLOCKED` stops a paying customer at the barrier. Bad experience, recoverable by manual override.
+- A missed `BLOCKED` means a card reported stolen is approved for one more payment. Costly but bounded by the card's transaction limits and chargeback rules.
+- A false `BLOCKED` declines a genuine customer at the checkout. Embarrassing, recoverable by retrying or paying another way.
 - Writes come from banks through an API that can retry.
 
-Choose **W = 2, R = 2** (`2 + 2 > 3`). Both reads and writes survive one zone failure. Plaza reads wait for the second-fastest replica, so a slow zone does not slow plazas.
+Choose **W = 2, R = 2** (`2 + 2 > 3`). Both reads and writes survive one zone failure. Switch reads wait for the second-fastest replica, so a slow zone does not slow checkouts.
 
 ### Step 4: decide on versions
 
-Status changes come from the issuing bank, which already keeps an ordered event log per tag. So instead of the coordinator's clock, use the **bank's sequence number** as the version. This avoids failure case 2 (clock skew) entirely, because the order comes from one authority per tag.
+Status changes come from the issuing bank, which already keeps an ordered event log per card. So instead of the coordinator's clock, use the **bank's sequence number** as the version. This avoids failure case 2 (clock skew) entirely, because the order comes from one authority per card.
 
 ### Step 5: decide on hints and repair
 
 - Hinted handoff on, with a 3-hour window, so a replica that restarts is fixed in seconds.
 - Strict quorum (no sloppy quorum): a write that cannot reach two real replicas fails and the bank retries. The bank's retry is idempotent because the version is the bank's sequence number.
-- Blocking read repair on plaza reads.
-- Nightly anti-entropy repair for tags that were not read.
+- Blocking read repair on payment-time reads.
+- Nightly anti-entropy repair for cards that were not read.
 
 ### Step 6: check the failure cases
 
-One zone down: reads and writes continue. Two zones down: both fail, and the plaza falls back to its local cached list of blocked tags. Partial write: the bank retries the same sequence number, which is harmless.
+One zone down: reads and writes continue. Two zones down: both fail, and the switch falls back to its local cached hot list of blocked cards. Partial write: the bank retries the same sequence number, which is harmless.
 
 ## Production-style C# implementation
 
 The code below is a small, complete quorum coordinator you can run in-process. Replicas are in-memory fakes behind `IReplica`, so the same coordinator could later talk to real nodes over gRPC. It shows preference lists with a stable hash, quorum writes with hints, first-R reads with blocking read repair, a hinted-handoff background service, and a Monte Carlo stale-read simulation.
 
 ```text
-Toll.Store/
+Cards.Store/
   Program.cs
   Quorums/ItemVersion.cs
   Quorums/Replicas.cs
@@ -310,7 +310,7 @@ Toll.Store/
 ```
 
 ```csharp file=Quorums/ItemVersion.cs
-namespace Toll.Store.Quorums;
+namespace Cards.Store.Quorums;
 
 /// <summary>A totally ordered version. In this lesson the coordinator uses the issuer's sequence
 /// number or a clock reading as <see cref="Sequence"/>; ties are broken by writer id so every
@@ -337,7 +337,7 @@ public sealed record VersionedValue(string Value, ItemVersion Version);
 ```csharp file=Quorums/Replicas.cs
 using System.Collections.Concurrent;
 
-namespace Toll.Store.Quorums;
+namespace Cards.Store.Quorums;
 
 public interface IReplica
 {
@@ -387,7 +387,7 @@ public sealed class InMemoryReplica(string id) : IReplica
 The most important line is the `AddOrUpdate` merge: a replica never replaces a newer value with an older one. That single rule is what makes hints, read repair and client retries safe to apply in any order and any number of times.
 
 ```csharp file=Quorums/QuorumOptions.cs
-namespace Toll.Store.Quorums;
+namespace Cards.Store.Quorums;
 
 public sealed class QuorumOptions
 {
@@ -417,7 +417,7 @@ public sealed class QuorumOptions
 ```csharp file=Quorums/Hints.cs
 using System.Collections.Concurrent;
 
-namespace Toll.Store.Quorums;
+namespace Cards.Store.Quorums;
 
 public sealed record Hint(string TargetReplicaId, string Key, VersionedValue Value, DateTimeOffset CreatedAt);
 
@@ -449,7 +449,7 @@ public sealed class InMemoryHintStore : IHintStore
 ```
 
 ```csharp file=Quorums/StableHash.cs
-namespace Toll.Store.Quorums;
+namespace Cards.Store.Quorums;
 
 /// <summary>FNV-1a. Never use string.GetHashCode() for placement: it is randomised per process
 /// in .NET, so two coordinators would disagree about which replicas own a key.</summary>
@@ -474,7 +474,7 @@ That comment describes a real and nasty bug. `string.GetHashCode()` in .NET Core
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace Toll.Store.Quorums;
+namespace Cards.Store.Quorums;
 
 public sealed record WriteResult(bool QuorumMet, int Acks, int Required, ItemVersion Version, IReadOnlyList<string> HintedFor);
 
@@ -619,7 +619,7 @@ Two decisions worth defending: every replica call has its own timeout (otherwise
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace Toll.Store.Quorums;
+namespace Cards.Store.Quorums;
 
 /// <summary>Replays hints to replicas that have come back. Puts are idempotent (newer wins),
 /// so replaying a hint that read repair already applied is harmless.</summary>
@@ -665,7 +665,7 @@ public sealed class HintedHandoffService(IHintStore hints, IEnumerable<IReplica>
 ```
 
 ```csharp file=Quorums/StaleReadSimulation.cs
-namespace Toll.Store.Quorums;
+namespace Cards.Store.Quorums;
 
 /// <summary>Worst-case model: right after a write is acknowledged, only W random replicas have it.
 /// A read contacts R random replicas. How often does it see none of the fresh ones?</summary>
@@ -702,7 +702,7 @@ Running `Simulate(3, 1, 1, 100_000, seed: 7)` gives a value close to 0.667, matc
 
 ```csharp file=Program.cs
 using Microsoft.AspNetCore.Mvc;
-using Toll.Store.Quorums;
+using Cards.Store.Quorums;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -721,18 +721,18 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<HintedHandoffServi
 
 var app = builder.Build();
 
-app.MapPut("/tags/{tagId}/status", async (string tagId, StatusUpdate body, QuorumCoordinator store, CancellationToken ct) =>
+app.MapPut("/cards/{cardId}/status", async (string cardId, StatusUpdate body, QuorumCoordinator store, CancellationToken ct) =>
 {
-    var result = await store.WriteAsync($"tag:{tagId}", body.Status, body.IssuerSequence, ct);
+    var result = await store.WriteAsync($"card:{cardId}", body.Status, body.IssuerSequence, ct);
     return result.QuorumMet
         ? Results.Ok(result)
         : Results.Problem(statusCode: 503, title: "Write quorum not met",
             detail: "Outcome unknown. Retry with the same issuerSequence; replicas ignore older or equal versions.");
 });
 
-app.MapGet("/tags/{tagId}/status", async (string tagId, QuorumCoordinator store, CancellationToken ct) =>
+app.MapGet("/cards/{cardId}/status", async (string cardId, QuorumCoordinator store, CancellationToken ct) =>
 {
-    var result = await store.ReadAsync($"tag:{tagId}", ct);
+    var result = await store.ReadAsync($"card:{cardId}", ct);
     if (!result.QuorumMet) return Results.Problem(statusCode: 503, title: "Read quorum not met");
     return result.Value is null ? Results.NotFound() : Results.Ok(result);
 });
@@ -756,7 +756,7 @@ Try it locally: write a status, take `mum-b` down, write again, bring it back, a
 For a real cluster, the `IReplica` implementation would be a gRPC client to each storage node, and the Cassandra C# driver would let you set the consistency level per statement. The shape is a short snippet (not compiled here because the driver is not available offline):
 
 ```csharp
-var statement = new SimpleStatement("SELECT status FROM tags WHERE tag_id = ?", tagId)
+var statement = new SimpleStatement("SELECT status FROM cards WHERE card_id = ?", cardId)
     .SetConsistencyLevel(ConsistencyLevel.LocalQuorum);
 var row = (await session.ExecuteAsync(statement)).FirstOrDefault();
 ```
@@ -767,7 +767,7 @@ var row = (await session.ExecuteAsync(statement)).FirstOrDefault();
 
 **Bad: "we use quorums, so we are consistent".**
 
-- R = 1, W = 1 "for speed", while the product requirement says a blocked tag must be blocked everywhere within a second.
+- R = 1, W = 1 "for speed", while the product requirement says a blocked card must be blocked everywhere within a second.
 - Versions come from each coordinator's wall clock, and coordinator VMs are not monitored for clock drift.
 - Sloppy quorums are on by default, and the team assumes reads see writes.
 - A write that returns "quorum not met" is shown to the user as "nothing happened".
@@ -1171,7 +1171,7 @@ Seats are a single-winner problem. Keep them out of the session store.
 **Not here.** Seat inventory is a single-winner problem; it stays in PostgreSQL behind a queue (waiting room) with row locks or a unique constraint. Payment state lives in the order database.
 
 ::mistakes
-- Using R = 1 for speed and then logging users out in one zone because a logout tombstone has not reached their replica, or worse, keeping a logged-out session alive.
+- Using R = 1 for speed: a user who just logged in is bounced to the login page because their new session has not reached the replica that was read, or worse, a logged-out session stays alive because the logout tombstone has not arrived.
 - Putting seat inventory in the same quorum store and selling the same seat twice.
 - Forgetting that three copies across zones also triple cross-zone traffic costs for writes.
 :::
@@ -1243,8 +1243,8 @@ public class HintQueueTests
     public void Newer_hint_for_same_key_replaces_older()
     {
         var q = new HintQueue(maxPerTarget: 1, window: TimeSpan.FromHours(3));
-        Assert.True(q.TryAdd(H("tag:1", 1, 0)));
-        Assert.True(q.TryAdd(H("tag:1", 2, 1)));
+        Assert.True(q.TryAdd(H("card:1", 1, 0)));
+        Assert.True(q.TryAdd(H("card:1", 2, 1)));
         Assert.Equal(1, q.Pending("node-c"));
         var delivered = q.Replay("node-c", T0.AddMinutes(5), _ => true);
         Assert.Equal(2L, Assert.Single(delivered).Version);
@@ -1254,8 +1254,8 @@ public class HintQueueTests
     public void Older_hint_for_same_key_is_ignored()
     {
         var q = new HintQueue(5, TimeSpan.FromHours(3));
-        q.TryAdd(H("tag:1", 5, 0));
-        q.TryAdd(H("tag:1", 3, 1));
+        q.TryAdd(H("card:1", 5, 0));
+        q.TryAdd(H("card:1", 3, 1));
         var delivered = q.Replay("node-c", T0.AddMinutes(5), _ => true);
         Assert.Equal(5L, Assert.Single(delivered).Version);
     }
@@ -1415,11 +1415,11 @@ public async Task Read_after_write_sees_value_with_one_replica_down()
     var nodes = new[] { new InMemoryReplica("a"), new InMemoryReplica("b"), new InMemoryReplica("c") };
     var store = NewCoordinator(nodes, n: 3, r: 2, w: 2);
     nodes[2].IsDown = true;
-    var write = await store.WriteAsync("tag:1", "BLOCKED", sequence: 10);
+    var write = await store.WriteAsync("card:1", "BLOCKED", sequence: 10);
     Assert.True(write.QuorumMet);
     nodes[2].IsDown = false;
     for (int i = 0; i < 50; i++)
-        Assert.Equal("BLOCKED", (await store.ReadAsync("tag:1")).Value?.Value);
+        Assert.Equal("BLOCKED", (await store.ReadAsync("card:1")).Value?.Value);
 }
 ```
 

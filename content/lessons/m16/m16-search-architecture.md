@@ -10,7 +10,7 @@ prerequisites: [m09-indexes, m12-outbox, m16-cdc]
 related: [m16-cqrs, m09-jsonb, m13-sharding, m13-replication, m12-idempotent-consumers]
 tags: [search, inverted-index, bm25, opensearch, elasticsearch, full-text-search, outbox, cdc, postgresql]
 patterns: [Inverted Index, Search Index Projection, Index Alias Swap]
-summary: How a search engine finds "bridge tenders in Patna" among millions of documents in milliseconds. Build a tiny inverted index with BM25 ranking in C#, learn how OpenSearch/Elasticsearch clusters split and copy that index, keep it in sync with PostgreSQL through an outbox or CDC, and know when PostgreSQL full-text search is all you need.
+summary: How a search engine finds "Java developer jobs in Kochi" among millions of documents in milliseconds. Build a tiny inverted index with BM25 ranking in C#, learn how OpenSearch/Elasticsearch clusters split and copy that index, keep it in sync with PostgreSQL through an outbox or CDC, and know when PostgreSQL full-text search is all you need.
 references:
   - title: "PostgreSQL 17 documentation — Full Text Search"
     url: https://www.postgresql.org/docs/17/textsearch.html
@@ -22,7 +22,7 @@ references:
     url: https://www.elastic.co/guide/en/elasticsearch/reference/current/aliases.html
 ---
 
-Every product with more than a few thousand records eventually gets a search box. Users type "bridge tender patna" and expect the right result first, in under 200 ms, even with typos and plurals. A `LIKE '%bridge%'` query cannot do that. This lesson explains the data structure that can (the inverted index), how ranking works, how dedicated search clusters scale it, how to keep it in sync with your database, and when PostgreSQL alone is enough.
+Every product with more than a few thousand records eventually gets a search box. Users type "java developer kochi" and expect the right result first, in under 200 ms, even with typos and plurals. A `LIKE '%developer%'` query cannot do that. This lesson explains the data structure that can (the inverted index), how ranking works, how dedicated search clusters scale it, how to keep it in sync with your database, and when PostgreSQL alone is enough.
 
 ## Learning objectives
 
@@ -38,7 +38,7 @@ By the end of this lesson you will be able to:
 
 ## Prerequisites
 
-- [Indexes, composite indexes, B-tree and hash](#/lesson/m09-indexes): you should know why a B-tree helps `WHERE id = 5` but not `WHERE description LIKE '%bridge%'`.
+- [Indexes, composite indexes, B-tree and hash](#/lesson/m09-indexes): you should know why a B-tree helps `WHERE id = 5` but not `WHERE description LIKE '%developer%'`.
 - [Transactional outbox](#/lesson/m12-outbox): the safest way to publish "this row changed" alongside the database write.
 - [Change data capture](#/lesson/m16-cdc): an alternative to the outbox that reads the database's own change log.
 
@@ -46,30 +46,30 @@ Helpful but optional: [CQRS in production](#/lesson/m16-cqrs), because a search 
 
 ## Explain it like I'm a beginner
 
-Think of a thick textbook on highway engineering. You want every page that mentions "culvert". You could read all 900 pages from start to finish. That is what `LIKE '%culvert%'` does: it reads every row (a full table scan).
+Think of a thick Indian cookbook. You want every page that mentions "paneer". You could read all 900 pages from start to finish. That is what `LIKE '%paneer%'` does: it reads every row (a full table scan).
 
 Or you could turn to the **index at the back of the book**. It lists words alphabetically, and next to each word, the page numbers where it appears:
 
-- culvert → 112, 340, 341, 702
-- curing → 88, 89
-- cut-and-fill → 45, 46, 210
+- paneer → 112, 340, 341, 702
+- pasta → 88, 89
+- pav bhaji → 45, 46, 210
 
-Finding "culvert" now takes seconds. You jump to "c", find the word, and read off the pages. Looking up "culvert **and** drainage" means taking both page lists and keeping the pages that appear in both.
+Finding "paneer" now takes seconds. You jump to "p", find the word, and read off the pages. Looking up "paneer **and** capsicum" means taking both page lists and keeping the pages that appear in both.
 
 A search engine is that back-of-the-book index, built automatically for millions of documents. The technical name is an **inverted index**: instead of "document → words" (how the data is stored), it keeps "word → documents" (how people search).
 
 Two more ideas make it useful:
 
-- **Ranking (relevance scoring).** If 40,000 tenders mention "road", which one comes first? A good engine prefers documents that mention your *rare* words ("Patna") over common ones ("road"), and documents that are about your topic rather than ones that mention it once in passing.
+- **Ranking (relevance scoring).** If 40,000 job posts mention "developer", which one comes first? A good engine prefers documents that mention your *rare* words ("Kochi") over common ones ("developer"), and documents that are about your topic rather than ones that mention it once in passing.
 - **A separate copy.** The search index is usually a *copy* of data that really lives in your database. Like the index at the back of a book, it must be rebuilt when the pages change. Keeping that copy fresh and correct is half of search architecture.
 
 ## First-principles explanation
 
 ### Why databases struggle with text search
 
-A B-tree index on `title` sorts whole values. It answers "titles starting with `Bridge`" quickly, because those sit next to each other in sort order. It cannot answer "titles *containing* `bridge`", because those are scattered all over the tree. So `WHERE title ILIKE '%bridge%'` reads every row.
+A B-tree index on `title` sorts whole values. It answers "titles starting with `Senior`" quickly, because those sit next to each other in sort order. It cannot answer "titles *containing* `developer`", because those are scattered all over the tree. So `WHERE title ILIKE '%developer%'` reads every row.
 
-Rough numbers (estimates, not benchmarks): 2 million tenders with 3 KB of text each is about 6 GB. Scanning 6 GB from memory takes on the order of a second or more per query; from disk, much longer. At 100 queries per second that is impossible. And `LIKE` gives no ranking, no plurals ("bridges"), and no typo tolerance.
+Rough numbers (estimates, not benchmarks): 2 million job posts with 3 KB of text each is about 6 GB. Scanning 6 GB from memory takes on the order of a second or more per query; from disk, much longer. At 100 queries per second that is impossible. And `LIKE` gives no ranking, no plurals ("developers"), and no typo tolerance.
 
 ### The inverted index
 
@@ -80,18 +80,18 @@ The inverted index has two parts:
 
 ```text
 term         posting list (docId:termFrequency)
-bridge   ->  1:1, 2:1, 3:2
-patna    ->  1:1
-road     ->  2:1, 4:3
-bihar    ->  2:1, 4:1
+developer ->  1:1, 2:1, 3:2
+kochi     ->  1:1
+java      ->  2:1, 4:3
+kerala    ->  2:1, 4:1
 ```
 
 Answering a query is now set algebra on short sorted lists:
 
-- `bridge AND bihar` → intersect `{1,2,3}` and `{2,4}` → `{2}`.
-- `bridge OR patna` → union → `{1,2,3}`, then rank.
+- `developer AND kerala` → intersect `{1,2,3}` and `{2,4}` → `{2}`.
+- `developer OR kochi` → union → `{1,2,3}`, then rank.
 
-Intersection of two sorted lists of sizes *m* and *n* takes at most *m + n* steps with two pointers. Real engines go faster by skipping ahead (skip lists, block-level metadata), because the shorter list drives the work. A query for "patna AND road" only needs to check the handful of documents containing "patna", not the 40,000 containing "road".
+Intersection of two sorted lists of sizes *m* and *n* takes at most *m + n* steps with two pointers. Real engines go faster by skipping ahead (skip lists, block-level metadata), because the shorter list drives the work. A query for "kochi AND java" only needs to check the handful of documents containing "kochi", not the 40,000 containing "java".
 
 Real engines (Apache Lucene, which powers both Elasticsearch and OpenSearch) also compress posting lists heavily, because sorted ids have small gaps: store `1, 2, 3` as `1, +1, +1` in a few bits each.
 
@@ -100,20 +100,20 @@ Real engines (Apache Lucene, which powers both Elasticsearch and OpenSearch) als
 Before a document enters the index, its text goes through an **analyser (analysis pipeline)**:
 
 1. **Character filters** clean the raw text: strip HTML tags, map "&" to "and".
-2. **A tokeniser** splits text into tokens: "NH-48 widening, Gurugram" → `nh`, `48`, `widening`, `gurugram`.
-3. **Token filters** change or drop tokens: lowercase, remove stop words ("the", "of"), reduce words to a stem ("bridges" → "bridg" with the Porter/Snowball stemmer), add synonyms ("flyover" ↔ "overpass"), fold accents.
+2. **A tokeniser** splits text into tokens: "Sr. Java-Spring developer, Gurugram" → `sr`, `java`, `spring`, `developer`, `gurugram`.
+3. **Token filters** change or drop tokens: lowercase, remove stop words ("the", "of"), reduce words to a stem ("developers" → "develop" with the Porter/Snowball stemmer), add synonyms ("frontend" ↔ "front-end" ↔ "UI developer"), fold accents.
 
-The golden rule: **the query goes through the same analyser as the documents.** If documents are stemmed and lowercased but the query "Bridges" is not, the lookup for `Bridges` finds nothing, because the index only holds `bridg`.
+The golden rule: **the query goes through the same analyser as the documents.** If documents are stemmed and lowercased but the query "Developers" is not, the lookup for `Developers` finds nothing, because the index only holds `develop`.
 
-Language matters. English stemmers do nothing useful for Hindi or Tamil text. Indian government portals often hold English, Hindi and transliterated text ("sadak nirman") side by side. Engines offer language-specific analysers (OpenSearch and Elasticsearch ship analysers for Hindi and other Indian languages) and you often index the same field several ways ("multi-fields"): once with a language analyser, once with a simple lowercase analyser, once as an exact keyword.
+Language matters. English stemmers do nothing useful for Hindi or Tamil text. Indian job apps, especially for delivery, driving and retail work, hold English, Hindi and transliterated text ("driver ki naukri") side by side. Engines offer language-specific analysers (OpenSearch and Elasticsearch ship built-in Hindi and Bengali analysers; other Indian languages need the ICU plugin or custom token filters) and you often index the same field several ways ("multi-fields"): once with a language analyser, once with a simple lowercase analyser, once as an exact keyword.
 
 ### Ranking: BM25 in plain words
 
 The default ranking function in Lucene-based engines is **BM25** (Best Matching 25, from the probabilistic relevance framework by Robertson and others). You do not need to memorise it, but you should understand its three ideas:
 
-1. **Rare words matter more (inverse document frequency, IDF).** If "bridge" appears in 60 % of tenders, matching it tells you little. If "Patna" appears in 0.1 %, matching it tells you a lot.
-2. **Repeats help, but with diminishing returns (term-frequency saturation).** A document mentioning "bridge" 3 times is probably more about bridges than one mentioning it once. But 30 mentions should not score 10 times more than 3. The parameter `k1` (default 1.2) controls how fast the benefit flattens.
-3. **Long documents are penalised (length normalisation).** A 50-page document mentions everything somewhere. The parameter `b` (default 0.75) controls how much length counts.
+1. **Rare words matter more (inverse document frequency, IDF).** If "developer" appears in 60 % of job posts, matching it tells you little. If "Kochi" appears in 0.1 %, matching it tells you a lot.
+2. **Repeats help, but with diminishing returns (term-frequency saturation).** A post mentioning "Java" 3 times is probably more about Java than one mentioning it once. But 30 mentions should not score 10 times more than 3. The parameter `k1` (default 1.2) controls how fast the benefit flattens.
+3. **Long documents are penalised (length normalisation).** A 3,000-word job description mentions every technology somewhere. The parameter `b` (default 0.75) controls how much length counts.
 
 For one query term in one document:
 
@@ -124,18 +124,18 @@ score    = idf(t) × tf × (k1 + 1) / (tf + k1 × (1 - b + b × docLength / avgD
 
 A document's total score is the sum over the query's terms. The step-by-step example below works through real numbers.
 
-BM25 is a strong *baseline*, not the last word. Production search adds field boosts ("title matches count 3×"), freshness ("tenders closing soon first"), business signals (popularity, verified sellers), and increasingly **semantic search**: embeddings that match "flyover" with "elevated corridor" even without a synonym list. Hybrid search (BM25 + vector similarity, merged) is now common. The inverted index remains the backbone because it is cheap, explainable and exact.
+BM25 is a strong *baseline*, not the last word. Production search adds field boosts ("title matches count 3×"), freshness ("posted this week first"), business signals (employer rating, verified employers), and increasingly **semantic search**: embeddings that match "frontend developer" with "React engineer" even without a synonym list. Hybrid search (BM25 + vector similarity, merged, for example with reciprocal rank fusion) is now common; OpenSearch and Elasticsearch both support vector fields, and in PostgreSQL the `pgvector` extension adds them. The inverted index remains the backbone because it is cheap, explainable and exact.
 
 ### Search clusters: OpenSearch and Elasticsearch basics
 
-When one machine is not enough, or you need high availability, you run a cluster. Elasticsearch and its open-source fork OpenSearch share the same core ideas:
+When one machine is not enough, or you need high availability, you run a cluster. Elasticsearch and OpenSearch share the same core ideas:
 
-- **Document**: a JSON object, for example one tender.
+- **Document**: a JSON object, for example one job post.
 - **Index**: a named collection of documents with a **mapping** (schema). `text` fields are analysed for full-text search; `keyword` fields are stored exactly for filters, sorting and aggregations (facets).
 - **Shard**: an index is split into *primary shards*. Each shard is a complete Lucene index holding a slice of the documents, chosen by hashing the document id (routing).
 - **Replica shard**: a copy of a primary on a *different* node. Replicas give fault tolerance and extra read capacity.
 - **Node roles**: *cluster manager* (formerly "master") nodes keep the cluster state: which shards live where. Run three dedicated ones so a majority (quorum) survives one loss and split-brain is avoided. *Data* nodes hold shards and do the work. *Coordinating* nodes receive requests and fan them out.
-- **Segments and refresh**: Lucene writes new documents into small immutable files called *segments*. A *refresh* (default every 1 second) makes new segments searchable. That is why these engines are **near-real-time**: a document indexed now is searchable about a second later, not instantly. Segments are merged in the background; deletes are just markers until a merge.
+- **Segments and refresh**: Lucene writes new documents into small immutable files called *segments*. A *refresh* (default every 1 second; an index that has received no searches for 30 seconds may skip refreshes until the next search arrives) makes new segments searchable. That is why these engines are **near-real-time**: a document indexed now is searchable about a second later, not instantly. Segments are merged in the background; deletes are just markers until a merge.
 - **Translog**: a write-ahead log that makes indexed-but-not-yet-committed documents durable across a crash.
 
 A search request is a **scatter-gather**:
@@ -151,58 +151,62 @@ Consequences you must know:
 - **Deep pagination is expensive.** Page 500 with 20 results per page asks every shard for its top 10,000. Use `search_after` cursors for deep scrolling, and cap `from + size`.
 - **IDF is per shard by default.** With few documents per shard, scores can differ slightly between shards. Usually harmless at scale; noticeable in small test indexes.
 
+:::callout type=note title="Elasticsearch or OpenSearch: the licence history in brief"
+Elasticsearch was Apache 2.0 licensed until early 2021, when Elastic moved new versions (7.11 onwards) to the Server Side Public License and the Elastic License, mainly to stop cloud providers selling it as a managed service. AWS and others forked the last Apache-licensed release (7.10.2) as **OpenSearch**, which remains Apache 2.0 and has been governed by the OpenSearch Software Foundation under the Linux Foundation since 2024. Also in 2024 Elastic added the OSI-approved AGPLv3 as a third licence option for Elasticsearch. The two projects have since diverged (APIs, client libraries, plugins, vector-search features), so pick one deliberately: check which licence your legal team accepts, which managed service your cloud offers, and use that engine's own .NET client (`Elastic.Clients.Elasticsearch` or `OpenSearch.Client`). This lesson's concepts apply to both.
+:::
+
 ### Keeping the index in sync
 
 The search index is a **projection (read model)** of the source of truth, usually PostgreSQL. The tempting design is a **dual write**:
 
 ```csharp
-await db.SaveTenderAsync(tender);          // 1. commit to PostgreSQL
-await search.IndexAsync(tender);           // 2. then index — what if this fails or the pod dies here?
+await db.SaveJobAsync(job);                // 1. commit to PostgreSQL
+await search.IndexAsync(job);              // 2. then index — what if this fails or the pod dies here?
 ```
 
-If step 2 fails, the index silently misses the tender forever. If you swap the order, the index can show a tender that was never saved. There is no transaction that spans PostgreSQL and a search cluster.
+If step 2 fails, the index silently misses the job post forever. If you swap the order, the index can show a job that was never saved. There is no transaction that spans PostgreSQL and a search cluster.
 
 Two reliable designs:
 
-1. **Transactional outbox.** In the *same* PostgreSQL transaction that saves the tender, insert a row into an `outbox` table: "tender T-1042, version 7, upserted". A background relay reads the outbox in order and indexes each change, retrying until it succeeds. See [the outbox lesson](#/lesson/m12-outbox).
+1. **Transactional outbox.** In the *same* PostgreSQL transaction that saves the job post, insert a row into an `outbox` table: "job J-1042, version 7, upserted". A background relay reads the outbox in order and indexes each change, retrying until it succeeds. See [the outbox lesson](#/lesson/m12-outbox).
 2. **Change data capture (CDC).** A tool such as Debezium reads PostgreSQL's write-ahead log through logical replication and streams row changes to Kafka; an indexer consumes them. No application change is needed, but you index *rows*, not business events, and often have to join several tables into one search document. See [change data capture](#/lesson/m16-cdc).
 
 Either way the indexer sees changes **at least once** and sometimes **out of order** (after retries or partition rebalancing). Make it safe:
 
 - **Idempotent writes.** Indexing the same document twice with the same id simply overwrites it.
 - **Versioning.** Send the row's version (a monotonically increasing number, such as an `updated_seq` column) with every write. The engine's *external versioning* rejects a write whose version is not higher than what it already has. A late "version 6" cannot overwrite "version 7".
-- **Tombstones for deletes.** Remember the version of a delete, so a delayed upsert cannot resurrect a deleted tender.
+- **Tombstones for deletes.** Remember the version of a delete, so a delayed upsert cannot resurrect a deleted job post.
 - **Full rebuild ability.** Mappings change, analysers improve, bugs corrupt data. You must be able to build a new index from PostgreSQL from scratch (backfill), then switch over.
 
 ### Zero-downtime reindexing with aliases
 
-Applications should never query an index by its real name. Query an **alias**: `tenders` → `tenders_v3`. To change the mapping:
+Applications should never query an index by its real name. Query an **alias**: `jobs` → `jobs_v3`. To change the mapping:
 
-1. Create `tenders_v4` with the new mapping.
+1. Create `jobs_v4` with the new mapping.
 2. Backfill it from PostgreSQL (or with the `_reindex` API) while the indexer keeps writing to **both** v3 and v4 (or replays the change stream from the backfill start point).
 3. Compare document counts and run sample queries.
-4. Atomically point the alias at `tenders_v4`. Keep v3 for a day as a rollback.
+4. Atomically point the alias at `jobs_v4`. Keep v3 for a day as a rollback.
 
 ### PostgreSQL full-text search: the simpler option
 
 PostgreSQL has a built-in inverted index for text:
 
-- `tsvector`: a document already analysed into normalised terms with positions: `to_tsvector('english', 'Bridges over Ganga')` → `'bridg':1 'ganga':3`.
-- `tsquery`: a parsed query. `websearch_to_tsquery('english', 'bridge -repair "ganga river"')` understands quotes and minus signs like a web search box.
+- `tsvector`: a document already analysed into normalised terms with positions: `to_tsvector('english', 'Developers in Kochi')` → `'develop':1 'kochi':3`.
+- `tsquery`: a parsed query. `websearch_to_tsquery('english', 'developer -intern "react native"')` understands quotes and minus signs like a web search box.
 - `@@`: the match operator.
 - **GIN index** (Generalized Inverted Index): exactly the term → row-list structure from this lesson.
 - `ts_rank` / `ts_rank_cd`: ranking by term frequency and proximity.
-- The `pg_trgm` extension adds trigram similarity for typo tolerance (`'patan' % 'patna'`) and speeds up `LIKE '%x%'`.
+- The `pg_trgm` extension adds trigram similarity for typo tolerance (`'devloper' % 'developer'` is true) and, with a GIN `gin_trgm_ops` index, speeds up `LIKE '%x%'` and `ILIKE`.
 
 ```sql
-ALTER TABLE tender ADD COLUMN search tsvector GENERATED ALWAYS AS (
+ALTER TABLE job_post ADD COLUMN search tsvector GENERATED ALWAYS AS (
   setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
   setweight(to_tsvector('english', coalesce(description, '')), 'B')) STORED;
-CREATE INDEX tender_search_gin ON tender USING gin (search);
+CREATE INDEX job_post_search_gin ON job_post USING gin (search);
 
 SELECT id, title, ts_rank(search, q) AS rank
-FROM tender, websearch_to_tsquery('english', 'bridge patna') q
-WHERE search @@ q AND state = 'BR' AND closes_at > now()
+FROM job_post, websearch_to_tsquery('english', 'developer kochi') q
+WHERE search @@ q AND state_code = 'KL' AND expires_at > now()
 ORDER BY rank DESC
 LIMIT 20;
 ```
@@ -216,7 +220,7 @@ Why this is often the right first choice:
 Where it runs out of road:
 
 - **Ranking cost.** `ts_rank` must be computed for *every* matching row before sorting. A query matching 300,000 rows ranks 300,000 rows. Lucene-based engines use top-k algorithms (such as WAND/block-max WAND) that skip documents that cannot make the top 20.
-- **Relevance features.** No BM25 with corpus statistics out of the box, limited synonym and typo handling, no learning-to-rank, weaker faceting at scale.
+- **Relevance features.** No BM25 with corpus statistics out of the box (third-party extensions such as ParadeDB's `pg_search` add BM25 inside PostgreSQL, at the cost of another component to operate), limited synonym and typo handling, no learning-to-rank, weaker faceting at scale.
 - **Scale-out.** Search load competes with your transactional workload on the same primary. Read replicas help, but you cannot shard a single search across nodes the way a search cluster does.
 - **Language analysers.** Built-in configurations cover many European languages; Indian-language stemming needs extensions or external tools.
 
@@ -224,9 +228,9 @@ Rule of thumb: **start with PostgreSQL full-text search** unless you already kno
 
 ### What breaks first under load
 
-1. **Indexing lag.** Bulk updates (a nightly import of 500,000 tender amendments) queue up behind the indexer. Users search and do not find yesterday's tenders. Watch "outbox age" or consumer lag as a key metric.
-2. **Hot shards.** Custom routing by state sends all Uttar Pradesh tenders to one shard; that node melts during month-end. Prefer the default id-based routing unless you have measured a reason.
-3. **Expensive queries.** Leading wildcards (`*bridge`), huge `from` offsets, regex queries and aggregations over high-cardinality fields. Put limits in your API layer, not just in the engine.
+1. **Indexing lag.** Bulk updates (a nightly import of 500,000 job posts from partner feeds) queue up behind the indexer. Users search and do not find yesterday's jobs. Watch "outbox age" or consumer lag as a key metric.
+2. **Hot shards.** Custom routing by city sends all Bengaluru jobs to one shard; that node melts on Monday morning. Prefer the default id-based routing unless you have measured a reason.
+3. **Expensive queries.** Leading wildcards (`*developer`), huge `from` offsets, regex queries and aggregations over high-cardinality fields. Put limits in your API layer, not just in the engine.
 4. **Memory pressure.** The JVM heap, field data and caches. Long garbage-collection pauses look like node failures and can cause shard relocations that make things worse.
 5. **Mapping explosion.** Indexing arbitrary user JSON creates thousands of fields; cluster state grows and the cluster slows down. Use strict mappings.
 
@@ -236,34 +240,34 @@ Rule of thumb: **start with PostgreSQL full-text search** unless you already kno
 
 ```mermaid
 flowchart LR
-    U["Bidders and officers"] --> GW["API gateway"]
-    GW --> API["Tender API (ASP.NET Core)"]
-    API -->|"write tender + outbox row (one transaction)"| PG[("PostgreSQL primary")]
+    U["Job seekers and recruiters"] --> GW["API gateway"]
+    GW --> API["Jobs API (ASP.NET Core)"]
+    API -->|"write job + outbox row (one transaction)"| PG[("PostgreSQL primary")]
     PG -->|"poll outbox / CDC"| IDX["Indexer worker"]
-    IDX -->|"bulk upsert with external version"| OS[("Search cluster: alias tenders -> tenders_v3")]
+    IDX -->|"bulk upsert with external version"| OS[("Search cluster: alias jobs -> jobs_v3")]
     API -->|"search queries"| OS
-    API -->|"load full tender by id"| PG
+    API -->|"load full job by id"| PG
     IDX -.->|"lag, failures"| MON["Monitoring"]
 ```
 
-How to read it: the API writes a tender and an outbox row in one PostgreSQL transaction, so they succeed or fail together. The indexer worker reads the outbox (or a CDC stream) in order and pushes changes to the search cluster in bulk, tagging each with the row version so stale writes are rejected. Search queries go to the cluster through an alias, which lets us swap the underlying index. The API returns ids and highlights from the cluster, then loads authoritative details (status, price, permissions) from PostgreSQL for the 20 results on the page. The dotted arrow is the metric that matters most: how far behind the indexer is.
+How to read it: the API writes a job post and an outbox row in one PostgreSQL transaction, so they succeed or fail together. The indexer worker reads the outbox (or a CDC stream) in order and pushes changes to the search cluster in bulk, tagging each with the row version so stale writes are rejected. Search queries go to the cluster through an alias, which lets us swap the underlying index. The API returns ids and highlights from the cluster, then loads authoritative details (open or closed, salary, who may see it) from PostgreSQL for the 20 results on the page. The dotted arrow is the metric that matters most: how far behind the indexer is.
 
-### Sequence: a tender update reaches search
+### Sequence: a job update reaches search
 
 ```mermaid
 sequenceDiagram
-    participant O as Officer
-    participant API as Tender API
+    participant O as Recruiter
+    participant API as Jobs API
     participant PG as PostgreSQL
     participant W as Indexer worker
     participant S as Search cluster
-    O->>API: PUT /tenders/T-1042 (new closing date)
-    API->>PG: BEGIN, UPDATE tender (version 7), INSERT outbox, COMMIT
+    O->>API: PUT /jobs/J-1042 (new salary range)
+    API->>PG: BEGIN, UPDATE job_post (version 7), INSERT outbox, COMMIT
     API-->>O: 200 OK
     loop every 500 ms
         W->>PG: SELECT outbox WHERE seq > checkpoint LIMIT 500
-        PG-->>W: change T-1042 v7
-        W->>S: index T-1042 (version 7, external)
+        PG-->>W: change J-1042 v7
+        W->>S: index J-1042 (version 7, external)
         alt version 7 is newer
             S-->>W: created/updated
         else stale or duplicate
@@ -274,50 +278,50 @@ sequenceDiagram
     Note over S: refresh (about 1 s) makes v7 searchable
 ```
 
-The officer gets a reply as soon as PostgreSQL commits; search catches up a moment later. The worker reads from its last checkpoint, so a crash only causes a replay, not a loss. A replayed or delayed change carries an old version number and is ignored. The final note is the near-real-time gap: even after the cluster accepts the write, the next refresh makes it visible. End-to-end freshness is outbox polling interval + indexing time + refresh interval, typically a second or two (estimate).
+The recruiter gets a reply as soon as PostgreSQL commits; search catches up a moment later. The worker reads from its last checkpoint, so a crash only causes a replay, not a loss. A replayed or delayed change carries an old version number and is ignored. The final note is the near-real-time gap: even after the cluster accepts the write, the next refresh makes it visible. End-to-end freshness is outbox polling interval + indexing time + refresh interval, typically a second or two (estimate).
 
 ### Inverted index shape
 
 ```mermaid
 flowchart TB
-    D1["Doc 1: Bridge construction, Patna"] --> AN["Analyser: lowercase, stop words, stem"]
-    D2["Doc 2: Road and bridge repair, Bihar"] --> AN
-    AN --> T1["bridge -> 1, 2"]
-    AN --> T2["construction -> 1"]
-    AN --> T3["patna -> 1"]
-    AN --> T4["road -> 2"]
-    AN --> T5["repair -> 2"]
-    AN --> T6["bihar -> 2"]
+    D1["Doc 1: Java developer, Kochi"] --> AN["Analyser: lowercase, stop words, stem"]
+    D2["Doc 2: Backend developer and tester, Kerala"] --> AN
+    AN --> T1["developer -> 1, 2"]
+    AN --> T2["java -> 1"]
+    AN --> T3["kochi -> 1"]
+    AN --> T4["backend -> 2"]
+    AN --> T5["tester -> 2"]
+    AN --> T6["kerala -> 2"]
 ```
 
 Both documents pass through the same analyser. The output is not stored per document; it is regrouped per term. Each box on the bottom row is one dictionary entry with its posting list. A query is analysed the same way and then looks up only the boxes for its terms.
 
 ## Step-by-step example
 
-We will index three tenders by hand and score the query "bridge patna".
+We will index three job posts by hand and score the query "developer kochi".
 
 ### Step 1 — analyse
 
 | Doc | Text | Terms after analysis | Length |
 |---|---|---|---|
-| D1 | "Bridge construction on Ganga river, Patna" | bridge, construction, ganga, river, patna | 5 |
-| D2 | "Road construction and bridge repair, Bihar" | road, construction, bridge, repair, bihar | 5 |
-| D3 | "Bridge inspection by drone survey" | bridge, inspection, drone, survey | 4 |
+| D1 | "Java developer for fintech startup, Kochi" | java, developer, fintech, startup, kochi | 5 |
+| D2 | "Backend developer and API tester, Kerala" | backend, developer, api, tester, kerala | 5 |
+| D3 | "Developer internship by cloud startup" | developer, internship, cloud, startup | 4 |
 
-"on", "and" and "by" are stop words and are dropped. Average length = (5 + 5 + 4) / 3 ≈ 4.67.
+"for", "and" and "by" are stop words and are dropped. Average length = (5 + 5 + 4) / 3 ≈ 4.67.
 
 ### Step 2 — build posting lists
 
-`bridge → D1, D2, D3`, `patna → D1`, `construction → D1, D2`, and one entry for each remaining term.
+`developer → D1, D2, D3`, `kochi → D1`, `startup → D1, D3`, and one entry for each remaining term.
 
 ### Step 3 — IDF
 
 N = 3.
 
-- `bridge` is in all 3: idf = ln(1 + (3 − 3 + 0.5) / (3 + 0.5)) = ln(1.1429) ≈ **0.134**.
-- `patna` is in 1: idf = ln(1 + (3 − 1 + 0.5) / (1 + 0.5)) = ln(2.667) ≈ **0.981**.
+- `developer` is in all 3: idf = ln(1 + (3 − 3 + 0.5) / (3 + 0.5)) = ln(1.1429) ≈ **0.134**.
+- `kochi` is in 1: idf = ln(1 + (3 − 1 + 0.5) / (1 + 0.5)) = ln(2.667) ≈ **0.981**.
 
-A match on "patna" is worth about 7 times a match on "bridge". That is IDF doing its job.
+A match on "kochi" is worth about 7 times a match on "developer". That is IDF doing its job.
 
 ### Step 4 — term-frequency saturation
 
@@ -337,34 +341,34 @@ Ten mentions score less than twice one mention. Keyword stuffing does not pay.
 
 D1 and D2 have length 5, slightly above average, so the length factor is `1 − 0.75 + 0.75 × 5 / 4.67 ≈ 1.054` and the tf part for tf = 1 is `2.2 / (1 + 1.2 × 1.054) ≈ 0.97`.
 
-- D1: bridge 0.134 × 0.97 + patna 0.981 × 0.97 ≈ **1.08**
-- D2: bridge only ≈ **0.13**
-- D3: bridge only, shorter than average (length factor ≈ 0.89, tf part ≈ 1.07) ≈ **0.14**
+- D1: developer 0.134 × 0.97 + kochi 0.981 × 0.97 ≈ **1.08**
+- D2: developer only ≈ **0.13**
+- D3: developer only, shorter than average (length factor ≈ 0.89, tf part ≈ 1.07) ≈ **0.14**
 
-Ranking: D1, D3, D2. D3 beats D2 slightly because it is shorter, so "bridge" is a bigger share of what it is about.
+Ranking: D1, D3, D2. D3 beats D2 slightly because it is shorter, so "developer" is a bigger share of what it is about.
 
 ### Step 6 — ask "do we even need a search engine?"
 
-The real portal holds 2 million tenders. Back-of-the-envelope (estimates):
+The real portal, a mid-sized Indian job site, holds 2 million active job posts. Back-of-the-envelope (estimates):
 
 - Text: 2 M × 3 KB ≈ **6 GB**.
-- Searches: 200,000 daily users × 10 searches ≈ 2 M/day ÷ 86,400 s ≈ **23 QPS** average. Tender deadlines bunch at month-end and fiscal-year-end, so assume ×5 peak ≈ **115 QPS**.
-- Writes: about 15,000 new or amended tenders per day ≈ **0.2 writes/s**.
+- Searches: 200,000 daily users × 10 searches ≈ 2 M/day ÷ 86,400 s ≈ **23 QPS** average. Job searching spikes on Monday mornings and in appraisal and campus-placement seasons, so assume ×5 peak ≈ **115 QPS**.
+- Writes: about 15,000 new or edited job posts per day ≈ **0.2 writes/s**.
 
-That is modest. A PostgreSQL instance with a GIN index and enough RAM to cache it can plausibly serve this, especially with filters (open tenders only, one state) that cut matches down. The case for a search cluster rests on *features*: typo tolerance for "Patana", Hindi and English analysers, synonyms ("flyover" = "ROB" = "overbridge"), facets by department and value band, and relevance tuning. Write that justification down in an [ADR](#/lesson/m02-adr).
+That is modest. A PostgreSQL instance with a GIN index and enough RAM to cache it can plausibly serve this, especially with filters (open jobs only, one state) that cut matches down. The case for a search cluster rests on *features*: typo tolerance for "Bangluru", Hindi and English analysers, synonyms ("SDE" = "software engineer" = "developer"), facets by industry, city and salary band, and relevance tuning. Write that justification down in an [ADR](#/lesson/m02-adr).
 
 ## Production-style C# implementation
 
-The sample is a tender search service. It contains a real (tiny) inverted index with BM25, an `ISearchBackend` abstraction so the in-memory index can be replaced with OpenSearch, a store that writes tenders and outbox messages together, and an outbox indexer `BackgroundService` with versioned, idempotent writes. Everything runs offline.
+The sample is a job search service. It contains a real (tiny) inverted index with BM25, an `ISearchBackend` abstraction so the in-memory index can be replaced with OpenSearch, a store that writes job posts and outbox messages together, and an outbox indexer `BackgroundService` with versioned, idempotent writes. Everything runs offline.
 
 ```text
-TenderSearch.Api/
+JobSearch.Api/
   Program.cs
   Search/Tokenizer.cs           analyser: normalise, split, lowercase, stop words, tiny stemmer
   Search/Bm25.cs                BM25 maths
   Search/InvertedIndex.cs       term -> postings, OR query with BM25 ranking
   Search/SearchBackend.cs       ISearchBackend + in-memory implementation with external versions
-  Tenders/TenderStore.cs        source of truth + outbox in one "transaction"
+  Jobs/JobStore.cs              source of truth + outbox in one "transaction"
   Indexing/OutboxIndexer.cs     BackgroundService relay with checkpoint
 ```
 
@@ -373,7 +377,7 @@ TenderSearch.Api/
 ```csharp file=Search/Tokenizer.cs
 using System.Text;
 
-namespace TenderSearch.Search;
+namespace JobSearch.Search;
 
 public interface ITokenizer
 {
@@ -413,7 +417,7 @@ public sealed class SimpleTokenizer : ITokenizer
         }
     }
 
-    /// <summary>"bridges" -> "bridge", "surveys" -> "survey", "facilities" -> "facility". Crude on purpose.</summary>
+    /// <summary>"developers" -> "developer", "openings" -> "opening", "vacancies" -> "vacancy". Crude on purpose.</summary>
     internal static string Stem(string t)
     {
         if (t.Length > 4 && t.EndsWith("ies", StringComparison.Ordinal)) return t[..^3] + "y";
@@ -428,7 +432,7 @@ The same `ITokenizer` instance analyses documents and queries, which enforces th
 ### BM25 and the inverted index
 
 ```csharp file=Search/Bm25.cs
-namespace TenderSearch.Search;
+namespace JobSearch.Search;
 
 public sealed record Bm25Parameters(double K1, double B)
 {
@@ -451,7 +455,7 @@ public static class Bm25
 ```
 
 ```csharp file=Search/InvertedIndex.cs
-namespace TenderSearch.Search;
+namespace JobSearch.Search;
 
 public sealed record SearchHit(string DocId, double Score);
 
@@ -544,17 +548,17 @@ Two choices worth noticing. The index keeps each document's distinct terms, so `
 ### The search backend abstraction with external versions
 
 ```csharp file=Search/SearchBackend.cs
-namespace TenderSearch.Search;
+namespace JobSearch.Search;
 
-public sealed record TenderDocument(string Id, string Title, string Description, string StateCode, decimal EstimatedValueInr);
+public sealed record JobDocument(string Id, string Title, string Description, string City, decimal MaxSalaryInr);
 
 public enum IndexResult { Applied, IgnoredStale }
 
 /// <summary>What the rest of the app needs from a search engine. An OpenSearch implementation would map
-/// IndexAsync to PUT /tenders/_doc/{id}?version={v}&amp;version_type=external, batched through the _bulk API.</summary>
+/// IndexAsync to PUT /jobs/_doc/{id}?version={v}&amp;version_type=external, batched through the _bulk API.</summary>
 public interface ISearchBackend
 {
-    Task<IndexResult> IndexAsync(TenderDocument doc, long version, CancellationToken ct);
+    Task<IndexResult> IndexAsync(JobDocument doc, long version, CancellationToken ct);
     Task<IndexResult> DeleteAsync(string id, long version, CancellationToken ct);
     Task<IReadOnlyList<SearchHit>> SearchAsync(string query, int top, CancellationToken ct);
 }
@@ -566,7 +570,7 @@ public sealed class InMemorySearchBackend(ITokenizer tokenizer) : ISearchBackend
     private readonly Dictionary<string, long> _versions = new(StringComparer.Ordinal);
     private readonly Lock _gate = new();
 
-    public Task<IndexResult> IndexAsync(TenderDocument doc, long version, CancellationToken ct)
+    public Task<IndexResult> IndexAsync(JobDocument doc, long version, CancellationToken ct)
     {
         lock (_gate)
         {
@@ -574,7 +578,7 @@ public sealed class InMemorySearchBackend(ITokenizer tokenizer) : ISearchBackend
                 return Task.FromResult(IndexResult.IgnoredStale);
             _versions[doc.Id] = version;
             // Title is repeated to give it a simple boost; real engines use per-field boosts instead.
-            _index.Upsert(doc.Id, $"{doc.Title} {doc.Title} {doc.Description} {doc.StateCode}");
+            _index.Upsert(doc.Id, $"{doc.Title} {doc.Title} {doc.Description} {doc.City}");
             return Task.FromResult(IndexResult.Applied);
         }
     }
@@ -600,12 +604,12 @@ The version check is the in-memory equivalent of OpenSearch's external versionin
 
 ### Source of truth plus outbox
 
-```csharp file=Tenders/TenderStore.cs
-using TenderSearch.Search;
+```csharp file=Jobs/JobStore.cs
+using JobSearch.Search;
 
-namespace TenderSearch.Tenders;
+namespace JobSearch.Jobs;
 
-public sealed record OutboxMessage(long Sequence, string TenderId, long Version, bool IsDelete, TenderDocument? Document);
+public sealed record OutboxMessage(long Sequence, string JobId, long Version, bool IsDelete, JobDocument? Document);
 
 public interface IOutboxReader
 {
@@ -614,22 +618,22 @@ public interface IOutboxReader
     Task SaveCheckpointAsync(long sequence, CancellationToken ct);
 }
 
-/// <summary>Stands in for PostgreSQL. In production: one transaction that UPDATEs tender (version = version + 1)
+/// <summary>Stands in for PostgreSQL. In production: one transaction that UPDATEs job_post (version = version + 1)
 /// and INSERTs into outbox; the relay's checkpoint is a row in a small table.</summary>
-public sealed class InMemoryTenderStore : IOutboxReader
+public sealed class InMemoryJobStore : IOutboxReader
 {
-    private readonly Dictionary<string, (TenderDocument Doc, long Version)> _tenders = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (JobDocument Doc, long Version)> _jobs = new(StringComparer.Ordinal);
     private readonly List<OutboxMessage> _outbox = [];
     private readonly Lock _gate = new();
     private long _sequence;
     private long _checkpoint;
 
-    public long Save(TenderDocument doc)
+    public long Save(JobDocument doc)
     {
         lock (_gate)   // "BEGIN ... COMMIT": row and outbox entry change together or not at all
         {
-            var version = _tenders.TryGetValue(doc.Id, out var existing) ? existing.Version + 1 : 1;
-            _tenders[doc.Id] = (doc, version);
+            var version = _jobs.TryGetValue(doc.Id, out var existing) ? existing.Version + 1 : 1;
+            _jobs[doc.Id] = (doc, version);
             _outbox.Add(new OutboxMessage(++_sequence, doc.Id, version, false, doc));
             return version;
         }
@@ -639,15 +643,15 @@ public sealed class InMemoryTenderStore : IOutboxReader
     {
         lock (_gate)
         {
-            if (!_tenders.Remove(id, out var existing)) return false;
+            if (!_jobs.Remove(id, out var existing)) return false;
             _outbox.Add(new OutboxMessage(++_sequence, id, existing.Version + 1, true, null));
             return true;
         }
     }
 
-    public TenderDocument? Get(string id)
+    public JobDocument? Get(string id)
     {
-        lock (_gate) return _tenders.TryGetValue(id, out var t) ? t.Doc : null;
+        lock (_gate) return _jobs.TryGetValue(id, out var t) ? t.Doc : null;
     }
 
     public Task<IReadOnlyList<OutboxMessage>> ReadAfterAsync(long sequence, int max, CancellationToken ct)
@@ -670,10 +674,10 @@ public sealed class InMemoryTenderStore : IOutboxReader
 ### The indexer relay
 
 ```csharp file=Indexing/OutboxIndexer.cs
-using TenderSearch.Search;
-using TenderSearch.Tenders;
+using JobSearch.Search;
+using JobSearch.Jobs;
 
-namespace TenderSearch.Indexing;
+namespace JobSearch.Indexing;
 
 public sealed class IndexerOptions
 {
@@ -701,10 +705,10 @@ public sealed class OutboxIndexer(
         foreach (var m in batch)
         {
             var result = m.IsDelete || m.Document is null
-                ? await search.DeleteAsync(m.TenderId, m.Version, ct)
+                ? await search.DeleteAsync(m.JobId, m.Version, ct)
                 : await search.IndexAsync(m.Document, m.Version, ct);
             if (result == IndexResult.IgnoredStale)
-                log.LogDebug("Skipped stale change {TenderId} v{Version}", m.TenderId, m.Version);
+                log.LogDebug("Skipped stale change {JobId} v{Version}", m.JobId, m.Version);
         }
         if (batch.Count > 0) await outbox.SaveCheckpointAsync(batch[^1].Sequence, ct);
         return batch.Count;
@@ -734,9 +738,9 @@ public sealed class OutboxIndexer(
 ### Wiring it up
 
 ```csharp file=Program.cs
-using TenderSearch.Indexing;
-using TenderSearch.Search;
-using TenderSearch.Tenders;
+using JobSearch.Indexing;
+using JobSearch.Search;
+using JobSearch.Jobs;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -744,32 +748,32 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<ITokenizer, SimpleTokenizer>();
 // Swap for an OpenSearch-backed implementation in production; nothing else changes.
 builder.Services.AddSingleton<ISearchBackend, InMemorySearchBackend>();
-builder.Services.AddSingleton<InMemoryTenderStore>();
-builder.Services.AddSingleton<IOutboxReader>(sp => sp.GetRequiredService<InMemoryTenderStore>());
+builder.Services.AddSingleton<InMemoryJobStore>();
+builder.Services.AddSingleton<IOutboxReader>(sp => sp.GetRequiredService<InMemoryJobStore>());
 builder.Services.Configure<IndexerOptions>(builder.Configuration.GetSection("Indexer"));
 builder.Services.AddHostedService<OutboxIndexer>();
 
 var app = builder.Build();
 
-app.MapPut("/tenders/{id}", (string id, TenderDocument doc, InMemoryTenderStore store) =>
+app.MapPut("/jobs/{id}", (string id, JobDocument doc, InMemoryJobStore store) =>
 {
     if (doc.Id != id) return Results.BadRequest("Id mismatch.");
     var version = store.Save(doc);
     // 202: saved now, searchable shortly (near-real-time). Say so in the API contract.
-    return Results.Accepted($"/tenders/{id}", new { id, version });
+    return Results.Accepted($"/jobs/{id}", new { id, version });
 });
 
-app.MapDelete("/tenders/{id}", (string id, InMemoryTenderStore store) =>
+app.MapDelete("/jobs/{id}", (string id, InMemoryJobStore store) =>
     store.Delete(id) ? Results.NoContent() : Results.NotFound());
 
-app.MapGet("/search", async (string q, int? size, ISearchBackend search, InMemoryTenderStore store, CancellationToken ct) =>
+app.MapGet("/search", async (string q, int? size, ISearchBackend search, InMemoryJobStore store, CancellationToken ct) =>
 {
     if (string.IsNullOrWhiteSpace(q) || q.Length > 200) return Results.BadRequest("q must be 1-200 characters.");
     var hits = await search.SearchAsync(q, size ?? 20, ct);
     // Hydrate from the source of truth; drop hits deleted since the last refresh.
     var results = hits.Select(h => (Hit: h, Doc: store.Get(h.DocId)))
                       .Where(x => x.Doc is not null)
-                      .Select(x => new { x.Doc!.Id, x.Doc.Title, x.Doc.StateCode, x.Hit.Score });
+                      .Select(x => new { x.Doc!.Id, x.Doc.Title, x.Doc.City, x.Hit.Score });
     return Results.Ok(results);
 });
 
@@ -779,7 +783,7 @@ app.Run();
 Design notes:
 
 - **Hydration from PostgreSQL** means a stale index can only cause a missing or extra *candidate*, never a wrong price or status on screen. It costs one batched query for 20 ids. Some teams skip it and show indexed fields directly, accepting a second or two of staleness.
-- **The API returns 202 Accepted on write** to make near-real-time behaviour explicit. If a screen must show the officer's own tender in results immediately, read it from PostgreSQL for that user (read-your-writes), or use the engine's `refresh=wait_for` on that one write, sparingly.
+- **The API returns 202 Accepted on write** to make near-real-time behaviour explicit. If a screen must show the recruiter's own job post in results immediately, read it from PostgreSQL for that user (read-your-writes), or use the engine's `refresh=wait_for` on that one write, sparingly.
 - **What an OpenSearch adapter would add:** the `_bulk` API (hundreds of documents per request), retries with backoff for HTTP 429 (cluster overloaded), and a mapping created at startup with strict dynamic mapping.
 
 ```json
@@ -790,9 +794,9 @@ Design notes:
     "properties": {
       "title":       { "type": "text", "analyzer": "english", "fields": { "raw": { "type": "keyword" } } },
       "description": { "type": "text", "analyzer": "english" },
-      "stateCode":   { "type": "keyword" },
-      "estimatedValueInr": { "type": "scaled_float", "scaling_factor": 100 },
-      "closesAt":    { "type": "date" }
+      "city":        { "type": "keyword" },
+      "maxSalaryInr": { "type": "scaled_float", "scaling_factor": 100 },
+      "expiresAt":   { "type": "date" }
     }
   }
 }
@@ -804,26 +808,26 @@ Design notes:
 
 ```csharp
 // Anti-example
-app.MapPut("/tenders/{id}", async (Tender t, AppDb db, SearchClient es) =>
+app.MapPut("/jobs/{id}", async (JobPost j, AppDb db, SearchClient es) =>
 {
-    db.Update(t);
+    db.Update(j);
     await db.SaveChangesAsync();
-    try { await es.IndexAsync(t); } catch { /* ignore, search is not critical */ }
+    try { await es.IndexAsync(j); } catch { /* ignore, search is not critical */ }
     return Results.Ok();
 });
 
-app.MapGet("/tenders/{id}/status", async (string id, SearchClient es) =>
+app.MapGet("/jobs/{id}/status", async (string id, SearchClient es) =>
     (await es.GetAsync(id)).Status);   // status read from the search index
 ```
 
 What goes wrong:
 
-- A swallowed indexing failure means a tender that bidders can never find. Nobody notices until a vendor complains that they missed a ₹40 crore bid deadline.
+- A swallowed indexing failure means a job post that candidates can never find. Nobody notices until an employer complains that a ₹15,000 premium listing got zero applications in a week.
 - Concurrent updates race: request A (version 6) and request B (version 7) both index; if A's index call lands last, search shows stale data indefinitely.
 - Reading status from the index returns data that may be a second, or a day, out of date.
 - When the mapping must change, there is no way to rebuild the index, because nothing records what was supposed to be in it.
 
-**Good:** the implementation above. The tender and its outbox entry commit together. A single relay applies changes in order with versions. The index is rebuildable from PostgreSQL, queried through an alias, and treated as a candidate generator, while PostgreSQL stays authoritative.
+**Good:** the implementation above. The job post and its outbox entry commit together. A single relay applies changes in order with versions. The index is rebuildable from PostgreSQL, queried through an alias, and treated as a candidate generator, while PostgreSQL stays authoritative.
 
 **Also bad: a search cluster for 20,000 rows.** A team stands up a three-node cluster for an internal HR directory. It costs more to run than the app, needs a sync pipeline, and has been "slightly out of date" for months. A `tsvector` column with a GIN index plus `pg_trgm` would have done the job in an afternoon.
 
@@ -833,30 +837,31 @@ A 1-second refresh is a good default for most catalogues. Lowering it to 100 ms 
 
 ## Practical playground
 
-The playground gives you a fresh PostgreSQL with a small tender table. Try:
+The playground gives you a fresh PostgreSQL with a small job-post table. Try:
 
-1. `SELECT to_tsvector('english', title) FROM tender;` and notice the stemming ("bridges" → "bridg") and dropped stop words.
+1. `SELECT to_tsvector('english', title) FROM job_post;` and notice the stemming ("developers" → "develop") and dropped stop words.
 2. Add a generated `tsvector` column and a GIN index (see the SQL earlier in the lesson).
-3. Compare `plainto_tsquery`, `websearch_to_tsquery('english', 'bridge -repair')` and `to_tsquery('english', 'bridge & (patna | gaya)')`.
+3. Compare `plainto_tsquery`, `websearch_to_tsquery('english', 'developer -intern')` and `to_tsquery('english', 'developer & (kochi | gurugram)')`.
+6. `CREATE EXTENSION pg_trgm;` then try `SELECT title, similarity(title, 'devloper') FROM job_post ORDER BY 2 DESC;` to see typo-tolerant matching.
 4. Rank with `ts_rank` and give the title more weight with `setweight`.
 5. Run `EXPLAIN` on your query before and after creating the index.
 
-:::playground type=sql title="PostgreSQL full-text search over tenders"
+:::playground type=sql title="PostgreSQL full-text search over job posts"
 ```sql
-CREATE TABLE tender (
-  id          int PRIMARY KEY,
-  title       text NOT NULL,
-  description text NOT NULL,
-  state_code  text NOT NULL,
-  value_inr   numeric(14,2) NOT NULL
+CREATE TABLE job_post (
+  id             int PRIMARY KEY,
+  title          text NOT NULL,
+  description    text NOT NULL,
+  state_code     text NOT NULL,
+  max_salary_inr int  NOT NULL
 );
-INSERT INTO tender VALUES
-  (1, 'Construction of bridges over Ganga at Patna', 'Two-lane steel bridges with approach roads', 'BR', 4200000000),
-  (2, 'Road widening and bridge repair, Gaya', 'Repair of three minor bridges and resurfacing', 'BR', 380000000),
-  (3, 'Drone survey for bridge inspection', 'Aerial inspection of 40 bridges in Patna division', 'BR', 25000000),
-  (4, 'Flyover at Sector 29, Gurugram', 'Elevated corridor with four-lane deck', 'HR', 1750000000),
-  (5, 'Water supply pipeline, Jaipur', 'Laying of DI pipes and pumping station', 'RJ', 960000000),
-  (6, 'Rail over bridge near Muzaffarpur', 'ROB replacing level crossing 42', 'BR', 610000000);
+INSERT INTO job_post VALUES
+  (1, 'Java developers for fintech team at Kochi', 'Two openings for backend developers with Spring Boot', 'KL', 2400000),
+  (2, 'Backend developer intern, Thiruvananthapuram', 'Six-month internship building REST APIs', 'KL', 300000),
+  (3, 'Android developer for food delivery app', 'Hybrid role, office in Kochi Infopark', 'KL', 1800000),
+  (4, 'Frontend engineer, Gurugram', 'React and TypeScript for a travel booking site', 'HR', 2200000),
+  (5, 'Data analyst, Jaipur', 'SQL and Power BI reporting for a hospital chain', 'RJ', 1200000),
+  (6, 'Full-stack developer near Ernakulam', 'Node and React for a school ERP product', 'KL', 1500000);
 ```
 :::
 
@@ -870,9 +875,9 @@ Implement `Analyzer.Tokenize` so that documents and queries are turned into sear
 - Drop stop words from the provided set and tokens shorter than 2 characters.
 - Keep the order of tokens, and keep duplicates (term frequency needs them).
 ::acceptance
-- `"Bridge construction on Ganga, Patna"` → `bridge, construction, ganga, patna`.
-- `"NH-48 widening (Phase-2)"` → `nh, 48, widening, phase`.
-- `"the bridge, the BRIDGE"` → `bridge, bridge`.
+- `"Java developer at fintech, Kochi"` → `java, developer, fintech, kochi`.
+- `"SDE-2 hiring (Node-18)"` → `sde, hiring, node, 18`.
+- `"the developer, the DEVELOPER"` → `developer, developer`.
 - `null`, empty and whitespace input return an empty list.
 ::hint
 Walk the string one character at a time and build the current token in a `StringBuilder`.
@@ -918,16 +923,16 @@ public class AnalyzerTests
 {
     [Fact]
     public void Splits_lowercases_and_drops_stop_words() =>
-        Assert.Equal(new[] { "bridge", "construction", "ganga", "patna" },
-            Analyzer.Tokenize("Bridge construction on Ganga, Patna"));
+        Assert.Equal(new[] { "java", "developer", "fintech", "kochi" },
+            Analyzer.Tokenize("Java developer at fintech, Kochi"));
 
     [Fact]
     public void Handles_hyphens_digits_and_brackets() =>
-        Assert.Equal(new[] { "nh", "48", "widening", "phase" }, Analyzer.Tokenize("NH-48 widening (Phase-2)"));
+        Assert.Equal(new[] { "sde", "hiring", "node", "18" }, Analyzer.Tokenize("SDE-2 hiring (Node-18)"));
 
     [Fact]
     public void Keeps_duplicates_for_term_frequency() =>
-        Assert.Equal(new[] { "bridge", "bridge" }, Analyzer.Tokenize("the bridge, the BRIDGE"));
+        Assert.Equal(new[] { "developer", "developer" }, Analyzer.Tokenize("the developer, the DEVELOPER"));
 
     [Theory]
     [InlineData(null)]
@@ -936,7 +941,7 @@ public class AnalyzerTests
     public void Empty_input_gives_no_tokens(string? input) => Assert.Empty(Analyzer.Tokenize(input));
 
     [Fact]
-    public void Last_word_is_not_lost() => Assert.Equal("gurugram", Analyzer.Tokenize("Flyover Gurugram")[1]);
+    public void Last_word_is_not_lost() => Assert.Equal("gurugram", Analyzer.Tokenize("Designer Gurugram")[1]);
 }
 ```
 ::solution
@@ -979,65 +984,65 @@ public static class Analyzer
 }
 ```
 
-"Phase-2" yields "phase" and "2"; "2" is dropped by the length rule. Whether that is right is a product decision: for tender numbers you might keep single digits, or index codes like "NH-48" as an extra keyword field so the exact code also matches.
+"SDE-2" yields "sde" and "2"; "2" is dropped by the length rule. Whether that is right is a product decision: for job levels you might keep single digits, or index codes like "SDE-2" as an extra keyword field so the exact code also matches.
 ::mistakes
 - Forgetting the final `Flush()`, which silently drops the last word of every document.
 - Using `ToLower()` without invariant culture; in a Turkish culture "I" lowercases to a dotless "ı" and matches break.
 - Removing duplicates in the analyser. Deduplication belongs in the query, not in document analysis, because BM25 needs term frequencies.
 ::extensions
-Add a crude plural stemmer ("bridges" → "bridge") and a synonym map ("rob" → "rail over bridge"). Write a test proving the query and document paths still match.
+Add a crude plural stemmer ("developers" → "developer") and a synonym map ("sde" → "software development engineer"). Write a test proving the query and document paths still match.
 :::
 
 :::exercise id=m16-search-architecture-ex2 difficulty=beginner kind=sql ordered=true title="Full-text search in PostgreSQL"
-Find all tenders whose title **or** description matches the web-style query `bridge patna` (both words must match, after English stemming). Return `id` and `title`, ordered by `id`.
+Find all job posts whose title **or** description matches the web-style query `developer kochi` (both words must match, after English stemming). Return `id` and `title`, ordered by `id`.
 ::setup
 ```sql
-CREATE TABLE tender (
+CREATE TABLE job_post (
   id          int PRIMARY KEY,
   title       text NOT NULL,
   description text NOT NULL,
   state_code  text NOT NULL
 );
-INSERT INTO tender VALUES
-  (1, 'Construction of bridges over Ganga at Patna', 'Two-lane steel bridges with approach roads', 'BR'),
-  (2, 'Road widening and bridge repair, Gaya', 'Repair of three minor bridges and resurfacing', 'BR'),
-  (3, 'Drone survey for bridge inspection', 'Aerial inspection of 40 bridges in Patna division', 'BR'),
-  (4, 'Flyover at Sector 29, Gurugram', 'Elevated corridor with four-lane deck', 'HR'),
-  (5, 'Patna metro depot civil works', 'Depot buildings and stabling lines', 'BR'),
-  (6, 'Rail over bridge near Muzaffarpur', 'ROB replacing level crossing 42', 'BR');
+INSERT INTO job_post VALUES
+  (1, 'Java developers for fintech team at Kochi', 'Two openings for backend developers with Spring Boot', 'KL'),
+  (2, 'Backend developer, Thiruvananthapuram', 'Developer role building APIs for an insurance product', 'KL'),
+  (3, 'Android developer for food delivery app', 'Hybrid role, office in Kochi Infopark', 'KL'),
+  (4, 'Frontend engineer, Gurugram', 'React and TypeScript for a travel booking site', 'HR'),
+  (5, 'Kochi warehouse supervisor', 'Shift lead for a parcel sorting centre', 'KL'),
+  (6, 'Data analyst near Ernakulam', 'SQL and Power BI reporting for a hospital chain', 'KL');
 ```
 ::check
 ```sql
 SELECT id, title
-FROM tender
-WHERE to_tsvector('english', title || ' ' || description) @@ websearch_to_tsquery('english', 'bridge patna')
+FROM job_post
+WHERE to_tsvector('english', title || ' ' || description) @@ websearch_to_tsquery('english', 'developer kochi')
 ORDER BY id;
 ```
 ::acceptance
-- Returns tenders 1 and 3 only.
-- Tender 1 matches although it says "bridges" (stemming).
-- Tender 3 matches because "Patna" is only in the description.
-- Tender 5 (Patna, no bridge) and tender 2 (bridge, no Patna) are excluded.
+- Returns job posts 1 and 3 only.
+- Job 1 matches although it says "developers" (stemming).
+- Job 3 matches because "Kochi" is only in the description.
+- Job 5 (Kochi, no developer) and job 2 (developer, no Kochi) are excluded.
 ::hint
 You need a `tsvector` built from both columns and a `tsquery` built from the user's words.
 ::hint
 Concatenate the columns with a space before calling `to_tsvector('english', ...)`.
 ::hint
-`websearch_to_tsquery('english', 'bridge patna')` produces `'bridg' & 'patna'`: both terms must match.
+`websearch_to_tsquery('english', 'developer kochi')` produces `'develop' & 'kochi'`: both terms must match.
 ::hint
 ```sql
-WHERE to_tsvector('english', title || ' ' || description) @@ websearch_to_tsquery('english', 'bridge patna')
+WHERE to_tsvector('english', title || ' ' || description) @@ websearch_to_tsquery('english', 'developer kochi')
 ```
 ::solution
 ```sql
 SELECT id, title
-FROM tender
-WHERE to_tsvector('english', title || ' ' || description) @@ websearch_to_tsquery('english', 'bridge patna')
+FROM job_post
+WHERE to_tsvector('english', title || ' ' || description) @@ websearch_to_tsquery('english', 'developer kochi')
 ORDER BY id;
 ```
 In production, store the `tsvector` in a generated column and index it with GIN, otherwise PostgreSQL recomputes it for every row on every query. Use `setweight` to give title matches more weight and `ts_rank` to order by relevance instead of id.
 ::mistakes
-- Using `ILIKE '%bridge%' AND ILIKE '%patna%'`: it works on 6 rows, but scans every row, misses "bridges" vs "bridge" variants in other words, and cannot rank.
+- Using `ILIKE '%developer%' AND ILIKE '%kochi%'`: it works on 6 rows, but scans every row, misses word variants such as "development" that stemming would catch, and cannot rank.
 - Calling `to_tsvector` without a configuration name; the result then depends on the server's `default_text_search_config`.
 - Forgetting the space when concatenating, which glues the last title word to the first description word.
 :::
@@ -1051,7 +1056,7 @@ Implement `PostingIndex`, an inverted index that stores sorted posting lists of 
 - Do not use LINQ's `Intersect` or `HashSet` for the intersection itself.
 ::acceptance
 - After adding docs 3, 1 and 2 with overlapping terms, `Postings` lists are sorted.
-- `And("bridge", "bihar")` returns exactly the shared ids.
+- `And("developer", "kerala")` returns exactly the shared ids.
 - An unknown term makes the AND result empty.
 - `And()` with no terms returns empty.
 ::hint
@@ -1101,28 +1106,28 @@ public class PostingIndexTests
     private static PostingIndex Sample()
     {
         var idx = new PostingIndex();
-        idx.Add(3, new[] { "bridge", "inspection", "patna" });
-        idx.Add(1, new[] { "bridge", "construction", "patna", "bridge" });
-        idx.Add(2, new[] { "road", "bridge", "bihar" });
-        idx.Add(4, new[] { "road", "bihar", "patna" });
+        idx.Add(3, new[] { "developer", "internship", "kochi" });
+        idx.Add(1, new[] { "developer", "java", "kochi", "developer" });
+        idx.Add(2, new[] { "backend", "developer", "kerala" });
+        idx.Add(4, new[] { "backend", "kerala", "kochi" });
         return idx;
     }
 
     [Fact]
     public void Postings_are_sorted_and_unique() =>
-        Assert.Equal(new[] { 1, 2, 3 }, Sample().Postings("bridge"));
+        Assert.Equal(new[] { 1, 2, 3 }, Sample().Postings("developer"));
 
     [Fact]
-    public void Unknown_term_has_empty_postings() => Assert.Empty(Sample().Postings("tunnel"));
+    public void Unknown_term_has_empty_postings() => Assert.Empty(Sample().Postings("cobol"));
 
     [Fact]
-    public void And_of_two_terms() => Assert.Equal(new[] { 2 }, Sample().And("bridge", "bihar"));
+    public void And_of_two_terms() => Assert.Equal(new[] { 2 }, Sample().And("developer", "kerala"));
 
     [Fact]
-    public void And_of_three_terms() => Assert.Equal(new[] { 1, 3 }, Sample().And("patna", "bridge", "patna"));
+    public void And_of_three_terms() => Assert.Equal(new[] { 1, 3 }, Sample().And("kochi", "developer", "kochi"));
 
     [Fact]
-    public void Unknown_term_makes_and_empty() => Assert.Empty(Sample().And("bridge", "tunnel"));
+    public void Unknown_term_makes_and_empty() => Assert.Empty(Sample().And("developer", "cobol"));
 
     [Fact]
     public void No_terms_gives_empty() => Assert.Empty(Sample().And());
@@ -1131,8 +1136,8 @@ public class PostingIndexTests
     public void Re_adding_same_doc_does_not_duplicate()
     {
         var idx = Sample();
-        idx.Add(2, new[] { "bridge" });
-        Assert.Equal(new[] { 1, 2, 3 }, idx.Postings("bridge"));
+        idx.Add(2, new[] { "developer" });
+        Assert.Equal(new[] { 1, 2, 3 }, idx.Postings("developer"));
     }
 }
 ```
@@ -1192,7 +1197,7 @@ public sealed class PostingIndex
 }
 ```
 
-Starting from the shortest list matters: "patna AND road" with 50 and 40,000 entries does at most about 40,050 comparisons with two pointers, and far fewer with skipping. Real engines skip with binary or galloping search into the long list, so the cost tracks the short list (about 50 × log 40,000 ≈ 800 steps).
+Starting from the shortest list matters: "kochi AND java" with 50 and 40,000 entries does at most about 40,050 comparisons with two pointers, and far fewer with skipping. Real engines skip with binary or galloping search into the long list, so the cost tracks the short list (about 50 × log 40,000 ≈ 800 steps).
 ::alternatives
 Inserting into the middle of a `List<int>` is O(n). Engines avoid it by buffering new documents in memory, sorting once, and writing an immutable segment; ids then only ever grow within a segment. For a batch-built index, append everything then sort once.
 ::mistakes
@@ -1200,11 +1205,11 @@ Inserting into the middle of a `List<int>` is O(n). Engines avoid it by bufferin
 - Forgetting duplicate terms within one document, which inserts the same id twice.
 - Intersecting in the given order rather than shortest first; correct, but slow on skewed term frequencies.
 ::extensions
-Add `Or` (k-way merge of sorted lists) and `AndNot("bridge", "repair")`. Then add galloping search: when one list is 100× longer, binary-search ahead in it instead of stepping one by one.
+Add `Or` (k-way merge of sorted lists) and `AndNot("developer", "intern")`. Then add galloping search: when one list is 100× longer, binary-search ahead in it instead of stepping one by one.
 :::
 
-:::exercise id=m16-search-architecture-ex4 difficulty=intermediate kind=hld title="Search for a national tender portal"
-A national e-procurement portal holds 2 million tenders (6 GB of text) and adds or amends 15,000 per day. Bidders search 2 million times a day, peaking at about 5× average around month-end. Product wants: typo tolerance ("Patana"), Hindi and English text, facets by department, state and value band, and results that reflect amendments within 5 seconds. Tender status shown on screen must always be correct.
+:::exercise id=m16-search-architecture-ex4 difficulty=intermediate kind=hld title="Search for a national job portal"
+A national job portal holds 2 million active job posts (6 GB of text) and adds or edits 15,000 per day. Job seekers search 2 million times a day, peaking at about 5× average on Monday mornings. Product wants: typo tolerance ("Bangluru" for "Bengaluru"), Hindi and English text, facets by industry, city and salary band, and results that reflect edits within 5 seconds. Whether a job is still open, as shown on screen, must always be correct.
 
 Starting from the graph, design the search architecture. Show capacity arithmetic, how the index stays in sync, how you reindex without downtime, and what you would do if product dropped typo tolerance and Hindi.
 ::acceptance
@@ -1227,42 +1232,42 @@ For reindexing: new index, backfill, dual-apply changes, compare counts, swap al
 ```json
 {
   "nodes": [
-    { "id": "bidders", "type": "client", "label": "Bidders and officers", "props": { "rps": 120 } },
+    { "id": "seekers", "type": "client", "label": "Job seekers and recruiters", "props": { "rps": 120 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
-    { "id": "api", "type": "app-server", "label": "Tender API", "props": { "instances": 3 } },
+    { "id": "api", "type": "app-server", "label": "Jobs API", "props": { "instances": 3 } },
     { "id": "pg", "type": "database", "label": "PostgreSQL", "props": { "replicas": 1 } }
   ],
   "edges": [
-    { "from": "bidders", "to": "lb", "kind": "sync" },
+    { "from": "seekers", "to": "lb", "kind": "sync" },
     { "from": "lb", "to": "api", "kind": "sync" },
     { "from": "api", "to": "pg", "kind": "sync", "label": "CRUD and ILIKE search" }
   ]
 }
 ```
 ::solution
-**Capacity (estimates).** 2 M/day ÷ 86,400 ≈ 23 QPS average, ×5 ≈ **115 QPS peak**; plan for 250 QPS headroom. Writes ≈ 15,000/day ≈ 0.2/s, with bulk amendment bursts of maybe 50,000 in an hour (≈ 14/s). Data: 6 GB source; assume the index with multi-fields (English, Hindi, keyword, n-grams for typo tolerance) is 2–3× source ≈ 12–18 GB. One primary shard fits within 10–50 GB guidance; use **2 primaries** for growth to ~5 M tenders, **1 replica** each. Total ≈ 36 GB on disk across the cluster.
+**Capacity (estimates).** 2 M/day ÷ 86,400 ≈ 23 QPS average, ×5 ≈ **115 QPS peak**; plan for 250 QPS headroom. Writes ≈ 15,000/day ≈ 0.2/s, with bulk amendment bursts of maybe 50,000 in an hour (≈ 14/s). Data: 6 GB source; assume the index with multi-fields (English, Hindi, keyword, n-grams for typo tolerance) is 2–3× source ≈ 12–18 GB. One primary shard fits within 10–50 GB guidance; use **2 primaries** for growth to ~5 M job posts, **1 replica** each. Total ≈ 36 GB on disk across the cluster.
 
 **Cluster.** 3 nodes, each cluster-manager-eligible and data (small cluster, so combined roles are fine), in 3 availability zones. Losing one node keeps quorum (2 of 3) and every shard still has a copy.
 
-**Sync.** Tender API writes `tender` and `outbox` in one transaction, with `version = version + 1`. An indexer worker polls every 500 ms, sends `_bulk` requests of up to 500 documents with `version_type=external`, and saves its checkpoint after each batch. Deletes and "withdrawn" tenders send a tombstone/delete with a version. Freshness budget: 0.5 s poll + 0.5 s bulk + 1 s refresh ≈ **2 s**, well under 5 s. Alert if outbox age exceeds 30 s.
+**Sync.** Jobs API writes `job_post` and `outbox` in one transaction, with `version = version + 1`. An indexer worker polls every 500 ms, sends `_bulk` requests of up to 500 documents with `version_type=external`, and saves its checkpoint after each batch. Deletes and closed jobs send a tombstone/delete with a version. Freshness budget: 0.5 s poll + 0.5 s bulk + 1 s refresh ≈ **2 s**, well under 5 s. Alert if outbox age exceeds 30 s.
 
-**Read path.** The API queries the alias `tenders` (filters for state, department, value band as `keyword`/numeric filters; facets via aggregations), gets 20 ids, then loads status and closing date from PostgreSQL (replica is fine, with a primary fallback for the officer's own edits). Status on screen is therefore always correct.
+**Read path.** The API queries the alias `jobs` (filters for city, industry, salary band as `keyword`/numeric filters; facets via aggregations), gets 20 ids, then loads open/closed status and expiry date from PostgreSQL (replica is fine, with a primary fallback for the recruiter's own edits). Status on screen is therefore always correct.
 
-**Reindex.** Create `tenders_v4`, backfill from a PostgreSQL snapshot recording the outbox sequence at start, replay the outbox from that sequence into v4, compare counts and golden queries, swap the alias atomically, keep v3 for 24 h.
+**Reindex.** Create `jobs_v4`, backfill from a PostgreSQL snapshot recording the outbox sequence at start, replay the outbox from that sequence into v4, compare counts and golden queries, swap the alias atomically, keep v3 for 24 h.
 
 ```json
 {
   "nodes": [
-    { "id": "bidders", "type": "client", "label": "Bidders and officers", "props": { "rps": 120 } },
+    { "id": "seekers", "type": "client", "label": "Job seekers and recruiters", "props": { "rps": 120 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
-    { "id": "api", "type": "app-server", "label": "Tender API", "props": { "instances": 3 } },
-    { "id": "pg", "type": "database", "label": "PostgreSQL (tender + outbox)", "props": { "replicas": 1, "multiAz": true } },
+    { "id": "api", "type": "app-server", "label": "Jobs API", "props": { "instances": 3 } },
+    { "id": "pg", "type": "database", "label": "PostgreSQL (job_post + outbox)", "props": { "replicas": 1, "multiAz": true } },
     { "id": "idx", "type": "worker", "label": "Indexer (outbox relay, bulk, external versions)" },
-    { "id": "search", "type": "search", "label": "Search cluster, alias tenders -> v3 (2 primaries, 1 replica)", "props": { "instances": 3, "multiAz": true } },
+    { "id": "search", "type": "search", "label": "Search cluster, alias jobs -> v3 (2 primaries, 1 replica)", "props": { "instances": 3, "multiAz": true } },
     { "id": "mon", "type": "monitoring", "label": "Outbox age, 429s, p95 latency" }
   ],
   "edges": [
-    { "from": "bidders", "to": "lb", "kind": "sync" },
+    { "from": "seekers", "to": "lb", "kind": "sync" },
     { "from": "lb", "to": "api", "kind": "sync" },
     { "from": "api", "to": "pg", "kind": "sync", "label": "writes + outbox in one tx; hydrate 20 ids" },
     { "from": "api", "to": "search", "kind": "sync", "label": "query alias, facets" },
@@ -1276,13 +1281,13 @@ For reindexing: new index, backfill, dual-apply changes, compare counts, swap al
 **Simpler alternative.** Without typo tolerance and Hindi, the remaining needs (English stemming, facets via `GROUP BY`, filters, 115 QPS over 2 M rows) fit PostgreSQL full-text search: a generated weighted `tsvector`, a GIN index, and searches routed to a read replica. That removes the cluster, the indexer and the freshness gap. Revisit if ranking slow queries with hundreds of thousands of matches becomes a problem.
 ::mistakes
 - Twenty shards "for scale" on a 15 GB index: every query becomes 20 searches, for no benefit.
-- Showing tender status from the index.
+- Showing job status (open or closed) from the index.
 - Two cluster-manager nodes: losing either loses quorum.
 - No plan for reindexing, so the first mapping change requires downtime.
 :::
 
 :::exercise id=m16-search-architecture-ex5 difficulty=advanced kind=code title="A versioned, idempotent index applier"
-CDC events for tenders arrive **at least once** and sometimes **out of order** (after consumer restarts and partition rebalances). Implement `VersionedIndexApplier.Apply`, which applies `ChangeEvent`s to an `IIndexSink` so that the final index state always equals the state of the highest version seen for each id.
+CDC events for job posts arrive **at least once** and sometimes **out of order** (after consumer restarts and partition rebalances). Implement `VersionedIndexApplier.Apply`, which applies `ChangeEvent`s to an `IIndexSink` so that the final index state always equals the state of the highest version seen for each id.
 ::requirements
 - An event has `Id`, `Version` (higher is newer), `Kind` (`Upsert` or `Delete`) and `Text` (null for deletes).
 - Apply an event only if its version is **greater** than the highest version already seen for that id; otherwise return `Outcome.Skipped` and do not touch the sink.
@@ -1361,45 +1366,45 @@ public class VersionedIndexApplierTests
     public void Newer_upsert_wins()
     {
         var sink = new InMemorySink(); var a = new VersionedIndexApplier(sink);
-        Assert.Equal(Outcome.Indexed, a.Apply(Up("T1", 1)));
-        Assert.Equal(Outcome.Indexed, a.Apply(Up("T1", 2)));
-        Assert.Equal("T1-v2", sink.Get("T1"));
+        Assert.Equal(Outcome.Indexed, a.Apply(Up("J1", 1)));
+        Assert.Equal(Outcome.Indexed, a.Apply(Up("J1", 2)));
+        Assert.Equal("J1-v2", sink.Get("J1"));
     }
 
     [Fact]
     public void Late_older_upsert_is_skipped()
     {
         var sink = new InMemorySink(); var a = new VersionedIndexApplier(sink);
-        a.Apply(Up("T1", 2));
-        Assert.Equal(Outcome.Skipped, a.Apply(Up("T1", 1)));
-        Assert.Equal("T1-v2", sink.Get("T1"));
+        a.Apply(Up("J1", 2));
+        Assert.Equal(Outcome.Skipped, a.Apply(Up("J1", 1)));
+        Assert.Equal("J1-v2", sink.Get("J1"));
     }
 
     [Fact]
     public void Delete_leaves_tombstone()
     {
         var sink = new InMemorySink(); var a = new VersionedIndexApplier(sink);
-        a.Apply(Up("T1", 1));
-        Assert.Equal(Outcome.Deleted, a.Apply(Del("T1", 3)));
-        Assert.Equal(Outcome.Skipped, a.Apply(Up("T1", 2)));
-        Assert.Null(sink.Get("T1"));
+        a.Apply(Up("J1", 1));
+        Assert.Equal(Outcome.Deleted, a.Apply(Del("J1", 3)));
+        Assert.Equal(Outcome.Skipped, a.Apply(Up("J1", 2)));
+        Assert.Null(sink.Get("J1"));
     }
 
     [Fact]
     public void Duplicate_is_skipped()
     {
         var sink = new InMemorySink(); var a = new VersionedIndexApplier(sink);
-        a.Apply(Up("T1", 5));
-        Assert.Equal(Outcome.Skipped, a.Apply(Up("T1", 5)));
+        a.Apply(Up("J1", 5));
+        Assert.Equal(Outcome.Skipped, a.Apply(Up("J1", 5)));
     }
 
     [Fact]
     public void Upsert_after_newer_delete_can_recreate()
     {
         var sink = new InMemorySink(); var a = new VersionedIndexApplier(sink);
-        a.Apply(Del("T1", 3));
-        Assert.Equal(Outcome.Indexed, a.Apply(Up("T1", 4)));
-        Assert.Equal("T1-v4", sink.Get("T1"));
+        a.Apply(Del("J1", 3));
+        Assert.Equal(Outcome.Indexed, a.Apply(Up("J1", 4)));
+        Assert.Equal("J1-v4", sink.Get("J1"));
     }
 
     [Fact]
@@ -1487,9 +1492,9 @@ public sealed class VersionedIndexApplier(IIndexSink sink)
 
 The stripe lock serialises all work for one id, including the sink call, so "check v19, write v19" cannot interleave with "check v20, write v20" in the wrong order. The short inner lock only protects the shared dictionary. With a real engine you push this check into the engine itself (`version_type=external`), which also survives the applier restarting, and keep tombstones for long enough to outlive the maximum redelivery delay (for example 24 hours), then let them expire.
 ::alternatives
-`ConcurrentDictionary.AddOrUpdate` can maintain the max version lock-free, but you still need the sink write ordered with the check; without the stripe lock, two threads can pass the check in order and write out of order. Partitioning by id (Kafka key = tender id) gives per-id ordering in the transport and removes most of this concern, but only within one consumer group generation.
+`ConcurrentDictionary.AddOrUpdate` can maintain the max version lock-free, but you still need the sink write ordered with the check; without the stripe lock, two threads can pass the check in order and write out of order. Partitioning by id (Kafka key = job id) gives per-id ordering in the transport and removes most of this concern, but only within one consumer group generation.
 ::mistakes
-- Deleting the version entry on delete, which lets a late upsert resurrect the tender.
+- Deleting the version entry on delete, which lets a late upsert resurrect the job post.
 - Using `>=` instead of `>`, which re-applies duplicates (harmless for upserts, but wasteful and noisy).
 - Checking the version under a lock but calling the sink outside it.
 ::extensions
@@ -1524,18 +1529,18 @@ public class Bm25Tests
 
 ```csharp
 [Theory]
-[InlineData("bridge patna", "T-1")]
-[InlineData("bridges", "T-1")]          // plural must match singular
+[InlineData("developer kochi", "J-1")]
+[InlineData("developers", "J-1")]          // plural must match singular
 public void Golden_queries(string query, string expectedTopId)
 {
     var index = new InvertedIndex(new SimpleTokenizer());
-    index.Upsert("T-1", "Bridge construction on Ganga river, Patna");
-    index.Upsert("T-2", "Road construction and bridge repair, Bihar");
+    index.Upsert("J-1", "Java developer for fintech startup, Kochi");
+    index.Upsert("J-2", "Backend developer and API tester, Kerala");
     Assert.Equal(expectedTopId, index.Search(query)[0].DocId);
 }
 ```
 
-**3. Sync tests.** Drive `OutboxIndexer.RunOnceAsync` directly (no timers): save, update and delete tenders, run the indexer, and assert search results. Then simulate a crash by resetting the checkpoint and running again; the result must be identical. Against a real cluster, use a Testcontainers-style integration test in CI with the production mapping.
+**3. Sync tests.** Drive `OutboxIndexer.RunOnceAsync` directly (no timers): save, update and delete job posts, run the indexer, and assert search results. Then simulate a crash by resetting the checkpoint and running again; the result must be identical. Against a real cluster, use a Testcontainers-style integration test in CI with the production mapping.
 
 Edge cases worth a test: an empty query, a query of only stop words, a deleted document still present until refresh, the same document updated twice in one batch, and a version-conflict response being treated as success.
 
@@ -1543,7 +1548,7 @@ Edge cases worth a test: an empty query, a query of only stop words, a deleted d
 
 - **E-commerce catalogues** (a large Indian marketplace or a global one) typically combine an inverted index for keywords, filters and facets with vector search for semantic matches, then re-rank with business signals such as stock and delivery speed.
 - **Log and observability platforms** (OpenSearch, Elasticsearch, and log stores like Grafana Loki that index less) use time-based indexes with rollover and deletion policies, because logs are written once and searched mostly when recent.
-- **Government portals** for tenders, land records and grievances need multilingual analysers and exact-code matching (tender numbers, survey numbers) side by side, which is why multi-fields matter.
+- **Government and public-service portals** (land records, grievances, scholarship applications) need multilingual analysers and exact-code matching (application numbers, land survey numbers) side by side, which is why multi-fields matter.
 - **SaaS admin screens** (find a customer by name, email or GSTIN) are usually best served by PostgreSQL with `pg_trgm` and full-text search; no extra cluster.
 - **Code search** tools build trigram indexes, because programmers search for substrings like `GetAsync(`, which word-based analysers would mangle.
 
@@ -1557,7 +1562,7 @@ It maps each term to the list of documents containing it (the posting list), lik
 ::q beginner
 Why must queries use the same analyser as documents?
 ::a
-The index stores terms *after* analysis (lowercased, stemmed, stop words removed). If the query is analysed differently, its terms will not exist in the dictionary. "Bridges" in the query must become the same term as "bridges" in the document, for example `bridg`. Changing the analyser therefore means reindexing.
+The index stores terms *after* analysis (lowercased, stemmed, stop words removed). If the query is analysed differently, its terms will not exist in the dictionary. "Developers" in the query must become the same term as "developers" in the document, for example `develop`. Changing the analyser therefore means reindexing.
 ::q intermediate
 Explain BM25 without the formula.
 ::a
@@ -1592,8 +1597,8 @@ Choose PostgreSQL when the data is in PostgreSQL already, volume is up to a few 
 :::flashcards
 Q: What does an inverted index map?
 A: Each term to a posting list: the sorted ids of documents containing it (often with term frequencies and positions).
-Q: Why can't a B-tree index help `LIKE '%bridge%'`?
-A: A B-tree orders whole values by prefix; values containing "bridge" in the middle are scattered, so every row must be scanned.
+Q: Why can't a B-tree index help `LIKE '%developer%'`?
+A: A B-tree orders whole values by prefix; values containing "developer" in the middle are scattered, so every row must be scanned.
 Q: What are BM25's three ideas?
 A: Rare terms weigh more (IDF), term frequency saturates (k1), and long documents are normalised (b).
 Q: Why is OpenSearch "near-real-time"?
@@ -1619,14 +1624,14 @@ A team saves a product to PostgreSQL, then calls the search cluster in the same 
 - [ ] The search cluster will lose its replicas.
 > This is the dual-write problem. Use an outbox or CDC with versioned, retried writes so every committed change eventually reaches the index in the right order.
 ::q single
-Query "bridge patna" over 2 million tenders. "bridge" appears in 600,000 tenders, "patna" in 3,000. Under BM25, which statement is true?
+Query "developer kochi" over 2 million job posts. "developer" appears in 600,000 posts, "kochi" in 3,000. Under BM25, which statement is true?
 - [ ] Both terms contribute equally for a document that contains each once.
-- [x] A match on "patna" contributes much more than a match on "bridge".
-- [ ] "bridge" contributes more because it appears in more documents.
+- [x] A match on "kochi" contributes much more than a match on "developer".
+- [ ] "developer" contributes more because it appears in more documents.
 - [ ] IDF is ignored for two-word queries.
 > IDF rewards rare terms: matching a term found in 0.15 % of documents says much more than matching one found in 30 %.
 ::q single
-After deploying a new analyser that adds stemming, users report that "bridges" no longer finds older tenders. The most likely cause?
+After deploying a new analyser that adds stemming, users report that "developers" no longer finds older job posts. The most likely cause?
 - [ ] The cluster needs more replicas.
 - [ ] BM25's k1 is too low.
 - [x] Old documents were indexed with the old analyser, so their stored terms differ from the stemmed query terms; the index must be rebuilt.
@@ -1654,7 +1659,7 @@ An internal admin tool searches 80,000 customers by name, email and GSTIN in Pos
 - [ ] A nightly CSV export to a search SaaS.
 > At this size PostgreSQL handles it with no sync pipeline; pg_trgm gives typo-tolerant similarity and speeds up substring matching.
 ::q single
-Users complain that a tender they just edited does not appear in search results for about a second. What explains it?
+Recruiters complain that a job post they just edited does not appear in search results for about a second. What explains it?
 - [ ] The search cluster lost the write.
 - [ ] PostgreSQL replication lag.
 - [x] Outbox polling plus the cluster's refresh interval make search near-real-time, not instant.

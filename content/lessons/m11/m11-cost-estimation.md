@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 80
 prerequisites: [m11-capacity-estimation, m11-object-storage, m11-scaling]
-related: [m11-cdn, m11-caching-layers, m11-availability, m11-trade-offs, m11-background-processing, m11-database-architecture]
+related: [m11-cdn, m11-caching-layers, m11-availability, m11-trade-offs, m11-background-processing, m11-database-architecture, m17-scaling-journey]
 tags: [hld, cost, finops, cloud, egress, reserved-instances, unit-economics]
 patterns: []
 summary: Turn a design into a monthly bill — compute, storage, egress, managed services and observability — compare on-demand, reserved and spot pricing, compute cost per request, and build a C# cost calculator whose unit prices are explicit, dated assumptions.
@@ -155,7 +155,7 @@ Commitments are a financial decision on top of a technical one. Do not commit un
 
 ### Storage cost has a time dimension
 
-Compute cost stops when you switch the server off. Storage cost **accumulates**: data you write this month is billed every month until you delete it. A system adding 10 TB a month pays for 10 TB in month one, 20 TB in month two, and 120 TB in month twelve. That is why **retention policies** and **lifecycle tiers** (move objects older than 90 days to a cheaper tier, delete after 7 years) are often the largest long-term savings in storage-heavy systems such as site-photo archives, CCTV footage or document management.
+Compute cost stops when you switch the server off. Storage cost **accumulates**: data you write this month is billed every month until you delete it. A system adding 10 TB a month pays for 10 TB in month one, 20 TB in month two, and 120 TB in month twelve. That is why **retention policies** and **lifecycle tiers** (move objects older than 90 days to a cheaper tier, delete after 7 years) are often the largest long-term savings in storage-heavy systems such as medical-imaging archives, CCTV footage or document management.
 
 Cold tiers have their own costs: retrieval fees per GB, minimum storage durations (deleting early still bills the minimum), and slower access. A tier that saves 90 % on storage but is read every week can cost more than the hot tier.
 
@@ -850,7 +850,7 @@ Cost per million: 347.62 ÷ 25.92            ≈ $13.41
 
 **High availability.** A standby adds one node ($146) and one storage copy ($6): **$152 more, about 44 %**, taking the bill to roughly $500.
 
-**Recommendation.** For 40 clinics booking patients during working hours, a database failure without a standby means restoring from backup or waiting for the provider to replace the node, which can take from tens of minutes to hours, and receptionists fall back to paper. $152 a month (about ₹13,000) is small next to an afternoon of disrupted clinics. Recommend HA, and fund it partly by committing the two API instances and the database for one year (35 % of $444 ≈ $155 saved), which almost pays for it.
+**Recommendation.** For 40 clinics booking patients during working hours, a database failure without a standby means restoring from backup or waiting for the provider to replace the node, which can take from tens of minutes to hours, and receptionists fall back to paper. $152 a month (about ₹13,000) is small next to an afternoon of disrupted clinics. Recommend HA, and fund it partly by committing the two API instances and both database nodes for one year (35 % of $146 + $292 = $438 ≈ $153 saved), which almost pays for it.
 ::mistakes
 - Forgetting the free egress tier or charging egress on ingress.
 - Doubling only the node cost for HA and forgetting the second storage copy.
@@ -1413,8 +1413,9 @@ public void Tiered_egress_charges_each_tier_at_its_own_rate()
 - **FinOps practice.** Many organisations now run cost as an engineering discipline: tagging every resource with owner and environment, showing teams their own cost per unit of business value, and reviewing commitments quarterly. The FinOps Foundation's framework describes this loop as inform, optimise, operate.
 - **Cloud well-architected frameworks.** Both Microsoft's and AWS's frameworks include a cost-optimisation pillar with the same core ideas as this lesson: measure, right-size, use commitments for steady load, use spot for interruptible load, and design for cost from the start.
 - **Media and education platforms.** Video-heavy products are dominated by delivery cost, which is why they invest in bitrate ladders, codecs and CDN negotiations long before optimising servers.
-- **Government and infrastructure portals.** Systems like tax, property or tender portals have low average load with sharp deadline peaks. The cost-efficient pattern is a committed small baseline, on-demand or serverless peaks, and aggressive caching of public pages.
-- **Construction and survey data platforms.** Drone imagery, site photos and BIM files make storage and retrieval the dominant cost. Lifecycle tiers and "process near the data" designs matter more than compute discounts.
+- **Government and deadline-driven portals.** Systems like tax filing, property tax or exam registration have low average load with sharp deadline peaks. The cost-efficient pattern is a committed small baseline, on-demand or serverless peaks, and aggressive caching of public pages.
+- **Medical-imaging and photo-archive platforms.** X-rays, scans, CCTV footage and user photo libraries make storage and retrieval the dominant cost. Lifecycle tiers and "process near the data" designs matter more than compute discounts.
+- **Cost per order across growth stages.** [Scaling a real system from 100 to 10 million users](#/lesson/m17-scaling-journey) tracks a grocery-delivery app's infrastructure cost per order stage by stage: it rises when redundancy and a CDN arrive before volume catches up, then falls as fixed costs are shared across more orders, which is the fixed-versus-variable pattern from this lesson.
 
 ## Interview questions
 

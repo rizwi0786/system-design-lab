@@ -377,6 +377,8 @@ if (isWeb)
 {
     app.UseRateLimiter();
 
+    // approverId comes from the query string only to keep the sample short. In production take it from the
+    // signed-in user (ClaimsPrincipal), never from the request, or anyone could approve as any manager.
     app.MapPost("/leave/{id:int}/approve", (int id, int approverId, LeaveService leave) =>
     {
         var result = leave.Approve(id, approverId);
@@ -805,7 +807,7 @@ public sealed class Bulkhead
 }
 ```
 
-Rejecting immediately (rather than queueing forever) is deliberate: the caller gets a fast `429` and can retry later, instead of holding a thread and a request open. ASP.NET Core's `AddConcurrencyLimiter` gives you the same behaviour, plus a bounded queue, without writing this class. Write your own only when you need it outside HTTP endpoints, for example around a specific database-heavy call inside a background job.
+Rejecting immediately (rather than queueing forever) is deliberate: the caller gets a fast `429` and can retry later, instead of holding a connection and a request open while the database is already saturated. ASP.NET Core's `AddConcurrencyLimiter` gives you the same behaviour, plus a bounded queue, without writing this class. Write your own only when you need it outside HTTP endpoints, for example around a specific database-heavy call inside a background job.
 ::alternatives
 A bounded queue (allow 2 running and 5 waiting) smooths short bursts. Use `WaitAsync(timeout)` instead of `Wait(0)`. Keep the queue small: a long queue just moves the timeout somewhere else.
 ::mistakes
@@ -955,7 +957,7 @@ With a real database, run PostgreSQL in a container per test run (for example wi
 
 - **Many well-known products began as monoliths.** Public engineering blogs from companies such as Shopify and Basecamp describe large, long-lived monolithic applications, with Shopify writing extensively about modularising its Rails monolith rather than splitting it.
 - **Stack Overflow** has publicly described serving very high traffic from a small number of servers running a largely monolithic .NET application, a frequently cited example that a well-tuned monolith scales a long way.
-- **Government and infrastructure project portals** are commonly single ASP.NET or Java applications with one database. Their main scaling events are predictable deadlines (bill submissions, tender closings), handled with scaled-out instances, read replicas and queues.
+- **Government and university portals** (exam results, college admissions, tax filing) are commonly single ASP.NET or Java applications with one database. Their main scaling events are predictable deadlines (results day, the last day of admissions, the tax-filing due date), handled with scaled-out instances, read replicas, caching and queues.
 - **Internal enterprise tools** (EMS, asset tracking, procurement) are monoliths in most organisations, and should be, given their team sizes and load.
 
 ## Interview questions

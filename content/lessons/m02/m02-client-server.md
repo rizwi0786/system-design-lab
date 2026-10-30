@@ -113,10 +113,10 @@ For non-idempotent operations that clients must retry, the server accepts an **i
 | Client type | Where logic and data live | EMS example | Strengths | Weaknesses |
 |---|---|---|---|---|
 | Thin client | Almost everything on the server. Client renders what the server sends. | Razor Pages HR portal: the server renders HTML, the browser displays it | Easy to update (deploy the server only), works on weak devices, logic cannot be tampered with | Needs the network for everything, each interaction is a round trip |
-| Thick (fat, rich) client | Significant logic and local data on the client | A field-site attendance app that works offline and syncs later, or a Windows payroll admin tool | Works offline, fast local interactions, can use device features | Hard to update (app store, installers), versions in the field vary, logic must still be re-checked on the server |
+| Thick (fat, rich) client | Significant logic and local data on the client | A warehouse attendance app that works offline and syncs later, or a Windows payroll admin tool | Works offline, fast local interactions, can use device features | Hard to update (app store, installers), versions in the field vary, logic must still be re-checked on the server |
 | Hybrid | UI logic on the client, business rules and data on the server | A single-page app (React, Blazor WebAssembly) or a typical mobile app calling a JSON API | Responsive UI, server remains the authority | Two codebases, API versioning, more complex security (tokens, CORS) |
 
-There is no universally best choice. Thin clients suit internal tools on good networks. Thick clients suit offline or device-heavy work (construction sites with poor connectivity, kiosks). Hybrid is the common default for public-facing apps.
+There is no universally best choice. Thin clients suit internal tools on good networks. Thick clients suit offline or device-heavy work (warehouses and rural areas with poor connectivity, kiosks). Hybrid is the common default for public-facing apps.
 
 ### Stateless servers
 
@@ -165,7 +165,7 @@ Even these usually keep a client-server part for login, configuration and coordi
 flowchart LR
     T["Thin client: HR portal (server-rendered pages)"] -->|"HTTPS, HTML"| LB["Load balancer"]
     H["Hybrid client: manager SPA"] -->|"HTTPS, JSON"| LB
-    K["Thick client: site attendance app (offline, syncs)"] -->|"HTTPS, JSON batches"| LB
+    K["Thick client: warehouse attendance app (offline, syncs)"] -->|"HTTPS, JSON batches"| LB
     LB --> S1["EMS API instance 1 (stateless)"]
     LB --> S2["EMS API instance 2 (stateless)"]
     S1 --> DB[("PostgreSQL")]
@@ -174,7 +174,7 @@ flowchart LR
     S2 --> C
 ```
 
-Three kinds of client use the same server. The HR portal is a thin client: the server renders HTML and the browser only displays it. The manager single-page app is a hybrid: it renders screens itself and asks the API for JSON. The attendance app used at construction sites is a thick client: it records punches offline and uploads them in batches when the signal returns. All of them reach the API through a load balancer. Because both API instances are stateless, the load balancer may send any request to either. Anything that must survive between requests lives in PostgreSQL or the shared cache, never in one instance's memory.
+Three kinds of client use the same server. The HR portal is a thin client: the server renders HTML and the browser only displays it. The manager single-page app is a hybrid: it renders screens itself and asks the API for JSON. The attendance app used in the company's warehouses is a thick client: it records punches offline and uploads them in batches when the signal returns. All of them reach the API through a load balancer. Because both API instances are stateless, the load balancer may send any request to either. Anything that must survive between requests lives in PostgreSQL or the shared cache, never in one instance's memory.
 
 ### A request, a lost response and a safe retry
 
@@ -214,7 +214,7 @@ The first version stored "current page" in session memory. With two instances it
 
 ### Step 3 — pick the client type per audience
 
-HR uses the thin Razor Pages portal on office PCs. Managers use the SPA on laptops and phones. Construction-site supervisors with poor connectivity use the thick attendance app, which queues punches locally.
+HR uses the thin Razor Pages portal on office PCs. Managers use the SPA on laptops and phones. Warehouse supervisors, whose phones lose signal inside large metal-roofed sheds, use the thick attendance app, which queues punches locally.
 
 ### Step 4 — make clients resilient
 
@@ -306,6 +306,7 @@ public static class EmployeeEndpoints
             var etag = $"\"v{e.Version}\"";
             response.Headers.ETag = etag;
             response.Headers.CacheControl = "private, max-age=60";
+            // Simplified: a real If-None-Match header may list several tags or use W/ weak tags.
             return request.Headers.IfNoneMatch == etag ? Results.StatusCode(StatusCodes.Status304NotModified) : Results.Ok(e);
         });
 
@@ -404,7 +405,7 @@ app.Run();
 
 **Why protect the token?** A plain base64 token can be edited by the client (for example to change the department filter and read another department's list). Data Protection signs and encrypts it. Authorization must still be checked on every request; the protection just stops tampering with the position.
 
-**Why `IHttpClientFactory`?** Creating a new `HttpClient` per call can exhaust sockets, while one static client never picks up DNS changes. The factory pools handlers and is the recommended approach. For retries in production, add `Microsoft.Extensions.Http.Resilience` (`AddStandardResilienceHandler()`), which applies timeouts, retries with backoff and a circuit breaker. Exercise 3 builds a small retry by hand so you see what it does.
+**Why `IHttpClientFactory`?** Creating a new `HttpClient` per call can exhaust sockets, while one long-lived static client keeps old connections and misses DNS changes unless you set `SocketsHttpHandler.PooledConnectionLifetime`. The factory pools handlers and is the recommended approach. For retries in production, add `Microsoft.Extensions.Http.Resilience` (`AddStandardResilienceHandler()`), which applies timeouts, retries with backoff and a circuit breaker. Exercise 3 builds a small retry by hand so you see what it does.
 
 ## Bad design vs good design
 
@@ -683,7 +684,7 @@ Add the department filter to the token, and sign the token with an HMAC so tampe
 Choose a client type for each EMS scenario and justify it in two or three sentences.
 
 1. HR staff in the Gurgaon head office maintaining employee records on desktop PCs.
-2. Supervisors at a highway construction site in a hilly area with patchy mobile signal, recording daily attendance for 200 workers.
+2. Supervisors at a tea estate in a hilly area with patchy mobile signal, recording daily attendance for 200 pickers.
 3. Managers approving leave from their phones while travelling.
 4. A factory gate kiosk where workers tap an ID card to check their leave balance.
 ::acceptance
@@ -908,15 +909,15 @@ For POST, retry only with an `Idempotency-Key` header that the server honours. T
 - Retrying without any delay, which turns a short outage into a self-inflicted overload.
 :::
 
-:::exercise id=m02-client-server-ex4 difficulty=intermediate kind=hld title="Client-server layout for EMS with an offline site app"
-Draw the client-server layout for EMS with three clients: the HR web portal (thin), the manager app (hybrid) and the construction-site attendance app (thick, offline-capable). The API must be stateless and run on at least two instances. Uploads from the site app arrive in bursts when signal returns, about 200 workers × 2 punches × 40 sites ≈ 16,000 punches per day, often in the evening.
+:::exercise id=m02-client-server-ex4 difficulty=intermediate kind=hld title="Client-server layout for EMS with an offline warehouse app"
+Draw the client-server layout for EMS with three clients: the HR web portal (thin), the manager app (hybrid) and the warehouse attendance app (thick, offline-capable). The API must be stateless and run on at least two instances. Uploads from the warehouse app arrive in bursts when signal returns, about 200 staff × 2 punches × 40 warehouses ≈ 16,000 punches per day, often in the evening.
 ::acceptance
 - All three clients reach the API through a load balancer.
 - The API tier is stateless: sessions or drafts live in a shared store.
-- Site app uploads are idempotent and handled so that bursts do not slow the HR portal.
+- Warehouse app uploads are idempotent and handled so that bursts do not slow the HR portal.
 - A short explanation of where state lives for each client.
 ::hint
-What should happen to a batch of 400 punches that arrives at 7 pm from one site?
+What should happen to a batch of 400 punches that arrives at 7 pm from one warehouse?
 ::hint
 Can the API accept the batch quickly and process it in the background?
 ::hint
@@ -927,14 +928,14 @@ Where does a half-finished onboarding form live if any instance may handle the n
   "nodes": [
     { "id": "hr", "type": "client", "label": "HR portal (thin)", "props": { "rps": 20 } },
     { "id": "mgr", "type": "client", "label": "Manager app (hybrid)", "props": { "rps": 30 } },
-    { "id": "site", "type": "client", "label": "Site attendance app (thick)", "props": { "rps": 5 } },
+    { "id": "wh", "type": "client", "label": "Warehouse attendance app (thick)", "props": { "rps": 5 } },
     { "id": "api", "type": "app-server", "label": "EMS API", "props": { "instances": 1 } },
     { "id": "db", "type": "database", "label": "PostgreSQL" }
   ],
   "edges": [
     { "from": "hr", "to": "api", "kind": "sync" },
     { "from": "mgr", "to": "api", "kind": "sync" },
-    { "from": "site", "to": "api", "kind": "sync" },
+    { "from": "wh", "to": "api", "kind": "sync" },
     { "from": "api", "to": "db", "kind": "sync" }
   ]
 }
@@ -945,7 +946,7 @@ Where does a half-finished onboarding form live if any instance may handle the n
   "nodes": [
     { "id": "hr", "type": "client", "label": "HR portal (thin)", "props": { "rps": 20 } },
     { "id": "mgr", "type": "client", "label": "Manager app (hybrid)", "props": { "rps": 30 } },
-    { "id": "site", "type": "client", "label": "Site attendance app (thick, local queue)", "props": { "rps": 5 } },
+    { "id": "wh", "type": "client", "label": "Warehouse attendance app (thick, local queue)", "props": { "rps": 5 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
     { "id": "api", "type": "app-server", "label": "EMS API (stateless)", "props": { "instances": 2 } },
     { "id": "cache", "type": "cache", "label": "Shared cache: sessions, form drafts", "props": { "ttlSeconds": 1800 } },
@@ -956,7 +957,7 @@ Where does a half-finished onboarding form live if any instance may handle the n
   "edges": [
     { "from": "hr", "to": "lb", "kind": "sync" },
     { "from": "mgr", "to": "lb", "kind": "sync" },
-    { "from": "site", "to": "lb", "kind": "sync", "label": "batch upload with idempotency key" },
+    { "from": "wh", "to": "lb", "kind": "sync", "label": "batch upload with idempotency key" },
     { "from": "lb", "to": "api", "kind": "sync" },
     { "from": "api", "to": "cache", "kind": "sync" },
     { "from": "api", "to": "db", "kind": "sync" },
@@ -967,12 +968,12 @@ Where does a half-finished onboarding form live if any instance may handle the n
 }
 ```
 
-**Where state lives.** HR portal: an authentication cookie, with server-side session data (if any) in the shared cache. Manager app: a bearer token on the device, everything else in PostgreSQL. Site app: punches in a local database on the phone until uploaded. Each batch carries an idempotency key (site id + device id + batch number), so a retry after a lost response is ignored instead of double-counted.
+**Where state lives.** HR portal: an authentication cookie, with server-side session data (if any) in the shared cache. Manager app: a bearer token on the device, everything else in PostgreSQL. Warehouse app: punches in a local database on the phone until uploaded. Each batch carries an idempotency key (warehouse id + device id + batch number), so a retry after a lost response is ignored instead of double-counted.
 
 **Bursts.** 16,000 punches a day is small, but they arrive in bursts. The API validates the batch shape, stores it in a queue and returns `202 Accepted` in milliseconds. The importer processes batches at its own pace, so the HR portal is unaffected. For this volume, a PostgreSQL table used as a queue is enough; a separate broker is optional.
 ::mistakes
 - Keeping wizard drafts in API instance memory, which breaks with two instances.
-- Processing large batches synchronously in the request, so the site app times out and retries, duplicating work.
+- Processing large batches synchronously in the request, so the warehouse app times out and retries, duplicating work.
 :::
 
 :::exercise id=m02-client-server-ex5 difficulty=advanced kind=written title="Remove server state from onboarding and add live notifications"
@@ -1059,7 +1060,7 @@ public async Task Tampered_token_is_rejected()
 - **The web itself** is client-server: browsers are clients, web servers respond. HTTP was designed around stateless request/response, which is why the web scales the way it does.
 - **Banking and UPI apps** are hybrid clients. The app handles screens and local checks, while every transaction is authorised and recorded on the bank's servers. Idempotency is central: a retried payment request must not debit twice.
 - **Email** uses client-server protocols (IMAP, SMTP), and mail apps are classic thick clients that cache mail offline.
-- **Field and construction apps** used on infrastructure projects (progress photos, measurements, attendance) are often offline-first thick clients that sync with a central server when connectivity returns.
+- **Field-service and delivery apps** (technician job cards, proof-of-delivery photos, attendance) are often offline-first thick clients that sync with a central server when connectivity returns.
 - **Database access** is client-server too: your ASP.NET Core app is a client of PostgreSQL, speaking its wire protocol over a pooled connection.
 
 ## Interview questions
@@ -1141,7 +1142,7 @@ A manager's app times out while submitting a leave request (POST). What should i
 - [ ] Switch to GET.
 > The first attempt may have succeeded with the response lost. An idempotency key lets the server detect the duplicate.
 ::q single
-Construction-site supervisors have patchy signal for hours. Which client type fits best?
+Warehouse supervisors have patchy signal for hours. Which client type fits best?
 - [ ] Thin client.
 - [x] Thick client with a local store and later synchronization.
 - [ ] A server-rendered page that polls every second.

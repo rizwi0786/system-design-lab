@@ -22,7 +22,7 @@ references:
     url: https://martinfowler.com/articles/injection.html
 ---
 
-Both dependency injection and service locator answer the same question: "how does this class get the objects it needs?" They give opposite answers. One makes the needs visible and checks them before the app serves its first request. The other hides them until a particular line of code runs, which may be at 2 a.m. on a Sunday. This lesson shows the difference with a highway toll system, then covers the handful of places where the "bad" option is actually correct.
+Both dependency injection and service locator answer the same question: "how does this class get the objects it needs?" They give opposite answers. One makes the needs visible and checks them before the app serves its first request. The other hides them until a particular line of code runs, which may be at 2 a.m. on a Sunday. This lesson shows the difference with a hotel booking service, then covers the handful of places where the "bad" option is actually correct.
 
 ## Learning objectives
 
@@ -61,21 +61,21 @@ Both cooks use the same store room. The difference is **who asks, and when**. Wi
 **Dependency injection** means a class declares what it needs, usually as constructor parameters, and receives those objects from outside. The class doesn't know or care who built them.
 
 ```csharp
-public sealed class TollChargeService(ITariffProvider tariffs, ITagWallet wallet, TimeProvider clock)
+public sealed class BookingService(IRoomRateProvider rates, IGuestWallet wallet, TimeProvider clock)
 {
-    // tariffs, wallet and clock are simply there
+    // rates, wallet and clock are simply there
 }
 ```
 
 **Service locator** means a class is given (or reaches for) a general-purpose registry, and asks it for specific services while it runs.
 
 ```csharp
-public sealed class TollChargeService(IServiceProvider services)
+public sealed class LocatorBookingService(IServiceProvider services)
 {
-    public async Task ChargeAsync(TollPassage p)
+    public async Task BookAsync(BookingRequest p)
     {
-        var tariffs = services.GetRequiredService<ITariffProvider>();
-        var wallet  = services.GetRequiredService<ITagWallet>();
+        var rates = services.GetRequiredService<IRoomRateProvider>();
+        var wallet  = services.GetRequiredService<IGuestWallet>();
         // ...and maybe, 80 lines later, something else
     }
 }
@@ -95,7 +95,7 @@ All three share one property. The real dependencies are not in the constructor s
 
 **1. Hidden dependencies.** The constructor is a class's public statement of what it needs. With a locator, the statement is "I need everything". To learn the real list, you read every method body. In a 600-line class, people miss one. Code review gets harder too: a new `GetService<ISmsGateway>()` on line 412 adds a dependency without changing a single signature.
 
-**2. Failures move from startup to runtime.** The .NET container can check, when the app starts, that every registered service's constructor parameters can be satisfied (`ValidateOnBuild`). It can only check what it can see. If the dependency is fetched inside a method, the check passes, and the app crashes the first time that method runs. If that method only runs for heavy construction vehicles at one toll plaza, it could take weeks.
+**2. Failures move from startup to runtime.** The .NET container can check, when the app starts, that every registered service's constructor parameters can be satisfied (`ValidateOnBuild`). It can only check what it can see. If the dependency is fetched inside a method, the check passes, and the app crashes the first time that method runs. If that method only runs when someone books a suite, it could take weeks.
 
 **3. Tests become guesswork.** To test a DI class, you pass fakes into the constructor. The compiler tells you exactly what's required. To test a locator class, you build a container (or a fake `IServiceProvider`) and register whatever you *think* the method will ask for. Forget one and you get `InvalidOperationException: No service for type ...` from inside the method under test. Add a new lookup in production code and unrelated tests start failing.
 
@@ -113,11 +113,16 @@ Constructor injection works because of three simple facts:
 
 ### How the .NET container resolves things internally
 
-When you call `builder.Build()`, the default container (`Microsoft.Extensions.DependencyInjection`) creates a `ServiceProvider`. On the first request for a type, it builds a *call site*: a recipe that says "to make `TollChargeService`, first make `ITariffProvider` (singleton, cached), then a scoped `IPassageHistory` (one per scope), then …". It caches and compiles that recipe, so later resolutions are fast.
+When you call `builder.Build()`, the default container (`Microsoft.Extensions.DependencyInjection`) creates a `ServiceProvider`. On the first request for a type, it builds a *call site*: a recipe that says "to make `BookingService`, first make `IRoomRateProvider` (singleton, cached), then a scoped `IBookingHistory` (one per scope), then …". It caches and compiles that recipe, so later resolutions are fast.
 
-With `ValidateOnBuild = true`, it builds the call sites for every registration up front, without creating any objects. A missing registration or a singleton-depends-on-scoped mistake throws an `AggregateException` from `Build()`. With `ValidateScopes = true`, it also refuses to resolve scoped services from the root provider at runtime. In the `Development` environment, ASP.NET Core turns both on by default. Many teams turn them on in every environment, because the startup cost is small (an estimate: tens of milliseconds for a few hundred registrations) and the payoff is large.
+With `ValidateOnBuild = true`, it builds the call sites for every registration up front, without creating any objects. A missing constructor dependency throws an `AggregateException` from `Build()`. With `ValidateScopes = true` as well, a singleton that depends (directly or indirectly) on a scoped service is also reported at `Build()`, and at runtime the provider refuses to resolve scoped services from the root provider. In the `Development` environment, ASP.NET Core turns both on by default; in other environments they are **off** unless you turn them on. Many teams turn them on in every environment, because the startup cost is small (an estimate: tens of milliseconds for a few hundred registrations) and the payoff is large.
 
-None of this can see inside method bodies. That is the whole argument in one sentence.
+Two blind spots to know about:
+
+- **Method bodies.** A `GetService` call inside a method is invisible to validation. That is the whole argument of this lesson in one sentence.
+- **Factory lambdas.** For `AddScoped<IFoo>(sp => new Foo(sp.GetRequiredService<IBar>()))`, the container only knows "call this lambda". It can't see that the lambda needs `IBar`, so a missing `IBar` is reported only when `IFoo` is first resolved. Prefer plain type registrations, or `ActivatorUtilities.CreateInstance<Foo>(sp, "extra arg")` inside the lambda when you must pass a value the container doesn't have; and cover factories with a wiring test (see Automated testing).
+
+Keyed services (.NET 8+) follow the same rules: `AddKeyedScoped<IFoo, Foo>("x")` plus a constructor parameter `[FromKeyedServices("x")] IFoo foo` is visible to validation; `sp.GetRequiredKeyedService<IFoo>(key)` in a method body is not.
 
 ### When resolving from the container is legitimate
 
@@ -137,7 +142,7 @@ What these have in common: they resolve **one root object** per unit of work (a 
 
 DI is a tool, not a religion. You don't need a container for:
 
-- Value objects and records (`Money`, `TollPassage`). Create them with `new`.
+- Value objects and records (`Money`, `BookingRequest`). Create them with `new`.
 - Pure helpers with no dependencies (`Math.Round`, a static `GstRounding.ToPaise` function).
 - Tiny console tools or scripts with three classes. Wiring by hand with `new` in `Main` is still dependency injection: "pure DI", without a container.
 
@@ -149,42 +154,42 @@ The goal is visible, swappable dependencies at the boundaries where things vary 
 
 ```mermaid
 classDiagram
-    class LocatorTollService {
+    class LocatorBookingService {
         -IServiceProvider services
-        +ChargeAsync(TollPassage p) TollReceipt
+        +BookAsync(BookingRequest p) BookingReceipt
     }
-    class TollChargeService {
-        -ITariffProvider tariffs
-        -ITagWallet wallet
-        -IPassageHistory history
-        -ITollNotifier notifier
+    class BookingService {
+        -IRoomRateProvider rates
+        -IGuestWallet wallet
+        -IBookingHistory history
+        -IGuestNotifier notifier
         -TimeProvider clock
-        +ChargeAsync(TollPassage p) TollReceipt
+        +BookAsync(BookingRequest p) BookingReceipt
     }
     class IServiceProvider {
         <<interface>>
         +GetService(Type t) object
     }
-    class ITariffProvider {
+    class IRoomRateProvider {
         <<interface>>
     }
-    class ITagWallet {
+    class IGuestWallet {
         <<interface>>
     }
-    class IPassageHistory {
+    class IBookingHistory {
         <<interface>>
     }
-    class ITollNotifier {
+    class IGuestNotifier {
         <<interface>>
     }
-    LocatorTollService --> IServiceProvider : asks at runtime
-    TollChargeService --> ITariffProvider
-    TollChargeService --> ITagWallet
-    TollChargeService --> IPassageHistory
-    TollChargeService --> ITollNotifier
+    LocatorBookingService --> IServiceProvider : asks at runtime
+    BookingService --> IRoomRateProvider
+    BookingService --> IGuestWallet
+    BookingService --> IBookingHistory
+    BookingService --> IGuestNotifier
 ```
 
-How to read it: on the left, `LocatorTollService` has exactly one visible arrow, to `IServiceProvider`. Its real dependencies exist, but the diagram (and the compiler, and the container's validator) can't see them. On the right, `TollChargeService` has an arrow for every dependency. The diagram is longer, but it's *true*. If you generated this diagram from code with a tool, the locator version would silently lie.
+How to read it: on the left, `LocatorBookingService` has exactly one visible arrow, to `IServiceProvider`. Its real dependencies exist, but the diagram (and the compiler, and the container's validator) can't see them. On the right, `BookingService` has an arrow for every dependency. The diagram is longer, but it's *true*. If you generated this diagram from code with a tool, the locator version would silently lie.
 
 ### Sequence diagram: where the failure shows up
 
@@ -192,49 +197,49 @@ How to read it: on the left, `LocatorTollService` has exactly one visible arrow,
 sequenceDiagram
     participant Host as App startup
     participant C as DI container
-    participant R as Request at 21:40
-    participant L as LocatorTollService
-    participant D as TollChargeService
+    participant R as Suite booking at 21:40
+    participant L as LocatorBookingService
+    participant D as BookingService
     Host->>C: Build() with ValidateOnBuild
-    C->>C: check TollChargeService ctor params
-    C-->>Host: AggregateException: ITollNotifier not registered
+    C->>C: check BookingService ctor params
+    C-->>Host: AggregateException: IGuestNotifier not registered
     Note over Host,C: DI version - deploy fails, nobody is affected
     Host->>C: Build() (locator version)
     C-->>Host: OK, IServiceProvider is always available
-    R->>L: ChargeAsync(passage)
-    L->>C: GetRequiredService ITollNotifier
+    R->>L: BookAsync(request)
+    L->>C: GetRequiredService IGuestNotifier
     C-->>L: InvalidOperationException
-    L-->>R: 500 error, truck waits at barrier
+    L-->>R: 500 error after the wallet was debited
 ```
 
-The top half is the DI version. The container checks the constructor at startup, finds the missing `ITollNotifier`, and the deployment fails in the pipeline. The bottom half is the locator version. Startup succeeds because the only declared dependency is `IServiceProvider`, which always exists. The bug waits until a real passage arrives. Same bug, very different cost.
+The top half is the DI version. The container checks the constructor at startup, finds the missing `IGuestNotifier`, and the deployment fails in the pipeline. The bottom half is the locator version. Startup succeeds because the only declared dependency is `IServiceProvider`, which always exists. The bug waits until a real guest books a suite. Same bug, very different cost.
 
 ## Step-by-step example
 
-We'll refactor a toll-plaza charging service, like the ones that debit an RFID tag wallet (FASTag in India) when a vehicle crosses the barrier. The example rules are simplified: a fare per vehicle class per plaza, and a return journey within 24 hours costs half the single fare.
+We'll refactor the booking service of a small hotel chain's app, the kind where a guest picks a hotel, a room type and a number of nights, and pays from a prepaid wallet in the app (topped up by UPI or card). The example rules are simplified: a nightly rate per room type per hotel, and a **repeat-guest discount** of 10 % when the same guest booked the same hotel within the last 30 days. The discount is granted once: a booking that itself got the discount doesn't make the next one discounted.
 
 ### Step 1 — the locator version
 
 ```csharp
-public sealed class TollService
+public sealed class LegacyBookingService
 {
-    public async Task<TollReceipt> ChargeAsync(TollPassage p)
+    public async Task<BookingReceipt> BookAsync(BookingRequest r)
     {
-        var tariffs = ServiceLocator.Current.Get<ITariffProvider>();
-        var fare = tariffs.GetSingleJourneyFare(p.PlazaCode, p.VehicleClass);
+        var rates = ServiceLocator.Current.Get<IRoomRateProvider>();
+        var price = rates.GetNightlyRate(r.HotelCode, r.RoomType) * r.Nights;
 
-        var history = ServiceLocator.Current.Get<IPassageHistory>();
-        var earlier = await history.FindChargeWithinAsync(p.TagId, p.PlazaCode, DateTimeOffset.UtcNow.AddHours(-24), default);
-        var amount = earlier is { ReturnJourney: false } ? fare / 2 : fare;
+        var history = ServiceLocator.Current.Get<IBookingHistory>();
+        var earlier = await history.FindLatestBookingSinceAsync(r.GuestId, r.HotelCode, DateTimeOffset.UtcNow.AddDays(-30), default);
+        var amount = earlier is { RepeatGuest: false } ? price * 0.9m : price;
 
-        var wallet = ServiceLocator.Current.Get<ITagWallet>();
-        if (!await wallet.TryDebitAsync(p.TagId, amount, p.PassageId, default)) throw new InsufficientBalanceException(p.TagId, amount);
+        var wallet = ServiceLocator.Current.Get<IGuestWallet>();
+        if (!await wallet.TryDebitAsync(r.GuestId, amount, r.BookingId, default)) throw new InsufficientBalanceException(r.GuestId, amount);
 
-        var receipt = new TollReceipt(p.PassageId, p.TagId, amount, earlier is not null, DateTimeOffset.UtcNow);
+        var receipt = new BookingReceipt(r.BookingId, r.GuestId, r.HotelCode, amount, earlier is not null, DateTimeOffset.UtcNow);
         await history.SaveAsync(receipt, default);
 
-        if (p.VehicleClass == VehicleClass.HeavyConstruction)          // only for one vehicle class!
-            await ServiceLocator.Current.Get<ITollNotifier>().NotifyChargedAsync(receipt, default);
+        if (r.RoomType == RoomType.Suite)                                // only for suites!
+            await ServiceLocator.Current.Get<IGuestNotifier>().NotifyConfirmedAsync(receipt, default);
         return receipt;
     }
 }
@@ -242,21 +247,23 @@ public sealed class TollService
 
 Count the problems:
 
-- Four hidden dependencies, one of which is only touched for heavy construction vehicles. If `ITollNotifier` is never registered, the bug appears only when the first excavator on a lowboy trailer crosses the plaza.
-- `DateTimeOffset.UtcNow` is a fifth hidden dependency: the clock. You can't test the 24-hour rule without waiting 24 hours.
-- `IPassageHistory` wraps a database context, so it should be scoped. A static locator has no idea which request it's in, so it either returns a shared instance (lifetime bug) or needs a hack such as thread-static storage.
+- Four hidden dependencies, one of which is only touched for suite bookings. If `IGuestNotifier` is never registered, the bug appears only when the first guest books a suite, which at a 40-room hotel with two suites might be weeks after the release.
+- Worse, that failure happens **after the wallet was debited and the booking saved**. The guest paid, then saw "Something went wrong". Many will tap "Book" again.
+- `DateTimeOffset.UtcNow` is a fifth hidden dependency: the clock. You can't test the 30-day rule without waiting 30 days.
+- `IBookingHistory` wraps a database context, so it should be scoped. A static locator has no idea which request it's in, so it either returns a shared instance (lifetime bug) or needs a hack such as thread-static storage.
 - There's no `CancellationToken`. If the client disconnects, the work carries on.
+- A small extra bug: `earlier is not null` marks the receipt as discounted even when the discount wasn't applied.
 
 ### Step 2 — list the real dependencies
 
-Read the method and write down everything it fetches: tariffs, history, wallet, notifier, clock. That list becomes the constructor. This step is mechanical, and that's good: refactoring should be boring.
+Read the method and write down everything it fetches: rates, history, wallet, notifier, clock. That list becomes the constructor. This step is mechanical, and that's good: refactoring should be boring.
 
 ### Step 3 — move them into the constructor
 
 ```csharp
-public sealed class TollChargeService(
-    ITariffProvider tariffs, ITagWallet wallet, IPassageHistory history,
-    ITollNotifier notifier, TimeProvider clock, ILogger<TollChargeService> logger)
+public sealed class BookingService(
+    IRoomRateProvider rates, IGuestWallet wallet, IBookingHistory history,
+    IGuestNotifier notifier, TimeProvider clock, ILogger<BookingService> logger)
 ```
 
 Each `ServiceLocator.Current.Get<T>()` call becomes a field read. `DateTimeOffset.UtcNow` becomes `clock.GetUtcNow()`. Add a `CancellationToken` parameter while you're there.
@@ -278,145 +285,146 @@ Once nothing calls `ServiceLocator.Current`, delete the class. If it stays aroun
 Project structure:
 
 ```text
-Tolling.Api/
+Hotels.Api/
   Program.cs
-  Tolling/
-    TollModels.cs          records, enum, exception
-    TollPorts.cs           interfaces the service depends on
-    TollChargeService.cs   the business logic, constructor-injected
+  Booking/
+    BookingModels.cs       records, enum, exception
+    BookingPorts.cs        interfaces the service depends on
+    BookingService.cs      the business logic, constructor-injected
     InMemoryAdapters.cs    simple implementations for the demo
-    PassageQueue.cs        in-process queue + BackgroundService worker
+    BookingQueue.cs        in-process queue + BackgroundService worker
 ```
 
-```csharp file=Tolling/TollModels.cs
-namespace Tolling;
+```csharp file=Booking/BookingModels.cs
+namespace Hotels.Booking;
 
-public enum VehicleClass { Car, LightCommercial, BusOrTruck, HeavyConstruction }
+public enum RoomType { Standard, Deluxe, Family, Suite }
 
-public sealed record TollPassage(Guid PassageId, string TagId, string PlazaCode, VehicleClass VehicleClass);
+public sealed record BookingRequest(Guid BookingId, string GuestId, string HotelCode, RoomType RoomType, int Nights);
 
-public sealed record TollReceipt(Guid PassageId, string TagId, string PlazaCode, decimal Amount, bool ReturnJourney, DateTimeOffset ChargedAt);
+public sealed record BookingReceipt(Guid BookingId, string GuestId, string HotelCode, decimal Amount, bool RepeatGuest, DateTimeOffset BookedAt);
 
-public sealed class InsufficientBalanceException(string tagId, decimal needed)
-    : Exception($"Tag {tagId} has insufficient balance for {needed:0.00}.")
+public sealed class InsufficientBalanceException(string guestId, decimal needed)
+    : Exception($"Wallet of guest {guestId} has insufficient balance for {needed:0.00}.")
 {
-    public string TagId { get; } = tagId;
+    public string GuestId { get; } = guestId;
     public decimal Needed { get; } = needed;
 }
 ```
 
-```csharp file=Tolling/TollPorts.cs
-namespace Tolling;
+```csharp file=Booking/BookingPorts.cs
+namespace Hotels.Booking;
 
-/// <summary>Fare table. Singleton: read-mostly reference data.</summary>
-public interface ITariffProvider
+/// <summary>Rate card. Singleton: read-mostly reference data.</summary>
+public interface IRoomRateProvider
 {
-    decimal GetSingleJourneyFare(string plazaCode, VehicleClass vehicleClass);
+    decimal GetNightlyRate(string hotelCode, RoomType roomType);
 }
 
-/// <summary>Tag wallet (an external bank/issuer system in real life).</summary>
-public interface ITagWallet
+/// <summary>Prepaid guest wallet (a payments provider in real life).</summary>
+public interface IGuestWallet
 {
     /// <summary>Debits once per idempotency key; a retry with the same key returns the original outcome.</summary>
-    Task<bool> TryDebitAsync(string tagId, decimal amount, Guid idempotencyKey, CancellationToken ct);
+    Task<bool> TryDebitAsync(string guestId, decimal amount, Guid idempotencyKey, CancellationToken ct);
 }
 
-/// <summary>Persistence for charges. Scoped, like a DbContext-backed repository.</summary>
-public interface IPassageHistory
+/// <summary>Persistence for bookings. Scoped, like a DbContext-backed repository.</summary>
+public interface IBookingHistory
 {
-    Task<TollReceipt?> FindLatestChargeSinceAsync(string tagId, string plazaCode, DateTimeOffset since, CancellationToken ct);
-    Task SaveAsync(TollReceipt receipt, CancellationToken ct);
+    Task<BookingReceipt?> FindLatestBookingSinceAsync(string guestId, string hotelCode, DateTimeOffset since, CancellationToken ct);
+    Task SaveAsync(BookingReceipt receipt, CancellationToken ct);
 }
 
-public interface ITollNotifier
+public interface IGuestNotifier
 {
-    Task NotifyChargedAsync(TollReceipt receipt, CancellationToken ct);
+    Task NotifyConfirmedAsync(BookingReceipt receipt, CancellationToken ct);
 }
 ```
 
-```csharp file=Tolling/TollChargeService.cs
+```csharp file=Booking/BookingService.cs
 using Microsoft.Extensions.Logging;
 
-namespace Tolling;
+namespace Hotels.Booking;
 
 /// <summary>Every dependency is in the constructor, so the container validates the graph at startup
 /// and tests pass fakes with plain `new`.</summary>
-public sealed class TollChargeService(
-    ITariffProvider tariffs,
-    ITagWallet wallet,
-    IPassageHistory history,
-    ITollNotifier notifier,
+public sealed class BookingService(
+    IRoomRateProvider rates,
+    IGuestWallet wallet,
+    IBookingHistory history,
+    IGuestNotifier notifier,
     TimeProvider clock,
-    ILogger<TollChargeService> logger)
+    ILogger<BookingService> logger)
 {
-    public static readonly TimeSpan ReturnWindow = TimeSpan.FromHours(24);
-    private const decimal ReturnFactor = 0.5m;   // example rule: return leg costs half
+    public static readonly TimeSpan RepeatGuestWindow = TimeSpan.FromDays(30);
+    private const decimal RepeatGuestFactor = 0.9m;   // example rule: 10 % off for a repeat guest
 
-    public async Task<TollReceipt> ChargeAsync(TollPassage passage, CancellationToken ct)
+    public async Task<BookingReceipt> BookAsync(BookingRequest request, CancellationToken ct)
     {
-        ArgumentNullException.ThrowIfNull(passage);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentOutOfRangeException.ThrowIfLessThan(request.Nights, 1);
 
         var now = clock.GetUtcNow();
-        var fare = tariffs.GetSingleJourneyFare(passage.PlazaCode, passage.VehicleClass);
-        var earlier = await history.FindLatestChargeSinceAsync(passage.TagId, passage.PlazaCode, now - ReturnWindow, ct);
+        var price = rates.GetNightlyRate(request.HotelCode, request.RoomType) * request.Nights;
+        var earlier = await history.FindLatestBookingSinceAsync(request.GuestId, request.HotelCode, now - RepeatGuestWindow, ct);
 
-        // A return leg is only granted once: a charge that was itself a return doesn't make the next one a return.
-        var isReturn = earlier is { ReturnJourney: false };
-        var amount = isReturn ? Math.Round(fare * ReturnFactor, 2, MidpointRounding.AwayFromZero) : fare;
+        // The discount is granted once: a booking that was itself discounted doesn't make the next one discounted.
+        var isRepeat = earlier is { RepeatGuest: false };
+        var amount = isRepeat ? Math.Round(price * RepeatGuestFactor, 2, MidpointRounding.AwayFromZero) : price;
 
-        if (!await wallet.TryDebitAsync(passage.TagId, amount, passage.PassageId, ct))
-            throw new InsufficientBalanceException(passage.TagId, amount);
+        if (!await wallet.TryDebitAsync(request.GuestId, amount, request.BookingId, ct))
+            throw new InsufficientBalanceException(request.GuestId, amount);
 
-        var receipt = new TollReceipt(passage.PassageId, passage.TagId, passage.PlazaCode, amount, isReturn, now);
+        var receipt = new BookingReceipt(request.BookingId, request.GuestId, request.HotelCode, amount, isRepeat, now);
         await history.SaveAsync(receipt, ct);
 
         try
         {
-            await notifier.NotifyChargedAsync(receipt, ct);
+            await notifier.NotifyConfirmedAsync(receipt, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // The money has moved; a failed SMS must not turn into a failed toll.
-            logger.LogWarning(ex, "Charge notification failed for passage {PassageId}", passage.PassageId);
+            // The money has moved and the room is booked; a failed WhatsApp message must not turn into a failed booking.
+            logger.LogWarning(ex, "Confirmation message failed for booking {BookingId}", request.BookingId);
         }
 
-        logger.LogInformation("Charged {Amount} to tag {TagId} at {Plaza} (return: {Return})",
-            amount, passage.TagId, passage.PlazaCode, isReturn);
+        logger.LogInformation("Booked {HotelCode} for guest {GuestId}: {Amount} (repeat guest: {Repeat})",
+            request.HotelCode, request.GuestId, amount, isRepeat);
         return receipt;
     }
 }
 ```
 
-```csharp file=Tolling/InMemoryAdapters.cs
+```csharp file=Booking/InMemoryAdapters.cs
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 
-namespace Tolling;
+namespace Hotels.Booking;
 
-public sealed class InMemoryTariffProvider(IReadOnlyDictionary<(string Plaza, VehicleClass Class), decimal> fares) : ITariffProvider
+public sealed class InMemoryRoomRateProvider(IReadOnlyDictionary<(string Hotel, RoomType Room), decimal> nightlyRates) : IRoomRateProvider
 {
-    public decimal GetSingleJourneyFare(string plazaCode, VehicleClass vehicleClass) =>
-        fares.TryGetValue((plazaCode, vehicleClass), out var fare)
-            ? fare
-            : throw new KeyNotFoundException($"No fare for {vehicleClass} at plaza {plazaCode}.");
+    public decimal GetNightlyRate(string hotelCode, RoomType roomType) =>
+        nightlyRates.TryGetValue((hotelCode, roomType), out var rate)
+            ? rate
+            : throw new KeyNotFoundException($"No rate for {roomType} at hotel {hotelCode}.");
 }
 
-public sealed class InMemoryTagWallet : ITagWallet
+public sealed class InMemoryGuestWallet : IGuestWallet
 {
     private readonly ConcurrentDictionary<string, decimal> _balances = new();
     private readonly ConcurrentDictionary<Guid, bool> _outcomes = new();
     private readonly Lock _gate = new();
 
-    public void TopUp(string tagId, decimal amount) => _balances.AddOrUpdate(tagId, amount, (_, b) => b + amount);
+    public void TopUp(string guestId, decimal amount) => _balances.AddOrUpdate(guestId, amount, (_, b) => b + amount);
 
-    public Task<bool> TryDebitAsync(string tagId, decimal amount, Guid idempotencyKey, CancellationToken ct)
+    public Task<bool> TryDebitAsync(string guestId, decimal amount, Guid idempotencyKey, CancellationToken ct)
     {
         lock (_gate)
         {
             if (_outcomes.TryGetValue(idempotencyKey, out var previous)) return Task.FromResult(previous);
-            var balance = _balances.GetValueOrDefault(tagId);
+            var balance = _balances.GetValueOrDefault(guestId);
             var ok = balance >= amount;
-            if (ok) _balances[tagId] = balance - amount;
+            if (ok) _balances[guestId] = balance - amount;
             _outcomes[idempotencyKey] = ok;
             return Task.FromResult(ok);
         }
@@ -424,73 +432,74 @@ public sealed class InMemoryTagWallet : ITagWallet
 }
 
 /// <summary>Singleton "database". The scoped repository below plays the role of a DbContext over it.</summary>
-public sealed class InMemoryTollStore
+public sealed class InMemoryBookingStore
 {
-    public ConcurrentBag<TollReceipt> Receipts { get; } = [];
+    public ConcurrentBag<BookingReceipt> Receipts { get; } = [];
 }
 
-public sealed class PassageHistory(InMemoryTollStore store) : IPassageHistory
+public sealed class BookingHistory(InMemoryBookingStore store) : IBookingHistory
 {
-    public Task<TollReceipt?> FindLatestChargeSinceAsync(string tagId, string plazaCode, DateTimeOffset since, CancellationToken ct) =>
+    public Task<BookingReceipt?> FindLatestBookingSinceAsync(string guestId, string hotelCode, DateTimeOffset since, CancellationToken ct) =>
         Task.FromResult(store.Receipts
-            .Where(r => r.TagId == tagId && r.PlazaCode == plazaCode && r.ChargedAt >= since)
-            .OrderByDescending(r => r.ChargedAt)
+            .Where(r => r.GuestId == guestId && r.HotelCode == hotelCode && r.BookedAt >= since)
+            .OrderByDescending(r => r.BookedAt)
             .FirstOrDefault());
 
-    public Task SaveAsync(TollReceipt receipt, CancellationToken ct)
+    public Task SaveAsync(BookingReceipt receipt, CancellationToken ct)
     {
         store.Receipts.Add(receipt);
         return Task.CompletedTask;
     }
 }
 
-public sealed class LoggingTollNotifier(ILogger<LoggingTollNotifier> logger) : ITollNotifier
+public sealed class LoggingGuestNotifier(ILogger<LoggingGuestNotifier> logger) : IGuestNotifier
 {
-    public Task NotifyChargedAsync(TollReceipt receipt, CancellationToken ct)
+    public Task NotifyConfirmedAsync(BookingReceipt receipt, CancellationToken ct)
     {
-        logger.LogInformation("SMS to owner of {TagId}: {Amount} debited at {Plaza}", receipt.TagId, receipt.Amount, receipt.PlazaCode);
+        logger.LogInformation("WhatsApp to guest {GuestId}: booking at {HotelCode} confirmed, {Amount} paid",
+            receipt.GuestId, receipt.HotelCode, receipt.Amount);
         return Task.CompletedTask;
     }
 }
 ```
 
-The worker below is the one place in this app (outside `Program.cs`) that resolves from the container. It's a singleton, so it can't take the scoped `TollChargeService` in its constructor. Instead it creates one scope per passage and resolves **one** root object from it. Everything below that object is constructor-injected.
+The worker below is the one place in this app (outside `Program.cs`) that resolves from the container. Bookings also arrive from partner travel sites (online travel agencies) as a feed, and those are processed in the background. The worker is a singleton, so it can't take the scoped `BookingService` in its constructor. Instead it creates one scope per booking and resolves **one** root object from it. Everything below that object is constructor-injected.
 
-```csharp file=Tolling/PassageQueue.cs
+```csharp file=Booking/BookingQueue.cs
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 
-namespace Tolling;
+namespace Hotels.Booking;
 
-public sealed class PassageQueue
+public sealed class BookingQueue
 {
-    private readonly Channel<TollPassage> _channel = Channel.CreateBounded<TollPassage>(
+    private readonly Channel<BookingRequest> _channel = Channel.CreateBounded<BookingRequest>(
         new BoundedChannelOptions(10_000) { FullMode = BoundedChannelFullMode.Wait });
 
-    public ValueTask EnqueueAsync(TollPassage passage, CancellationToken ct) => _channel.Writer.WriteAsync(passage, ct);
-    public IAsyncEnumerable<TollPassage> ReadAllAsync(CancellationToken ct) => _channel.Reader.ReadAllAsync(ct);
+    public ValueTask EnqueueAsync(BookingRequest request, CancellationToken ct) => _channel.Writer.WriteAsync(request, ct);
+    public IAsyncEnumerable<BookingRequest> ReadAllAsync(CancellationToken ct) => _channel.Reader.ReadAllAsync(ct);
 }
 
-public sealed class PassageWorker(PassageQueue queue, IServiceScopeFactory scopes, ILogger<PassageWorker> logger) : BackgroundService
+public sealed class BookingWorker(BookingQueue queue, IServiceScopeFactory scopes, ILogger<BookingWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await foreach (var passage in queue.ReadAllAsync(stoppingToken))
+        await foreach (var request in queue.ReadAllAsync(stoppingToken))
         {
             // Legitimate container use: infrastructure code creating a unit-of-work scope.
             await using var scope = scopes.CreateAsyncScope();
-            var service = scope.ServiceProvider.GetRequiredService<TollChargeService>();
+            var service = scope.ServiceProvider.GetRequiredService<BookingService>();
             try
             {
-                await service.ChargeAsync(passage, stoppingToken);
+                await service.BookAsync(request, stoppingToken);
             }
             catch (InsufficientBalanceException ex)
             {
-                logger.LogWarning("Passage {PassageId} rejected: {Message}", passage.PassageId, ex.Message);
+                logger.LogWarning("Booking {BookingId} rejected: {Message}", request.BookingId, ex.Message);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                logger.LogError(ex, "Passage {PassageId} failed; it should go to a dead-letter store", passage.PassageId);
+                logger.LogError(ex, "Booking {BookingId} failed; it should go to a dead-letter store", request.BookingId);
             }
         }
     }
@@ -498,7 +507,7 @@ public sealed class PassageWorker(PassageQueue queue, IServiceScopeFactory scope
 ```
 
 ```csharp file=Program.cs
-using Tolling;
+using Hotels.Booking;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -510,42 +519,42 @@ builder.Host.UseDefaultServiceProvider(o =>
 });
 
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<ITariffProvider>(new InMemoryTariffProvider(new Dictionary<(string, VehicleClass), decimal>
+builder.Services.AddSingleton<IRoomRateProvider>(new InMemoryRoomRateProvider(new Dictionary<(string, RoomType), decimal>
 {
-    [("NH48-KHERKI", VehicleClass.Car)] = 115m,
-    [("NH48-KHERKI", VehicleClass.LightCommercial)] = 185m,
-    [("NH48-KHERKI", VehicleClass.BusOrTruck)] = 390m,
-    [("NH48-KHERKI", VehicleClass.HeavyConstruction)] = 610m,
+    [("GOA-BAGA-01", RoomType.Standard)] = 4_500m,
+    [("GOA-BAGA-01", RoomType.Deluxe)] = 6_500m,
+    [("GOA-BAGA-01", RoomType.Family)] = 8_000m,
+    [("GOA-BAGA-01", RoomType.Suite)] = 14_000m,
 }));
-builder.Services.AddSingleton<InMemoryTagWallet>();
-builder.Services.AddSingleton<ITagWallet>(sp => sp.GetRequiredService<InMemoryTagWallet>()); // composition root: fine
-builder.Services.AddSingleton<InMemoryTollStore>();
-builder.Services.AddScoped<IPassageHistory, PassageHistory>();
-builder.Services.AddSingleton<ITollNotifier, LoggingTollNotifier>();
-builder.Services.AddScoped<TollChargeService>();
+builder.Services.AddSingleton<InMemoryGuestWallet>();
+builder.Services.AddSingleton<IGuestWallet>(sp => sp.GetRequiredService<InMemoryGuestWallet>()); // composition root: fine
+builder.Services.AddSingleton<InMemoryBookingStore>();
+builder.Services.AddScoped<IBookingHistory, BookingHistory>();
+builder.Services.AddSingleton<IGuestNotifier, LoggingGuestNotifier>();
+builder.Services.AddScoped<BookingService>();
 
-builder.Services.AddSingleton<PassageQueue>();
-builder.Services.AddHostedService<PassageWorker>();
+builder.Services.AddSingleton<BookingQueue>();
+builder.Services.AddHostedService<BookingWorker>();
 
 var app = builder.Build();
 
-// Readers at the plaza post passages; the worker charges them in the background.
-app.MapPost("/passages", async (TollPassage passage, PassageQueue queue, CancellationToken ct) =>
+// Partner travel-site feed posts bookings; the worker processes them in the background.
+app.MapPost("/partner-bookings", async (BookingRequest request, BookingQueue queue, CancellationToken ct) =>
 {
-    await queue.EnqueueAsync(passage, ct);
+    await queue.EnqueueAsync(request, ct);
     return Results.Accepted();
 });
 
-// Synchronous variant: the endpoint parameter is injected per request (injection, not location).
-app.MapPost("/passages/charge", async (TollPassage passage, TollChargeService service, CancellationToken ct) =>
+// The app's own synchronous booking: the endpoint parameter is injected per request (injection, not location).
+app.MapPost("/bookings", async (BookingRequest request, BookingService service, CancellationToken ct) =>
 {
-    try { return Results.Ok(await service.ChargeAsync(passage, ct)); }
+    try { return Results.Ok(await service.BookAsync(request, ct)); }
     catch (InsufficientBalanceException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status402PaymentRequired); }
 });
 
-app.MapPost("/wallets/{tagId}/topup", (string tagId, decimal amount, InMemoryTagWallet wallet) =>
+app.MapPost("/wallets/{guestId}/topup", (string guestId, decimal amount, InMemoryGuestWallet wallet) =>
 {
-    wallet.TopUp(tagId, amount);
+    wallet.TopUp(guestId, amount);
     return Results.NoContent();
 });
 
@@ -554,9 +563,10 @@ app.Run();
 
 Notes on the design choices:
 
-- **`TollChargeService` is scoped** because it depends on the scoped `IPassageHistory`. If you registered it as a singleton, `ValidateOnBuild` would fail with "Cannot consume scoped service ... from singleton ...". That's a bug the locator version would never have reported.
-- **The wallet uses the passage id as an idempotency key.** If the worker crashes after debiting and the passage is retried, the tag isn't charged twice. DI doesn't give you this, but constructor injection makes it easy to test with a fake wallet.
-- **`TimeProvider` is injected**, so tests can control "now" and check the 24-hour rule at 23 h 59 min and at 24 h 1 min.
+- **`BookingService` is scoped** because it depends on the scoped `IBookingHistory`. If you registered it as a singleton, startup validation would fail with "Cannot consume scoped service ... from singleton ...". That's a bug the locator version would never have reported.
+- **The wallet uses the booking id as an idempotency key.** If the worker crashes after debiting and the booking is retried, or the guest double-taps "Book", the wallet isn't charged twice. DI doesn't give you this, but constructor injection makes it easy to test with a fake wallet.
+- **`TimeProvider` is injected**, so tests can control "now" and check the 30-day rule at 29 days 23 hours and at 30 days 1 hour.
+- **Not shown, but needed in production:** checking room availability (and holding the room) in the same transaction as saving the booking, and an outbox for the confirmation message so it is sent even if the process dies right after the save. Those are separate topics; they don't change the DI story.
 
 ## Bad design vs good design
 
@@ -603,7 +613,7 @@ An unknown `format` throws `InvalidOperationException` and becomes a 500, when i
 - `ValidateOnBuild` and `ValidateScopes` are on, plus a wiring test that builds the real `ServiceCollection`.
 
 :::callout type=tradeoff title="Long constructors are a signal, not a reason for a locator"
-If a constructor has 8 or more parameters, the class probably has more than one job. Split it, or group parameters that always travel together into a meaningful object (`TollPricing` holding tariffs and the clock). Don't hide them behind `IServiceProvider` — the class still has 8 dependencies, you just can't see them.
+If a constructor has 8 or more parameters, the class probably has more than one job. Split it, or group parameters that always travel together into a meaningful object (`RoomPricing` holding the rate card, discount rules and the clock). Don't hide them behind `IServiceProvider` — the class still has 8 dependencies, you just can't see them.
 :::
 
 :::callout type=mistake title="Disposing what you resolved"
@@ -636,14 +646,14 @@ public sealed class LocatorInvoiceService(IServiceProvider services)
     {
         var gst = services.GetRequiredService<IGstRateTable>();
         var numbering = services.GetRequiredService<IInvoiceNumbering>(); // hidden dependency
-        return $"{numbering.Next()}: net {net:0.00}, GST {net * gst.RateFor("9954"):0.00}";
+        return $"{numbering.Next()}: net {net:0.00}, GST {net * gst.RateFor("996311"):0.00}";
     }
 }
 
 // Constructor injection: the dependencies are in the signature.
 public sealed class InjectedInvoiceService(IGstRateTable gst, IInvoiceNumbering numbering)
 {
-    public string Create(decimal net) => $"{numbering.Next()}: net {net:0.00}, GST {net * gst.RateFor("9954"):0.00}";
+    public string Create(decimal net) => $"{numbering.Next()}: net {net:0.00}, GST {net * gst.RateFor("996311"):0.00}";
 }
 
 public static class Program
@@ -1096,7 +1106,7 @@ Add a test that loops over every `ServiceDescriptor` in the collection and resol
 :::
 
 :::exercise id=m04-di-vs-service-locator-ex3 difficulty=intermediate kind=code title="A scope per message in a background pump"
-A hosted worker reads site-attendance messages from a queue. It's a singleton, but each message needs a scoped `IJobHandler` (which wraps a database context). Implement `ScopedMessagePump.RunAsync` so each message gets its own DI scope.
+A hotel's hosted worker reads housekeeping messages ("room 214 cleaned", "room 305 needs towels") from a queue. It's a singleton, but each message needs a scoped `IJobHandler` (which wraps a database context). Implement `ScopedMessagePump.RunAsync` so each message gets its own DI scope.
 ::requirements
 - Create a new **async** scope per message and resolve `IJobHandler` from it.
 - If a handler throws, log the error, count it as failed, and carry on with the next message.
@@ -1264,7 +1274,7 @@ public sealed class ScopedMessagePump(IServiceScopeFactory scopes, ILogger<Scope
 }
 ```
 ::alternatives
-In production, prefer `BackgroundService` with a `Channel<T>` (as in the lesson's `PassageWorker`). For high throughput you can process messages in parallel with `Parallel.ForEachAsync`, still with one scope per message. Never share one scope across parallel messages, because scoped services such as `DbContext` aren't thread-safe.
+In production, prefer `BackgroundService` with a `Channel<T>` (as in the lesson's `BookingWorker`). For high throughput you can process messages in parallel with `Parallel.ForEachAsync`, still with one scope per message. Never share one scope across parallel messages, because scoped services such as `DbContext` aren't thread-safe.
 ::mistakes
 - Creating one scope outside the loop. Every message then shares one `DbContext`, which grows its change tracker forever and leaks memory.
 - Resolving `IJobHandler` from the root provider. With `ValidateScopes` that throws; without it, you get a captive scoped service that lives for the app's whole life.
@@ -1520,36 +1530,36 @@ Add an `IReportFormatter.SupportsRowCount(int)` capability so the PDF formatter 
 
 DI makes three kinds of tests cheap.
 
-**1. Unit tests with hand-rolled fakes.** Because `TollChargeService` declares everything it needs, a test just passes fakes. No container, no mocking library:
+**1. Unit tests with hand-rolled fakes.** Because `BookingService` declares everything it needs, a test just passes fakes. No container, no mocking library:
 
 ```csharp
-public class TollChargeServiceTests
+public class BookingServiceTests
 {
     private sealed class FixedClock(DateTimeOffset now) : TimeProvider { public override DateTimeOffset GetUtcNow() => now; }
-    private sealed class OneFare(decimal fare) : ITariffProvider { public decimal GetSingleJourneyFare(string p, VehicleClass c) => fare; }
-    private sealed class RichWallet : ITagWallet { public Task<bool> TryDebitAsync(string t, decimal a, Guid k, CancellationToken ct) => Task.FromResult(true); }
-    private sealed class ListHistory : IPassageHistory
+    private sealed class OneRate(decimal rate) : IRoomRateProvider { public decimal GetNightlyRate(string h, RoomType r) => rate; }
+    private sealed class RichWallet : IGuestWallet { public Task<bool> TryDebitAsync(string g, decimal a, Guid k, CancellationToken ct) => Task.FromResult(true); }
+    private sealed class ListHistory : IBookingHistory
     {
-        public List<TollReceipt> Saved { get; } = new();
-        public Task<TollReceipt?> FindLatestChargeSinceAsync(string tag, string plaza, DateTimeOffset since, CancellationToken ct) =>
-            Task.FromResult(Saved.Where(r => r.TagId == tag && r.ChargedAt >= since).OrderByDescending(r => r.ChargedAt).FirstOrDefault());
-        public Task SaveAsync(TollReceipt r, CancellationToken ct) { Saved.Add(r); return Task.CompletedTask; }
+        public List<BookingReceipt> Saved { get; } = new();
+        public Task<BookingReceipt?> FindLatestBookingSinceAsync(string guest, string hotel, DateTimeOffset since, CancellationToken ct) =>
+            Task.FromResult(Saved.Where(r => r.GuestId == guest && r.HotelCode == hotel && r.BookedAt >= since).OrderByDescending(r => r.BookedAt).FirstOrDefault());
+        public Task SaveAsync(BookingReceipt r, CancellationToken ct) { Saved.Add(r); return Task.CompletedTask; }
     }
-    private sealed class ThrowingNotifier : ITollNotifier { public Task NotifyChargedAsync(TollReceipt r, CancellationToken ct) => throw new TimeoutException(); }
+    private sealed class ThrowingNotifier : IGuestNotifier { public Task NotifyConfirmedAsync(BookingReceipt r, CancellationToken ct) => throw new TimeoutException(); }
 
     [Fact]
-    public async Task Return_within_24h_costs_half_even_if_sms_fails()
+    public async Task Repeat_guest_within_30_days_gets_10_percent_off_even_if_whatsapp_fails()
     {
         var t0 = new DateTimeOffset(2026, 10, 18, 8, 0, 0, TimeSpan.Zero);
         var history = new ListHistory();
-        history.Saved.Add(new TollReceipt(Guid.NewGuid(), "TAG1", "P1", 115m, false, t0.AddHours(-23)));
-        var svc = new TollChargeService(new OneFare(115m), new RichWallet(), history, new ThrowingNotifier(),
-                                        new FixedClock(t0), NullLogger<TollChargeService>.Instance);
+        history.Saved.Add(new BookingReceipt(Guid.NewGuid(), "G-1001", "GOA-BAGA-01", 9_000m, false, t0.AddDays(-29)));
+        var svc = new BookingService(new OneRate(4_500m), new RichWallet(), history, new ThrowingNotifier(),
+                                     new FixedClock(t0), NullLogger<BookingService>.Instance);
 
-        var receipt = await svc.ChargeAsync(new TollPassage(Guid.NewGuid(), "TAG1", "P1", VehicleClass.Car), CancellationToken.None);
+        var receipt = await svc.BookAsync(new BookingRequest(Guid.NewGuid(), "G-1001", "GOA-BAGA-01", RoomType.Standard, Nights: 2), CancellationToken.None);
 
-        Assert.Equal(57.50m, receipt.Amount);
-        Assert.True(receipt.ReturnJourney);
+        Assert.Equal(8_100m, receipt.Amount);   // 2 nights x 4,500 = 9,000, less 10 %
+        Assert.True(receipt.RepeatGuest);
     }
 }
 ```
@@ -1564,10 +1574,10 @@ public void Container_is_valid()
 {
     var services = new ServiceCollection();
     services.AddLogging();
-    services.AddTolling();   // your feature's registration extension
+    services.AddHotelBooking();   // your feature's registration extension
     using var sp = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
     using var scope = sp.CreateScope();
-    Assert.NotNull(scope.ServiceProvider.GetRequiredService<TollChargeService>());
+    Assert.NotNull(scope.ServiceProvider.GetRequiredService<BookingService>());
 }
 ```
 
@@ -1575,12 +1585,12 @@ For a full ASP.NET Core app, `WebApplicationFactory<Program>` (from `Microsoft.A
 
 **3. Lifetime tests.** Assert that scoped services differ across scopes and match within one (exercise 2), and that a background worker disposes each scope (exercise 3).
 
-Edge cases worth a test: the return-journey boundary at exactly 24 hours, a second return within the window (should be full fare in this example rule), an idempotent retry with the same passage id, and a notifier that throws (the charge must still succeed).
+Edge cases worth a test: the repeat-guest boundary at exactly 30 days, a third booking within the window (full price in this example rule, because the previous one was already discounted), an idempotent retry with the same booking id, zero nights (rejected), and a notifier that throws (the booking must still succeed).
 
 ## Real-world application
 
 - **ASP.NET Core itself** is built on constructor injection. Controllers, Razor Pages, minimal-API handlers, hosted services and options all receive their dependencies. The framework uses `IServiceProvider` internally, in its own composition-root code, so your code doesn't have to.
-- **Background processing.** Any system that reads from a queue (toll passages, UPI payment callbacks, IoT readings from a bridge health sensor) needs a scope per message. `IServiceScopeFactory` in a `BackgroundService` is the documented pattern on Microsoft Learn.
+- **Background processing.** Any system that reads from a queue (partner booking feeds, UPI payment callbacks, check-in events from smart door locks) needs a scope per message. `IServiceScopeFactory` in a `BackgroundService` is the documented pattern on Microsoft Learn.
 - **Legacy migrations.** Older ASP.NET MVC 5 and WCF apps often used a static `DependencyResolver.Current` or a third-party `ServiceLocator.Current`. When teams move them to ASP.NET Core, finding every static locator call is usually the first step. Each one becomes a constructor parameter. Those parameters often reveal classes with 10+ dependencies that need splitting.
 - **Plug-in systems.** Apps that load plug-ins at runtime (report formats, payment providers, export targets) need runtime selection. The good versions use typed resolvers or keyed services, with startup validation, rather than raw `GetService` calls spread through business code.
 - **Multi-tenant SaaS.** Per-tenant services are often chosen by a resolver keyed by tenant id. The resolver is the only class that knows about the selection; everything below it is plain constructor injection.
@@ -1607,7 +1617,7 @@ The singleton received the **root** provider, so `AppDbContext` (registered as s
 ::q advanced
 Your team says "our constructors have 12 parameters, so we switched to injecting `IServiceProvider`". How do you respond?
 ::a
-The 12 parameters are a symptom: the class has too many responsibilities. A locator hides the symptom without removing the cause — the class still has 12 dependencies, and now nobody can see them, startup validation can't check them, and tests must guess them. Better options: split the class by responsibility (often a big "service" contains several use cases that can become separate handlers); group parameters that always travel together into a cohesive object (`PricingContext` with tariffs and clock); move cross-cutting concerns such as logging, metrics and retries into decorators or middleware; and use `IOptions<T>` for configuration rather than many primitive parameters. I'd also turn on `ValidateOnBuild` and add a wiring test so the benefit of visible dependencies is actually collected.
+The 12 parameters are a symptom: the class has too many responsibilities. A locator hides the symptom without removing the cause — the class still has 12 dependencies, and now nobody can see them, startup validation can't check them, and tests must guess them. Better options: split the class by responsibility (often a big "service" contains several use cases that can become separate handlers); group parameters that always travel together into a cohesive object (`RoomPricing` with the rate card and clock); move cross-cutting concerns such as logging, metrics and retries into decorators or middleware; and use `IOptions<T>` for configuration rather than many primitive parameters. I'd also turn on `ValidateOnBuild` and add a wiring test so the benefit of visible dependencies is actually collected.
 ::q advanced
 How would you migrate a large legacy codebase that uses a static `ServiceLocator.Current` everywhere?
 ::a
@@ -1635,6 +1645,8 @@ Q: Name three shapes of service locator in .NET.
 A: A static ServiceLocator class; an injected IServiceProvider used inside methods; HttpContext.RequestServices.GetService in controllers or helpers.
 Q: What does ValidateOnBuild check, and what can't it see?
 A: At Build(), it checks every registered service's constructor dependencies can be resolved with valid lifetimes. It can't see GetService calls inside method bodies.
+Q: Why can't ValidateOnBuild check a factory registration like AddScoped<IFoo>(sp => new Foo(sp.GetRequiredService<IBar>()))?
+A: The lambda is opaque: the container only knows "call this function", so a missing IBar shows up when IFoo is first resolved. Cover factories with a wiring test.
 Q: What is a captive dependency?
 A: A shorter-lived service (scoped or transient) held by a longer-lived one (singleton), so it lives far longer than intended — e.g. a DbContext shared across requests.
 Q: Why must a BackgroundService use IServiceScopeFactory to use a DbContext?

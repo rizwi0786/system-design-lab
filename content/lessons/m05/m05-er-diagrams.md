@@ -84,7 +84,7 @@ Peter Chen introduced the entity-relationship model in 1976, drawing entities as
 
 ### Entities
 
-An **entity** is a kind of thing the business needs to remember, with its own identity: a customer, an order, a measurement entry in a road project's measurement book. Each **entity instance** becomes one row.
+An **entity** is a kind of thing the business needs to remember, with its own identity: a customer, an order, one UPI payment in a wallet app's transaction history. Each **entity instance** becomes one row.
 
 Naming conventions vary. Diagrams often use singular, upper-case names (`CUSTOMER`, `ORDER_ITEM`), while the PostgreSQL tables use plural snake_case (`customers`, `order_items`). Pick one convention per project and write it in the README. Watch out for SQL reserved words: an entity called `ORDER` is fine on a diagram, but a table called `order` must be quoted every time it appears (`"order"`), so use `orders` or `customer_orders`.
 
@@ -728,77 +728,77 @@ What to notice in the implementation:
 
 ## Bad design vs good design
 
-Here is a diagram from a pull request for a road-maintenance complaints system (citizens report potholes; a contractor fixes them):
+Here is a diagram from a pull request for a home-services app (customers book a repair for a broken AC or washing machine; a technician visits and fixes it):
 
 ```mermaid
 erDiagram
-    COMPLAINT {
+    REPAIR_REQUEST {
         int id
-        string citizen_name
-        string citizen_phone
+        string customer_name
+        string customer_phone
         string photos
-        string ward
-        string contractor_name
-        string contractor_phone
+        string service_area
+        string technician_name
+        string technician_phone
         string status
-        float repair_cost
+        float repair_charge
     }
-    COMPLAINT ||--|| CONTRACTOR : has
-    CONTRACTOR {
+    REPAIR_REQUEST ||--|| TECHNICIAN : has
+    TECHNICIAN {
         string name
     }
 ```
 
 Problems:
 
-- **Repeated facts.** Citizen name and phone are copied into every complaint. When Ms Iyer changes her number, 14 old complaints show the wrong one. Same for contractor details, which also exist in `CONTRACTOR`.
+- **Repeated facts.** Customer name and phone are copied into every request. When Ms Iyer changes her number, her 14 old requests show the wrong one. Same for technician details, which also exist in `TECHNICIAN`.
 - **A multi-valued attribute.** `photos` holds a comma-separated list of URLs. You can't count, constrain or delete one photo cleanly.
-- **Wrong cardinality.** `||--||` claims each contractor has exactly one complaint, ever.
-- **No keys marked.** Which column identifies a contractor? `name` isn't unique.
+- **Wrong cardinality.** `||--||` claims each technician handles exactly one request, ever.
+- **No keys marked.** Which column identifies a technician? `name` isn't unique.
 - **`float` for money.** ₹1,250.10 may be stored as 1250.0999999. Use `numeric` or integer paise.
 - **`status` as free text**, so "Closed", "closed" and "CLOSED" will all appear within a month.
-- **A missing time dimension.** When was it reported? When fixed? Service-level reports are impossible.
+- **A missing time dimension.** When was it booked? When fixed? "Fixed within 24 hours" reports are impossible.
 
 The better model:
 
 ```mermaid
 erDiagram
-    CITIZEN ||..o{ COMPLAINT : reports
-    WARD ||..o{ COMPLAINT : "located in"
-    CONTRACTOR |o..o{ COMPLAINT : "assigned to"
-    COMPLAINT ||--o{ COMPLAINT_PHOTO : has
-    CITIZEN {
+    CUSTOMER ||..o{ REPAIR_REQUEST : books
+    SERVICE_AREA ||..o{ REPAIR_REQUEST : "located in"
+    TECHNICIAN |o..o{ REPAIR_REQUEST : "assigned to"
+    REPAIR_REQUEST ||--o{ REQUEST_PHOTO : has
+    CUSTOMER {
         bigint id PK
         text name
         text phone UK
     }
-    WARD {
+    SERVICE_AREA {
         int id PK
-        text name UK
+        text name UK "e.g. Koramangala, Bengaluru"
     }
-    CONTRACTOR {
+    TECHNICIAN {
         bigint id PK
         text name
-        text registration_no UK
+        text employee_code UK
     }
-    COMPLAINT {
+    REPAIR_REQUEST {
         bigint id PK
-        bigint citizen_id FK
-        int ward_id FK
-        bigint contractor_id FK "null until assigned"
-        text status "Reported, Assigned, Fixed, Rejected"
-        numeric repair_cost_rupees "null until fixed"
-        timestamptz reported_at
+        bigint customer_id FK
+        int service_area_id FK
+        bigint technician_id FK "null until assigned"
+        text status "Booked, Assigned, Fixed, Cancelled"
+        numeric repair_charge_rupees "null until fixed"
+        timestamptz booked_at
         timestamptz fixed_at
     }
-    COMPLAINT_PHOTO {
-        bigint complaint_id PK, FK
+    REQUEST_PHOTO {
+        bigint repair_request_id PK, FK
         int seq PK
         text storage_key "object storage key, not the image"
     }
 ```
 
-Each fact now lives in one place, each relationship states its real cardinality, photos are rows (stored in object storage, referenced by key), and the optional contractor is a nullable foreign key. The status values are written in the comment; in SQL they become a `CHECK` constraint, or a lookup table if business users must add values without a deployment.
+Each fact now lives in one place, each relationship states its real cardinality, photos are rows (stored in object storage, referenced by key), and the optional technician is a nullable foreign key. The status values are written in the comment; in SQL they become a `CHECK` constraint, or a lookup table if business users must add values without a deployment.
 
 **Is the "bad" version ever acceptable?** Sometimes. An **append-only reporting table** or an export to a data warehouse often deliberately copies names into each row (denormalisation), because reports must show the name *as it was* and must not join across 10 tables. That's a conscious choice for a read model, documented as such. It's wrong as the system of record.
 
@@ -1424,101 +1424,102 @@ and the foreign keys from `information_schema.key_column_usage` joined to `infor
 Add type drift (`expected bigint, found integer`) and unique-constraint drift. Then generate the expected snapshot directly from the `ErModel` in the production-style implementation.
 :::
 
-:::exercise id=m05-er-diagrams-ex6 difficulty=advanced kind=design title="Model a measurement book for a highway contract"
-On an Indian highway project, a site engineer records quantities of work done in a **measurement book (MB)**. The consultancy's requirements:
+:::exercise id=m05-er-diagrams-ex6 difficulty=advanced kind=design title="Model timesheets and invoices for a software agency"
+A software agency in Bengaluru bills its clients for hours worked, using a timesheet tool (think of a Harvest- or Jira-style app). The product owner's requirements:
 
-> "A contract has a bill of quantities (BOQ) with numbered items (for example item 3.04, 'Dense bituminous macadam, 50 mm', unit cubic metre, rate ₹9,850). Engineers record measurement entries against BOQ items, at a chainage range (km 12.400 to 12.650) on a date. Each entry is checked by one supervising engineer, but not immediately. Every month the contractor raises a running-account (RA) bill that includes many measurement entries; an entry can be billed only once. Some BOQ items are revised by a variation order, which changes the rate from a date; old bills must keep the old rate."
+> "Each client contract has a rate card with numbered items (for example item R-03, 'Senior .NET developer', unit hour, rate ₹2,400). Team members log timesheet entries against rate-card items: a start and end time on a date (09:30 to 13:00, 3.5 hours). Each entry is approved by one project manager, but not immediately. Every month the agency raises an invoice for the contract that includes many approved entries; an entry can be invoiced only once. Rate-card items are revised by a rate revision (for example from 1 April), which changes the rate from a date; old invoices must keep the old rate."
 
 Draw a Mermaid ER diagram with attributes, keys and correct crow's foot symbols, and list the PostgreSQL constraints you would add that the diagram alone cannot express.
 ::acceptance
-- Contract → BOQ item is one-to-many, and BOQ item number is unique **within** a contract, not globally.
-- Measurement entry → BOQ item is mandatory; checked-by is an optional reference to an engineer.
-- An entry belongs to zero or one RA bill (billed once), and the bill has one or more entries.
-- Rate history is modelled so that old bills keep their rate (a rate table with effective dates, or the rate copied onto the billed line).
-- At least three constraints the diagram can't show are listed (for example a chainage `CHECK`, unique `(contract_id, item_no)`, a non-overlapping rate period).
+- Contract → rate-card item is one-to-many, and the item number is unique **within** a contract, not globally.
+- Timesheet entry → rate-card item is mandatory; approved-by is an optional reference to a team member.
+- An entry belongs to zero or one invoice (invoiced once), and the invoice has one or more entries.
+- Rate history is modelled so that old invoices keep their rate (a rate table with effective dates, or the rate copied onto the invoiced entry).
+- At least three constraints the diagram can't show are listed (for example `ended_at > started_at`, unique `(contract_id, item_no)`, a non-overlapping rate period).
 ::hint
-Which nouns have identity? Contract, BOQ item, measurement entry, engineer, RA bill, variation order.
+Which nouns have identity? Contract, rate-card item, timesheet entry, team member, invoice, rate revision.
 ::hint
-"Billed only once" is a maximum of one at the bill end: `RA_BILL |o..|{ MEASUREMENT_ENTRY` reads "an entry is in zero or one bill, a bill has one or more entries".
+"Invoiced only once" is a maximum of one at the invoice end: `INVOICE |o..|{ TIMESHEET_ENTRY` reads "an entry is in zero or one invoice, an invoice has one or more entries".
 ::hint
-For rates that change over time, either keep a `BOQ_RATE` table with `effective_from`, or copy the rate onto the entry when it is billed. The second is simpler and is how invoices usually work.
+For rates that change over time, either keep an `ITEM_RATE` table with `effective_from`, or copy the rate onto the entry when it is invoiced. The second is simpler and is how invoices usually work; many teams do both.
 ::hint
-Chainage is a number in kilometres with three decimals. What must be true about `from_km` and `to_km`?
+An entry has a start and an end time. What must be true about `started_at` and `ended_at`? And should `hours` be stored separately, or derived from them?
 ::solution
 ```mermaid
 erDiagram
-    CONTRACT ||..|{ BOQ_ITEM : "priced in"
-    BOQ_ITEM ||..|{ BOQ_RATE : "rate history"
-    VARIATION_ORDER |o..o{ BOQ_RATE : introduces
-    BOQ_ITEM ||..o{ MEASUREMENT_ENTRY : "measured as"
-    ENGINEER ||..o{ MEASUREMENT_ENTRY : records
-    ENGINEER |o..o{ MEASUREMENT_ENTRY : checks
-    CONTRACT ||..o{ RA_BILL : "billed through"
-    RA_BILL |o..|{ MEASUREMENT_ENTRY : includes
+    CONTRACT ||..|{ RATE_CARD_ITEM : "priced in"
+    RATE_CARD_ITEM ||..|{ ITEM_RATE : "rate history"
+    RATE_REVISION |o..o{ ITEM_RATE : introduces
+    RATE_CARD_ITEM ||..o{ TIMESHEET_ENTRY : "logged against"
+    TEAM_MEMBER ||..o{ TIMESHEET_ENTRY : logs
+    TEAM_MEMBER |o..o{ TIMESHEET_ENTRY : approves
+    CONTRACT ||..o{ INVOICE : "billed through"
+    INVOICE |o..|{ TIMESHEET_ENTRY : includes
     CONTRACT {
         bigint id PK
         text contract_no UK
-        text name
+        text client_name
     }
-    BOQ_ITEM {
+    RATE_CARD_ITEM {
         bigint id PK
         bigint contract_id FK
-        text item_no "unique per contract, e.g. 3.04"
+        text item_no "unique per contract, e.g. R-03"
         text description
-        text unit "m3, m2, MT"
+        text unit "hour or day"
     }
-    BOQ_RATE {
+    ITEM_RATE {
         bigint id PK
-        bigint boq_item_id FK
-        bigint variation_order_id FK "null for the original rate"
+        bigint rate_card_item_id FK
+        bigint rate_revision_id FK "null for the original rate"
         numeric rate_rupees
         date effective_from
     }
-    MEASUREMENT_ENTRY {
+    TIMESHEET_ENTRY {
         bigint id PK
-        bigint boq_item_id FK
-        bigint recorded_by FK
-        bigint checked_by FK "null until checked"
-        bigint ra_bill_id FK "null until billed"
-        numeric from_km
-        numeric to_km
-        numeric quantity
-        numeric billed_rate_rupees "copied when billed"
-        date measured_on
+        bigint rate_card_item_id FK
+        bigint logged_by FK
+        bigint approved_by FK "null until approved"
+        bigint invoice_id FK "null until invoiced"
+        timestamptz started_at
+        timestamptz ended_at
+        numeric invoiced_rate_rupees "copied when invoiced"
     }
-    RA_BILL {
+    INVOICE {
         bigint id PK
         bigint contract_id FK
-        int bill_no "1, 2, 3 per contract"
+        int invoice_no "1, 2, 3 per contract"
         date period_end
     }
-    ENGINEER {
+    TEAM_MEMBER {
         bigint id PK
         text name
+        text email UK
     }
-    VARIATION_ORDER {
+    RATE_REVISION {
         bigint id PK
-        text vo_no
+        text revision_no
         date approved_on
     }
 ```
 
-Two relationships between `ENGINEER` and `MEASUREMENT_ENTRY` are normal: they have different roles (`recorded_by`, `checked_by`) and different optionality. Name the foreign key columns after the role, not after the table.
+Two relationships between `TEAM_MEMBER` and `TIMESHEET_ENTRY` are normal: they have different roles (`logged_by`, `approved_by`) and different optionality. Name the foreign key columns after the role, not after the table.
 
 Constraints the diagram can't express:
 
-- `UNIQUE (contract_id, item_no)` on `boq_items`, and `UNIQUE (contract_id, bill_no)` on `ra_bills`.
-- `CHECK (to_km > from_km)` and `CHECK (quantity > 0)` on `measurement_entries`.
-- `CHECK (checked_by IS NULL OR checked_by <> recorded_by)`: nobody checks their own entry.
-- Non-overlapping rate periods: `UNIQUE (boq_item_id, effective_from)` as a minimum. For true ranges, store a `daterange` and use an exclusion constraint (`EXCLUDE USING gist (boq_item_id WITH =, period WITH &&)`, which needs the `btree_gist` extension).
-- An entry may be billed only after it is checked: `CHECK (ra_bill_id IS NULL OR checked_by IS NOT NULL)`.
-- The entry's BOQ item and the RA bill must belong to the same contract: a composite foreign key, as in the TiffinHub example.
+- `UNIQUE (contract_id, item_no)` on `rate_card_items`, and `UNIQUE (contract_id, invoice_no)` on `invoices`.
+- `CHECK (ended_at > started_at)` on `timesheet_entries`, plus a sanity limit such as `CHECK (ended_at - started_at <= interval '16 hours')`. Hours are derived from the two times, so they can't disagree; if reports need an `hours` column, make it a generated column rather than a value someone types.
+- `CHECK (approved_by IS NULL OR approved_by <> logged_by)`: nobody approves their own hours.
+- Non-overlapping rate periods: `UNIQUE (rate_card_item_id, effective_from)` as a minimum. For true ranges, store a `daterange` and use an exclusion constraint (`EXCLUDE USING gist (rate_card_item_id WITH =, period WITH &&)`, which needs the `btree_gist` extension).
+- An entry may be invoiced only after it is approved: `CHECK (invoice_id IS NULL OR approved_by IS NOT NULL)`.
+- The entry's rate-card item and the invoice must belong to the same contract: a composite foreign key, as in the TiffinHub example.
+- Optionally, one person can't log two overlapping entries: an exclusion constraint `EXCLUDE USING gist (logged_by WITH =, tstzrange(started_at, ended_at) WITH &&)`.
 
-`billed_rate_rupees` is deliberately copied: an RA bill is a financial document and must not change when a later variation order changes the rate.
+`invoiced_rate_rupees` is deliberately copied: an invoice is a financial (and GST) document and must not change when a later rate revision changes the rate. For example, 3.5 hours at ₹2,400 is invoiced as ₹8,400 in March, and must still read ₹8,400 after the rate rises to ₹2,600 in April.
 ::mistakes
-- Making `item_no` globally unique, which breaks the second contract that also has item 3.04.
-- A single `rate` column on `BOQ_ITEM`, so variation orders rewrite history.
-- Drawing `RA_BILL ||--|{ MEASUREMENT_ENTRY` (mandatory bill), which claims every entry is billed the moment it is recorded.
+- Making `item_no` globally unique, which breaks the second contract that also has item R-03.
+- A single `rate` column on `RATE_CARD_ITEM`, so a rate revision rewrites history.
+- Drawing `INVOICE ||--|{ TIMESHEET_ENTRY` (mandatory invoice), which claims every entry is invoiced the moment it is logged.
+- Storing `hours` as an ordinary column next to `started_at` and `ended_at`, so the three values can disagree.
 :::
 
 ## Automated testing
@@ -1555,8 +1556,8 @@ public class DdlMappingTests
 ## Real-world application
 
 - **Migration reviews.** A pull request that adds a table includes the changed part of the ER diagram. Reviewers check the crow's feet against the requirements before the migration ships, when changing them is still cheap.
-- **Reporting and analytics.** Analysts writing SQL for dashboards (for example, ward-wise complaint closure times for a municipal corporation) start from the ER diagram to find join paths. Without one, wrong joins and double-counted totals are easy to make.
-- **Government and infrastructure systems.** Project-monitoring portals for roads, water and power are long-lived and handed between vendors. An up-to-date ER diagram is often a contractual deliverable, and the first thing a new team asks for.
+- **Reporting and analytics.** Analysts writing SQL for dashboards (for example, average delivery time per restaurant per city for a food-delivery platform) start from the ER diagram to find join paths. Without one, wrong joins and double-counted totals are easy to make.
+- **Long-lived systems that change hands.** Banking, insurance and public-service platforms (passport, rail or tax portals) live for decades and move between teams and vendors. An up-to-date ER diagram is often a formal handover deliverable, and the first thing a new team asks for.
 
 ## Interview questions
 
@@ -1580,7 +1581,7 @@ A foreign key can't: it only stops children pointing at missing parents. Options
 ::q advanced
 When would you deliberately copy data that an ER diagram suggests should live in one place?
 ::a
-When the copy has a different meaning: it records a value **at a point in time**. An order line's unit price, an invoice's customer address, an RA bill's rate are all historical facts; they must not change when the source changes, so copying is correct normalisation, not duplication. Separately, read models and reporting tables often denormalise deliberately to avoid expensive joins, with a clear owner and a rebuild process. What I avoid is copying a *current* fact (a customer's phone number into every order) into the system of record, because the copies drift.
+When the copy has a different meaning: it records a value **at a point in time**. An order line's unit price, an invoice's customer address, the hourly rate on an invoiced timesheet entry are all historical facts; they must not change when the source changes, so copying is correct normalisation, not duplication. Separately, read models and reporting tables often denormalise deliberately to avoid expensive joins, with a clear owner and a rebuild process. What I avoid is copying a *current* fact (a customer's phone number into every order) into the system of record, because the copies drift.
 ::q advanced
 How would you keep an ER diagram accurate for a schema that changes every sprint?
 ::a
@@ -1629,10 +1630,10 @@ A: A nullable foreign key column.
 ::q single
 A vehicle-tracking app says: "Each vehicle has at most one GPS device installed. A device can be in the store, not installed in any vehicle." Which Mermaid line fits, with `VEHICLE` on the left?
 - [ ] `VEHICLE ||--|| GPS_DEVICE : has`
-- [x] `VEHICLE |o--o| GPS_DEVICE : "fitted with"`
+- [x] `VEHICLE |o..o| GPS_DEVICE : "fitted with"`
 - [ ] `VEHICLE }o--o{ GPS_DEVICE : has`
 - [ ] `VEHICLE ||--|{ GPS_DEVICE : has`
-> Each vehicle has zero or one device (`o|` at the device end), and each device is in zero or one vehicle (`|o` at the vehicle end). In SQL, a nullable `vehicle_id` on devices with `UNIQUE`, or a nullable `device_id` on vehicles with `UNIQUE`.
+> Each vehicle has zero or one device (`o|` at the device end), and each device is in zero or one vehicle (`|o` at the vehicle end). The line is dashed because a device has its own identity (a serial number) and exists without a vehicle. In SQL, a nullable `vehicle_id` on devices with `UNIQUE`, or a nullable `device_id` on vehicles with `UNIQUE`.
 ::q single
 `DEPARTMENT ||..|{ EMPLOYEE : employs`. What does the database need?
 - [x] `employees.department_id NOT NULL REFERENCES departments(id)`, plus an application or trigger rule if departments must never be empty.

@@ -22,7 +22,7 @@ references:
     url: https://learn.microsoft.com/aspnet/core/fundamentals/middleware/write
 ---
 
-Every ASP.NET Core request you have ever served travelled through a Chain of Responsibility. Exception handling, HTTPS redirection, authentication, authorisation and routing are a line of handlers, and each one either deals with the request or passes it on. The same shape appears in purchase approvals ("who is allowed to sign off ₹8 lakh?"), in `HttpClient` handlers that add headers and retries, and in validation rules that stop at the first serious problem.
+Every ASP.NET Core request you have ever served travelled through a Chain of Responsibility. Exception handling, HTTPS redirection, authentication, authorisation and routing are a line of handlers, and each one either deals with the request or passes it on. The same shape appears in expense approvals ("who is allowed to sign off a ₹4.5 lakh team-offsite claim?"), in `HttpClient` handlers that add headers and retries, and in validation rules that stop at the first serious problem.
 
 ## Learning objectives
 
@@ -45,16 +45,16 @@ By the end of this lesson you will be able to:
 
 Think of a complaint at a bank branch. You speak to the counter clerk. If the clerk can sort it out, done. If not, the clerk passes it to the branch manager. If the branch manager can't, it goes to the regional office. You, the customer, only ever talked to the first person. You didn't need to know who would finally decide.
 
-A company's purchase approvals work the same way:
+Expense claims at a mid-sized SaaS company work the same way. An employee submits a claim (a client dinner, a conference ticket, a team offsite) and the amount decides who may approve it:
 
 | Amount | Who can approve |
 |---|---|
-| up to ₹50,000 | Site engineer |
-| up to ₹5,00,000 | Project manager |
-| up to ₹50,00,000 | Regional head |
-| above that | Director |
+| up to ₹25,000 | Manager |
+| up to ₹2,00,000 | Finance manager |
+| up to ₹10,00,000 | CFO |
+| above that | CEO |
 
-A request for ₹8,00,000 starts at the site engineer, who says "too big for me" and passes it on. The project manager passes it on too. The regional head approves it. The person raising the request just submits it. The chain decides.
+A ₹4,50,000 claim for a team offsite in Goa starts at the employee's manager, who says "too big for me" and passes it on. The finance manager passes it on too. The CFO approves it. The person raising the request just submits it. The chain decides.
 
 - Each person in the line is a **handler**.
 - "Handle it or pass it to the next one" is the **chain**.
@@ -124,6 +124,8 @@ The result is one `RequestDelegate` that, when called, runs ExceptionHandler →
 - The request **must** be handled, and silently falling off the end of the chain would be dangerous. You need an explicit end-of-chain behaviour (reject, or a default handler), or a different design.
 - Steps have **hidden dependencies on order** that nobody wrote down. Chains make order easy to change, which also makes order easy to break.
 - Very long chains for every request add latency and make stack traces deep. Each middleware layer is cheap, but 40 layers of logging and enrichment add up.
+- **The step applies to only some endpoints.** Middleware runs for every request, including health checks and static files. Behaviour that belongs to a few endpoints (validating one request body, checking that the caller owns this expense claim) fits better in an endpoint filter (`AddEndpointFilter`), a route group (`MapGroup(...).RequireAuthorization()`), or the handler itself. Use `app.UseWhen(...)` only when a whole branch of URLs genuinely needs extra middleware.
+- **The "chain" is really a long-running workflow.** If each approver may take days, holds state between steps, and needs reminders and escalation, a synchronous chain is the wrong tool. Store the claim with its status and model it as a state machine or a workflow engine; a chain can still compute *who* is next.
 
 ### Trade-offs
 
@@ -144,82 +146,82 @@ classDiagram
         <<abstract>>
         -ApprovalHandler next
         +SetNext(ApprovalHandler next) ApprovalHandler
-        +Handle(PurchaseRequest request) ApprovalDecision
-        #Pass(PurchaseRequest request) ApprovalDecision
+        +Handle(ExpenseClaim request) ApprovalDecision
+        #Pass(ExpenseClaim request) ApprovalDecision
     }
-    class BlockedVendorCheck {
-        -IVendorRegistry registry
-        +Handle(PurchaseRequest request) ApprovalDecision
+    class BlockedMerchantCheck {
+        -IMerchantRegistry registry
+        +Handle(ExpenseClaim request) ApprovalDecision
     }
     class LimitApprover {
         -string role
         -decimal limitInr
-        +Handle(PurchaseRequest request) ApprovalDecision
+        +Handle(ExpenseClaim request) ApprovalDecision
     }
     class FinalApprover {
-        +Handle(PurchaseRequest request) ApprovalDecision
+        +Handle(ExpenseClaim request) ApprovalDecision
     }
     class ApprovalChainFactory {
         +Create() ApprovalHandler
     }
-    class ProcurementService {
-        +Submit(PurchaseRequest request) ApprovalDecision
+    class ExpenseService {
+        +Submit(ExpenseClaim request) ApprovalDecision
     }
-    ApprovalHandler <|-- BlockedVendorCheck
+    ApprovalHandler <|-- BlockedMerchantCheck
     ApprovalHandler <|-- LimitApprover
     ApprovalHandler <|-- FinalApprover
     ApprovalHandler --> ApprovalHandler : next
     ApprovalChainFactory ..> ApprovalHandler : builds
-    ProcurementService --> ApprovalHandler : first handler only
+    ExpenseService --> ApprovalHandler : first handler only
 ```
 
-How to read it: every handler extends `ApprovalHandler`, which holds a reference to the **next** handler (the arrow from the class to itself). `BlockedVendorCheck` can stop the chain by rejecting. `LimitApprover` is one reusable class configured with a role and a limit, so "site engineer ₹50,000" and "project manager ₹5,00,000" are two instances, not two classes. `FinalApprover` sits at the end so the chain never falls off without a decision. `ProcurementService` (the client) knows only the **first** handler. `ApprovalChainFactory` builds the chain from configuration.
+How to read it: every handler extends `ApprovalHandler`, which holds a reference to the **next** handler (the arrow from the class to itself). `BlockedMerchantCheck` can stop the chain by rejecting. `LimitApprover` is one reusable class configured with a role and a limit, so "manager ₹25,000" and "finance manager ₹2,00,000" are two instances, not two classes. `FinalApprover` sits at the end so the chain never falls off without a decision. `ExpenseService` (the client) knows only the **first** handler. `ApprovalChainFactory` builds the chain from configuration.
 
 ### Sequence diagram
 
 ```mermaid
 sequenceDiagram
-    participant S as ProcurementService
-    participant V as BlockedVendorCheck
-    participant E as LimitApprover (Site engineer, ₹50k)
-    participant P as LimitApprover (Project manager, ₹5L)
-    participant R as LimitApprover (Regional head, ₹50L)
-    S->>V: Handle(₹8,00,000, vendor V-2231)
-    V->>V: vendor not blocked
+    participant S as ExpenseService
+    participant V as BlockedMerchantCheck
+    participant E as LimitApprover (Manager, ₹25k)
+    participant P as LimitApprover (Finance manager, ₹2L)
+    participant R as LimitApprover (CFO, ₹10L)
+    S->>V: Handle(₹4,50,000, merchant M-2231)
+    V->>V: merchant not blocked
     V->>E: Pass
-    E->>E: 8,00,000 > 50,000
+    E->>E: 4,50,000 > 25,000
     E->>P: Pass
-    P->>P: 8,00,000 > 5,00,000
+    P->>P: 4,50,000 > 2,00,000
     P->>R: Pass
-    R->>R: 8,00,000 ≤ 50,00,000
-    R-->>P: Approved by Regional head
+    R->>R: 4,50,000 ≤ 10,00,000
+    R-->>P: Approved by CFO
     P-->>E: (returned unchanged)
     E-->>V: (returned unchanged)
-    V-->>S: Approved by Regional head
+    V-->>S: Approved by CFO
 ```
 
-The request enters at the first handler and moves along until one handler can decide. The decision then travels back up the call stack unchanged. If the vendor had been blocked, `BlockedVendorCheck` would have returned `Rejected` immediately and no approver would have been asked: that is **short-circuiting**. The service never mentions engineers, managers or limits.
+The request enters at the first handler and moves along until one handler can decide. The decision then travels back up the call stack unchanged. If the merchant had been on the blocked list, `BlockedMerchantCheck` would have returned `Rejected` immediately and no approver would have been asked: that is **short-circuiting**. The service never mentions managers, finance or limits.
 
 ## Step-by-step example
 
 ### Step 1 — the naive version
 
 ```csharp
-public ApprovalDecision Approve(PurchaseRequest r)
+public ApprovalDecision Approve(ExpenseClaim r)
 {
-    if (_blockedVendors.Contains(r.VendorId)) return Rejected("Vendor blocked");
-    if (r.AmountInr <= 50_000) return Approved("Site engineer");
-    if (r.AmountInr <= 5_00_000) return Approved("Project manager");
-    if (r.AmountInr <= 50_00_000) return Approved("Regional head");
-    return Approved("Director");
+    if (_blockedMerchants.Contains(r.MerchantId)) return Rejected("Merchant blocked");
+    if (r.AmountInr <= 25_000) return Approved("Manager");
+    if (r.AmountInr <= 2_00_000) return Approved("Finance manager");
+    if (r.AmountInr <= 10_00_000) return Approved("CFO");
+    return Approved("CEO");
 }
 ```
 
 Honestly, with five fixed rules this is fine. The trouble starts when finance asks for changes:
 
-- Limits differ per project type: an EPC project gives project managers ₹10 lakh.
-- Emergency procurement during monsoon damage gets a separate fast-track approver.
-- IT purchases above ₹2 lakh must go via the IT head, whatever the amount.
+- Limits differ per department: sales managers travel constantly, so they get ₹50,000 instead of ₹25,000.
+- Emergency spend during a production outage (extra cloud capacity, a vendor's premium support call) gets a separate fast-track approver.
+- IT purchases above ₹1 lakh must go via the IT head, whatever the amount.
 - Limits must change without redeploying.
 
 The method turns into nested conditions that nobody dares to touch.
@@ -230,7 +232,7 @@ An `ApprovalHandler` base class with `Handle()` and a protected `Pass()` that fo
 
 ### Step 3 — reusable concrete handlers
 
-`LimitApprover(role, limit)` approves if the amount is within its limit, otherwise passes. `BlockedVendorCheck` rejects or passes. `CategoryRouter("IT", "IT head", 2_00_000)` approves IT requests above a threshold. Each is a few lines.
+`LimitApprover(role, limit)` approves if the amount is within its limit, otherwise passes. `BlockedMerchantCheck` rejects or passes. `CategoryRouter("IT", "IT head", 1_00_000)` approves IT requests above a threshold. Each is a few lines.
 
 ### Step 4 — build the chain from configuration
 
@@ -238,16 +240,16 @@ Limits move to `appsettings.json`. A factory reads them, sorts by limit, and lin
 
 ### Step 5 — recognise the same shape in the framework
 
-Then we'll write an ASP.NET Core middleware that adds a correlation ID to every request, and a `DelegatingHandler` that adds the same ID to every outgoing `HttpClient` call, so one ID follows a request through your API and into the vendor-registry service it calls.
+Then we'll write an ASP.NET Core middleware that adds a correlation ID to every request, and a `DelegatingHandler` that adds the same ID to every outgoing `HttpClient` call, so one ID follows a request through your API and into the merchant-registry service it calls.
 
 ## Production-style C# implementation
 
 ```text
-Procurement.Api/
+Expenses.Api/
   Program.cs
   appsettings.json            (Approvals:Limits)
   Approvals/
-    PurchaseRequest.cs
+    ExpenseClaim.cs
     ApprovalHandlers.cs
     ApprovalChainFactory.cs
   Web/
@@ -255,15 +257,15 @@ Procurement.Api/
     MaintenanceModeMiddleware.cs
   Outbound/
     CorrelationIdHandler.cs
-    VendorRegistryClient.cs
+    MerchantRegistryClient.cs
 ```
 
 ### The approval chain
 
-```csharp file=Approvals/PurchaseRequest.cs
-namespace Procurement.Approvals;
+```csharp file=Approvals/ExpenseClaim.cs
+namespace Expenses.Approvals;
 
-public sealed record PurchaseRequest(Guid Id, string ProjectCode, string Category, string VendorId, decimal AmountInr, string RaisedBy);
+public sealed record ExpenseClaim(Guid Id, string Department, string Category, string MerchantId, decimal AmountInr, string RaisedBy);
 
 public enum ApprovalOutcome { Approved, Rejected, NoApprover }
 
@@ -278,7 +280,7 @@ public sealed record ApprovalDecision(ApprovalOutcome Outcome, string DecidedBy,
 ```csharp file=Approvals/ApprovalHandlers.cs
 using System.Globalization;
 
-namespace Procurement.Approvals;
+namespace Expenses.Approvals;
 
 /// <summary>Handler base. Each handler decides or passes the request to the next one.</summary>
 public abstract class ApprovalHandler
@@ -292,32 +294,32 @@ public abstract class ApprovalHandler
         return next;
     }
 
-    public abstract Task<ApprovalDecision> HandleAsync(PurchaseRequest request, CancellationToken ct);
+    public abstract Task<ApprovalDecision> HandleAsync(ExpenseClaim request, CancellationToken ct);
 
-    protected Task<ApprovalDecision> PassAsync(PurchaseRequest request, CancellationToken ct) =>
+    protected Task<ApprovalDecision> PassAsync(ExpenseClaim request, CancellationToken ct) =>
         _next is null ? Task.FromResult(ApprovalDecision.Unhandled) : _next.HandleAsync(request, ct);
 
     protected static string Inr(decimal amount) => amount.ToString("N0", CultureInfo.GetCultureInfo("en-IN"));
 }
 
-public interface IVendorRegistry
+public interface IMerchantRegistry
 {
-    Task<bool> IsBlockedAsync(string vendorId, CancellationToken ct);
+    Task<bool> IsBlockedAsync(string merchantId, CancellationToken ct);
 }
 
-/// <summary>Short-circuits: a blocked vendor is rejected before any approver sees the request.</summary>
-public sealed class BlockedVendorCheck(IVendorRegistry registry) : ApprovalHandler
+/// <summary>Short-circuits: a claim paid to a blocked merchant is rejected before any approver sees it.</summary>
+public sealed class BlockedMerchantCheck(IMerchantRegistry registry) : ApprovalHandler
 {
-    public override async Task<ApprovalDecision> HandleAsync(PurchaseRequest request, CancellationToken ct) =>
-        await registry.IsBlockedAsync(request.VendorId, ct)
-            ? ApprovalDecision.Reject("Vendor check", $"Vendor {request.VendorId} is blocked.")
+    public override async Task<ApprovalDecision> HandleAsync(ExpenseClaim request, CancellationToken ct) =>
+        await registry.IsBlockedAsync(request.MerchantId, ct)
+            ? ApprovalDecision.Reject("Merchant check", $"Merchant {request.MerchantId} is blocked.")
             : await PassAsync(request, ct);
 }
 
 /// <summary>Routes one category above a threshold to a specialist, whatever the amount band.</summary>
 public sealed class CategoryApprover(string category, decimal thresholdInr, string role) : ApprovalHandler
 {
-    public override Task<ApprovalDecision> HandleAsync(PurchaseRequest request, CancellationToken ct) =>
+    public override Task<ApprovalDecision> HandleAsync(ExpenseClaim request, CancellationToken ct) =>
         string.Equals(request.Category, category, StringComparison.OrdinalIgnoreCase) && request.AmountInr > thresholdInr
             ? Task.FromResult(ApprovalDecision.Approve(role, $"{category} purchase above ₹{Inr(thresholdInr)}"))
             : PassAsync(request, ct);
@@ -329,7 +331,7 @@ public sealed class LimitApprover(string role, decimal limitInr) : ApprovalHandl
     public string Role { get; } = role;
     public decimal LimitInr { get; } = limitInr;
 
-    public override Task<ApprovalDecision> HandleAsync(PurchaseRequest request, CancellationToken ct) =>
+    public override Task<ApprovalDecision> HandleAsync(ExpenseClaim request, CancellationToken ct) =>
         request.AmountInr <= LimitInr
             ? Task.FromResult(ApprovalDecision.Approve(Role, $"Within limit of ₹{Inr(LimitInr)}"))
             : PassAsync(request, ct);
@@ -338,7 +340,7 @@ public sealed class LimitApprover(string role, decimal limitInr) : ApprovalHandl
 /// <summary>Terminal handler: the chain never ends without a decision.</summary>
 public sealed class FinalApprover(string role) : ApprovalHandler
 {
-    public override Task<ApprovalDecision> HandleAsync(PurchaseRequest request, CancellationToken ct) =>
+    public override Task<ApprovalDecision> HandleAsync(ExpenseClaim request, CancellationToken ct) =>
         Task.FromResult(ApprovalDecision.Approve(role, "Above all delegated limits"));
 }
 ```
@@ -346,7 +348,7 @@ public sealed class FinalApprover(string role) : ApprovalHandler
 ```csharp file=Approvals/ApprovalChainFactory.cs
 using Microsoft.Extensions.Options;
 
-namespace Procurement.Approvals;
+namespace Expenses.Approvals;
 
 public sealed class ApprovalLimitOptions
 {
@@ -356,13 +358,13 @@ public sealed class ApprovalLimitOptions
 
     public static IReadOnlyList<LimitEntry> DevelopmentDefaults { get; } =
     [
-        new() { Role = "Site engineer", LimitInr = 50_000m },
-        new() { Role = "Project manager", LimitInr = 5_00_000m },
-        new() { Role = "Regional head", LimitInr = 50_00_000m },
+        new() { Role = "Manager", LimitInr = 25_000m },
+        new() { Role = "Finance manager", LimitInr = 2_00_000m },
+        new() { Role = "CFO", LimitInr = 10_00_000m },
     ];
-    public string FinalApproverRole { get; set; } = "Director";
+    public string FinalApproverRole { get; set; } = "CEO";
     public string ItHeadRole { get; set; } = "IT head";
-    public decimal ItThresholdInr { get; set; } = 2_00_000m;
+    public decimal ItThresholdInr { get; set; } = 1_00_000m;
 
     public sealed class LimitEntry
     {
@@ -371,15 +373,15 @@ public sealed class ApprovalLimitOptions
     }
 }
 
-/// <summary>Builds the chain from configuration. Order: vendor check → category routing → limits (ascending) → final.</summary>
-public sealed class ApprovalChainFactory(IVendorRegistry registry, IOptionsMonitor<ApprovalLimitOptions> options)
+/// <summary>Builds the chain from configuration. Order: merchant check → category routing → limits (ascending) → final.</summary>
+public sealed class ApprovalChainFactory(IMerchantRegistry registry, IOptionsMonitor<ApprovalLimitOptions> options)
 {
     public ApprovalHandler Create()
     {
         var o = options.CurrentValue;
         if (o.Limits.Count == 0) throw new InvalidOperationException("At least one approval limit must be configured.");
 
-        var first = new BlockedVendorCheck(registry);
+        var first = new BlockedMerchantCheck(registry);
         var tail = first.SetNext(new CategoryApprover("IT", o.ItThresholdInr, o.ItHeadRole));
         foreach (var limit in o.Limits.OrderBy(l => l.LimitInr))
             tail = tail.SetNext(new LimitApprover(limit.Role, limit.LimitInr));
@@ -389,7 +391,7 @@ public sealed class ApprovalChainFactory(IVendorRegistry registry, IOptionsMonit
 }
 ```
 
-Sorting by limit is a safety measure. If someone writes the configuration in the wrong order (regional head before site engineer), the regional head would approve a ₹10,000 request that a site engineer should handle. The factory makes the order a rule instead of a hope.
+Sorting by limit is a safety measure. If someone writes the configuration in the wrong order (CFO before manager), the CFO would approve a ₹10,000 request that a manager should handle. The factory makes the order a rule instead of a hope.
 
 ### ASP.NET Core middleware: the framework's own chain
 
@@ -397,7 +399,7 @@ Sorting by limit is a safety measure. If someone writes the configuration in the
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 
-namespace Procurement.Web;
+namespace Expenses.Web;
 
 /// <summary>"Every handler contributes": adds a correlation ID, then ALWAYS calls the next middleware.</summary>
 public sealed class CorrelationIdMiddleware(RequestDelegate next, ILogger<CorrelationIdMiddleware> logger)
@@ -431,7 +433,7 @@ public sealed class CorrelationIdMiddleware(RequestDelegate next, ILogger<Correl
 ```csharp file=Web/MaintenanceModeMiddleware.cs
 using Microsoft.Extensions.Options;
 
-namespace Procurement.Web;
+namespace Expenses.Web;
 
 public sealed class MaintenanceOptions
 {
@@ -462,9 +464,9 @@ public sealed class MaintenanceModeMiddleware(RequestDelegate next, IOptionsMoni
 Outgoing requests have their own chain. Each `DelegatingHandler` gets the request, can change it, calls `base.SendAsync` (the next handler), and can inspect the response on the way back. The last link is the handler that actually talks to the network.
 
 ```csharp file=Outbound/CorrelationIdHandler.cs
-using Procurement.Web;
+using Expenses.Web;
 
-namespace Procurement.Outbound;
+namespace Expenses.Outbound;
 
 /// <summary>Copies the current request's correlation ID to every outgoing call.</summary>
 public sealed class CorrelationIdHandler(IHttpContextAccessor accessor) : DelegatingHandler
@@ -481,32 +483,32 @@ public sealed class CorrelationIdHandler(IHttpContextAccessor accessor) : Delega
 }
 ```
 
-```csharp file=Outbound/VendorRegistryClient.cs
+```csharp file=Outbound/MerchantRegistryClient.cs
 using System.Net;
-using Procurement.Approvals;
+using Expenses.Approvals;
 
-namespace Procurement.Outbound;
+namespace Expenses.Outbound;
 
-/// <summary>Typed HttpClient for the vendor-registry service. Its handler chain is configured in Program.cs.</summary>
-public sealed class VendorRegistryClient(HttpClient http) : IVendorRegistry
+/// <summary>Typed HttpClient for the merchant-registry service. Its handler chain is configured in Program.cs.</summary>
+public sealed class MerchantRegistryClient(HttpClient http) : IMerchantRegistry
 {
-    private sealed record VendorStatus(string VendorId, bool Blocked);
+    private sealed record MerchantStatus(string MerchantId, bool Blocked);
 
-    public async Task<bool> IsBlockedAsync(string vendorId, CancellationToken ct)
+    public async Task<bool> IsBlockedAsync(string merchantId, CancellationToken ct)
     {
-        using var response = await http.GetAsync($"vendors/{Uri.EscapeDataString(vendorId)}/status", ct);
-        if (response.StatusCode == HttpStatusCode.NotFound) return true;      // unknown vendor: treat as blocked
+        using var response = await http.GetAsync($"merchants/{Uri.EscapeDataString(merchantId)}/status", ct);
+        if (response.StatusCode == HttpStatusCode.NotFound) return true;      // unknown merchant: treat as blocked
         response.EnsureSuccessStatusCode();
-        var status = await response.Content.ReadFromJsonAsync<VendorStatus>(ct);
+        var status = await response.Content.ReadFromJsonAsync<MerchantStatus>(ct);
         return status?.Blocked ?? true;                                        // fail closed
     }
 }
 ```
 
 ```csharp file=Program.cs
-using Procurement.Approvals;
-using Procurement.Outbound;
-using Procurement.Web;
+using Expenses.Approvals;
+using Expenses.Outbound;
+using Expenses.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -518,9 +520,9 @@ builder.Services.AddHttpContextAccessor();
 
 // Outgoing chain: CorrelationIdHandler → (primary handler that does the network I/O)
 builder.Services.AddTransient<CorrelationIdHandler>();
-builder.Services.AddHttpClient<IVendorRegistry, VendorRegistryClient>(c =>
+builder.Services.AddHttpClient<IMerchantRegistry, MerchantRegistryClient>(c =>
     {
-        c.BaseAddress = new Uri(builder.Configuration["VendorRegistry:BaseUrl"] ?? "https://vendors.internal.example/");
+        c.BaseAddress = new Uri(builder.Configuration["MerchantRegistry:BaseUrl"] ?? "https://merchants.internal.example/");
         c.Timeout = TimeSpan.FromSeconds(5);
     })
     .AddHttpMessageHandler<CorrelationIdHandler>();
@@ -538,7 +540,7 @@ app.UseMiddleware<MaintenanceModeMiddleware>();  // 3. may short-circuit with 50
 app.MapGet("/error", () => Results.Problem("Something went wrong.", statusCode: 500));
 app.MapGet("/health", () => Results.Ok("healthy"));
 
-app.MapPost("/purchase-requests", async (PurchaseRequest request, ApprovalChainFactory chains, CancellationToken ct) =>
+app.MapPost("/expense-claims", async (ExpenseClaim request, ApprovalChainFactory chains, CancellationToken ct) =>
 {
     if (request.AmountInr <= 0) return Results.Problem("Amount must be positive.", statusCode: 400);
     var decision = await chains.Create().HandleAsync(request, ct);
@@ -555,7 +557,14 @@ app.Run();
 
 **Why build the chain per request?** `Create()` reads `IOptionsMonitor.CurrentValue`, so a limit changed in configuration takes effect on the next request without a restart. Building six small objects costs microseconds. If profiling ever showed it mattered, you could cache the chain and rebuild it in an `OnChange` callback.
 
-**Why does the vendor check "fail closed"?** If the registry says "not found", or returns garbage, the safe answer for a payment approval is "treat as blocked". A chain that defaults to "pass" when a check is unsure lets bad requests through exactly when systems are unhealthy.
+**Why `IHttpContextAccessor` in the `DelegatingHandler`?** `IHttpClientFactory` pools handler chains and reuses them for two minutes by default (`HandlerLifetime`), and it creates them in their own DI scope, not the request's. A handler that took a scoped service (such as a per-request correlation context) in its constructor would see the wrong request's data. Read per-request data at call time, through `IHttpContextAccessor` or `Activity.Current`, as `CorrelationIdHandler` does. Keep handlers stateless and register them as transient.
+
+**Do you even need a custom correlation header?** If every service uses OpenTelemetry, `HttpClient` already propagates the W3C `traceparent` header and ASP.NET Core continues the trace automatically; `Activity.Current.TraceId` is then your correlation ID across services. The custom header in this lesson is for partners and older services that don't speak W3C trace context, and it falls back to the trace id for exactly that reason.
+
+**Short-circuiting is also built in.** Since ASP.NET Core 8, an endpoint marked `.ShortCircuit()` (for example `app.MapGet("/health", ...).ShortCircuit()`) runs straight after routing and skips the rest of the middleware chain, which is useful for health probes and `robots.txt`. Rate limiting (`UseRateLimiter`) and output caching are other framework middleware that end the chain early by answering on their own.
+
+**Why does the merchant check "fail closed"?**
+ If the registry says "not found", or returns garbage, the safe answer for a payment approval is "treat as blocked". A chain that defaults to "pass" when a check is unsure lets bad requests through exactly when systems are unhealthy.
 
 :::callout type=warning title="Middleware order is a contract"
 `UseExceptionHandler` must come first, or exceptions thrown by earlier middleware are not caught. `UseAuthentication` must come before `UseAuthorization`. `UseCors` must come before endpoints and before middleware that writes responses. Static files often come early so they skip authentication. When you add middleware, write a comment saying *why* it sits where it does, and add an integration test that would fail if it moved.
@@ -563,9 +572,9 @@ app.Run();
 
 ## Bad design vs good design
 
-**Bad: a chain that can fall off the end.** Without `FinalApprover`, a ₹2 crore request returns `NoApprover`. If the caller treats "not rejected" as approved, money moves without a signature. Always end a chain with an explicit terminal handler: approve by the top authority, reject, or throw.
+**Bad: a chain that can fall off the end.** Without `FinalApprover`, a ₹25 lakh request returns `NoApprover`. If the caller treats "not rejected" as approved, money moves without a signature. Always end a chain with an explicit terminal handler: approve by the top authority, reject, or throw.
 
-**Bad: handlers that know about each other.** `LimitApprover` checking `if (next is DirectorApprover)` couples the chain back together. A handler should know only "do I handle this?" and "pass it on".
+**Bad: handlers that know about each other.** `LimitApprover` checking `if (next is CEOApprover)` couples the chain back together. A handler should know only "do I handle this?" and "pass it on".
 
 **Bad: a handler that both handles and passes, by accident.** In the "first handler wins" variant, approving *and then* calling `PassAsync` could produce two approvals and two notifications. Decide the variant and stick to it.
 
@@ -573,43 +582,43 @@ app.Run();
 
 **Good:** small, reusable handlers configured by data; a factory that enforces order; a terminal handler; logging of who decided.
 
-**Is it worth it?** For five fixed amount bands that never change, the `if` ladder is clearer. Introduce the chain when bands become configurable, per-project or per-category, or when new kinds of checks keep arriving.
+**Is it worth it?** For five fixed amount bands that never change, the `if` ladder is clearer. Introduce the chain when bands become configurable, per-department or per-category, or when new kinds of checks keep arriving.
 
 :::callout type=tradeoff title="Sequential sign-off is not 'first handler wins'"
-Many organisations require **every** level up to the limit to sign: a ₹8 lakh request needs the site engineer, then the project manager, then the regional head. That's a multi-step workflow with waiting and state between steps, not a single synchronous chain. Model it as a [state machine](#/lesson/m06-state) whose next approver is computed by a chain like this one.
+Many organisations require **every** level up to the limit to sign: a ₹4.5 lakh request needs the manager, then the finance manager, then the CFO. That's a multi-step workflow with waiting and state between steps, not a single synchronous chain. Model it as a [state machine](#/lesson/m06-state) whose next approver is computed by a chain like this one.
 :::
 
 ## Practical playground
 
 Run the playground, then try:
 
-1. Submit ₹4,99,999 and ₹5,00,001. Which roles approve?
-2. Remove the `FinalApprover` and submit ₹2 crore. What comes back?
-3. Swap the order of the project manager and regional head links. Submit ₹60,000 and notice who approves now.
+1. Submit ₹4,99,999 and ₹2,00,001. Which roles approve?
+2. Remove the `FinalApprover` and submit ₹25 lakh. What comes back?
+3. Swap the order of the finance manager and CFO links. Submit ₹60,000 and notice who approves now.
 
 :::playground type=csharp title="Approval chain"
 ```csharp file=Program.cs
 using System;
 using System.Globalization;
 
-public sealed record PurchaseRequest(string Category, decimal AmountInr, bool VendorBlocked);
+public sealed record ExpenseClaim(string Category, decimal AmountInr, bool MerchantBlocked);
 
 public abstract class Approver
 {
     private Approver? _next;
     public Approver SetNext(Approver next) { _next = next; return next; }
-    public abstract string Handle(PurchaseRequest r);
-    protected string Pass(PurchaseRequest r) => _next?.Handle(r) ?? "NO APPROVER (chain fell off the end!)";
+    public abstract string Handle(ExpenseClaim r);
+    protected string Pass(ExpenseClaim r) => _next?.Handle(r) ?? "NO APPROVER (chain fell off the end!)";
 }
 
-public sealed class VendorCheck : Approver
+public sealed class MerchantCheck : Approver
 {
-    public override string Handle(PurchaseRequest r) => r.VendorBlocked ? "Rejected: vendor blocked" : Pass(r);
+    public override string Handle(ExpenseClaim r) => r.MerchantBlocked ? "Rejected: merchant blocked" : Pass(r);
 }
 
 public sealed class LimitApprover(string role, decimal limit) : Approver
 {
-    public override string Handle(PurchaseRequest r)
+    public override string Handle(ExpenseClaim r)
     {
         Console.WriteLine($"    {role} looks at it (limit {limit.ToString("N0", CultureInfo.GetCultureInfo("en-IN"))})");
         return r.AmountInr <= limit ? $"Approved by {role}" : Pass(r);
@@ -618,25 +627,25 @@ public sealed class LimitApprover(string role, decimal limit) : Approver
 
 public sealed class FinalApprover(string role) : Approver
 {
-    public override string Handle(PurchaseRequest r) => $"Approved by {role} (above all limits)";
+    public override string Handle(ExpenseClaim r) => $"Approved by {role} (above all limits)";
 }
 
 public static class Program
 {
     public static void Main()
     {
-        var chain = new VendorCheck();
-        chain.SetNext(new LimitApprover("Site engineer", 50_000m))
-             .SetNext(new LimitApprover("Project manager", 5_00_000m))
-             .SetNext(new LimitApprover("Regional head", 50_00_000m))
-             .SetNext(new FinalApprover("Director"));
+        var chain = new MerchantCheck();
+        chain.SetNext(new LimitApprover("Manager", 25_000m))
+             .SetNext(new LimitApprover("Finance manager", 2_00_000m))
+             .SetNext(new LimitApprover("CFO", 10_00_000m))
+             .SetNext(new FinalApprover("CEO"));
 
         foreach (var r in new[]
         {
-            new PurchaseRequest("Cement", 32_000m, false),
-            new PurchaseRequest("Steel", 8_00_000m, false),
-            new PurchaseRequest("Machinery", 2_00_00_000m, false),
-            new PurchaseRequest("Diesel", 10_000m, true),
+            new ExpenseClaim("Client dinner", 8_500m, false),
+            new ExpenseClaim("Team offsite, Goa", 4_50_000m, false),
+            new ExpenseClaim("GPU servers", 25_00_000m, false),
+            new ExpenseClaim("Taxi", 1_200m, true),
         })
         {
             Console.WriteLine($"{r.Category} ₹{r.AmountInr.ToString("N0", CultureInfo.GetCultureInfo("en-IN"))}:");
@@ -1073,22 +1082,22 @@ public string Approve(Expense e, Employee raisedBy)
     if (e.Amount <= 0) return "Rejected: invalid";
     if (e.Category == "Travel" && e.Amount > 25_000 && !e.HasPreApproval) return "Rejected: no pre-approval";
     if (raisedBy.IsOnNoticePeriod) return "HR";
-    if (e.ProjectType == "EPC")
+    if (e.Department == "Sales")
     {
-        if (e.Amount <= 1_00_000) return "Project manager";
-        if (e.Amount <= 10_00_000) return "Regional head";
-        return "Director";
+        if (e.Amount <= 50_000) return "Manager";
+        if (e.Amount <= 5_00_000) return "Finance manager";
+        return "CFO";
     }
-    if (e.Amount <= 50_000) return "Project manager";
-    if (e.Amount <= 5_00_000) return "Regional head";
-    return "Director";
+    if (e.Amount <= 25_000) return "Manager";
+    if (e.Amount <= 2_00_000) return "Finance manager";
+    return "CFO";
 }
 ```
 
-Finance wants limits per project type in configuration, a new rule "software subscriptions always go to the IT head", and an audit line saying which rule decided. Redesign it.
+Finance wants limits per department in configuration, a new rule "software subscriptions always go to the IT head", and an audit line saying which rule decided. Redesign it.
 ::acceptance
 - Each rule is a separate handler; you list them in order and explain why that order.
-- Limits per project type come from configuration; adding a project type needs no code change.
+- Limits per department come from configuration; adding a department needs no code change.
 - The chain always ends with a decision.
 - Every decision records which handler made it.
 - You note one risk of the new design and how a test guards against it.
@@ -1097,7 +1106,7 @@ Sort the rules into rejections, special routing, and amount bands.
 ::hint
 Rejections first (cheap and final), then routing rules that override amount (notice period, software → IT head), then amount bands.
 ::hint
-The amount bands differ only by data. One `LimitApprover` class, many instances built from `Approvals:ProjectTypes:EPC:Limits` and so on.
+The amount bands differ only by data. One `LimitApprover` class, many instances built from `Approvals:Departments:Sales` and so on.
 ::hint
 Include the handler's name in the decision (`DecidedBy`) and log it in the chain's base class so no handler can forget.
 ::solution
@@ -1107,8 +1116,8 @@ Include the handler's name in the decision (`DecidedBy`) and log it in the chain
 2. `TravelPreApprovalCheck` → reject. A policy violation should not reach any approver.
 3. `NoticePeriodRouter` → HR. Overrides amount bands.
 4. `CategoryRouter("Software", "IT head")` → IT head. Overrides amount bands.
-5. `LimitApprover` × N, built from the project type's configured limits, ascending.
-6. `FinalApprover("Director")`, the terminal handler.
+5. `LimitApprover` × N, built from the department's configured limits, ascending.
+6. `FinalApprover("CFO")`, the terminal handler.
 
 ```mermaid
 classDiagram
@@ -1119,41 +1128,41 @@ classDiagram
   class CategoryRouter { -string category -string role }
   class LimitApprover { -string role -decimal limit }
   class FinalApprover
-  class ExpenseChainFactory { +Create(string projectType) ExpenseHandler }
+  class ExpenseChainFactory { +Create(string department) ExpenseHandler }
   ExpenseHandler <|-- InvalidAmountCheck
   ExpenseHandler <|-- TravelPreApprovalCheck
   ExpenseHandler <|-- NoticePeriodRouter
   ExpenseHandler <|-- CategoryRouter
   ExpenseHandler <|-- LimitApprover
   ExpenseHandler <|-- FinalApprover
-  ExpenseChainFactory ..> ExpenseHandler : builds per project type
+  ExpenseChainFactory ..> ExpenseHandler : builds per department
 ```
 
 Configuration:
 
 ```json
-{ "Approvals": { "ProjectTypes": {
-    "Default": [ { "Role": "Project manager", "Limit": 50000 },  { "Role": "Regional head", "Limit": 500000 } ],
-    "EPC":     [ { "Role": "Project manager", "Limit": 100000 }, { "Role": "Regional head", "Limit": 1000000 } ] } } }
+{ "Approvals": { "Departments": {
+    "Default": [ { "Role": "Manager", "Limit": 25000 }, { "Role": "Finance manager", "Limit": 200000 } ],
+    "Sales":   [ { "Role": "Manager", "Limit": 50000 }, { "Role": "Finance manager", "Limit": 500000 } ] } } }
 ```
 
-`ExpenseChainFactory.Create(projectType)` falls back to `Default` for unknown types. The base class sets `DecidedBy = GetType().Name` (or the configured role) and logs it, giving the audit line for free.
+`ExpenseChainFactory.Create(department)` falls back to `Default` for unknown departments. The base class sets `DecidedBy = GetType().Name` (or the configured role) and logs it, giving the audit line for free.
 
 **Risk**: order is now data assembled by the factory, so a refactor could move `NoticePeriodRouter` after the limits and quietly change behaviour. Guard it with table-driven tests that run the *old* method and the *new* chain over the same 50 sample expenses (a characterisation test) and assert identical results before the old code is deleted.
 ::mistakes
-- Making one class per role (`ProjectManagerApprover`, `RegionalHeadApprover`), which turns configuration into code again.
+- Making one class per role (`ManagerApprover`, `FinanceManagerApprover`), which turns configuration into code again.
 - Putting routing rules after the amount bands, where they can never fire.
 - Letting the factory accept limits in any order without sorting or validating them.
 :::
 
 :::exercise id=m06-chain-of-responsibility-ex5 difficulty=advanced kind=code title="Validation chain: cheap checks first, stop early"
-A vendor-onboarding API validates registrations: required fields, GSTIN format, PAN matching the GSTIN, and a slow call to check the GSTIN is active (about 400 ms, an estimate based on a typical external API). Implement `ValidationChain.ValidateAsync`, which runs rules in order, collects errors, and stops early when a rule says so.
+A marketplace's seller-onboarding API validates new sellers' registrations: required fields, GSTIN format, PAN matching the GSTIN, and a slow call to check the GSTIN is active (about 400 ms, an estimate based on a typical external API). Implement `ValidationChain.ValidateAsync`, which runs rules in order, collects errors, and stops early when a rule says so.
 ::requirements
 - Each rule returns a `RuleResult` with zero or more errors and a `Stop` flag.
 - Run rules in the given order. Add each rule's errors to the result.
 - If a rule returns `Stop = true`, run no further rules.
 - After the chain, `IsValid` is true only if there are no errors.
-- Implement the four rules: `RequiredFieldsRule` (stops if anything is missing), `GstinFormatRule` (15 characters, pattern `^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$`, stops on failure), `PanMatchesGstinRule` (characters 3–12 of the GSTIN must equal the PAN; doesn't stop), `ActiveGstinRule` (calls `IGstinDirectory.IsActiveAsync`).
+- Implement the four rules: `RequiredFieldsRule` (stops if anything is missing), `GstinFormatRule` (15 characters, pattern `^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$`, stops on failure), `PanMatchesGstinRule` (characters 3–12 of the GSTIN must equal the PAN; doesn't stop), `ActiveGstinRule` (calls `IGstinCEOy.IsActiveAsync`).
 ::acceptance
 - A registration missing its name returns only the "required" error, and the directory is never called.
 - A malformed GSTIN returns the format error, and the directory is never called.
@@ -1177,7 +1186,7 @@ foreach (var rule in _rules)
 }
 ```
 ::starter
-```csharp file=VendorValidation.cs
+```csharp file=SellerValidation.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -1185,7 +1194,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
-public sealed record VendorRegistration(string? Name, string? Gstin, string? Pan);
+public sealed record SellerRegistration(string? Name, string? Gstin, string? Pan);
 
 public sealed record RuleResult(IReadOnlyList<string> Errors, bool Stop)
 {
@@ -1199,10 +1208,10 @@ public sealed record ValidationResult(IReadOnlyList<string> Errors)
 
 public interface IValidationRule
 {
-    Task<RuleResult> CheckAsync(VendorRegistration r, CancellationToken ct);
+    Task<RuleResult> CheckAsync(SellerRegistration r, CancellationToken ct);
 }
 
-public interface IGstinDirectory
+public interface IGstinCEOy
 {
     Task<bool> IsActiveAsync(string gstin, CancellationToken ct);
 }
@@ -1210,46 +1219,46 @@ public interface IGstinDirectory
 public sealed class ValidationChain(IEnumerable<IValidationRule> rules)
 {
     private readonly IReadOnlyList<IValidationRule> _rules = rules.ToList();
-    public Task<ValidationResult> ValidateAsync(VendorRegistration r, CancellationToken ct) => throw new NotImplementedException();
+    public Task<ValidationResult> ValidateAsync(SellerRegistration r, CancellationToken ct) => throw new NotImplementedException();
 }
 
 public sealed class RequiredFieldsRule : IValidationRule
 {
-    public Task<RuleResult> CheckAsync(VendorRegistration r, CancellationToken ct) => throw new NotImplementedException();
+    public Task<RuleResult> CheckAsync(SellerRegistration r, CancellationToken ct) => throw new NotImplementedException();
 }
 
 public sealed class GstinFormatRule : IValidationRule
 {
-    public Task<RuleResult> CheckAsync(VendorRegistration r, CancellationToken ct) => throw new NotImplementedException();
+    public Task<RuleResult> CheckAsync(SellerRegistration r, CancellationToken ct) => throw new NotImplementedException();
 }
 
 public sealed class PanMatchesGstinRule : IValidationRule
 {
-    public Task<RuleResult> CheckAsync(VendorRegistration r, CancellationToken ct) => throw new NotImplementedException();
+    public Task<RuleResult> CheckAsync(SellerRegistration r, CancellationToken ct) => throw new NotImplementedException();
 }
 
-public sealed class ActiveGstinRule(IGstinDirectory directory) : IValidationRule
+public sealed class ActiveGstinRule(IGstinCEOy directory) : IValidationRule
 {
-    public Task<RuleResult> CheckAsync(VendorRegistration r, CancellationToken ct) => throw new NotImplementedException();
+    public Task<RuleResult> CheckAsync(SellerRegistration r, CancellationToken ct) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=VendorValidationTests.cs
+```csharp file=SellerValidationTests.cs
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-public class VendorValidationTests
+public class SellerValidationTests
 {
-    private sealed class FakeDirectory(bool active) : IGstinDirectory
+    private sealed class FakeCEOy(bool active) : IGstinCEOy
     {
         public int Calls;
         public Task<bool> IsActiveAsync(string gstin, CancellationToken ct) { Calls++; return Task.FromResult(active); }
     }
 
-    private static (ValidationChain Chain, FakeDirectory Dir) Build(bool active = true)
+    private static (ValidationChain Chain, FakeCEOy Dir) Build(bool active = true)
     {
-        var dir = new FakeDirectory(active);
+        var dir = new FakeCEOy(active);
         var chain = new ValidationChain(new IValidationRule[]
             { new RequiredFieldsRule(), new GstinFormatRule(), new PanMatchesGstinRule(), new ActiveGstinRule(dir) });
         return (chain, dir);
@@ -1262,7 +1271,7 @@ public class VendorValidationTests
     public async Task Missing_field_stops_before_directory()
     {
         var (chain, dir) = Build();
-        var result = await chain.ValidateAsync(new VendorRegistration("", Gstin, Pan), CancellationToken.None);
+        var result = await chain.ValidateAsync(new SellerRegistration("", Gstin, Pan), CancellationToken.None);
         Assert.False(result.IsValid);
         Assert.Single(result.Errors);
         Assert.Equal(0, dir.Calls);
@@ -1272,7 +1281,7 @@ public class VendorValidationTests
     public async Task Bad_format_stops_before_directory()
     {
         var (chain, dir) = Build();
-        var result = await chain.ValidateAsync(new VendorRegistration("Shree Infra", "06ABCDE1234", Pan), CancellationToken.None);
+        var result = await chain.ValidateAsync(new SellerRegistration("Shree Handloom", "06ABCDE1234", Pan), CancellationToken.None);
         Assert.Single(result.Errors);
         Assert.Contains("format", result.Errors[0]);
         Assert.Equal(0, dir.Calls);
@@ -1282,7 +1291,7 @@ public class VendorValidationTests
     public async Task Pan_mismatch_and_inactive_are_both_reported()
     {
         var (chain, dir) = Build(active: false);
-        var result = await chain.ValidateAsync(new VendorRegistration("Shree Infra", Gstin, "ZZZZZ9999Z"), CancellationToken.None);
+        var result = await chain.ValidateAsync(new SellerRegistration("Shree Handloom", Gstin, "ZZZZZ9999Z"), CancellationToken.None);
         Assert.Equal(2, result.Errors.Count);
         Assert.Equal(1, dir.Calls);
     }
@@ -1291,14 +1300,14 @@ public class VendorValidationTests
     public async Task Valid_registration_passes()
     {
         var (chain, dir) = Build();
-        var result = await chain.ValidateAsync(new VendorRegistration("Shree Infra", " 06abcde1234f1z5 ", Pan), CancellationToken.None);
+        var result = await chain.ValidateAsync(new SellerRegistration("Shree Handloom", " 06abcde1234f1z5 ", Pan), CancellationToken.None);
         Assert.True(result.IsValid);
         Assert.Equal(1, dir.Calls);
     }
 }
 ```
 ::solution
-```csharp file=VendorValidation.cs
+```csharp file=SellerValidation.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -1306,7 +1315,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
-public sealed record VendorRegistration(string? Name, string? Gstin, string? Pan);
+public sealed record SellerRegistration(string? Name, string? Gstin, string? Pan);
 
 public sealed record RuleResult(IReadOnlyList<string> Errors, bool Stop)
 {
@@ -1320,10 +1329,10 @@ public sealed record ValidationResult(IReadOnlyList<string> Errors)
 
 public interface IValidationRule
 {
-    Task<RuleResult> CheckAsync(VendorRegistration r, CancellationToken ct);
+    Task<RuleResult> CheckAsync(SellerRegistration r, CancellationToken ct);
 }
 
-public interface IGstinDirectory
+public interface IGstinCEOy
 {
     Task<bool> IsActiveAsync(string gstin, CancellationToken ct);
 }
@@ -1332,7 +1341,7 @@ public sealed class ValidationChain(IEnumerable<IValidationRule> rules)
 {
     private readonly IReadOnlyList<IValidationRule> _rules = rules.ToList();
 
-    public async Task<ValidationResult> ValidateAsync(VendorRegistration r, CancellationToken ct)
+    public async Task<ValidationResult> ValidateAsync(SellerRegistration r, CancellationToken ct)
     {
         var errors = new List<string>();
         foreach (var rule in _rules)
@@ -1352,7 +1361,7 @@ internal static class Norm
 
 public sealed class RequiredFieldsRule : IValidationRule
 {
-    public Task<RuleResult> CheckAsync(VendorRegistration r, CancellationToken ct)
+    public Task<RuleResult> CheckAsync(SellerRegistration r, CancellationToken ct)
     {
         var missing = new List<string>();
         if (string.IsNullOrWhiteSpace(r.Name)) missing.Add("Name is required.");
@@ -1367,7 +1376,7 @@ public sealed class GstinFormatRule : IValidationRule
     private static readonly Regex Pattern = new("^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
-    public Task<RuleResult> CheckAsync(VendorRegistration r, CancellationToken ct) =>
+    public Task<RuleResult> CheckAsync(SellerRegistration r, CancellationToken ct) =>
         Task.FromResult(Pattern.IsMatch(Norm.Up(r.Gstin))
             ? RuleResult.Ok
             : new RuleResult(new[] { "GSTIN format is invalid." }, Stop: true));
@@ -1375,15 +1384,15 @@ public sealed class GstinFormatRule : IValidationRule
 
 public sealed class PanMatchesGstinRule : IValidationRule
 {
-    public Task<RuleResult> CheckAsync(VendorRegistration r, CancellationToken ct) =>
+    public Task<RuleResult> CheckAsync(SellerRegistration r, CancellationToken ct) =>
         Task.FromResult(Norm.Up(r.Gstin).Substring(2, 10) == Norm.Up(r.Pan)
             ? RuleResult.Ok
             : new RuleResult(new[] { "PAN does not match the GSTIN." }, Stop: false));
 }
 
-public sealed class ActiveGstinRule(IGstinDirectory directory) : IValidationRule
+public sealed class ActiveGstinRule(IGstinCEOy directory) : IValidationRule
 {
-    public async Task<RuleResult> CheckAsync(VendorRegistration r, CancellationToken ct) =>
+    public async Task<RuleResult> CheckAsync(SellerRegistration r, CancellationToken ct) =>
         await directory.IsActiveAsync(Norm.Up(r.Gstin), ct)
             ? RuleResult.Ok
             : new RuleResult(new[] { "GSTIN is not active." }, Stop: false);
@@ -1406,7 +1415,7 @@ FluentValidation offers the same idea with `RuleFor(...).Cascade(CascadeMode.Sto
 private sealed class RecordingNext : ApprovalHandler
 {
     public bool Called { get; private set; }
-    public override Task<ApprovalDecision> HandleAsync(PurchaseRequest r, CancellationToken ct)
+    public override Task<ApprovalDecision> HandleAsync(ExpenseClaim r, CancellationToken ct)
     {
         Called = true;
         return Task.FromResult(ApprovalDecision.Approve("next", "test"));
@@ -1417,29 +1426,29 @@ private sealed class RecordingNext : ApprovalHandler
 public async Task LimitApprover_passes_when_over_limit()
 {
     var next = new RecordingNext();
-    var engineer = new LimitApprover("Site engineer", 50_000m);
-    engineer.SetNext(next);
-    await engineer.HandleAsync(Request(amount: 50_001m), CancellationToken.None);
+    var manager = new LimitApprover("Manager", 25_000m);
+    manager.SetNext(next);
+    await manager.HandleAsync(Request(amount: 25_001m), CancellationToken.None);
     Assert.True(next.Called);
 }
 ```
 
-**2. The assembled chain, table-driven.** Build the real chain from a known options object and run boundary values through it: ₹50,000 and ₹50,001; ₹5,00,000 and ₹5,00,001; an IT purchase of ₹2,00,001; a blocked vendor of ₹10. Boundaries are where off-by-one bugs (`<` vs `<=`) live.
+**2. The assembled chain, table-driven.** Build the real chain from a known options object and run boundary values through it: ₹25,000 and ₹25,001; ₹2,00,000 and ₹2,00,001; an IT purchase of ₹1,00,001; a blocked vendor of ₹10. Boundaries are where off-by-one bugs (`<` vs `<=`) live.
 
-**3. The factory's ordering.** Pass limits in a scrambled order and assert that ₹10,000 still goes to the site engineer. Pass an empty list and assert the factory refuses to build a chain.
+**3. The factory's ordering.** Pass limits in a scrambled order and assert that ₹10,000 still goes to the manager. Pass an empty list and assert the factory refuses to build a chain.
 
 **4. Middleware with `TestServer` or a `DefaultHttpContext`.** For unit tests, create `new DefaultHttpContext()`, call `middleware.InvokeAsync(context)` with a `next` delegate that records it was called, and assert headers and status codes. For order-sensitive behaviour (exception handler wraps everything, maintenance mode stops before endpoints), use `WebApplicationFactory<Program>` integration tests that send real requests through the real pipeline.
 
 **5. `DelegatingHandler`s with a fake inner handler** (exercise 3). No network, no mocking library, and fast.
 
-**Extensibility check.** Add a new handler type (for example, an `EmergencyProcurementApprover` for monsoon damage works) in a test: insert it into the chain built by a test factory and assert that existing boundary tests still pass and the new case is handled. If existing handlers needed edits, the chain has leaked knowledge between links.
+**Extensibility check.** Add a new handler type (for example, an `OutageSpendApprover` for emergency cloud spend during a production incident) in a test: insert it into the chain built by a test factory and assert that existing boundary tests still pass and the new case is handled. If existing handlers needed edits, the chain has leaked knowledge between links.
 
 ## Real-world application
 
 - **ASP.NET Core middleware**: exception handling, HSTS, HTTPS redirection, static files, routing, CORS, authentication, authorisation, rate limiting, output caching. Each is a link; order is documented by Microsoft for good reasons.
 - **`HttpClient` pipelines**: `IHttpClientFactory` builds a chain of `DelegatingHandler`s per named client: logging, auth tokens, correlation IDs, and the standard resilience handler (retries, circuit breaker, timeouts).
 - **MVC filters and endpoint filters**: authorisation, resource, action, exception and result filters form chains around controller actions; `IEndpointFilter` does the same for minimal APIs.
-- **Approvals**: purchase, expense, leave and change-request approvals in ERPs route by amount, category and role, typically with limits held in configuration tables.
+- **Approvals**: expense, purchase, leave, refund and change-request approvals in HR, finance and spend-management tools route by amount, category and role, typically with limits held in configuration tables.
 - **Logging and exception handling**: `ILoggerProvider`s and `IExceptionHandler` registrations (ASP.NET Core 8+) are tried in order; an exception handler returns `true` to say "handled", otherwise the next one is tried. That's the classic "first handler wins" variant.
 
 ## Interview questions
@@ -1466,9 +1475,9 @@ Chain of Responsibility vs Decorator: aren't they the same?
 ::a
 Structurally they look alike: each object wraps the next and forwards calls. The intent differs. A **decorator** always forwards and adds behaviour; every decorator runs, and the wrapped object always gets the call. A **chain** lets each link decide whether to handle the request and stop, or pass it on; in the classic form exactly one handler handles it. ASP.NET Core middleware sits between them: most middleware behave like decorators (logging, correlation IDs), while some short-circuit (authorisation failures, maintenance mode). Naming it correctly helps reviewers ask the right question: "is it OK if this link stops the request?"
 ::q advanced
-A purchase-approval chain is in production. A ₹3 crore order was approved by nobody, and money was released. How could that happen and how do you prevent it?
+An expense-approval chain is in production. A ₹30 lakh claim was approved by nobody, and the money was paid out. How could that happen and how do you prevent it?
 ::a
-Likely the chain fell off the end: no handler matched (perhaps a new project type had no configured limits), the chain returned a default like `null` or `NoApprover`, and the caller treated "not rejected" as approved. Prevent it with: a terminal handler that always decides (top authority or explicit reject); a factory that refuses to build a chain without limits; callers that only release funds on an explicit `Approved`; failing closed when a dependency is unavailable; tests for every project type at boundary amounts; and an audit log of the deciding handler so gaps are visible.
+Likely the chain fell off the end: no handler matched (perhaps a new department had no configured limits), the chain returned a default like `null` or `NoApprover`, and the caller treated "not rejected" as approved. Prevent it with: a terminal handler that always decides (top authority or explicit reject); a factory that refuses to build a chain without limits; callers that only release funds on an explicit `Approved`; failing closed when a dependency is unavailable; tests for every project type at boundary amounts; and an audit log of the deciding handler so gaps are visible.
 :::
 
 ## Summary and revision
@@ -1498,6 +1507,8 @@ Q: Chain vs Decorator in one line?
 A: A decorator always forwards and adds behaviour; a chain link may handle the request and stop.
 Q: Why put cheap validation rules before expensive ones?
 A: Early rules can stop the chain, so slow or costly checks only run on plausible input.
+Q: Why shouldn't a DelegatingHandler take a scoped service in its constructor?
+A: IHttpClientFactory pools handler chains (2-minute default lifetime) in their own DI scope, so the handler would see another request's data. Read per-request data at call time via IHttpContextAccessor or Activity.Current.
 :::
 
 ## Knowledge check
@@ -1511,7 +1522,7 @@ In `Program.cs`, a teammate moved `app.UseAuthorization()` above `app.UseAuthent
 - [ ] Middleware order doesn't matter; it must be another bug.
 > Each middleware only sees what earlier ones set up. Authentication must populate `HttpContext.User` before authorization checks it.
 ::q single
-An approval chain has limits ₹50,000, ₹5,00,000 and ₹50,00,000 but no terminal handler. A ₹2 crore request arrives. What happens?
+An approval chain has limits ₹25,000, ₹2,00,000 and ₹10,00,000 but no terminal handler. A ₹25 lakh request arrives. What happens?
 - [ ] The highest approver approves it automatically.
 - [x] It falls off the end with no decision, and behaviour depends on what the caller does with "no approver".
 - [ ] The chain loops back to the first handler.
@@ -1539,7 +1550,8 @@ A `RetryOn503Handler` retries every request, including POST `/invoices`. What is
 - [ ] HttpClient will throw on retried POSTs.
 > Retry only idempotent requests, or send an idempotency key the server uses to detect duplicates.
 ::q single
-Vendor validation calls a slow external GSTIN check (≈400 ms, estimated) and three fast local checks. Where should the slow check go?
+Seller-onboarding validation calls a slow external GSTIN check
+ (≈400 ms, estimated) and three fast local checks. Where should the slow check go?
 - [ ] First, because it is the most authoritative.
 - [x] Last, after fast checks that stop the chain on malformed input.
 - [ ] In parallel with everything, always.
@@ -1552,7 +1564,15 @@ Which statement best distinguishes Chain of Responsibility from Observer?
 - [ ] Observer is only for UI code.
 - [ ] A chain always has exactly two handlers.
 > Observer is one-to-many notification. A chain is one request moving through handlers in order, often with exactly one handler deciding.
+::q single
+Only `POST /expense-claims/{id}/receipts` must check that the uploaded file is under 5 MB. A teammate writes a middleware that checks the path and the size on every request. What is the better design?
+- [ ] Keep the middleware; middleware is the right place for all request checks.
+- [x] Put the check on that endpoint (an endpoint filter or the handler, plus a request-size limit for that route), so other requests don't pay for it and the rule lives next to the endpoint it protects.
+- [ ] Move the check into the `DelegatingHandler` chain.
+- [ ] Add it to `UseExceptionHandler`.
+> Middleware runs for every request. Endpoint-specific rules belong in endpoint filters, route groups or the handler; path-matching middleware is a hidden, fragile routing table.
 :::
+
 
 ## Completion criteria
 

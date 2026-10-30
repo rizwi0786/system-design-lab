@@ -290,7 +290,7 @@ If 50 % of calls fail over 10 seconds (with at least 100 calls), open the breake
 
 ### Step 6 — remove the other layers' retries
 
-Audit the gateway and the app. The gateway's 3 retries are removed for `POST` routes; the app keeps 1 jittered retry for network errors only (no response at all), and honours `Retry-After`. Worst-case amplification drops from 256× to 2 × 2 = 4×, and in practice the budget keeps it near 1.1×.
+Audit the gateway and the app. The gateway's 3 retries are removed for `POST` routes and the booking service stops retrying; the app keeps 1 jittered retry for network errors only (no response at all), sends the same idempotency key on that retry, and honours `Retry-After`. The payment service keeps at most 2 retries to the bank. Worst-case amplification on the pay path drops from 256× to 2 (app) × 1 (gateway) × 1 (booking) × 3 (payment) = 6×, and in practice the budget keeps it near 1.1×.
 
 ## Production-style C# implementation
 
@@ -588,7 +588,7 @@ builder.Services.AddHttpClient("bank")
     });
 ```
 
-Two cautions with any library: check what is retried by default (for example whether `POST` requests are retried), and remember that a per-client policy still multiplies across layers. The library protects one hop; you design the path.
+Two cautions with any library: check what is retried by default, and remember that a per-client policy still multiplies across layers. The standard handler's retry strategy retries transient failures for every HTTP method unless you call `o.Retry.DisableForUnsafeHttpMethods()` (or send an idempotency key the server honours), so a `POST /payments` behind it is retried by default. It also honours `Retry-After` by default (`ShouldRetryAfterHeader`). It has no retry budget; if you need one, add a custom strategy or rely on the circuit breaker plus a low retry count. The library protects one hop; you design the path.
 
 ## Bad design vs good design
 
@@ -612,7 +612,7 @@ Booking: no retries; passes deadline and do-not-retry hints through
 Payment: owns retries to the bank: max 2, full jitter, 10 % budget, breaker, idempotency key
 ```
 
-Worst case: 2 × 2 × 1 × 3 = 12 attempts per tap, and the budget keeps typical extra load near 10 %. Every policy is written down in one place (an architecture decision record) for the whole path.
+Worst case on the pay path (a `POST`, so the gateway does not retry): 2 × 1 × 1 × 3 = 6 attempts per tap at the bank, and the budget keeps typical extra load near 10 %. Every policy is written down in one place (an architecture decision record) for the whole path.
 
 :::callout type=mistake title="Retrying inside a retry"
 A common hidden multiplier is retrying around a client that already retries: an SDK with built-in retries wrapped in your own retry loop, or an `HttpClient` with a resilience handler called from a method that also retries. Read the defaults of every SDK on a critical path.
@@ -1304,7 +1304,7 @@ Assert that a `GET` is retried, that a `POST` without `Idempotency-Key` is not, 
 - **AWS SDKs** use exponential backoff with jitter and client-side retry quotas by default; AWS's public architecture writing explains why jitter is essential for many clients.
 - **Microsoft's resilience libraries** (`Microsoft.Extensions.Http.Resilience`, Polly v8) package timeout, retry with jitter, circuit breaker and rate limiting into a standard pipeline for `HttpClient`.
 - **Mobile apps** often ship a remote-config "retry kill switch": during an incident, operators can set client retries to zero or lengthen backoff for millions of devices within minutes.
-- **Infrastructure telemetry**: thousands of site gateways uploading sensor batches after a network outage should resume with randomized delays, or the upload service sees every gateway reconnect in the same second.
+- **Smart-home and IoT devices**: hundreds of thousands of smart meters, doorbell cameras or fitness bands that lost connectivity during an internet-provider outage should reconnect with randomized delays, or the upload service sees every device reconnect in the same second.
 
 ## Interview questions
 

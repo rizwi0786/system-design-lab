@@ -114,5 +114,19 @@ body { background: var(--color-bg); color: var(--color-ink); font-family: var(--
 .md-table tr:last-child td { border-bottom: 0; }
 .md-table code { font-size: 0.85em; }
 .mermaid-svg svg { max-height: 640px; }
+
+/* ---------- visual blocks (:::flow and friends) ---------- */
+.flow-stage { perspective: 1400px; }
+.flow-board { transform-origin: 50% 40%; transition: transform 0.7s cubic-bezier(0.2, 0.8, 0.2, 1), filter 0.7s; }
+.flow-stage.is-3d .flow-board { transform: rotateX(48deg) rotateZ(-24deg) scale(0.86); filter: drop-shadow(0 28px 24px rgb(20 24 50 / 0.18)); }
+.dark .flow-stage.is-3d .flow-board { filter: drop-shadow(0 28px 24px rgb(0 0 0 / 0.5)); }
+.flow-edge-live { stroke-dasharray: 7 5; animation: flow-dash 0.6s linear infinite; }
+@keyframes flow-dash { to { stroke-dashoffset: -12; } }
+.flow-pulse { transform-box: fill-box; transform-origin: center; animation: flow-pulse 1.2s ease-out infinite; }
+@keyframes flow-pulse { from { opacity: 0.7; transform: scale(1); } to { opacity: 0; transform: scale(1.12); } }
+@keyframes fade-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.mmd-dim { opacity: 0.12; transition: opacity 0.35s ease; }
+.mermaid-zoom svg { width: 100% !important; max-width: none !important; height: auto; max-height: none; }
+.mmd-live { transition: opacity 0.35s ease; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; scroll-behavior: auto !important; } .confetti { display: none; } }
 .reduce-motion *, .reduce-motion *::before { animation: none !important; transition: none !important; } .reduce-motion .confetti { display: none; }

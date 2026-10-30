@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 75
 prerequisites: [m11-capacity-estimation, m11-latency-numbers]
-related: [m11-stateless, m11-load-balancing, m11-availability, m15-kubernetes, m13-backpressure, m11-cost-estimation]
+related: [m11-stateless, m11-load-balancing, m11-availability, m15-kubernetes, m13-backpressure, m11-cost-estimation, m17-scaling-journey, m17-flash-sale]
 tags: [hld, scaling, scale-up, scale-out, autoscaling, elasticity, capacity]
 patterns: [Horizontal Scaling, Autoscaling, Load Shedding]
 summary: Learn when to buy a bigger machine (scale up) and when to add more machines (scale out), why both hit limits, how cost grows with each, and how autoscalers decide when to add and remove instances without flapping or arriving too late.
@@ -220,12 +220,15 @@ When you scale the web tier out, the bottleneck moves. In order of how often it 
 4. **Downstream rate limits.** A payment gateway or SMS provider that allows 200 requests per second, however many instances you run.
 5. **The autoscaler itself.** Quotas (your subscription may allow only so many vCPUs per region), IP addresses in a subnet, or image pulls from a registry that throttles.
 
+To watch the bottleneck move in a real growing system, follow [Scaling a real system from 100 to 10 million users](#/lesson/m17-scaling-journey): a grocery app runs on a single app instance until about 5,000 users, scales out to three stateless instances with a cache when database CPU hits 85 % at 100,000 users, adds read replicas at about a million users, and partitions only at the last stage. Each step happens because a measured number forced it.
+
 ### When a simpler design is enough
 
 - An internal tool with 200 users: one VM, scale up when needed. Do not build an autoscaling fleet.
 - A product with steady load that fits on two instances: run two (for availability), size them generously, and skip autoscaling until the bill or the traffic shape justifies it.
 - A results portal that is busy one day a year: the cheapest design might be to **pre-generate** all results as static files behind a CDN and object storage, so the "scaling" is done by the CDN. (Check privacy rules first: anyone who guesses a roll number could see a result, so you might still need a lightweight check.)
 - A database that is CPU-bound on a 4-vCPU server: scale up to 16 vCPUs before building shards. Scaling up the database is boring and that is its virtue.
+- A young product: start on one well-sized VM (or two for availability) and scale up first. The [scaling journey case study](#/lesson/m17-scaling-journey) keeps one app instance until about 5,000 users (around 5 RPS at peak), because scaling out earlier would have bought complexity and no measurable benefit.
 
 ## Visual explanation
 
@@ -1185,7 +1188,7 @@ public void Dip_does_not_scale_down_inside_window()
 
 ## Real-world application
 
-- **Ticketing and flash sales.** A system like a railway's Tatkal booking or a concert sale opens at a known time. Teams pre-scale, use waiting rooms (virtual queues) to admit users at a rate the backend can serve, and shed the rest politely.
+- **Ticketing and flash sales.** A system like a railway's Tatkal booking or a concert sale opens at a known time. Teams pre-scale, use waiting rooms (virtual queues) to admit users at a rate the backend can serve, and shed the rest politely. [Flash sale](#/lesson/m17-flash-sale) works through one in detail.
 - **Kubernetes HPA and KEDA.** HPA implements target tracking on CPU, memory or custom metrics with the stabilisation behaviour shown here. KEDA adds event-driven scaling on queue depth or message age, including scale to zero for workers.
 - **Azure App Service and Container Apps.** App Service scales up by changing the plan tier and out by instance count (manual, rule-based or automatic). Container Apps scales on HTTP concurrency, CPU, or KEDA scalers.
 - **Databases.** Managed PostgreSQL services typically scale up by changing compute tier (with a brief failover) and scale reads out with replicas. Writes scale out only through partitioning or sharding ([partitioning and sharding](#/lesson/m09-partitioning-sharding)).

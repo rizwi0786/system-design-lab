@@ -57,7 +57,7 @@ The company has three options:
 
 In software, the "hub" is a cloud region: a cluster of data centres in one metro area, such as Azure's Central India (Pune) or AWS's ap-south-1 (Mumbai). The "parcels" are requests, and the "records" are your database. The hard part of option 3 is the address-change problem: two copies of a record that both accepted a write. That is a **write conflict**, and every active-active design is mostly a plan for what to do about them.
 
-There is a fourth reason, nothing to do with cyclones. Some customers are legally required to keep their data in their country. A hospital group in Germany cannot store patient records in Mumbai; an Indian government department may not store citizen data outside India. That is **data residency** (data physically stored in a place) and **data sovereignty** (that place's laws govern it). If you have such customers, you need a region in their country whether or not you care about disaster recovery.
+There is a fourth reason, nothing to do with cyclones. Some customers are legally required to keep their data in their country. A hospital group in Germany will usually not be allowed (by EU data-protection rules and its own contracts) to store patient records in Mumbai; an Indian bank may not store payment data outside India. That is **data residency** (data physically stored in a place) and **data sovereignty** (that place's laws govern it). If you have such customers, you need a region in their country whether or not you care about disaster recovery.
 
 ## First-principles explanation
 
@@ -90,7 +90,7 @@ What multi-zone does not protect against:
 
 ### Three ways to handle writes in active-active
 
-1. **Write-home, read-local.** Each record has one home region (for a SaaS, usually each tenant's home region). Reads are served from the local replica; writes are forwarded to the home region. There are no conflicts because only one region ever writes a given row. Cross-region latency (Mumbai to Frankfurt is roughly 120–150 ms round trip; treat that as an estimate from public latency tables) is paid only on writes. This is the Geode pattern in Azure's catalogue, and it is where most teams should start.
+1. **Write-home, read-local.** Each record has one home region (for a SaaS, usually each tenant's home region). Reads are served from the local replica; writes are forwarded to the home region. There are no conflicts because only one region ever writes a given row. Cross-region latency (Mumbai to Frankfurt is roughly 120–150 ms round trip; treat that as an estimate from public latency tables) is paid only on writes. This is close to the Geode pattern in Azure's catalogue, and it is where most teams should start. In PostgreSQL (16 and later) you can build it with logical replication in both directions: each region publishes the rows it owns (a row filter on `home_region`, available since PostgreSQL 15) and the other region subscribes with `origin = none` so changes are not echoed back. PostgreSQL does not resolve conflicts for you: in version 17 a conflicting change (for example a duplicate key) raises an error and stops that subscription until someone fixes it, so write-home must genuinely guarantee a single writer per row.
 2. **Last-writer-wins (LWW).** Both regions write; on conflict, the write with the later timestamp survives. Simple, and it silently discards the other write. Needs careful clocks: two machines 30 ms apart in wall time will "lose" writes in the wrong order. Hybrid logical clocks ([clock skew, ordering and logical clocks](#/lesson/m13-time-ordering)) make the ordering consistent even if not "true".
 3. **Mergeable data (CRDTs).** Design the data so any two versions can be merged without losing anything: counters that add, sets where adds and removes carry timestamps, documents edited with operational transforms. Powerful, limited to data that fits, and heavier to implement. Covered in depth in [real-time collaborative editor](#/lesson/m17-collaborative-editor).
 
@@ -99,6 +99,16 @@ Most real systems mix them: write-home for business records, LWW for user prefer
 ### Residency and sovereignty are routing problems
 
 If a German tenant's data must stay in the EU, three things must all be true: the tenant's **primary database** is in the EU, its **replicas and backups** are in the EU, and **no code path** copies it elsewhere (caches, search indexes, analytics exports, log lines containing personal data). Residency therefore shows up in three places in the design: a tenant directory that records each tenant's home region and residency zone, a router that sends each request to the tenant's home region for writes, and a guard inside the data layer that refuses to persist a tenant's row in the wrong region even if a developer makes a mistake. Logs and telemetry are the usual leak: a stack trace with a customer email shipped to a global logging account breaks residency just as surely as a database in the wrong country.
+
+:::callout type=note title="What the laws actually require (as of 2026)"
+Read the contract and the regulation before you buy regions; "the law says data must stay here" is often half true.
+
+- **GDPR (EU)** does not forbid storing personal data outside the EU. It restricts *transfers* (Chapter V): allowed to countries with an adequacy decision, otherwise only with safeguards such as Standard Contractual Clauses plus a transfer impact assessment. India has no adequacy decision. Many EU public bodies and hospitals then go further and demand EU-only storage in the contract. Remote access from India to EU data (a support engineer opening a record) also counts as a transfer.
+- **India's Digital Personal Data Protection Act, 2023** (with the DPDP Rules notified in 2025 and phasing in) takes a negative-list approach: personal data may go abroad except to countries the government restricts. Sector rules are stricter and override it: the RBI's 2018 directive requires payment-system data to be stored only in India, and government and regulated-sector contracts commonly require in-country storage.
+- **Both** expect breach notification, deletion on request and purpose limits, which is why a copy you forgot about (a backup, a log, a search index) is a compliance problem, not just a tidiness one.
+
+This is engineering guidance, not legal advice; the residency zone for each tenant should come from the contract and your legal team, and the code should enforce whatever they decide.
+:::
 
 ### Failover is a muscle, not a feature
 
@@ -217,7 +227,7 @@ For the Indian zone: Central India (Pune) as the primary and South India (Chenna
 
 ### Step 4 — the one thing that is active-active
 
-Agent **preferences** (language, dashboard layout, notification settings) are not residency-sensitive and are read on every page load. They live in a small key-value store replicated to all four regions with LWW on a hybrid clock. Losing a preference write is harmless; saving a 130 ms cross-region hop on every login is noticeable. This is the mixed approach in practice: pick the rule per data type, not per system.
+Agent **preferences** (language, dashboard layout, notification settings) are read on every page load and hold no citizen data. They are keyed by an opaque agent id, never a name or email, and live in a small key-value store replicated to all four regions with LWW on a hybrid clock. One caveat a reviewer will raise: under GDPR, pseudonymous data tied to a person is still personal data, so copying EU agents' preferences into India is a transfer the EU contracts must permit (with Standard Contractual Clauses). If a contract forbids any transfer, replicate that tenant's preferences only between the two EU regions. Losing a preference write is harmless; saving a 130 ms cross-region hop on every login is noticeable. This is the mixed approach in practice: pick the rule per data type, not per system.
 
 ### Step 5 — routing
 
@@ -357,7 +367,7 @@ public sealed class RegionRoutingMiddleware(RequestDelegate next, IOptions<Regio
 }
 ```
 
-The middleware runs before authentication because it only needs the tenant header, which the gateway sets from the host name. `307 Temporary Redirect` keeps the method and body, so a `POST` redirected to Pune is still a `POST`. Browsers and most HTTP clients follow it; service-to-service callers should read `X-Redirect-Reason` and fix their routing.
+The middleware runs before authentication because it only needs the tenant header, which the gateway sets from the host name. The gateway must also strip any `X-Tenant` header the client sent; otherwise anyone can pick a tenant (and a region) by adding a header. `307 Temporary Redirect` keeps the method and body, so a `POST` redirected to Pune is still a `POST`. Browsers and most HTTP clients follow it; service-to-service callers should read `X-Redirect-Reason` and fix their routing.
 
 ```csharp file=Regions/ResidencyGuard.cs
 using Microsoft.Extensions.Options;
@@ -619,7 +629,7 @@ The replication simulator below models a primary and a lagging replica. Use it t
 :::exercise id=m16-multi-region-ex1 difficulty=beginner kind=written title="Pick the shape for three systems"
 For each system below, choose single-region (multi-zone), active-passive, or active-active, and justify it in three to five sentences using RTO, RPO, residency and cost.
 
-1. An internal expense-claims portal for a 4,000-person construction company in India. 300 users a day, all in Indian business hours. The finance team says a day of downtime "would be annoying".
+1. An internal expense-claims portal for a 4,000-employee supermarket chain in India. 300 users a day, all in Indian business hours. The finance team says a day of downtime "would be annoying".
 2. A UPI-style payment switch for a fintech with 20 M users across India. Regulator requires data stored in India, availability of 99.99 % and no more than 5 seconds of transaction loss.
 3. A B2B document-collaboration SaaS with customers in India, Singapore and Germany. German customers require EU residency. Editors in all three countries co-edit the same documents during overlapping hours.
 ::acceptance
@@ -1053,7 +1063,7 @@ Shape per zone: DNS → app (active) → DB primary; DB primary → DB replica (
 
 Reasoning:
 
-- **No ticket-data edge crosses zones.** The only cross-zone edges are the preferences replication, which carries no citizen data, and monitoring probes. An auditor can verify residency by reading the graph.
+- **No ticket-data edge crosses zones.** The only cross-zone edges are the preferences replication, which carries no citizen data (only pseudonymous agent settings, subject to the GDPR caveat in step 4), and monitoring probes. An auditor can verify residency by reading the graph.
 - **Each zone is active-passive.** The standby app tier runs 2 instances so every release is proven to deploy there; it scales up during failover. The replica is promoted; the directory is updated; the front door's 30-second cache expires and traffic moves.
 - **Routing is by tenant, not by user location**, so a travelling user still reaches the right zone.
 - **The monitor lives outside the zones it watches** and needs a quorum of probes, so a network problem between one probe and Pune is not mistaken for Pune being down.
@@ -1181,7 +1191,7 @@ public class LastWriterWinsConvergenceTests
 - **Payment and banking systems in India** are typically required to keep data within the country and to meet strict availability targets, so they commonly run active-passive or active-active across two Indian regions (for example Mumbai and Hyderabad or Chennai) with synchronous replication for ledgers. The engineering principle, not any one company's internals: money movement uses write-home or synchronous commit; nothing financial uses last-writer-wins.
 - **Global SaaS products** offer "data residency" as a plan feature. Under the hood that is a tenant directory with a home region, regional database clusters, and a routing layer that forwards by tenant. The EU region is often a complete, separately operated copy with its own standby.
 - **Content-heavy consumer products** are read-mostly, so they go active-active for reads via CDN and regional replicas, and keep writes homed to one region per user or account. This "mostly single-writer" shape avoids conflicts while giving most of the latency benefit.
-- **Government and infrastructure platforms** (tendering portals, project-monitoring dashboards) usually need residency inside the country and a stated RTO, which points to two in-country regions in active-passive with quarterly drills. A platform tracking 400 highway projects does not need active-active; it needs a standby that has been proven to work.
+- **Government and public-service platforms** (citizen-service portals, vehicle-registration or ration-card systems) usually need residency inside the country and a stated RTO, which points to two in-country regions in active-passive with quarterly drills. A grievance portal serving 400 municipal bodies does not need active-active; it needs a standby that has been proven to work.
 - **Collaboration tools** (shared documents, whiteboards) are the main legitimate home of mergeable data types: concurrent edits from different regions must merge, so they design the data structure for it rather than picking a winner.
 
 ## Interview questions

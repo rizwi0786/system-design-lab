@@ -143,7 +143,7 @@ classDiagram
         #FormatRow(InvoiceLine row)
         #FormatTotals(...)
     }
-    class SiteAttendanceReport {
+    class StaffAttendanceReport {
         -IAttendanceSource source
         #MaxRangeDays = 7
         #IncludeTotals = false
@@ -155,9 +155,9 @@ classDiagram
         <<interface>>
     }
     ReportGenerator <|-- GstSalesSummaryReport
-    ReportGenerator <|-- SiteAttendanceReport
+    ReportGenerator <|-- StaffAttendanceReport
     GstSalesSummaryReport --> IInvoiceSource
-    SiteAttendanceReport --> IAttendanceSource
+    StaffAttendanceReport --> IAttendanceSource
 ```
 
 How to read it: `ReportGenerator<TRow>` is abstract. `GenerateAsync` (public, no asterisk) is the **template method**; it is not virtual. Members marked `*` are **abstract steps**: every report must say what its title and columns are, how to load rows and how to format one row. The other protected members (`MaxRangeDays`, `IncludeTotals`, `ValidateRequest`, `FormatTotals`, `OnGeneratedAsync`) are **hooks** with defaults. The GST report overrides `FormatTotals` to add tax totals; the attendance report changes two hooks: a 7-day maximum range and no totals row. Neither subclass can change the order of the steps.
@@ -191,7 +191,7 @@ The base class drives every step. The subclass is called only at the points the 
 
 ## Step-by-step example
 
-A company needs two CSV reports: a monthly **GST sales summary** for the accounts team, and a weekly **site attendance** report for project managers.
+A fitness chain with 40 gyms needs two CSV reports: a monthly **GST sales summary** for the accounts team, and a weekly **staff attendance** report (trainers and front-desk staff, hours per branch) for branch managers.
 
 ### Step 1 — the naive version: two copy-pasted classes
 
@@ -210,7 +210,7 @@ public async Task<string> GstReportAsync(DateOnly from, DateOnly to)
 public async Task<string> AttendanceReportAsync(DateOnly from, DateOnly to)
 {
     // same validation (but someone forgot the 7-day limit), same header logic,
-    // different rows, and a CSV escaping bug: a worker name "Singh, R." breaks the columns
+    // different rows, and a CSV escaping bug: a staff name "Singh, R." breaks the columns
 }
 ```
 
@@ -241,7 +241,7 @@ Reports.Api/
     ReportModels.cs
     ReportGenerator.cs
     GstSalesSummaryReport.cs
-    SiteAttendanceReport.cs
+    StaffAttendanceReport.cs
   Workers/
     PeriodicWorker.cs
     NightlyGstReportWorker.cs
@@ -256,7 +256,7 @@ public sealed record ReportDocument(string Title, string FileName, string Conten
 
 public sealed record InvoiceLine(string InvoiceNo, DateOnly Date, string CustomerGstin, decimal Taxable, decimal Cgst, decimal Sgst, decimal Igst);
 
-public sealed record AttendanceRow(DateOnly Date, string Site, string WorkerName, decimal HoursWorked);
+public sealed record AttendanceRow(DateOnly Date, string Branch, string StaffName, decimal HoursWorked);
 
 public interface IInvoiceSource
 {
@@ -387,26 +387,26 @@ public sealed class GstSalesSummaryReport(IInvoiceSource source, IReportArchive 
 }
 ```
 
-```csharp file=Reporting/SiteAttendanceReport.cs
+```csharp file=Reporting/StaffAttendanceReport.cs
 using Microsoft.Extensions.Logging;
 
 namespace Reports.Reporting;
 
-public sealed class SiteAttendanceReport(IAttendanceSource source, ILogger<SiteAttendanceReport> logger)
+public sealed class StaffAttendanceReport(IAttendanceSource source, ILogger<StaffAttendanceReport> logger)
     : ReportGenerator<AttendanceRow>(logger)
 {
-    protected override string Title => "Site attendance";
+    protected override string Title => "Staff attendance";
     protected override string FileStem => "attendance";
-    protected override IReadOnlyList<string> Columns => ["Date", "Site", "Worker", "Hours"];
+    protected override IReadOnlyList<string> Columns => ["Date", "Branch", "Staff", "Hours"];
 
     protected override int MaxRangeDays => 7;        // hook: weekly report only
     protected override bool IncludeTotals => false;  // hook: no totals row
 
     protected override async Task<IReadOnlyList<AttendanceRow>> LoadRowsAsync(ReportRequest request, CancellationToken ct) =>
         (await source.GetRowsAsync(request.From, request.To, ct))
-            .OrderBy(r => r.Date).ThenBy(r => r.Site).ThenBy(r => r.WorkerName).ToList();
+            .OrderBy(r => r.Date).ThenBy(r => r.Branch).ThenBy(r => r.StaffName).ToList();
 
-    protected override IReadOnlyList<object?> FormatRow(AttendanceRow r) => [r.Date, r.Site, r.WorkerName, r.HoursWorked];
+    protected override IReadOnlyList<object?> FormatRow(AttendanceRow r) => [r.Date, r.Branch, r.StaffName, r.HoursWorked];
 }
 ```
 
@@ -512,6 +512,8 @@ public sealed class NightlyGstReportWorker(IServiceScopeFactory scopes, TimeProv
 }
 ```
 
+One production caveat the template cannot hide: if the API runs on three replicas, every replica runs its own `NightlyGstReportWorker`, so the report is generated three times. Either run scheduled jobs in a single dedicated worker process, or take a PostgreSQL advisory lock (`pg_try_advisory_lock`) at the start of `RunOnceAsync` and skip the run when another instance holds it. Make the run idempotent as well (overwrite the same archive file name), so a retry after a crash does no harm.
+
 ```csharp file=Program.cs
 using System.Collections.Concurrent;
 using System.Text;
@@ -525,7 +527,7 @@ builder.Services.AddSingleton<IInvoiceSource, SampleInvoiceSource>();
 builder.Services.AddSingleton<IAttendanceSource, SampleAttendanceSource>();
 builder.Services.AddSingleton<IReportArchive, InMemoryReportArchive>();
 builder.Services.AddScoped<GstSalesSummaryReport>();
-builder.Services.AddScoped<SiteAttendanceReport>();
+builder.Services.AddScoped<StaffAttendanceReport>();
 builder.Services.AddHostedService<NightlyGstReportWorker>();
 
 var app = builder.Build();
@@ -533,7 +535,7 @@ var app = builder.Build();
 app.MapGet("/reports/gst", (DateOnly from, DateOnly to, GstSalesSummaryReport report, CancellationToken ct) =>
     Download(report.GenerateAsync(new ReportRequest(from, to, "api"), ct)));
 
-app.MapGet("/reports/attendance", (DateOnly from, DateOnly to, SiteAttendanceReport report, CancellationToken ct) =>
+app.MapGet("/reports/attendance", (DateOnly from, DateOnly to, StaffAttendanceReport report, CancellationToken ct) =>
     Download(report.GenerateAsync(new ReportRequest(from, to, "api"), ct)));
 
 app.Run();
@@ -562,7 +564,7 @@ sealed class SampleInvoiceSource : IInvoiceSource
 sealed class SampleAttendanceSource : IAttendanceSource
 {
     public Task<IReadOnlyList<AttendanceRow>> GetRowsAsync(DateOnly from, DateOnly to, CancellationToken ct) =>
-        Task.FromResult<IReadOnlyList<AttendanceRow>>([new(from, "Km 12+400", "Singh, R.", 9m), new(from, "Km 12+400", "Meena K", 8.5m)]);
+        Task.FromResult<IReadOnlyList<AttendanceRow>>([new(from, "Koramangala", "Singh, R.", 9m), new(from, "Koramangala", "Meena K", 8.5m)]);
 }
 
 sealed class InMemoryReportArchive : IReportArchive
@@ -572,7 +574,7 @@ sealed class InMemoryReportArchive : IReportArchive
 }
 ```
 
-The attendance sample includes a worker named `Singh, R.` on purpose: the base class's escaping turns it into `"Singh, R."`, so the CSV still has four columns.
+The attendance sample includes a staff member named `Singh, R.` on purpose: the base class's escaping turns it into `"Singh, R."`, so the CSV still has four columns.
 
 ## Bad design vs good design
 
@@ -1112,20 +1114,20 @@ In production, retries are usually composed rather than inherited: a resilience 
 :::
 
 :::exercise id=m06-template-method-ex4 difficulty=intermediate kind=design title="Refactor three exporters with copied pipelines"
-A project-monitoring app has three classes: `MonthlyProgressPdfExporter`, `MonthlyProgressExcelExporter` and `CashflowPdfExporter`. Each is 300 lines and repeats: check permissions, load data, apply the project's currency and units, build the document, upload to blob storage, write an audit row, email a link. Two of them forgot the audit row. Redesign them.
+A gym chain's admin app has three classes: `MonthlyMembershipPdfExporter`, `MonthlyMembershipExcelExporter` and `ClassAttendancePdfExporter`. Each is 300 lines and repeats: check permissions, load data, apply the branch's currency and number format, build the document, upload to blob storage, write an audit row, email a link. Two of them forgot the audit row. Redesign them.
 ::acceptance
 - A diagram showing which steps are fixed, which vary, and how.
 - A decision on Template Method, Strategy or a combination, justified by the axes of variation.
 - Permission check and audit cannot be skipped by any exporter.
-- Adding a fourth report (say, "Labour deployment") in PDF and Excel costs a stated, small number of classes.
+- Adding a fourth report (say, "Trainer utilisation") in PDF and Excel costs a stated, small number of classes.
 ::hint
 List the axes of variation. How many are there?
 ::hint
-There are two independent axes: **what** data (progress, cash flow, labour) and **which format** (PDF, Excel).
+There are two independent axes: **what** data (membership sales, class attendance, trainer utilisation) and **which format** (PDF, Excel).
 ::hint
 Keep a template for the fixed sequence (permissions → load → build → upload → audit → notify), but inject the *data* and the *format* as strategies rather than subclassing for each combination.
 ::hint
-`ExportPipeline` (template, sealed sequence) + `IReportData` (progress, cash flow, labour) + `IDocumentFormat` (PDF, Excel). New report: 1 class. New format: 1 class.
+`ExportPipeline` (template, sealed sequence) + `IReportData` (membership sales, class attendance, trainer utilisation) + `IDocumentFormat` (PDF, Excel). New report: 1 class. New format: 1 class.
 ::solution
 ```mermaid
 classDiagram
@@ -1138,16 +1140,16 @@ classDiagram
   }
   class IReportData { <<interface>> +LoadAsync(ExportRequest r) ReportModel }
   class IDocumentFormat { <<interface>> +string Extension +Render(ReportModel m) byte[] }
-  class MonthlyProgressData
-  class CashflowData
-  class LabourDeploymentData
+  class MonthlyMembershipData
+  class ClassAttendanceData
+  class TrainerUtilisationData
   class PdfFormat
   class ExcelFormat
   ExportPipeline --> IReportData
   ExportPipeline --> IDocumentFormat
-  IReportData <|.. MonthlyProgressData
-  IReportData <|.. CashflowData
-  IReportData <|.. LabourDeploymentData
+  IReportData <|.. MonthlyMembershipData
+  IReportData <|.. ClassAttendanceData
+  IReportData <|.. TrainerUtilisationData
   IDocumentFormat <|.. PdfFormat
   IDocumentFormat <|.. ExcelFormat
 ```
@@ -1157,7 +1159,7 @@ classDiagram
 - **Cost of growth**: a new report = 1 `IReportData` class, available in every format. A new format (CSV) = 1 class, available for every report. Pure inheritance would need one subclass per pair: 3 reports × 2 formats = 6 today, 4 × 3 = 12 after both additions.
 - **Where Template Method alone would be fine**: if every report were PDF only, a `PdfExporter` base with abstract `LoadAsync` and `BuildPages` would be simpler.
 ::mistakes
-- Creating `ProgressPdfExporter : PdfExporter : ExporterBase`, a three-level hierarchy that explodes with each format.
+- Creating `MembershipPdfExporter : PdfExporter : ExporterBase`, a three-level hierarchy that explodes with each format.
 - Making audit a hook with an empty default, which is exactly how two exporters "forgot" it.
 - Putting the format choice inside each data class (`if (format == "pdf")`), which brings the duplication back.
 :::
@@ -1234,7 +1236,7 @@ using Xunit;
 public class ReportPipelineTests
 {
     private sealed record Invoice(string No, decimal Taxable);
-    private sealed record Attendance(string Worker, decimal Hours);
+    private sealed record Attendance(string Staff, decimal Hours);
 
     private sealed class GstSource : IReportSource<Invoice>
     {
@@ -1246,10 +1248,10 @@ public class ReportPipelineTests
 
     private sealed class AttendanceSource : IReportSource<Attendance>
     {
-        public IReadOnlyList<string> Columns => new[] { "Worker", "Hours" };
+        public IReadOnlyList<string> Columns => new[] { "Staff", "Hours" };
         public IReadOnlyList<Attendance> Load(DateOnly from, DateOnly to) => new[] { new Attendance("Singh, R.", 9m), new Attendance("Meena K", 8.5m) };
-        public string SortKey(Attendance r) => r.Worker;
-        public IReadOnlyList<string> ToCells(Attendance r) => new[] { r.Worker, r.Hours.ToString(System.Globalization.CultureInfo.InvariantCulture) };
+        public string SortKey(Attendance r) => r.Staff;
+        public IReadOnlyList<string> ToCells(Attendance r) => new[] { r.Staff, r.Hours.ToString(System.Globalization.CultureInfo.InvariantCulture) };
     }
 
     private static readonly DateOnly D1 = new(2026, 10, 1);
@@ -1261,7 +1263,7 @@ public class ReportPipelineTests
         var gst = new ReportPipeline<Invoice>(new GstSource(), csv, 31).Generate(D1, D1.AddDays(30));
         var att = new ReportPipeline<Attendance>(new AttendanceSource(), csv, 7).Generate(D1, D1.AddDays(6));
         Assert.Equal("Invoice,Taxable\nINV-1,1200.00\nINV-9,500.00\n", gst);
-        Assert.Equal("Worker,Hours\nMeena K,8.5\n\"Singh, R.\",9\n", att);
+        Assert.Equal("Staff,Hours\nMeena K,8.5\n\"Singh, R.\",9\n", att);
     }
 
     [Fact]
@@ -1353,7 +1355,7 @@ If only formats varied and there were a single data source, keeping Template Met
 ::mistakes
 - Moving validation into each source, so the "max range" rule drifts again.
 - Letting `IReportFormat` sort rows, mixing presentation with data order.
-- Hand-building JSON with string concatenation; quotes in a worker's name break it.
+- Hand-building JSON with string concatenation; quotes in a staff member's name break it.
 :::
 
 ## Automated testing
@@ -1388,7 +1390,7 @@ public async Task Gst_report_has_totals_and_is_archived()
 - **Authorisation**: `AuthorizationHandler<TRequirement>` implements `HandleAsync` and calls your `HandleRequirementAsync` for each matching requirement.
 - **Streams**: `System.IO.Stream` provides `CopyToAsync`, `ReadAsync` overloads and more on top of a few core methods that subclasses implement.
 - **`JsonConverter<T>`**: the serialiser drives the process and calls your `Read` and `Write` overrides.
-- **Business reporting**: monthly progress reports, GST summaries and compliance returns in many organisations share a "validate → load → compute → render → archive" skeleton, which is a natural template, often combined with format strategies as in exercise 4.
+- **Business reporting**: monthly membership and sales reports, GST summaries and compliance returns in many organisations share a "validate → load → compute → render → archive" skeleton, which is a natural template, often combined with format strategies as in exercise 4.
 
 ## Interview questions
 
@@ -1466,7 +1468,7 @@ A teammate makes `GenerateAsync` virtual so one report can "skip validation". Wh
 - [ ] Nothing; flexibility is always good.
 > If a report needs different validation, override the `ValidateRequest` hook. The template itself should stay non-virtual.
 ::q single
-Reports now vary by data (GST, attendance, cash flow) and by format (CSV, Excel, JSON). How many classes do you need with pure inheritance vs a template plus two strategy interfaces?
+Reports now vary by data (GST, attendance, membership renewals) and by format (CSV, Excel, JSON). How many classes do you need with pure inheritance vs a template plus two strategy interfaces?
 - [ ] 6 vs 6
 - [x] 9 subclasses vs 3 + 3 = 6 strategy classes
 - [ ] 3 vs 9

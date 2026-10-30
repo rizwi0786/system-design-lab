@@ -45,13 +45,13 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Think of a shared spreadsheet for a construction site's shift roster. Two site engineers, Asha and Bilal, are both editing it at 6 pm.
+Think of a hospital's shared duty roster for the night shift. Two doctors, Dr Asha and Dr Bilal, are both editing it at 6 pm.
 
 - If Asha can see the half-typed row Bilal has not saved yet, that is a **dirty read**. PostgreSQL never allows this.
-- If Asha reads "3 crane operators on shift", looks away, reads again and now sees "2" because Bilal saved in between, that is a **non-repeatable read**. Same row, different answer, inside one piece of work.
+- If Asha reads "3 nurses on shift", looks away, reads again and now sees "2" because Bilal saved in between, that is a **non-repeatable read**. Same row, different answer, inside one piece of work.
 - If Asha counts the rows for tomorrow's shift, then counts again and a *new* row has appeared, that is a **phantom read**. Not a changed row; an extra one.
-- If both read "approved inspections: 41", both add one and both write 42, the real answer should be 43. One update vanished. That is a **lost update**.
-- The subtle one. The site rule is "at least one certified operator on every shift". Two operators are on shift. Asha checks the rule (2 on shift, fine) and marks herself off. Bilal checks (2 on shift, fine) and marks himself off. Each check was correct when it ran. Both saves succeed. Tomorrow nobody is on shift. Neither of them touched the other's row, so no lock or version check on a single row would have caught it. That is **write skew**.
+- If both read "patients admitted today: 41", both add one and both write 42, the real answer should be 43. One update vanished. That is a **lost update**.
+- The subtle one. The hospital rule is "at least one senior doctor on shift in every ward". Two senior doctors are on shift. Asha checks the rule (2 on shift, fine) and marks herself off. Bilal checks (2 on shift, fine) and marks himself off. Each check was correct when it ran. Both saves succeed. Tomorrow nobody is on shift. Neither of them touched the other's row, so no lock or version check on a single row would have caught it. That is **write skew**.
 
 An isolation level is the database's answer to "how much of this chaos will you let through?" Stronger levels let less through but cost more: more waiting, more work tracking what each transaction read, and sometimes an abort that your code must retry.
 
@@ -122,10 +122,10 @@ The payoff: with Serializable, you can write "read the rule, check it, write" co
 ### Which to use
 
 - **Read Committed** for most OLTP work where each write is a self-contained conditional statement, or where you use explicit row locks for the few check-then-act cases. Lowest overhead, never aborts for serialization reasons.
-- **Repeatable Read** for reports and exports that must see one consistent point in time (the monthly progress bill, a reconciliation run). Also useful for lost-update detection on a single row when you do not want a lock.
+- **Repeatable Read** for reports and exports that must see one consistent point in time (the monthly account statement run, a reconciliation job). Also useful for lost-update detection on a single row when you do not want a lock.
 - **Serializable** when the business rule spans several rows or a count ("at least one on shift", "no more than 10 % of seats held", "no overlapping bookings") and you cannot or do not want to express it as a constraint or a lock. Budget for retries; measure the abort rate.
 
-A rule of thumb for the abort rate: it grows with the number of concurrent transactions touching the same data and with how long they run. Ten operators changing shifts per minute on a site table of 50 rows will almost never conflict. Five hundred concurrent sessions updating the same 20 rows for 200 ms each will conflict constantly, and Serializable becomes a retry storm. In that case redesign the data (per-row counters, a lock on the parent row) rather than fight the level.
+A rule of thumb for the abort rate: it grows with the number of concurrent transactions touching the same data and with how long they run. Ten doctors changing shifts per minute on a ward table of 50 rows will almost never conflict. Five hundred concurrent sessions updating the same 20 rows for 200 ms each will conflict constantly, and Serializable becomes a retry storm. In that case redesign the data (per-row counters, a lock on the parent row) rather than fight the level.
 
 ## Visual explanation
 
@@ -134,22 +134,22 @@ A rule of thumb for the abort rate: it grows with the number of concurrent trans
 ```mermaid
 sequenceDiagram
     participant A as Session A
-    participant DB as PostgreSQL (row: approved = 41)
+    participant DB as PostgreSQL (row: admitted = 41)
     participant B as Session B
-    A->>DB: BEGIN, SELECT approved FROM site_stats WHERE site_id = 7
+    A->>DB: BEGIN, SELECT admitted FROM ward_stats WHERE ward_id = 7
     DB-->>A: 41
-    B->>DB: BEGIN, SELECT approved FROM site_stats WHERE site_id = 7
+    B->>DB: BEGIN, SELECT admitted FROM ward_stats WHERE ward_id = 7
     DB-->>B: 41
-    A->>DB: UPDATE site_stats SET approved = 42 WHERE site_id = 7
+    A->>DB: UPDATE ward_stats SET admitted = 42 WHERE ward_id = 7
     DB-->>A: 1 row (row now locked by A)
-    B->>DB: UPDATE site_stats SET approved = 42 WHERE site_id = 7
+    B->>DB: UPDATE ward_stats SET admitted = 42 WHERE ward_id = 7
     Note over B,DB: B waits for A's lock
     A->>DB: COMMIT
     DB-->>A: ok
     alt Read Committed
         DB-->>B: 1 row (overwrites 42 with 42)
         B->>DB: COMMIT
-        Note over DB: approved = 42, one increment lost
+        Note over DB: admitted = 42, one increment lost
     else Repeatable Read / Serializable
         DB-->>B: ERROR 40001 could not serialize access due to concurrent update
         B->>DB: ROLLBACK, then retry from BEGIN
@@ -157,26 +157,26 @@ sequenceDiagram
     end
 ```
 
-Walk through it. Both sessions read 41 under their own snapshots. A writes 42 and takes the row lock. B's `UPDATE` hits the lock and waits; this waiting happens at every level. A commits. At Read Committed, PostgreSQL re-evaluates B's `WHERE site_id = 7` on the new version (still true), applies B's `SET approved = 42`, and one increment disappears. At Repeatable Read or Serializable, B's snapshot predates A's commit, so B is aborted with `40001`. B retries, reads 42, writes 43. Note that `UPDATE ... SET approved = approved + 1` would have been correct even at Read Committed, because the re-evaluation reads the fresh value; the anomaly only exists when the application computes the new value from a stale read.
+Walk through it. Both sessions read 41 under their own snapshots. A writes 42 and takes the row lock. B's `UPDATE` hits the lock and waits; this waiting happens at every level. A commits. At Read Committed, PostgreSQL re-evaluates B's `WHERE ward_id = 7` on the new version (still true), applies B's `SET admitted = 42`, and one increment disappears. At Repeatable Read or Serializable, B's snapshot predates A's commit, so B is aborted with `40001`. B retries, reads 42, writes 43. Note that `UPDATE ... SET admitted = admitted + 1` would have been correct even at Read Committed, because the re-evaluation reads the fresh value; the anomaly only exists when the application computes the new value from a stale read.
 
 ### Write skew: two correct checks, one broken rule
 
 ```mermaid
 sequenceDiagram
     participant A as Session A (Asha)
-    participant DB as PostgreSQL (2 certified operators on shift)
+    participant DB as PostgreSQL (2 senior doctors on shift)
     participant B as Session B (Bilal)
-    A->>DB: BEGIN, SELECT count(*) FROM shift WHERE site_id = 7 AND on_shift AND certified
+    A->>DB: BEGIN, SELECT count(*) FROM shift WHERE ward_id = 7 AND on_shift AND senior
     DB-->>A: 2
-    B->>DB: BEGIN, SELECT count(*) FROM shift WHERE site_id = 7 AND on_shift AND certified
+    B->>DB: BEGIN, SELECT count(*) FROM shift WHERE ward_id = 7 AND on_shift AND senior
     DB-->>B: 2
-    A->>DB: UPDATE shift SET on_shift = false WHERE operator_id = 'asha'
-    B->>DB: UPDATE shift SET on_shift = false WHERE operator_id = 'bilal'
+    A->>DB: UPDATE shift SET on_shift = false WHERE doctor_id = 'asha'
+    B->>DB: UPDATE shift SET on_shift = false WHERE doctor_id = 'bilal'
     Note over A,B: Different rows: no lock conflict, no first-committer-wins conflict
     A->>DB: COMMIT
     alt Read Committed or Repeatable Read
         B->>DB: COMMIT
-        Note over DB: 0 operators on shift. Rule broken, no error.
+        Note over DB: 0 doctors on shift. Rule broken, no error.
     else Serializable
         B->>DB: COMMIT
         DB-->>B: ERROR 40001 read/write dependencies among transactions
@@ -207,15 +207,15 @@ We will reproduce every anomaly on one small schema, then fix the shift problem 
 
 ```sql
 CREATE TABLE shift (
-  operator_id text PRIMARY KEY,
-  site_id     int  NOT NULL,
-  certified   boolean NOT NULL,
+  doctor_id text PRIMARY KEY,
+  ward_id     int  NOT NULL,
+  senior   boolean NOT NULL,
   on_shift    boolean NOT NULL
 );
 INSERT INTO shift VALUES ('asha', 7, true, true), ('bilal', 7, true, true), ('chetan', 7, false, true);
 
-CREATE TABLE site_stats (site_id int PRIMARY KEY, approved int NOT NULL);
-INSERT INTO site_stats VALUES (7, 41);
+CREATE TABLE ward_stats (ward_id int PRIMARY KEY, admitted int NOT NULL);
+INSERT INTO ward_stats VALUES (7, 41);
 ```
 
 ### Step 2 — non-repeatable read and phantom (Read Committed)
@@ -223,26 +223,26 @@ INSERT INTO site_stats VALUES (7, 41);
 | Step | Session A | Session B |
 |---|---|---|
 | 1 | `BEGIN;` | |
-| 2 | `SELECT count(*) FROM shift WHERE site_id = 7;` → **3** | |
+| 2 | `SELECT count(*) FROM shift WHERE ward_id = 7;` → **3** | |
 | 3 | | `INSERT INTO shift VALUES ('dev', 7, true, true);` (autocommit) |
-| 4 | `SELECT count(*) FROM shift WHERE site_id = 7;` → **4** | |
+| 4 | `SELECT count(*) FROM shift WHERE ward_id = 7;` → **4** | |
 | 5 | `COMMIT;` | |
 
-Step 4 differs from step 2 inside one transaction. Because a new row appeared, this is a phantom. Replace B's insert with `UPDATE shift SET certified = false WHERE operator_id = 'chetan'` and A's query with `SELECT certified ... WHERE operator_id = 'chetan'` and you have a non-repeatable read. Run A with `BEGIN ISOLATION LEVEL REPEATABLE READ;` and step 4 returns 3: the snapshot is fixed.
+Step 4 differs from step 2 inside one transaction. Because a new row appeared, this is a phantom. Replace B's insert with `UPDATE shift SET senior = false WHERE doctor_id = 'chetan'` and A's query with `SELECT senior ... WHERE doctor_id = 'chetan'` and you have a non-repeatable read. Run A with `BEGIN ISOLATION LEVEL REPEATABLE READ;` and step 4 returns 3: the snapshot is fixed.
 
 ### Step 3 — lost update
 
-Shown in the first sequence diagram. The fix at Read Committed is to make the increment relative (`approved = approved + 1`), lock the row first (`SELECT ... FOR UPDATE`, next lesson), or use a version column (also next lesson). The fix at Repeatable Read is to retry on `40001`.
+Shown in the first sequence diagram. The fix at Read Committed is to make the increment relative (`admitted = admitted + 1`), lock the row first (`SELECT ... FOR UPDATE`, next lesson), or use a version column (also next lesson). The fix at Repeatable Read is to retry on `40001`.
 
 ### Step 4 — write skew, three fixes
 
-The rule: at least one certified operator on shift per site.
+The rule: at least one senior doctor on shift per ward.
 
 **Fix 1: Serializable.** Keep the code as it is; wrap it in `BEGIN ISOLATION LEVEL SERIALIZABLE;` and retry on `40001`. Correct, general, needs the retry loop.
 
-**Fix 2: Materialise the conflict.** Make both transactions write the *same* row so that first-committer-wins or a row lock catches them. For example, `UPDATE site SET roster_version = roster_version + 1 WHERE id = 7` as the first statement. Now the two leave requests conflict on the `site` row. Works at Read Committed (second waits, then re-reads) or Repeatable Read (second aborts). Cheap, but every roster change on a site is now serialised through one row.
+**Fix 2: Materialise the conflict.** Make both transactions write the *same* row so that first-committer-wins or a row lock catches them. For example, `UPDATE ward SET roster_version = roster_version + 1 WHERE id = 7` as the first statement. Now the two leave requests conflict on the `ward` row. Works at Read Committed (second waits, then re-reads) or Repeatable Read (second aborts). Cheap, but every roster change on a ward is now serialised through one row.
 
-**Fix 3: Lock the rows you read.** `SELECT ... FROM shift WHERE site_id = 7 AND certified AND on_shift FOR UPDATE` locks the two operator rows. B's identical select waits until A commits, then sees Asha off shift and count = 1. Precise, but `FOR UPDATE` cannot lock rows that do not exist yet, so it does not protect against *inserts* (a phantom-based skew such as "no overlapping booking").
+**Fix 3: Lock the rows you read.** `SELECT ... FROM shift WHERE ward_id = 7 AND senior AND on_shift FOR UPDATE` locks the two doctor rows. B's identical select waits until A commits, then sees Asha off shift and count = 1. Precise, but `FOR UPDATE` cannot lock rows that do not exist yet, so it does not protect against *inserts* (a phantom-based skew such as "no overlapping booking").
 
 For rules that are really about *absence* ("no other booking overlaps"), the best fix is often a constraint: an exclusion constraint `EXCLUDE USING gist (room_id WITH =, during WITH &&)` makes the database reject the second booking regardless of isolation level. Constraints beat isolation levels when they can express the rule.
 
@@ -264,7 +264,7 @@ In Npgsql, a serialization failure surfaces as `PostgresException` with `SqlStat
 
 ## Production-style C# implementation
 
-The compilable code below has two parts. `SerializableRetry` is the generic retry loop, written against a small `DbConcurrencyException` abstraction so the course checker can compile it; in production you map `PostgresException.SqlState` to it. `ShiftRosterService` is the leave-request use case, running against an in-memory store that models Serializable behaviour in a deliberately simple way: each site has a version, a transaction remembers the version it read, and commit fails with `40001` if another transaction changed the site in between. Real SSI is more precise, but the application code you write against it is identical.
+The compilable code below has two parts. `SerializableRetry` is the generic retry loop, written against a small `DbConcurrencyException` abstraction so the course checker can compile it; in production you map `PostgresException.SqlState` to it. `ShiftRosterService` is the leave-request use case, running against an in-memory store that models Serializable behaviour in a deliberately simple way: each ward has a version, a transaction remembers the version it read, and commit fails with `40001` if another transaction changed the ward in between. Real SSI is more precise, but the application code you write against it is identical.
 
 ```text
 Roster.Api/
@@ -352,14 +352,14 @@ public sealed class SerializableRetry(SerializableRetryOptions options, ILogger<
 ```csharp file=Roster/IShiftStore.cs
 namespace Roster.Roster;
 
-public sealed record Operator(string OperatorId, int SiteId, bool Certified, bool OnShift);
+public sealed record Doctor(string DoctorId, int WardId, bool Senior, bool OnShift);
 
 /// <summary>One Serializable transaction over the roster. Disposing without Commit rolls back.</summary>
 public interface IRosterTransaction : IAsyncDisposable
 {
-    Task<int> CountCertifiedOnShiftAsync(int siteId, CancellationToken ct = default);
-    Task<Operator?> GetOperatorAsync(string operatorId, CancellationToken ct = default);
-    Task SetOnShiftAsync(string operatorId, bool onShift, CancellationToken ct = default);
+    Task<int> CountSeniorOnShiftAsync(int wardId, CancellationToken ct = default);
+    Task<Doctor?> GetDoctorAsync(string doctorId, CancellationToken ct = default);
+    Task SetOnShiftAsync(string doctorId, bool onShift, CancellationToken ct = default);
     /// <summary>Throws DbConcurrencyException("40001") when a concurrent transaction invalidated what this one read.</summary>
     Task CommitAsync(CancellationToken ct = default);
 }
@@ -376,24 +376,24 @@ using Roster.Concurrency;
 namespace Roster.Roster;
 
 /// <summary>
-/// In-memory model of Serializable: a transaction snapshots a site's version at first read; commit fails with 40001
-/// if any other transaction committed a change to that site after the snapshot. Coarser than real SSI (one "predicate"
-/// per site), which is fine: real SSI also has false positives, and the application code is the same either way.
+/// In-memory model of Serializable: a transaction snapshots a ward's version at first read; commit fails with 40001
+/// if any other transaction committed a change to that ward after the snapshot. Coarser than real SSI (one "predicate"
+/// per ward), which is fine: real SSI also has false positives, and the application code is the same either way.
 /// </summary>
 public sealed class InMemoryShiftStore : IShiftStore
 {
     private readonly object _gate = new();
-    private readonly Dictionary<string, Operator> _operators = new();
-    private readonly Dictionary<int, long> _siteVersion = new();
+    private readonly Dictionary<string, Doctor> _doctors = new();
+    private readonly Dictionary<int, long> _wardVersion = new();
 
-    public InMemoryShiftStore Seed(params Operator[] operators)
+    public InMemoryShiftStore Seed(params Doctor[] doctors)
     {
         lock (_gate)
-            foreach (var o in operators) { _operators[o.OperatorId] = o; _siteVersion.TryAdd(o.SiteId, 0); }
+            foreach (var o in doctors) { _doctors[o.DoctorId] = o; _wardVersion.TryAdd(o.WardId, 0); }
         return this;
     }
 
-    public Operator? Committed(string operatorId) { lock (_gate) return _operators.GetValueOrDefault(operatorId); }
+    public Doctor? Committed(string doctorId) { lock (_gate) return _doctors.GetValueOrDefault(doctorId); }
 
     public Task<IRosterTransaction> BeginSerializableAsync(CancellationToken ct = default) =>
         Task.FromResult<IRosterTransaction>(new Tx(this));
@@ -402,42 +402,41 @@ public sealed class InMemoryShiftStore : IShiftStore
     {
         private readonly Dictionary<int, long> _readVersions = new();   // SIRead "locks": what we depended on
         private readonly Dictionary<string, bool> _writes = new();
-        private readonly Dictionary<string, Operator> _snapshot;
+        private Dictionary<string, Doctor>? _snap;
         private bool _done;
 
-        // Snapshot taken at BEGIN; later commits by others are invisible to this transaction.
-        public Dictionary<string, Operator> Snapshot => _snapshot;
-
-        private Dictionary<string, Operator> TakeSnapshot()
+        // Like PostgreSQL, the snapshot is taken at the first statement, not at BEGIN.
+        // Later commits by others are invisible to this transaction.
+        private Dictionary<string, Doctor> Snap
         {
-            lock (store._gate) return new Dictionary<string, Operator>(store._operators);
+            get
+            {
+                if (_snap is null) lock (store._gate) _snap = new Dictionary<string, Doctor>(store._doctors);
+                return _snap;
+            }
         }
 
-        // C# 12 primary constructor + field initializer order: snapshot is taken when the Tx is created.
-        private Dictionary<string, Operator> _snap = null!;
-        private Dictionary<string, Operator> Snap => _snap ??= TakeSnapshot();
-
-        public Task<int> CountCertifiedOnShiftAsync(int siteId, CancellationToken ct = default)
+        public Task<int> CountSeniorOnShiftAsync(int wardId, CancellationToken ct = default)
         {
             Ensure();
-            RememberRead(siteId);
-            var count = Snap.Values.Count(o => o.SiteId == siteId && o.Certified && Effective(o).OnShift);
+            RememberRead(wardId);
+            var count = Snap.Values.Count(o => o.WardId == wardId && o.Senior && Effective(o).OnShift);
             return Task.FromResult(count);
         }
 
-        public Task<Operator?> GetOperatorAsync(string operatorId, CancellationToken ct = default)
+        public Task<Doctor?> GetDoctorAsync(string doctorId, CancellationToken ct = default)
         {
             Ensure();
-            if (!Snap.TryGetValue(operatorId, out var o)) return Task.FromResult<Operator?>(null);
-            RememberRead(o.SiteId);
-            return Task.FromResult<Operator?>(Effective(o));
+            if (!Snap.TryGetValue(doctorId, out var o)) return Task.FromResult<Doctor?>(null);
+            RememberRead(o.WardId);
+            return Task.FromResult<Doctor?>(Effective(o));
         }
 
-        public Task SetOnShiftAsync(string operatorId, bool onShift, CancellationToken ct = default)
+        public Task SetOnShiftAsync(string doctorId, bool onShift, CancellationToken ct = default)
         {
             Ensure();
-            if (!Snap.ContainsKey(operatorId)) throw new KeyNotFoundException(operatorId);
-            _writes[operatorId] = onShift;
+            if (!Snap.ContainsKey(doctorId)) throw new KeyNotFoundException(doctorId);
+            _writes[doctorId] = onShift;
             return Task.CompletedTask;
         }
 
@@ -446,16 +445,16 @@ public sealed class InMemoryShiftStore : IShiftStore
             Ensure();
             lock (store._gate)
             {
-                foreach (var (siteId, seen) in _readVersions)
-                    if (store._siteVersion.GetValueOrDefault(siteId) != seen)
+                foreach (var (wardId, seen) in _readVersions)
+                    if (store._wardVersion.GetValueOrDefault(wardId) != seen)
                         throw new DbConcurrencyException(DbConcurrencyException.SerializationFailure,
                             "could not serialize access due to read/write dependencies among transactions");
 
                 foreach (var (id, onShift) in _writes)
                 {
-                    var o = store._operators[id] with { OnShift = onShift };
-                    store._operators[id] = o;
-                    store._siteVersion[o.SiteId] = store._siteVersion.GetValueOrDefault(o.SiteId) + 1;
+                    var o = store._doctors[id] with { OnShift = onShift };
+                    store._doctors[id] = o;
+                    store._wardVersion[o.WardId] = store._wardVersion.GetValueOrDefault(o.WardId) + 1;
                 }
             }
             _done = true;
@@ -464,18 +463,15 @@ public sealed class InMemoryShiftStore : IShiftStore
 
         public ValueTask DisposeAsync() { _done = true; return ValueTask.CompletedTask; }
 
-        private Operator Effective(Operator o) => _writes.TryGetValue(o.OperatorId, out var w) ? o with { OnShift = w } : o;
+        private Doctor Effective(Doctor o) => _writes.TryGetValue(o.DoctorId, out var w) ? o with { OnShift = w } : o;
 
-        private void RememberRead(int siteId)
+        private void RememberRead(int wardId)
         {
-            if (_readVersions.ContainsKey(siteId)) return;
-            lock (store._gate) _readVersions[siteId] = store._siteVersion.GetValueOrDefault(siteId);
+            if (_readVersions.ContainsKey(wardId)) return;
+            lock (store._gate) _readVersions[wardId] = store._wardVersion.GetValueOrDefault(wardId);
         }
 
         private void Ensure() { if (_done) throw new InvalidOperationException("transaction finished"); }
-
-        // Keep the unused field warning-free; the real snapshot is lazily taken via Snap.
-        private readonly Dictionary<string, Operator> _unusedSnapshotPlaceholder = new();
     }
 }
 ```
@@ -486,33 +482,33 @@ using Roster.Concurrency;
 
 namespace Roster.Roster;
 
-public enum LeaveOutcome { Granted, RefusedLastCertified, UnknownOperator, AlreadyOff }
+public enum LeaveOutcome { Granted, RefusedLastSenior, UnknownDoctor, AlreadyOff }
 
 public sealed class ShiftRosterService(IShiftStore store, SerializableRetry retry, ILogger<ShiftRosterService> log)
 {
-    /// <summary>Rule: a site must always keep at least one certified operator on shift.</summary>
-    public Task<LeaveOutcome> RequestLeaveAsync(string operatorId, CancellationToken ct = default) =>
+    /// <summary>Rule: a ward must always keep at least one senior doctor on shift.</summary>
+    public Task<LeaveOutcome> RequestLeaveAsync(string doctorId, CancellationToken ct = default) =>
         retry.ExecuteAsync(async (attempt, c) =>
         {
             // Every attempt starts a NEW transaction on a NEW snapshot.
             await using var tx = await store.BeginSerializableAsync(c);
 
-            var op = await tx.GetOperatorAsync(operatorId, c);
-            if (op is null) return LeaveOutcome.UnknownOperator;
-            if (!op.OnShift) return LeaveOutcome.AlreadyOff;
+            var doctor = await tx.GetDoctorAsync(doctorId, c);
+            if (doctor is null) return LeaveOutcome.UnknownDoctor;
+            if (!doctor.OnShift) return LeaveOutcome.AlreadyOff;
 
-            if (op.Certified)
+            if (doctor.Senior)
             {
-                var certifiedOnShift = await tx.CountCertifiedOnShiftAsync(op.SiteId, c);
-                if (certifiedOnShift <= 1)
+                var seniorOnShift = await tx.CountSeniorOnShiftAsync(doctor.WardId, c);
+                if (seniorOnShift <= 1)
                 {
-                    log.LogInformation("Leave refused for {Operator}: last certified operator on site {Site} (attempt {Attempt})",
-                        operatorId, op.SiteId, attempt);
-                    return LeaveOutcome.RefusedLastCertified;
+                    log.LogInformation("Leave refused for {Doctor}: last senior doctor on ward {Ward} (attempt {Attempt})",
+                        doctorId, doctor.WardId, attempt);
+                    return LeaveOutcome.RefusedLastSenior;
                 }
             }
 
-            await tx.SetOnShiftAsync(operatorId, false, c);
+            await tx.SetOnShiftAsync(doctorId, false, c);
             await tx.CommitAsync(c);          // 40001 surfaces here and is retried by SerializableRetry
             return LeaveOutcome.Granted;
         }, ct);
@@ -529,18 +525,18 @@ builder.Services.AddSingleton(new SerializableRetryOptions { MaxAttempts = 5 });
 builder.Services.AddSingleton<SerializableRetry>(sp => new SerializableRetry(
     sp.GetRequiredService<SerializableRetryOptions>(), sp.GetRequiredService<ILogger<SerializableRetry>>()));
 builder.Services.AddSingleton<IShiftStore>(_ => new InMemoryShiftStore().Seed(
-    new Operator("asha", 7, true, true),
-    new Operator("bilal", 7, true, true),
-    new Operator("chetan", 7, false, true)));
+    new Doctor("asha", 7, true, true),
+    new Doctor("bilal", 7, true, true),
+    new Doctor("chetan", 7, false, true)));
 builder.Services.AddScoped<ShiftRosterService>();
 
 var app = builder.Build();
 
-app.MapPost("/sites/operators/{operatorId}/leave", async (string operatorId, ShiftRosterService svc, CancellationToken ct) =>
-    await svc.RequestLeaveAsync(operatorId, ct) switch
+app.MapPost("/wards/doctors/{doctorId}/leave", async (string doctorId, ShiftRosterService svc, CancellationToken ct) =>
+    await svc.RequestLeaveAsync(doctorId, ct) switch
     {
         LeaveOutcome.Granted => Results.NoContent(),
-        LeaveOutcome.RefusedLastCertified => Results.Conflict("At least one certified operator must stay on shift."),
+        LeaveOutcome.RefusedLastSenior => Results.Conflict("At least one senior doctor must stay on shift."),
         LeaveOutcome.AlreadyOff => Results.NoContent(),
         _ => Results.NotFound(),
     });
@@ -570,9 +566,9 @@ With EF Core, prefer the built-in execution strategy: `optionsBuilder.UseNpgsql(
 ```csharp
 // Anti-pattern: 40001 propagates as a 500 Internal Server Error to the user.
 await using var tx = await conn.BeginTransactionAsync(IsolationLevel.Serializable);
-var count = await CountCertifiedOnShiftAsync(conn, tx, siteId);
+var count = await CountSeniorOnShiftAsync(conn, tx, wardId);
 if (count <= 1) return Refuse();
-await SetOffShiftAsync(conn, tx, operatorId);
+await SetOffShiftAsync(conn, tx, doctorId);
 await tx.CommitAsync();   // throws 40001 under contention
 ```
 
@@ -602,20 +598,20 @@ Teams sometimes set `default_transaction_isolation = 'repeatable read'` cluster-
 The in-browser database has a single session, so you cannot run two interleaved transactions here. You can still do useful things:
 
 1. `SHOW default_transaction_isolation;` then `BEGIN ISOLATION LEVEL REPEATABLE READ; SHOW transaction_isolation; COMMIT;`.
-2. Run the rule check: which sites currently have fewer than one certified operator on shift?
+2. Run the rule check: which wards currently have fewer than one senior doctor on shift?
 3. Find overlapping bookings in `room_booking` with the `&&` range operator; this is the *result* of write skew that got through.
 4. Add the constraint that would have prevented it: `CREATE EXTENSION IF NOT EXISTS btree_gist; ALTER TABLE room_booking ADD CONSTRAINT no_overlap EXCLUDE USING gist (room_id WITH =, during WITH &&);` and watch it fail because of the existing overlap. Delete one of the overlapping rows and try again.
-5. Try the "materialise the conflict" fix: `UPDATE site SET roster_version = roster_version + 1 WHERE id = 7 RETURNING roster_version;`.
+5. Try the "materialise the conflict" fix: `UPDATE ward SET roster_version = roster_version + 1 WHERE id = 7 RETURNING roster_version;`.
 
 :::playground type=sql title="Shift roster and room bookings"
 ```sql
-CREATE TABLE site (id int PRIMARY KEY, name text NOT NULL, roster_version bigint NOT NULL DEFAULT 0);
-INSERT INTO site VALUES (7, 'Palashbari bridge yard', 0), (8, 'Manesar casting yard', 0), (9, 'Sohna tunnel portal', 0);
+CREATE TABLE ward (id int PRIMARY KEY, name text NOT NULL, roster_version bigint NOT NULL DEFAULT 0);
+INSERT INTO ward VALUES (7, 'Cardiology', 0), (8, 'Paediatrics', 0), (9, 'Orthopaedics', 0);
 
 CREATE TABLE shift (
-  operator_id text PRIMARY KEY,
-  site_id     int  NOT NULL REFERENCES site(id),
-  certified   boolean NOT NULL,
+  doctor_id text PRIMARY KEY,
+  ward_id     int  NOT NULL REFERENCES ward(id),
+  senior   boolean NOT NULL,
   on_shift    boolean NOT NULL
 );
 INSERT INTO shift VALUES
@@ -638,30 +634,30 @@ INSERT INTO room_booking VALUES
   (3, 101, 'deepa', '[2026-10-20 11:00+05:30, 2026-10-20 12:00+05:30)'),
   (4, 102, 'gauri', '[2026-10-20 09:00+05:30, 2026-10-20 12:00+05:30)');
 
-CREATE TABLE site_stats (site_id int PRIMARY KEY REFERENCES site(id), approved int NOT NULL);
-INSERT INTO site_stats VALUES (7, 41), (8, 12), (9, 5);
+CREATE TABLE ward_stats (ward_id int PRIMARY KEY REFERENCES ward(id), admitted int NOT NULL);
+INSERT INTO ward_stats VALUES (7, 41), (8, 12), (9, 5);
 ```
 :::
 
 ## Exercises
 
-:::exercise id=m09-isolation-levels-ex1 difficulty=beginner kind=sql ordered=true title="Which sites already violate the certified-operator rule?"
-Write a query that returns `site_id`, `site_name` and `certified_on_shift` for every site with fewer than one certified operator currently on shift, ordered by `site_id`. Sites with no operators at all must be included with a count of 0.
+:::exercise id=m09-isolation-levels-ex1 difficulty=beginner kind=sql ordered=true title="Which wards already violate the senior-doctor rule?"
+Write a query that returns `ward_id`, `ward_name` and `senior_on_shift` for every ward with fewer than one senior doctor currently on shift, ordered by `ward_id`. Wards with no doctors at all must be included with a count of 0.
 ::acceptance
-- Includes a site that has operators but none certified and on shift.
-- Includes a site with zero operator rows.
-- Excludes sites that satisfy the rule.
+- Includes a ward that has doctors but none senior and on shift.
+- Includes a ward with zero doctor rows.
+- Excludes wards that satisfy the rule.
 ::hint
-Start from `site`, not from `shift`, so empty sites are not lost.
+Start from `ward`, not from `shift`, so empty wards are not lost.
 ::hint
-A `LEFT JOIN shift s ON s.site_id = site.id AND s.certified AND s.on_shift` puts the filter in the join condition so unmatched sites still appear.
+A `LEFT JOIN shift s ON s.ward_id = ward.id AND s.senior AND s.on_shift` puts the filter in the join condition so unmatched wards still appear.
 ::hint
-`COUNT(s.operator_id)` counts only matched rows; `HAVING COUNT(s.operator_id) < 1` keeps the violators.
+`COUNT(s.doctor_id)` counts only matched rows; `HAVING COUNT(s.doctor_id) < 1` keeps the violators.
 ::setup
 ```sql
-CREATE TABLE site (id int PRIMARY KEY, name text NOT NULL);
-INSERT INTO site VALUES (7, 'Palashbari bridge yard'), (8, 'Manesar casting yard'), (9, 'Sohna tunnel portal'), (10, 'Dwarka depot');
-CREATE TABLE shift (operator_id text PRIMARY KEY, site_id int NOT NULL REFERENCES site(id), certified boolean NOT NULL, on_shift boolean NOT NULL);
+CREATE TABLE ward (id int PRIMARY KEY, name text NOT NULL);
+INSERT INTO ward VALUES (7, 'Cardiology'), (8, 'Paediatrics'), (9, 'Orthopaedics'), (10, 'Dermatology');
+CREATE TABLE shift (doctor_id text PRIMARY KEY, ward_id int NOT NULL REFERENCES ward(id), senior boolean NOT NULL, on_shift boolean NOT NULL);
 INSERT INTO shift VALUES
   ('asha', 7, true, false), ('bilal', 7, true, false), ('chetan', 7, false, true),
   ('deepa', 8, true, true), ('farhan', 8, false, true),
@@ -669,26 +665,26 @@ INSERT INTO shift VALUES
 ```
 ::check
 ```sql
-SELECT site.id AS site_id, site.name AS site_name, COUNT(s.operator_id) AS certified_on_shift
-FROM site
-LEFT JOIN shift s ON s.site_id = site.id AND s.certified AND s.on_shift
-GROUP BY site.id, site.name
-HAVING COUNT(s.operator_id) < 1
-ORDER BY site.id;
+SELECT ward.id AS ward_id, ward.name AS ward_name, COUNT(s.doctor_id) AS senior_on_shift
+FROM ward
+LEFT JOIN shift s ON s.ward_id = ward.id AND s.senior AND s.on_shift
+GROUP BY ward.id, ward.name
+HAVING COUNT(s.doctor_id) < 1
+ORDER BY ward.id;
 ```
 ::solution
 ```sql
-SELECT site.id AS site_id, site.name AS site_name, COUNT(s.operator_id) AS certified_on_shift
-FROM site
-LEFT JOIN shift s ON s.site_id = site.id AND s.certified AND s.on_shift
-GROUP BY site.id, site.name
-HAVING COUNT(s.operator_id) < 1
-ORDER BY site.id;
+SELECT ward.id AS ward_id, ward.name AS ward_name, COUNT(s.doctor_id) AS senior_on_shift
+FROM ward
+LEFT JOIN shift s ON s.ward_id = ward.id AND s.senior AND s.on_shift
+GROUP BY ward.id, ward.name
+HAVING COUNT(s.doctor_id) < 1
+ORDER BY ward.id;
 ```
-Sites 7, 9 and 10 violate the rule. Site 7 is the write-skew outcome from the lesson: two correct checks, both operators off. This query is the detection side; prevention needs Serializable, a lock on the rows read, or a conflict materialised on the `site` row.
+Wards 7, 9 and 10 violate the rule. Ward 7 is the write-skew outcome from the lesson: two correct checks, both doctors off. This query is the detection side; prevention needs Serializable, a lock on the rows read, or a conflict materialised on the `ward` row.
 ::mistakes
-- Putting `s.certified AND s.on_shift` in the `WHERE` clause instead of the join condition, which turns the `LEFT JOIN` into an inner join and drops sites 9 and 10.
-- `COUNT(*)` instead of `COUNT(s.operator_id)`, which reports 1 for sites with no matching rows.
+- Putting `s.senior AND s.on_shift` in the `WHERE` clause instead of the join condition, which turns the `LEFT JOIN` into an inner join and drops wards 9 and 10.
+- `COUNT(*)` instead of `COUNT(s.doctor_id)`, which reports 1 for wards with no matching rows.
 :::
 
 :::exercise id=m09-isolation-levels-ex2 difficulty=beginner kind=written title="Name the anomaly"
@@ -696,16 +692,16 @@ For each interleaving below, name the anomaly (dirty read, non-repeatable read, 
 
 **(a)** A: `BEGIN; SELECT balance FROM wallet WHERE id = 3;` → 500. B: `UPDATE wallet SET balance = 200 WHERE id = 3;` (autocommit). A: `SELECT balance FROM wallet WHERE id = 3;` → 200. A: `COMMIT;`
 
-**(b)** A and B both run, at Read Committed: `SELECT qty FROM stock WHERE sku = 'CEM-50';` → 10. Both then run `UPDATE stock SET qty = 9 WHERE sku = 'CEM-50';` and commit. Final `qty` = 9 although two bags were issued.
+**(b)** A and B both run, at Read Committed: `SELECT qty FROM stock WHERE sku = 'PCM-500';` → 10. Both then run `UPDATE stock SET qty = 9 WHERE sku = 'PCM-500';` and commit. Final `qty` = 9 although two strips of paracetamol were sold.
 
-**(c)** Rule: a tender can have at most 3 evaluators. A and B each count evaluators for tender 42 (→ 2), each insert themselves, both commit. Tender 42 now has 4 evaluators.
+**(c)** Rule: a group physiotherapy slot can have at most 3 patients. Receptionists A and B each count bookings for slot 42 (→ 2), each insert a new booking, both commit. Slot 42 now has 4 patients.
 
 **(d)** A: `BEGIN; SELECT count(*) FROM complaint WHERE status = 'open';` → 17. B inserts an open complaint and commits. A: same query → 18.
 ::acceptance
 - Each case correctly named.
 - Correct weakest level for each: (a) Repeatable Read, (b) Repeatable Read, (c) Serializable, (d) Repeatable Read.
 - For (b), notes that `qty = qty - 1` would have been safe even at Read Committed.
-- For (c), notes that a unique constraint cannot express "at most 3" but that a lock on the tender row would work.
+- For (c), notes that a unique constraint cannot express "at most 3" but that a lock on the slot row would work.
 ::hint
 Ask two questions: did the same row change, or did the set of rows change? Did the anomaly involve one row written by two transactions, or different rows?
 ::hint
@@ -717,7 +713,7 @@ Write skew is the only one of the five that Repeatable Read lets through, becaus
 
 **(b) Lost update.** Both computed `9` from a stale read and the second overwrote the first. Repeatable Read aborts the second `UPDATE` with `40001` (first-committer-wins); a retry reads 9 and writes 8. At Read Committed the relative form `UPDATE stock SET qty = qty - 1` is already correct because the blocked updater re-reads the fresh row.
 
-**(c) Write skew.** Each transaction read a count and then inserted a *new, different* row. No row was written twice, so Repeatable Read does not detect it; only Serializable does, by tracking the reads. Alternatives: `SELECT ... FROM tender WHERE id = 42 FOR UPDATE` as the first statement to serialise evaluators of the same tender, or a trigger that counts at insert time under that lock.
+**(c) Write skew.** Each transaction read a count and then inserted a *new, different* row. No row was written twice, so Repeatable Read does not detect it; only Serializable does, by tracking the reads. Alternatives: `SELECT ... FROM therapy_slot WHERE id = 42 FOR UPDATE` as the first statement to serialise bookings for the same slot, or a trigger that counts at insert time under that lock.
 
 **(d) Phantom read.** The row count changed because a new row appeared. In PostgreSQL, Repeatable Read prevents phantoms (it is snapshot isolation), unlike the SQL standard's minimum definition of the level.
 ::mistakes
@@ -998,29 +994,29 @@ public class SnapshotDbTests
     [Fact]
     public void Lost_update_is_detected()
     {
-        var db = new SnapshotDb().Seed("approved", 41);
+        var db = new SnapshotDb().Seed("admitted", 41);
         var a = db.Begin();
         var b = db.Begin();
-        a.Set("approved", a.Get("approved")!.Value + 1);
-        b.Set("approved", b.Get("approved")!.Value + 1);
+        a.Set("admitted", a.Get("admitted")!.Value + 1);
+        b.Set("admitted", b.Get("admitted")!.Value + 1);
         a.Commit();
         Assert.Throws<SerializationException>(() => b.Commit());
-        Assert.Equal(42, db.Committed("approved"));
+        Assert.Equal(42, db.Committed("admitted"));
     }
 
     [Fact]
     public void Retry_on_fresh_snapshot_succeeds()
     {
-        var db = new SnapshotDb().Seed("approved", 41);
+        var db = new SnapshotDb().Seed("admitted", 41);
         var a = db.Begin();
         var b = db.Begin();
-        a.Set("approved", 42); a.Commit();
-        b.Set("approved", 42);
+        a.Set("admitted", 42); a.Commit();
+        b.Set("admitted", 42);
         Assert.Throws<SerializationException>(() => b.Commit());
         var b2 = db.Begin();
-        b2.Set("approved", b2.Get("approved")!.Value + 1);
+        b2.Set("admitted", b2.Get("admitted")!.Value + 1);
         b2.Commit();
-        Assert.Equal(43, db.Committed("approved"));
+        Assert.Equal(43, db.Committed("admitted"));
     }
 
     [Fact]
@@ -1048,7 +1044,7 @@ public class SnapshotDbTests
     [Fact]
     public void Write_skew_is_NOT_detected_at_repeatable_read()
     {
-        // Invariant: asha + bilal >= 1 (at least one certified operator on shift). 1 = on shift, 0 = off.
+        // Invariant: asha + bilal >= 1 (at least one senior doctor on shift). 1 = on shift, 0 = off.
         var db = new SnapshotDb().Seed("asha", 1).Seed("bilal", 1);
         var a = db.Begin();
         var b = db.Begin();
@@ -1138,24 +1134,24 @@ Isolation behaviour cannot be unit-tested against a fake with full fidelity, but
 
 ```csharp
 [Fact]
-public async Task Leave_request_retries_and_refuses_when_last_certified()
+public async Task Leave_request_retries_and_refuses_when_last_senior()
 {
     var store = new InMemoryShiftStore().Seed(
-        new Operator("asha", 7, true, true), new Operator("bilal", 7, true, true));
+        new Doctor("asha", 7, true, true), new Doctor("bilal", 7, true, true));
     var retry = new SerializableRetry(new SerializableRetryOptions { MaxAttempts = 5 },
         NullLogger<SerializableRetry>.Instance, delay: (_, _) => Task.CompletedTask);
     var svc = new ShiftRosterService(store, retry, NullLogger<ShiftRosterService>.Instance);
 
     // Simulate the write-skew race: both read count = 2 before either commits.
     var txA = await store.BeginSerializableAsync();
-    _ = await txA.CountCertifiedOnShiftAsync(7);
-    var first = await svc.RequestLeaveAsync("asha");          // commits, bumps site version
+    _ = await txA.CountSeniorOnShiftAsync(7);
+    var first = await svc.RequestLeaveAsync("asha");          // commits, bumps ward version
     await txA.SetOnShiftAsync("bilal", false);
     await Assert.ThrowsAsync<DbConcurrencyException>(() => txA.CommitAsync()); // 40001
 
     var second = await svc.RequestLeaveAsync("bilal");        // fresh snapshot sees count = 1
     Assert.Equal(LeaveOutcome.Granted, first);
-    Assert.Equal(LeaveOutcome.RefusedLastCertified, second);
+    Assert.Equal(LeaveOutcome.RefusedLastSenior, second);
 }
 ```
 
@@ -1165,7 +1161,7 @@ public async Task Leave_request_retries_and_refuses_when_last_certified()
 
 - **Seat and slot booking** (cinemas, exams, doctor appointments): "no two bookings for the same seat and show" is best done with a unique or exclusion constraint. "No more than 10 % of seats held unpaid" spans rows and is a Serializable or lock-the-parent problem.
 - **Wallets and ledgers**: single-row balance rules use conditional updates at Read Committed. Cross-account rules ("total daily outflow ≤ ₹1 lakh") are write-skew-prone and need Serializable or a per-account daily counter row that both transactions must update.
-- **Rosters and duty systems** (hospital on-call, site safety officers, railway crew links): the canonical write-skew case. Teams that discover it late usually add Serializable plus retries to the few endpoints that enforce the rule.
+- **Rosters and duty systems** (hospital on-call, pharmacy duty pharmacists, railway crew links): the canonical write-skew case. Teams that discover it late usually add Serializable plus retries to the few endpoints that enforce the rule.
 - **Reports and exports**: Repeatable Read gives a consistent point-in-time view for a 20-minute monthly report without blocking writers; Read Committed would mix states across pages.
 - **Inventory**: `UPDATE stock SET qty = qty - 1 WHERE sku = ? AND qty >= 1` at Read Committed scales better than any stronger level because it never aborts; the row-count check carries the business answer.
 
@@ -1241,7 +1237,7 @@ At Read Committed, Session A runs `UPDATE stock SET qty = qty - 1 WHERE sku = 'X
 - [ ] A reads B's uncommitted value.
 > Read Committed's write rule: wait, then re-check the WHERE clause against the committed row version. This is why the conditional single-statement update is safe at the default level.
 ::q single
-A monthly progress report runs 15 minutes and reads 40 tables. Writers must not be blocked and the report must be internally consistent. Which level?
+A monthly account-statement job runs 15 minutes and reads 40 tables. Writers must not be blocked and the report must be internally consistent. Which level?
 - [ ] Read Committed
 - [x] Repeatable Read
 - [ ] Serializable
@@ -1255,12 +1251,12 @@ Which statements about PostgreSQL Serializable (SSI) are true? (Select all that 
 - [x] Serialization failures use SQLSTATE 40001 and should be retried from the start of the transaction.
 > SSI detects dangerous read/write dependency patterns and aborts rather than blocks; predicate locks are coarse enough to produce false positives.
 ::q single
-Two users each read "2 approvers assigned to tender 42", each insert themselves as an approver, and both commit. The limit is 3 and now there are 4. Which is this, and what is the weakest level that would have stopped it?
+Two receptionists each read "2 patients booked in therapy slot 42", each insert a new booking, and both commit. The limit is 3 and now there are 4. Which is this, and what is the weakest level that would have stopped it?
 - [ ] Lost update; Repeatable Read
 - [ ] Phantom read; Repeatable Read
 - [x] Write skew; Serializable
 - [ ] Dirty read; Read Committed
-> Different rows were written, so same-row detection does not fire. Only read tracking (Serializable), a lock on the tender row, or a trigger under that lock catches it.
+> Different rows were written, so same-row detection does not fire. Only read tracking (Serializable), a lock on the slot row, or a trigger under that lock catches it.
 ::q single
 A team sets `default_transaction_isolation = 'repeatable read'` for the whole cluster. What new behaviour should they expect?
 - [ ] Nothing changes for writes.
@@ -1272,8 +1268,8 @@ A team sets `default_transaction_isolation = 'repeatable read'` for the whole cl
 Which rule is best enforced by a constraint rather than by an isolation level?
 - [ ] Total outflow from all accounts of a customer in a day must not exceed ₹1 lakh.
 - [x] No two bookings for the same room may overlap in time.
-- [ ] At least one certified operator must stay on shift at every site.
-- [ ] At most 3 evaluators per tender.
+- [ ] At least one senior doctor must stay on shift in every ward.
+- [ ] At most 3 patients per therapy slot.
 > Overlap is a per-row property that an exclusion constraint on (room_id, during) expresses directly, at any isolation level. The others involve counts or sums across rows.
 ::q single
 Your retry loop catches `Exception` and retries up to 5 times. What is the main problem?

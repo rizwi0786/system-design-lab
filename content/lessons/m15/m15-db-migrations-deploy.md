@@ -150,7 +150,7 @@ dotnet ef migrations bundle --project src/ChallanDesk.Data --startup-project src
 Points to know:
 
 - EF Core records applied migrations in `__EFMigrationsHistory` (`MigrationId`, `ProductVersion`).
-- Recent EF Core versions take a database lock while migrating to stop concurrent runs (the mechanism is provider-specific; check that your provider supports it), and warn when the model has changes that have no migration yet.
+- Since EF Core 9, `Migrate` takes a database-wide lock while migrating to stop concurrent runs (the mechanism is provider-specific; check that your provider supports it), and by default **throws** when the model has changes that have no migration yet (the `PendingModelChangesWarning` is an error unless you reconfigure it), which catches a forgotten `dotnet ef migrations add`.
 - PostgreSQL supports transactional DDL, so most migrations run in a transaction and either fully apply or not at all. Statements that **can't** run in a transaction, such as `CREATE INDEX CONCURRENTLY`, need `migrationBuilder.Sql("...", suppressTransaction: true)` and should be alone in their migration, written to be re-runnable (`IF NOT EXISTS`).
 - Auto-generated migrations for a property rename emit `RENAME COLUMN`. EF does what you ask; it can't know you're doing a rolling deployment. Review every generated migration.
 
@@ -276,7 +276,7 @@ Pre-deploy job applies the expand migration in milliseconds (with lock timeout a
 
 ### Step 4: release R2
 
-Pre-deploy job adds `CHECK (payment_status IN (...)) NOT VALID` and then `VALIDATE CONSTRAINT` (which allows normal reads and writes while it scans). App v2 rolls out, reading and writing `payment_status`. Readiness requires migration `20261002_1105_sync_trigger`.
+Pre-deploy job adds `CHECK (payment_status IN (...)) NOT VALID` in one migration and runs `VALIDATE CONSTRAINT` in the next (which allows normal reads and writes while it scans). They must be separate transactions: in one transaction, the strong lock from `ADD CONSTRAINT` would be held for the whole scan. App v2 rolls out, reading and writing `payment_status`. Readiness requires migration `20261002_1105_sync_trigger`.
 
 ### Step 5: release R3
 
@@ -439,16 +439,24 @@ public sealed class ChallanMigrations : IMigrationSource
               FOR EACH ROW EXECUTE FUNCTION sync_payment_status();
             """),
 
-        // Cannot run inside a transaction. Re-runnable thanks to IF NOT EXISTS.
+        // Cannot run inside a transaction, and must be the only statement (a multi-statement string is an
+        // implicit transaction). Re-runnable thanks to IF NOT EXISTS, with one catch: a failed concurrent build
+        // leaves an INVALID index that IF NOT EXISTS then skips. Check pg_index.indisvalid after a failure and
+        // DROP INDEX CONCURRENTLY the leftover before retrying.
         new("20261009_0900_index_payment_status", MigrationPhase.Expand,
             "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_challans_payment_status ON challans (payment_status) WHERE payment_status <> 'paid';",
             RunInTransaction: false),
 
+        // Two migrations, so two transactions. In ONE transaction the ACCESS EXCLUSIVE lock taken by
+        // ADD CONSTRAINT would be held until commit, i.e. for the whole 60-million-row validation scan.
         new("20261009_0910_check_payment_status", MigrationPhase.Expand, """
             ALTER TABLE challans ADD CONSTRAINT ck_challans_payment_status
               CHECK (payment_status IN ('unpaid', 'paid', 'court', 'waived')) NOT VALID;
-            ALTER TABLE challans VALIDATE CONSTRAINT ck_challans_payment_status;
             """),
+
+        // VALIDATE takes only SHARE UPDATE EXCLUSIVE: reads and writes continue while it scans.
+        new("20261009_0915_validate_payment_status", MigrationPhase.Expand,
+            "ALTER TABLE challans VALIDATE CONSTRAINT ck_challans_payment_status;"),
 
         // Release R3. Only after every running and rollback-target version stopped using is_paid.
         new("20261023_1000_drop_is_paid", MigrationPhase.Contract, """
@@ -757,7 +765,7 @@ Since PostgreSQL 11, `ADD COLUMN ... DEFAULT <constant>` doesn't rewrite the tab
 4. **Breaking.** Old instances (and a rolled-back version) query `registration_no`. Split: R1 add `vehicle_reg_no`, sync with a trigger, backfill; R2 app reads and writes `vehicle_reg_no`; R3 drop `registration_no`. Often the honest answer is "don't rename": map the new property name to the old column in EF Core (`HasColumnName("registration_no")`).
 5. **Safe with care.** A plain `CREATE INDEX` blocks writes for the whole build on 60 million rows. Use `CREATE INDEX CONCURRENTLY IF NOT EXISTS`, alone in a migration with the transaction suppressed. If it fails, it leaves an invalid index: drop it and retry.
 6. **Breaking and a full table rewrite** under an exclusive lock. Add `fine_rupees numeric(12,2)`, sync and backfill, switch the app, then drop `fine_paise`. Also question the change: paise in `bigint` is usually the better representation.
-7. **Safe with care.** Adding a foreign key validates every row while holding locks. Use `ADD CONSTRAINT ... NOT VALID` (fast, enforced for new rows), then `VALIDATE CONSTRAINT` (scans, but doesn't block normal reads and writes). Make sure every existing `offence_code` exists in `offences` first.
+7. **Safe with care.** Adding a foreign key validates every row while holding locks. Use `ADD CONSTRAINT ... NOT VALID` (fast, enforced for new rows), then `VALIDATE CONSTRAINT` in a separate transaction (scans, but doesn't block normal reads and writes). Make sure every existing `offence_code` exists in `offences` first.
 8. **Breaking in this release.** Old instances during the rollout and the rollback target both use `is_paid`. Move the drop to a later release, once the version that stopped using it is fully deployed and rollback to the older version is no longer planned.
 
 For every statement that takes an `ACCESS EXCLUSIVE` lock (2, 3, 4, 7's `ADD`, 8), set `lock_timeout` (for example 5 seconds) and retry, to avoid the lock queue.
@@ -1507,7 +1515,7 @@ A: Waiting in the lock queue and blocking every other query on the table behind 
 Q: How do you add an index to a 60-million-row table without blocking writes?
 A: CREATE INDEX CONCURRENTLY, alone in a migration that runs outside a transaction.
 Q: How do you add a foreign key safely on a big table?
-A: ADD CONSTRAINT ... NOT VALID, then VALIDATE CONSTRAINT in a separate statement.
+A: ADD CONSTRAINT ... NOT VALID, then VALIDATE CONSTRAINT in a separate statement and a separate transaction, so the strong lock from the first is released before the long scan.
 Q: What is an EF Core migration bundle?
 A: A single executable built in CI that applies the migrations to a target database, with no SDK or source needed there.
 Q: Why gate readiness on the schema version?

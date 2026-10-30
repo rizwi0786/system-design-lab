@@ -550,6 +550,8 @@ public static class LeaveEndpoints
             };
         });
 
+        // Simplified for the lesson: in production, take the approver's id from the authenticated user's claims,
+        // never from a query-string value the caller controls.
         app.MapPost("/leave/{id:guid}/approve", async (Guid id, Guid approverId, ILeaveApplication leave, CancellationToken ct) =>
         {
             var result = await leave.ApproveAsync(id, approverId, ct);
@@ -812,7 +814,7 @@ The calculator is in the core and knows only the port. The same calculator works
 :::
 
 :::exercise id=m02-hexagonal-ex2 difficulty=beginner kind=written title="Label the ports and adapters"
-An attendance module for construction sites works like this. Site supervisors mark attendance in a **mobile app** that calls a **REST API**. Biometric devices at the gate push punch records to an **MQTT broker**, and a **consumer** reads them. Each night a **scheduled job** closes the day's attendance. The module stores data in **PostgreSQL**, sends an **SMS** to workers whose overtime is approved, and asks the **HR service** (over HTTP) whether a worker is on the site's roster. A **test suite** checks the overtime rules.
+An attendance module for a chain of schools works like this. Teachers mark class attendance in a **mobile app** that calls a **REST API**, and can excuse an absence when a parent sends a note. RFID card readers at the school gate push tap records to an **MQTT broker**, and a **consumer** reads them. Each night a **scheduled job** closes the day's attendance. The module stores data in **PostgreSQL**, sends an **SMS** to parents when a student is absent without an excuse, and asks the **Admissions service** (over HTTP) whether a student is enrolled in a class. A **test suite** checks the absence rules.
 
 List the driving adapters, driven adapters, driving ports and driven ports you would design. Name each port in business language.
 ::acceptance
@@ -824,15 +826,15 @@ Ask for each item: does it **call into** the module, or does the module **call o
 ::hint
 The MQTT consumer receives messages, but what does it do with them? Which direction is that?
 ::hint
-Name the port after the need ("check roster membership"), not after the protocol ("HR HTTP client").
+Name the port after the need ("check class enrolment"), not after the protocol ("Admissions HTTP client").
 ::solution
-**Driving adapters** (they call the app): the REST API used by the mobile app, the MQTT punch consumer (it receives punches and calls the app), the nightly scheduled job, and the test suite.
+**Driving adapters** (they call the app): the REST API used by the mobile app, the MQTT gate-tap consumer (it receives taps and calls the app), the nightly scheduled job, and the test suite.
 
-**Driving ports**: `IAttendanceMarking.MarkAsync(siteId, workerId, date, status)`, `IPunchIngestion.RecordPunchAsync(deviceId, workerId, timestamp, direction)`, `IDayClosing.CloseDayAsync(siteId, date)`, and `IOvertimeApproval.ApproveAsync(...)`.
+**Driving ports**: `IAttendanceMarking.MarkAsync(classId, studentId, date, status)`, `IGateTapIngestion.RecordTapAsync(readerId, studentId, timestamp, direction)`, `IDayClosing.CloseDayAsync(schoolId, date)`, and `IAbsenceExcusal.ExcuseAsync(studentId, date, reason)`.
 
-**Driven ports** (the app needs them): `IAttendanceRepository`, `IWorkerNotifier.OvertimeApprovedAsync(workerId, hours)`, `ISiteRoster.IsOnRosterAsync(siteId, workerId)`.
+**Driven ports** (the app needs them): `IAttendanceRepository`, `IParentNotifier.StudentAbsentAsync(studentId, date)`, `IClassRoster.IsEnrolledAsync(classId, studentId)`.
 
-**Driven adapters**: a PostgreSQL repository, an SMS gateway notifier, and an HTTP client for the HR service implementing `ISiteRoster`. Tests use in-memory versions of all three.
+**Driven adapters**: a PostgreSQL repository, an SMS gateway notifier, and an HTTP client for the Admissions service implementing `IClassRoster`. Tests use in-memory versions of all three.
 
 Note that the MQTT consumer is *driving*, even though it "consumes": direction is about who initiates a call into the application core.
 :::
@@ -1362,7 +1364,7 @@ A useful health metric: if most of your tests need a database to run, the hexago
 
 - **Payment and banking integrations.** Payment providers, bank file formats and SMS gateways change often. Teams that keep them behind business-shaped ports (`IPayoutGateway`, `IOtpSender`) can switch providers, or run two in parallel during a migration, without touching core rules.
 - **Government and regulatory APIs.** E-invoicing, GST or statutory filing portals change formats and endpoints. An adapter per external API isolates those changes, and the core rules (what must be filed when) stay stable and tested.
-- **Infrastructure project systems.** A measurement-book or progress-billing core can be driven by a web app, a mobile site app working offline, and a nightly import from survey tools, all through the same driving ports. It can store data in PostgreSQL today and push to an ERP tomorrow through a driven adapter.
+- **Insurance claims systems.** A claims core can be driven by a web portal, a mobile app where customers photograph damage while offline, and a nightly file import from partner hospitals and garages, all through the same driving ports. It can store data in PostgreSQL today and push to an ERP tomorrow through a driven adapter.
 - **ASP.NET Core itself.** The framework is built around abstractions such as `ILogger`, `IDistributedCache`, `IOptions<T>` and `TimeProvider`, with swappable implementations. It isn't a hexagon in the strict sense, but it shows the same idea: depend on the need, plug in the technology.
 - **Related styles.** [Clean Architecture and Onion Architecture](#/lesson/m02-clean-onion) build on the same inward-dependency idea and add more explicit rings for entities and use cases.
 

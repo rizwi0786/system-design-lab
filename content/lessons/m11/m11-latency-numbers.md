@@ -140,7 +140,7 @@ A **latency budget** splits an end-to-end target into allowances for each step, 
 | Downstream pricing service | 60 ms | Its own p99, measured |
 | Serialisation and response | 5 ms | |
 | Browser render of critical content | 200 ms | Small bundle, server-rendered first view |
-| **Margin** | ~450 ms | For variance, retries and growth |
+| **Margin** | ~500 ms | For variance, retries and growth (1,000 ms minus the ~490 ms sum of the upper budgets) |
 
 Three practical rules:
 
@@ -207,15 +207,15 @@ If users are in one country, the app is in a nearby region, each request makes t
 flowchart LR
     U["Phone on 4G in Pune"] -- "1 RTT about 40 ms" --> CDN["CDN edge in Mumbai (TLS ends here)"]
     CDN -- "about 2 ms" --> LB["Load balancer (India region)"]
-    LB -- "under 1 ms" --> API["Bill API"]
+    LB -- "under 1 ms" --> API["Checkout API"]
     API -- "about 1 ms" --> C["Cache"]
     API -- "about 5 ms each, 2 queries" --> DB[("PostgreSQL")]
     API -- "p99 60 ms, in parallel" --> PR["Pricing service"]
-    API -- "p99 40 ms, in parallel" --> RB["Rebate service"]
+    API -- "p99 40 ms, in parallel" --> RB["Offers service"]
     API -. "async, not in budget" .-> N["Notification queue"]
 ```
 
-The phone connects to a **CDN edge in Mumbai**, so the expensive round trips for TCP and TLS set-up happen over a short distance and the connection is reused for later requests. The edge forwards to the **load balancer and API in an Indian region**, a couple of milliseconds away. Inside the region, the API reads the bill from the **cache** (about a millisecond) and, on a miss, makes **two indexed queries** to PostgreSQL. It calls the **pricing** and **rebate** services **in parallel**, so the slower of the two (pricing, 60 ms at p99) sets that stage's cost rather than their sum. The **notification** is put on a queue asynchronously and is deliberately outside the budget: the user does not wait for an SMS to be sent. Every arrow on the critical path has a number, and their sum plus margin is the end-to-end target.
+The phone connects to a **CDN edge in Mumbai**, so the expensive round trips for TCP and TLS set-up happen over a short distance and the connection is reused for later requests. The edge forwards to the **load balancer and API in an Indian region**, a couple of milliseconds away. Inside the region, the API reads the cart from the **cache** (about a millisecond) and, on a miss, makes **two indexed queries** to PostgreSQL. It calls the **pricing** and **offers** (coupons) services **in parallel**, so the slower of the two (pricing, 60 ms at p99) sets that stage's cost rather than their sum. The **notification** is put on a queue asynchronously and is deliberately outside the budget: the user does not wait for an SMS to be sent. Every arrow on the critical path has a number, and their sum plus margin is the end-to-end target.
 
 ### Fan-out with a deadline and a hedged request
 
@@ -242,7 +242,7 @@ The search API sends the query to all three shards at once, each with a **deadli
 
 ## Step-by-step example
 
-**Scenario.** A national highway authority's public "project status" page shows a map and progress for each road project. Users are mostly in India. The page currently takes about 2.5 s at p99. The target is **p99 under 800 ms** for the first useful view on a 4G phone.
+**Scenario.** A train-travel app's "My trips" page shows a traveller's upcoming journeys: each booking, the train's live running status, the e-ticket and a route map. Users are mostly in India. The page currently takes about 2.5 s at p99. The target is **p99 under 800 ms** for the first useful view on a 4G phone.
 
 ### Step 1 — Measure the current path
 
@@ -251,10 +251,10 @@ The trace of one slow request (numbers from the team's tracing, rounded):
 | Step | p99 |
 |---|---|
 | New TLS connection to API in a US-East region (3 RTTs × ~220 ms) | 660 ms |
-| API: fetch project list from PostgreSQL (missing index, sequential scan) | 400 ms |
-| API: call progress service, then contractor service, then document service, sequentially (3 × ~150 ms) | 450 ms |
-| API: render map tiles server-side | 600 ms |
-| Response transfer (1.8 MB JSON) on 4G | 350 ms |
+| API: fetch the traveller's bookings from PostgreSQL (missing index on `bookings.user_id`, sequential scan) | 400 ms |
+| API: call live-status service, then PNR-status service, then e-ticket service, sequentially (3 × ~150 ms) | 450 ms |
+| API: render route-map tiles server-side | 600 ms |
+| Response transfer (1.8 MB JSON, about 600 KB gzip-compressed) on 4G at roughly 14 Mbit/s | 350 ms |
 | **Total** | **≈ 2,460 ms** |
 
 ### Step 2 — Fix physics first
@@ -267,11 +267,11 @@ Add the missing index: the query falls from 400 ms to about 5 ms. Call the three
 
 ### Step 4 — Move work off the critical path
 
-Map tiles do not change per request: serve them as static tiles from the CDN (pre-rendered nightly). The page shows the project list first and loads the map progressively. **Saved: ~600 ms** from the critical path.
+Map tiles do not change per request: serve them as static tiles from the CDN (pre-rendered nightly). The page shows the list of trips first and loads the map progressively. **Saved: ~600 ms** from the critical path.
 
 ### Step 5 — Shrink the payload
 
-Return only the fields the first view needs (about 120 KB compressed instead of 1.8 MB), paginate the rest. Transfer time falls from about 350 ms to about 40 ms. **Saved: ~310 ms.**
+Return only the fields the first view needs (about 60 KB compressed instead of 600 KB), paginate the rest. At the same ~14 Mbit/s, 60 KB × 8 ≈ 0.5 Mbit takes about 35 ms, so transfer time falls from about 350 ms to about 40 ms. **Saved: ~310 ms.**
 
 ### Step 6 — Check against the budget
 
@@ -285,7 +285,7 @@ Return only the fields the first view needs (about 120 KB compressed instead of 
 | Browser render of list view | 200 ms |
 | **Total** | **≈ 520 ms** |
 
-That leaves about 280 ms of margin under the 800 ms target. The remaining risk is the parallel stage: its p99 is the worst of three services, so the team adds a 200 ms deadline per call and shows a "documents loading" placeholder if the document service misses it (a partial result).
+That leaves about 280 ms of margin under the 800 ms target. The remaining risk is the parallel stage: its p99 is the worst of three services, so the team adds a 200 ms deadline per call and shows an "e-ticket loading" placeholder if the e-ticket service misses it (a partial result).
 
 ## Production-style C# implementation
 
@@ -418,7 +418,7 @@ public static class FanOutMath
 ```csharp file=Search/IShardClient.cs
 namespace Latency.Demo.Search;
 
-public sealed record SearchHit(string ProjectId, string Title, double Score);
+public sealed record SearchHit(string ListingId, string Title, double Score);
 
 public interface IShardClient
 {
@@ -442,7 +442,7 @@ public sealed class FakeShardClient(TimeProvider clock) : IShardClient
     {
         int ms = Random.Shared.NextDouble() < 0.02 ? 250 : 5 + Random.Shared.Next(15);
         await Task.Delay(TimeSpan.FromMilliseconds(ms), clock, ct);
-        return [new SearchHit($"NH-{shard}{replica}{text.Length}", $"Project on shard {shard} matching '{text}'", 1.0 / (shard + 1))];
+        return [new SearchHit($"HTL-{shard}{replica}{text.Length}", $"Hotel on shard {shard} matching '{text}'", 1.0 / (shard + 1))];
     }
 }
 ```
@@ -491,7 +491,7 @@ builder.Services.AddScoped<SearchService>();
 var app = builder.Build();
 app.UseMiddleware<DeadlineMiddleware>();
 
-// GET /search?q=bridge  (optionally send X-Deadline-Ms: 150 from an upstream caller)
+// GET /search?q=goa  (hotel search; optionally send X-Deadline-Ms: 150 from an upstream caller)
 app.MapGet("/search", async (string q, SearchService search, HttpContext http) =>
 {
     var result = await search.SearchAsync(q, http.RequestAborted);
@@ -511,7 +511,7 @@ app.Run();
 
 Design points to defend:
 
-1. **One budget for the whole call tree.** `DeadlineMiddleware` accepts the caller's remaining budget, and `RequestDeadline.ForStep` never gives a step more time than the request has left. Without this, each layer applies its own fixed timeout and a deep call chain can take far longer than the user's target.
+1. **One budget for the whole call tree.** `DeadlineMiddleware` accepts the caller's remaining budget, and `RequestDeadline.ForStep` never gives a step more time than the request has left. Without this, each layer applies its own fixed timeout and a deep call chain can take far longer than the user's target. Only trust `X-Deadline-Ms` from internal callers (strip it at the edge or gateway); the cap of 10× the default stops a public client from asking for very long budgets.
 2. **Hedging only for idempotent reads.** The shard query has no side effects, so a duplicate is harmless. Never hedge a payment or an insert without idempotency keys.
 3. **Hedge at about the p95, not immediately.** Hedging every call doubles load; hedging the slowest ~5 % adds ~5 % load and removes most of the tail.
 4. **Partial results are explicit.** The response says how many shards answered and sets `X-Partial-Results`, so clients and dashboards can see degraded answers instead of silently receiving fewer results.
@@ -763,7 +763,7 @@ public class CriticalPathTests
     private static IStep Plan() => new Sequence("request",
         new Step("auth", 5),
         new Step("db", 15),
-        new Parallel("downstream", new Step("pricing", 60), new Step("rebate", 40)));
+        new Parallel("downstream", new Step("pricing", 60), new Step("offers", 40)));
 
     [Fact]
     public void Sequence_adds_parallel_takes_max() => Assert.Equal(80, Plan().EstimateMs(), 6);
@@ -862,7 +862,7 @@ public static class LatencyBudget
 }
 ```
 
-**Why "max" is optimistic for parallel groups.** If pricing and rebate each exceed their own p99 1 % of the time independently, "wait for both" exceeds 60 ms more often than 1 % of the time: up to about 2 %. For two children the error is small; for a 50-way fan-out it is large (see exercise 1). A more honest model gives each parallel group an extra allowance, or uses each child's p99.9 when the group is wide.
+**Why "max" is optimistic for parallel groups.** If pricing and offers each exceed their own p99 1 % of the time independently, "wait for both" exceeds 60 ms more often than 1 % of the time: up to about 2 %. For two children the error is small; for a 50-way fan-out it is large (see exercise 1). A more honest model gives each parallel group an extra allowance, or uses each child's p99.9 when the group is wide.
 ::alternatives
 Run a Monte Carlo simulation instead: sample each leaf from its measured latency distribution (or a histogram), compute the tree's latency per sample, and read off the p99. It captures fan-out amplification exactly, at the cost of needing distributions rather than single numbers.
 ::mistakes
@@ -871,8 +871,8 @@ Run a Monte Carlo simulation instead: sample each leaf from its measured latency
 - Forgetting that `Max` on an empty sequence throws `InvalidOperationException`, not the `ArgumentException` the contract requires.
 :::
 
-:::exercise id=m11-latency-numbers-ex4 difficulty=intermediate kind=hld title="Bring the project-status page under 800 ms"
-The starter graph is the highway project-status page from the step-by-step example: users in India, API in a US-East region, three services called sequentially, server-rendered map tiles and a PostgreSQL database without the right index. Redesign it to meet p99 < 800 ms for the first useful view on 4G, and annotate each edge with its budget.
+:::exercise id=m11-latency-numbers-ex4 difficulty=intermediate kind=hld title="Bring the My-trips page under 800 ms"
+The starter graph is the train app's "My trips" page from the step-by-step example: users in India, API in a US-East region, three services called sequentially, server-rendered map tiles and a PostgreSQL database without the right index. Redesign it to meet p99 < 800 ms for the first useful view on 4G, and annotate each edge with its budget.
 ::acceptance
 - The API and data are in an Indian region, with TLS terminated at a nearby edge.
 - The three downstream calls run in parallel with per-call deadlines.
@@ -891,13 +891,13 @@ Add `cdn`, set `region` on nodes, put `latencyMs` on edges or nodes, and make th
 ```json
 {
   "nodes": [
-    { "id": "u", "type": "client", "label": "Citizens on 4G (India)", "props": { "rps": 150 } },
+    { "id": "u", "type": "client", "label": "Travellers on 4G (India)", "props": { "rps": 150 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer", "props": { "region": "US East" } },
-    { "id": "api", "type": "app-server", "label": "Status API (renders map tiles)", "props": { "instances": 2, "region": "US East" } },
-    { "id": "db", "type": "database", "label": "PostgreSQL (no index on project_state)", "props": { "region": "US East" } },
-    { "id": "prog", "type": "app-server", "label": "Progress service", "props": { "latencyMs": 150 } },
-    { "id": "con", "type": "app-server", "label": "Contractor service", "props": { "latencyMs": 150 } },
-    { "id": "doc", "type": "app-server", "label": "Document service", "props": { "latencyMs": 150 } }
+    { "id": "api", "type": "app-server", "label": "Trip API (renders map tiles)", "props": { "instances": 2, "region": "US East" } },
+    { "id": "db", "type": "database", "label": "PostgreSQL (no index on bookings.user_id)", "props": { "region": "US East" } },
+    { "id": "prog", "type": "app-server", "label": "Live running-status service", "props": { "latencyMs": 150 } },
+    { "id": "con", "type": "app-server", "label": "PNR-status service", "props": { "latencyMs": 150 } },
+    { "id": "doc", "type": "app-server", "label": "E-ticket service", "props": { "latencyMs": 150 } }
   ],
   "edges": [
     { "from": "u", "to": "lb", "kind": "sync", "label": "new TLS each visit" },
@@ -913,17 +913,17 @@ Add `cdn`, set `region` on nodes, put `latencyMs` on edges or nodes, and make th
 ```json
 {
   "nodes": [
-    { "id": "u", "type": "client", "label": "Citizens on 4G (India)", "props": { "rps": 150 } },
+    { "id": "u", "type": "client", "label": "Travellers on 4G (India)", "props": { "rps": 150 } },
     { "id": "dns", "type": "dns", "label": "DNS (geo-routed)" },
     { "id": "cdn", "type": "cdn", "label": "CDN edge in India: TLS, static map tiles, JS", "props": { "region": "India" } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer", "props": { "region": "India Central", "multiAz": true } },
-    { "id": "api", "type": "app-server", "label": "Status API (deadline 300 ms)", "props": { "instances": 2, "region": "India Central", "multiAz": true } },
-    { "id": "cache", "type": "cache", "label": "Project summary cache", "props": { "ttlSeconds": 300, "latencyMs": 1 } },
-    { "id": "db", "type": "database", "label": "PostgreSQL (index on project_state)", "props": { "region": "India Central", "latencyMs": 5 } },
-    { "id": "prog", "type": "app-server", "label": "Progress service", "props": { "latencyMs": 150, "region": "India Central" } },
-    { "id": "con", "type": "app-server", "label": "Contractor service", "props": { "latencyMs": 150, "region": "India Central" } },
-    { "id": "doc", "type": "app-server", "label": "Document service", "props": { "latencyMs": 150, "region": "India Central" } },
-    { "id": "tiles", "type": "object-storage", "label": "Pre-rendered map tiles (nightly job)" },
+    { "id": "api", "type": "app-server", "label": "Trip API (deadline 300 ms)", "props": { "instances": 2, "region": "India Central", "multiAz": true } },
+    { "id": "cache", "type": "cache", "label": "Trip summary cache", "props": { "ttlSeconds": 300, "latencyMs": 1 } },
+    { "id": "db", "type": "database", "label": "PostgreSQL (index on bookings.user_id)", "props": { "region": "India Central", "latencyMs": 5 } },
+    { "id": "prog", "type": "app-server", "label": "Live running-status service", "props": { "latencyMs": 150, "region": "India Central" } },
+    { "id": "con", "type": "app-server", "label": "PNR-status service", "props": { "latencyMs": 150, "region": "India Central" } },
+    { "id": "doc", "type": "app-server", "label": "E-ticket service", "props": { "latencyMs": 150, "region": "India Central" } },
+    { "id": "tiles", "type": "object-storage", "label": "Pre-rendered route-map tiles (nightly job)" },
     { "id": "job", "type": "scheduler", "label": "Nightly tile render" }
   ],
   "edges": [
@@ -951,11 +951,11 @@ Add `cdn`, set `region` on nodes, put `latencyMs` on edges or nodes, and make th
 | Edge → API | 5 ms |
 | Cache or indexed DB | 5 ms |
 | Three services in parallel (slowest, capped by 200 ms deadline) | 150 ms |
-| Response transfer (~120 KB compressed) | 40 ms |
+| Response transfer (~60 KB compressed) | 40 ms |
 | Browser render of list view | 200 ms |
 | **Total** | **520 ms** (≈ 280 ms margin) |
 
-**Slowness handling.** If the document service misses its 200 ms deadline, the API returns the page without document links and a "documents loading" flag; the client fetches them separately. Map tiles load progressively from the CDN after the list view and are outside the first-view budget. Hedging is not used here: the fan-out is only three calls, and the deadline plus partial result is simpler.
+**Slowness handling.** If the e-ticket service misses its 200 ms deadline, the API returns the page without the e-ticket link and an "e-ticket loading" flag; the client fetches them separately. Map tiles load progressively from the CDN after the list view and are outside the first-view budget. Hedging is not used here: the fan-out is only three calls, and the deadline plus partial result is simpler.
 ::mistakes
 - Keeping the US-East region and adding a cache: the 3-RTT connection cost (~650 ms) remains.
 - Parallelising the calls but keeping fixed 30-second timeouts, so one slow service still holds the page.
@@ -1208,7 +1208,7 @@ public void Step_budget_is_capped_by_remaining_request_time()
 - **Search engines and large web services** fan out each query to many index servers; *The Tail at Scale* describes the hedging, tied requests and micro-partitioning techniques used to keep their tails short.
 - **Payment and UPI flows** keep the synchronous path short (debit and confirm) with strict per-hop timeouts, because a payment that hangs is worse than one that fails fast and can be retried with an idempotency key.
 - **Indian government portals** serving citizens across the country benefit most from hosting in Indian regions and using CDN edges inside India; the speed-of-light arithmetic shows why a distant region costs hundreds of milliseconds per round trip.
-- **Infrastructure dashboards** (highway progress, BIM viewers, drone survey maps) usually have heavy static assets; moving tiles and models to a CDN and loading them progressively matters more than API micro-optimisations.
+- **Map-heavy apps** (delivery tracking, property listings, trip planners) usually have heavy static assets; moving tiles and models to a CDN and loading them progressively matters more than API micro-optimisations.
 - **Database connection pooling** is sized with Little's law: concurrent requests = arrival rate × time in system, which explains why slow queries exhaust pools during peaks.
 
 ## Interview questions

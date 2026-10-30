@@ -87,12 +87,12 @@ In an interview, ask before you draw. Typical questions and the assumptions we m
 | Question | Our assumption |
 |---|---|
 | Can a cart mix restaurants? | No. One restaurant per cart, as most apps do, because one rider picks up from one kitchen. |
-| Is payment part of this design? | Only as an interface. Payment is its own case study ([payment gateway](#/lesson/m18-payment-gateway)). |
+| Is payment part of this design? | Only as interfaces (a refund gateway here). We assume the payment is authorised before `PlaceAsync` runs; a real app adds a `PendingPayment` state in front of `Placed`. Payment is its own case study ([payment gateway](#/lesson/m18-payment-gateway)). |
 | Do we model riders and dispatch? | Only the `PickUp(riderId)` transition. Dispatch is an HLD concern. |
-| Who can cancel, and until when? | Customer: only before the restaurant accepts. Restaurant: until the food is picked up. |
+| Who can cancel, and until when? | Customer: only before the restaurant accepts. Restaurant: while the order is accepted or being prepared (not once it is ready at the counter). |
 | Are prices fixed at add-to-cart time or checkout time? | Checked again at checkout. If a price changed, the customer reviews the cart. |
 | Is the delivery fee distance-based? | Yes: ₹30 up to 3 km, ₹8 for each extra km, free above ₹499 of food (illustrative numbers). |
-| How many orders per second? | Not decisive at this level. We keep domain objects thread-safe through the repository. |
+| How many orders per second? | Not decisive at this level. We make every status change atomic per order through the repository. How the same design grows to millions of orders a day is covered in [the scaling journey](#/lesson/m17-scaling-journey). |
 
 ## Identifying classes and responsibilities
 
@@ -276,6 +276,8 @@ The order has a private constructor and a static `Place` method. `Place` validat
 ### 6. Idempotency at the repository boundary
 
 The client sends an `Idempotency-Key` header (a UUID created when the user taps "Place order"). The repository stores `(customerId, key) → orderId` atomically with the order. A repeated key returns the first order. See [idempotency keys](#/lesson/m10-idempotency) for the HTTP side.
+
+Two details a reviewer will ask about. First, the key is scoped to the customer, so one customer can never receive another customer's order by guessing a key. Second, a production store also keeps a hash of the request body next to the key: the same key with a *different* cart is a client bug and should get **422 Unprocessable Content**, not the old order. Keys are kept for a bounded time (24 hours is common) and then purged.
 
 ### 7. Serialised updates per order
 
@@ -765,6 +767,12 @@ public sealed class OrderService(
             var current = catalog.GetItem(line.Item.Id);
             if (current is null || !current.IsAvailable) throw new CartException($"{line.Item.Name} is no longer available.");
             if (current.Price != line.Item.Price) throw new CartException($"The price of {line.Item.Name} changed. Please review your cart.");
+            foreach (var addOn in line.AddOns)
+            {
+                var currentAddOn = current.AddOns.FirstOrDefault(a => a.Id == addOn.Id);
+                if (currentAddOn is null || currentAddOn.Price != addOn.Price)
+                    throw new CartException($"An add-on for {line.Item.Name} changed. Please review your cart.");
+            }
         }
 
         ICoupon? coupon = null;
@@ -812,6 +820,7 @@ public sealed class OrderService(
     }
 }
 
+/// <summary>Implementations must treat <c>orderId</c> as the idempotency key: with an outbox, the same refund event can be delivered twice.</summary>
 public interface IRefundGateway
 {
     Task RefundAsync(Guid orderId, decimal amount, CancellationToken ct);
@@ -844,6 +853,8 @@ public sealed class CustomerPushNotifier(ILogger<CustomerPushNotifier> logger) :
 ```
 
 The service contains orchestration only: look up, check, calculate, create, store, publish. Every business rule it uses lives in a domain class. A good test of that: you could replace ASP.NET Core with a console app and the rules wouldn't move.
+
+The re-check covers add-on prices too, not just the item price: "extra cheese went from ₹40 to ₹50" is just as much a price change. Two honest limits of this in-memory version: `Cart` is not thread-safe, so it assumes one device edits a customer's cart at a time (a real cart lives in storage and is loaded per request), and the returned `Order` is the live stored object, where a database-backed repository would hand out a fresh copy per request.
 
 ### In-memory infrastructure and wiring
 
@@ -1743,7 +1754,7 @@ Keep the table permission-free and enforce roles in ASP.NET Core authorization p
 :::
 
 :::exercise id=m18-food-ordering-ex4 difficulty=intermediate kind=written title="The menu price changed during checkout"
-A customer adds a ₹250 paneer tikka at 8:30 pm. At 8:35 pm the restaurant raises the price to ₹270. At 8:38 pm the customer taps "Place order". Our service throws "price changed, please review". Argue whether that is the right behaviour, describe two alternatives, and say which you would pick for (a) a food app and (b) a B2B construction-materials ordering portal.
+A customer adds a ₹250 paneer tikka at 8:30 pm. At 8:35 pm the restaurant raises the price to ₹270. At 8:38 pm the customer taps "Place order". Our service throws "price changed, please review". Argue whether that is the right behaviour, describe two alternatives, and say which you would pick for (a) a food app and (b) a B2B wholesale portal where a café chain orders milk, coffee beans and paper cups in bulk for its 40 outlets.
 ::acceptance
 - States the two prices involved and who is harmed by each choice.
 - Describes at least two alternatives (honour the cart price for a window; silently use the new price; show a diff).

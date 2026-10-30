@@ -22,7 +22,7 @@ references:
     url: https://martinfowler.com/articles/mocksArentStubs.html
 ---
 
-Writing code is half the job. The other half is knowing it works, and finding out quickly when it doesn't. Beginners check their code by running the app and clicking around. Professionals write small programs that check the code for them, in milliseconds, every time anything changes: **unit tests**. And when something breaks, they don't sprinkle `Console.WriteLine` everywhere and guess; they pause the program and look inside it with a **debugger**. This lesson teaches both skills with one running example: calculating late-delivery penalties on purchase orders for a construction project.
+Writing code is half the job. The other half is knowing it works, and finding out quickly when it doesn't. Beginners check their code by running the app and clicking around. Professionals write small programs that check the code for them, in milliseconds, every time anything changes: **unit tests**. And when something breaks, they don't sprinkle `Console.WriteLine` everywhere and guess; they pause the program and look inside it with a **debugger**. This lesson teaches both skills with one running example: calculating the penalty an online marketplace charges sellers who deliver customer orders late.
 
 ## Learning objectives
 
@@ -43,24 +43,24 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-### The concrete cube test
+### The medicine sample test
 
-On every construction site, when concrete is poured, the engineers fill a few small steel moulds with the same concrete. Those **cubes** are cured and crushed in a testing machine after 7 and 28 days, to check that the concrete reached its required strength. Nobody waits for the finished building to fall down to find out the concrete was weak.
+When a factory makes a batch of paracetamol tablets, it does not ship the batch and wait to hear from patients. A few tablets are taken from every batch and tested in the quality-control lab: does each one contain 500 mg of medicine (within a small tolerance), and does it dissolve in time? Only a batch whose samples pass is released to pharmacies.
 
-A **unit test** is the cube test for code:
+A **unit test** is the sample test for code:
 
-| Construction site | Software | Technical term |
+| Medicine factory | Software | Technical term |
 |---|---|---|
-| A small sample cube instead of the whole building | test one method or class, not the whole app | unit test |
-| A required strength written in the specification | an expected result written in the test | assertion |
-| The same test procedure for every batch | tests run automatically on every change | regression testing |
-| A dummy load instead of a real truck | a fake database or a fixed clock instead of the real ones | test double |
+| A few sample tablets instead of the whole batch | test one method or class, not the whole app | unit test |
+| "500 mg ± 5 %" written in the specification | an expected result written in the test | assertion |
+| The same lab test for every batch | tests run automatically on every change | regression testing |
+| A lab liquid that imitates stomach acid instead of a real patient | a fake database or a fixed clock instead of the real ones | test double |
 
-Because each cube test is small and quick, you can run many of them. A typical project has hundreds or thousands of unit tests that all run in a few seconds.
+Because each sample test is small and quick, you can run many of them. A typical project has hundreds or thousands of unit tests that all run in a few seconds.
 
 ### The detective
 
-**Debugging** is detective work. A bug report is a crime scene: "the penalty for order PO-2231 shows ₹0 but the supplier was 10 days late". A bad detective guesses the culprit and arrests someone. A good detective collects evidence: they reproduce the problem, read the clues (the error message and stack trace), form a hypothesis, and test it.
+**Debugging** is detective work. A bug report is a crime scene: "the penalty for order ORD-2231 shows ₹0 but the seller delivered it 10 days late". A bad detective guesses the culprit and arrests someone. A good detective collects evidence: they reproduce the problem, read the clues (the error message and stack trace), form a hypothesis, and test it.
 
 The **debugger** is the detective's magnifying glass and pause button. You tell it "stop the program at this line" (a **breakpoint**), and when it stops you can look at every variable, step forward one line at a time, and watch the bug happen in slow motion.
 
@@ -97,11 +97,11 @@ The higher the level, the more realistic and the slower and more brittle the tes
 
 ### xUnit in five minutes
 
-**xUnit.net** is the most widely used test framework for .NET (MSTest and NUnit are the main alternatives, and they work similarly). The newest major version is xUnit v3 (package `xunit.v3`); the attributes and asserts in this lesson work the same in v2 and v3. Tests live in a separate **test project** that references the project under test:
+**xUnit.net** is the most widely used test framework for .NET (MSTest and NUnit are the main alternatives, and they work similarly). The current major version is xUnit v3 (package `xunit.v3`, project template `xunit3` from `dotnet new install xunit.v3.templates`); the attributes and asserts in this lesson work the same in v2 and v3. Tests live in a separate **test project** that references the project under test:
 
 ```text
-dotnet new xunit -n Procurement.Tests
-dotnet add Procurement.Tests reference Procurement.Api
+dotnet new xunit3 -n Marketplace.Tests
+dotnet add Marketplace.Tests reference Marketplace.Api
 dotnet test                                  # build and run every test
 dotnet test --filter "FullyQualifiedName~Penalty"   # run only matching tests
 ```
@@ -115,7 +115,7 @@ public class PenaltyPolicyTests
     public void No_penalty_when_delivered_on_time()
     {
         var penalty = PenaltyPolicy.Calculate(
-            orderValue: 5_00_000m,
+            orderValue: 50_000m,
             promised: new DateOnly(2026, 10, 1),
             actual: new DateOnly(2026, 10, 1),
             forceMajeure: false);
@@ -131,12 +131,12 @@ A `[Theory]` runs one test method with several sets of data, one `[InlineData]` 
 [Theory]
 [InlineData(0, 0)]       // on time
 [InlineData(2, 0)]       // last day of grace
-[InlineData(3, 2500)]    // first day of penalty: 0.5 % of 5,00,000
-[InlineData(8, 5000)]    // second week started
+[InlineData(3, 1000)]    // first day of penalty: 2 % of 50,000
+[InlineData(8, 2000)]    // second week started
 public void Penalty_by_days_late(int daysLate, int expected)
 {
     var promised = new DateOnly(2026, 10, 1);
-    var penalty = PenaltyPolicy.Calculate(5_00_000m, promised, promised.AddDays(daysLate), false);
+    var penalty = PenaltyPolicy.Calculate(50_000m, promised, promised.AddDays(daysLate), false);
     Assert.Equal(expected, penalty);
 }
 ```
@@ -157,13 +157,13 @@ public void Penalty_is_capped_at_ten_percent()
 {
     // Arrange: set up the inputs and the world
     var promised = new DateOnly(2026, 1, 1);
-    var veryLate = promised.AddDays(400);
+    var veryLate = promised.AddDays(60);             // 9 weeks x 2 % = 18 %, above the cap
 
     // Act: do exactly one thing
-    var penalty = PenaltyPolicy.Calculate(10_00_000m, promised, veryLate, forceMajeure: false);
+    var penalty = PenaltyPolicy.Calculate(1_00_000m, promised, veryLate, forceMajeure: false);
 
     // Assert: check the outcome
-    Assert.Equal(1_00_000m, penalty);
+    Assert.Equal(10_000m, penalty);
 }
 ```
 
@@ -228,7 +228,7 @@ public decimal QuoteHard(string orderNo)
 }
 
 // Easy to test: dependencies passed in through the constructor
-public sealed class PenaltyService(IPurchaseOrderRepository orders, TimeProvider clock, IAlertSender alerts)
+public sealed class PenaltyService(IOrderRepository orders, TimeProvider clock, IAlertSender alerts)
 ```
 
 The second version receives its dependencies (this is **dependency injection**, covered in [its own lesson](#/lesson/m03-dependency-injection)). In production, ASP.NET Core passes the real database repository and `TimeProvider.System`. In tests, you pass fakes. **`TimeProvider`** (built into .NET since version 8) exists precisely so that "today" can be controlled in tests; never call `DateTime.Now` deep inside business logic.
@@ -237,7 +237,7 @@ Even better, keep the core rule a **pure function** (`PenaltyPolicy.Calculate`) 
 
 ### Code coverage: useful, not a goal
 
-**Coverage** tools (`dotnet test --collect:"XPlat Code Coverage"`) report which lines your tests executed. Low coverage reliably shows untested areas. High coverage does **not** prove good tests: a test that calls every method but asserts nothing gets 100 % coverage and catches nothing. Use coverage to find gaps, not as a score to chase.
+**Coverage** tools (`dotnet test --collect:"XPlat Code Coverage"` with the coverlet collector, or the `--coverage` option when the project runs on Microsoft.Testing.Platform, the newer test runner xUnit v3 supports) report which lines your tests executed. Low coverage reliably shows untested areas. High coverage does **not** prove good tests: a test that calls every method but asserts nothing gets 100 % coverage and catches nothing. Use coverage to find gaps, not as a score to chase.
 
 ### Test-driven development, briefly
 
@@ -264,9 +264,9 @@ These exist in Visual Studio, VS Code with the C# Dev Kit, and JetBrains Rider (
 | **Step over** (F10) | Runs the current line, including any method it calls, and stops at the next line. |
 | **Step into** (F11) | Goes *inside* the method called on this line. |
 | **Step out** (Shift+F11) | Finishes the current method and stops back in the caller. |
-| **Locals / Autos / Watch** | Show variable values. In Watch you can type expressions such as `order.Value * 0.005m`. |
+| **Locals / Autos / Watch** | Show variable values. In Watch you can type expressions such as `order.Value * 0.02m`. |
 | **Call stack** | Shows the chain of method calls that led here. Double-click a frame to inspect that method's variables. |
-| **Conditional breakpoint** | Pauses only when an expression is true, e.g. `order.Number == "PO-2231"`, so you don't stop 5,000 times in a loop. |
+| **Conditional breakpoint** | Pauses only when an expression is true, e.g. `order.Number == "ORD-2231"`, so you don't stop 5,000 times in a loop. |
 | **Hit count** | Pauses on the Nth time the line runs. |
 | **Tracepoint / logpoint** | Prints a message (with variable values) without pausing and without editing code. |
 | **Exception settings** | "Break when thrown": stops at the `throw` itself, before any `catch` hides it. |
@@ -309,16 +309,16 @@ sequenceDiagram
     participant Repo as FakeOrderRepository
     participant Clock as FixedClock
     participant Spy as SpyAlertSender
-    Test->>Repo: Arrange - add PO-2231 worth 1.2 crore, promised 1 Sep
-    Test->>Svc: Act - Quote(PO-2231)
-    Svc->>Repo: Find(PO-2231)
+    Test->>Repo: Arrange - add ORD-2231 worth 84,000 rupees, promised 1 Oct
+    Test->>Svc: Act - Quote(ORD-2231)
+    Svc->>Repo: Find(ORD-2231)
     Repo-->>Svc: the order, not yet delivered
     Svc->>Clock: GetUtcNow()
     Clock-->>Svc: 20 Oct 2026, always
-    Svc->>Svc: PenaltyPolicy.Calculate gives 4.2 lakh
+    Svc->>Svc: PenaltyPolicy.Calculate gives 5,040 rupees
     Svc->>Spy: Send(large penalty alert)
     Spy->>Spy: remember the message
-    Svc-->>Test: quote with 49 days late and 4.2 lakh
+    Svc-->>Test: quote with 19 days late and 5,040 rupees
     Test->>Test: Assert amount and days
     Test->>Spy: Assert exactly one alert was sent
 ```
@@ -327,26 +327,26 @@ This sequence diagram shows one unit test from start to finish. The test **arran
 
 ## Step-by-step example
 
-We'll test the penalty rule, find a bug with the debugger, and add a service test with doubles. The rule (illustrative, not taken from any specific contract):
+We'll test the penalty rule, find a bug with the debugger, and add a service test with doubles. The setting: an online marketplace promises customers a delivery date for each order. When a seller delivers late, the marketplace charges the seller a penalty and credits it to the customer's wallet. The rule (illustrative, not taken from any real marketplace's policy):
 
 - Delivery up to 2 days after the promised date: no penalty (grace period).
-- From the 3rd day: 0.5 % of the order value for every week or part-week of delay, counted from the promised date.
+- From the 3rd day: 2 % of the order value for every week or part-week of delay, counted from the promised date.
 - The penalty is capped at 10 % of the order value.
-- Force majeure (floods, strikes, as certified by the engineer) means no penalty.
+- Force majeure (floods, a regional shutdown, as declared by the marketplace's operations team) means no penalty.
 
 ### Step 1: list the cases before writing code
 
 | Case | Days late | Order ₹ | Expected ₹ |
 |---|---|---|---|
-| On time | 0 | 5,00,000 | 0 |
-| Early (delivered before promised) | −3 | 5,00,000 | 0 |
-| Last grace day | 2 | 5,00,000 | 0 |
-| First penalised day | 3 | 5,00,000 | 2,500 (1 week) |
-| End of week 1 | 7 | 5,00,000 | 2,500 |
-| Start of week 2 | 8 | 5,00,000 | 5,000 |
-| Exactly at cap | 140 (20 weeks) | 5,00,000 | 50,000 |
-| Beyond cap | 400 | 5,00,000 | 50,000 |
-| Force majeure | 30 | 5,00,000 | 0 |
+| On time | 0 | 50,000 | 0 |
+| Early (delivered before promised) | −3 | 50,000 | 0 |
+| Last grace day | 2 | 50,000 | 0 |
+| First penalised day | 3 | 50,000 | 1,000 (1 week) |
+| End of week 1 | 7 | 50,000 | 1,000 |
+| Start of week 2 | 8 | 50,000 | 2,000 |
+| Exactly at cap | 29 (week 5) | 50,000 | 5,000 |
+| Beyond cap | 60 | 50,000 | 5,000 |
+| Force majeure | 10 | 50,000 | 0 |
 
 Nine cases, chosen from equivalence classes and boundaries. Writing the table first often reveals questions for the business ("is day 7 still week 1?") before any code exists.
 
@@ -361,9 +361,9 @@ int weeks = late / 7;      // whole weeks
 The theory row for 3 days late fails:
 
 ```text
-Penalty_by_days_late(daysLate: 3, expected: 2500) [FAIL]
+Penalty_by_days_late(daysLate: 3, expected: 1000) [FAIL]
   Assert.Equal() Failure
-  Expected: 2500
+  Expected: 1000
   Actual:   0
 ```
 
@@ -397,14 +397,14 @@ public class PenaltyServiceTests
     [Fact]
     public void Undelivered_order_accrues_penalty_until_today_and_alerts_when_large()
     {
-        _orders.Add(new PurchaseOrder("PO-2231", "Shree Steel", 1_20_00_000m,
-            PromisedOn: new DateOnly(2026, 9, 1), DeliveredOn: null, ForceMajeure: false));
+        _orders.Add(new CustomerOrder("ORD-2231", "Lakshmi Electronics", 84_000m,
+            PromisedOn: new DateOnly(2026, 10, 1), DeliveredOn: null, ForceMajeure: false));
 
-        var quote = _service.Quote("PO-2231");
+        var quote = _service.Quote("ORD-2231");
 
         Assert.NotNull(quote);
-        Assert.Equal(49, quote.DaysLate);              // 1 Sep to 20 Oct
-        Assert.Equal(4_20_000m, quote.Amount);         // 7 weeks x 0.5 % of 1.2 crore
+        Assert.Equal(19, quote.DaysLate);              // 1 Oct to 20 Oct
+        Assert.Equal(5_040m, quote.Amount);            // 3 weeks x 2 % = 6 % of 84,000
         Assert.False(quote.IsFinal);
         Assert.Single(_alerts.Sent);
     }
@@ -418,24 +418,24 @@ The constructor runs before *each* test, so every test gets a fresh repository a
 The penalty feature as a small ASP.NET Core API, written so that every piece can be tested.
 
 ```text
-Procurement.Api/
+Marketplace.Api/
   Program.cs
   Penalties/
-    PurchaseOrder.cs                   // data
+    CustomerOrder.cs                   // data
     PenaltyPolicy.cs                   // the pure rule: easiest to test
-    IPurchaseOrderRepository.cs        // storage abstraction
-    InMemoryPurchaseOrderRepository.cs // demo storage
+    IOrderRepository.cs                // storage abstraction
+    InMemoryOrderRepository.cs         // demo storage
     IAlertSender.cs                    // side-effect abstraction
     LogAlertSender.cs                  // production implementation
     PenaltyService.cs                  // orchestration: uses repo, clock, alerts
 ```
 
-```csharp file=Penalties/PurchaseOrder.cs
-namespace Procurement.Api.Penalties;
+```csharp file=Penalties/CustomerOrder.cs
+namespace Marketplace.Api.Penalties;
 
-public sealed record PurchaseOrder(
+public sealed record CustomerOrder(
     string Number,
-    string Supplier,
+    string Seller,
     decimal Value,
     DateOnly PromisedOn,
     DateOnly? DeliveredOn,
@@ -443,13 +443,13 @@ public sealed record PurchaseOrder(
 ```
 
 ```csharp file=Penalties/PenaltyPolicy.cs
-namespace Procurement.Api.Penalties;
+namespace Marketplace.Api.Penalties;
 
 /// <summary>Illustrative late-delivery rule. Pure: no clock, no database, so tests need no doubles.</summary>
 public static class PenaltyPolicy
 {
     public const int GraceDays = 2;
-    public const decimal RatePerWeek = 0.005m;   // 0.5 % per week or part-week
+    public const decimal RatePerWeek = 0.02m;    // 2 % per week or part-week
     public const decimal CapRate = 0.10m;        // never more than 10 % of the order value
 
     public static int DaysLate(DateOnly promised, DateOnly actual) =>
@@ -470,37 +470,37 @@ public static class PenaltyPolicy
 }
 ```
 
-```csharp file=Penalties/IPurchaseOrderRepository.cs
-namespace Procurement.Api.Penalties;
+```csharp file=Penalties/IOrderRepository.cs
+namespace Marketplace.Api.Penalties;
 
-public interface IPurchaseOrderRepository
+public interface IOrderRepository
 {
-    PurchaseOrder? Find(string number);
+    CustomerOrder? Find(string number);
 }
 ```
 
-```csharp file=Penalties/InMemoryPurchaseOrderRepository.cs
+```csharp file=Penalties/InMemoryOrderRepository.cs
 using System.Collections.Concurrent;
 
-namespace Procurement.Api.Penalties;
+namespace Marketplace.Api.Penalties;
 
 /// <summary>Demo storage, also usable as a fake in tests. Production would query PostgreSQL.</summary>
-public sealed class InMemoryPurchaseOrderRepository : IPurchaseOrderRepository
+public sealed class InMemoryOrderRepository : IOrderRepository
 {
-    private readonly ConcurrentDictionary<string, PurchaseOrder> _orders = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, CustomerOrder> _orders = new(StringComparer.OrdinalIgnoreCase);
 
-    public void Add(PurchaseOrder order)
+    public void Add(CustomerOrder order)
     {
         if (!_orders.TryAdd(order.Number, order))
             throw new InvalidOperationException($"Order {order.Number} already exists.");
     }
 
-    public PurchaseOrder? Find(string number) => _orders.GetValueOrDefault(number);
+    public CustomerOrder? Find(string number) => _orders.GetValueOrDefault(number);
 }
 ```
 
 ```csharp file=Penalties/IAlertSender.cs
-namespace Procurement.Api.Penalties;
+namespace Marketplace.Api.Penalties;
 
 public interface IAlertSender
 {
@@ -509,7 +509,7 @@ public interface IAlertSender
 ```
 
 ```csharp file=Penalties/LogAlertSender.cs
-namespace Procurement.Api.Penalties;
+namespace Marketplace.Api.Penalties;
 
 /// <summary>Production stand-in: writes alerts to the log. A real system might send email or Teams messages.</summary>
 public sealed class LogAlertSender(ILogger<LogAlertSender> logger) : IAlertSender
@@ -519,28 +519,29 @@ public sealed class LogAlertSender(ILogger<LogAlertSender> logger) : IAlertSende
 ```
 
 ```csharp file=Penalties/PenaltyService.cs
-namespace Procurement.Api.Penalties;
+namespace Marketplace.Api.Penalties;
 
 public sealed record PenaltyQuote(string OrderNumber, int DaysLate, decimal Amount, bool IsFinal);
 
 /// <summary>Every dependency arrives through the constructor, so tests can pass fakes, stubs and spies.</summary>
-public sealed class PenaltyService(IPurchaseOrderRepository orders, TimeProvider clock, IAlertSender alerts)
+public sealed class PenaltyService(IOrderRepository orders, TimeProvider clock, IAlertSender alerts)
 {
-    public const decimal AlertThreshold = 1_00_000m;
+    public const decimal AlertThreshold = 2_500m;      // seller-support looks at undelivered orders above this
 
     public PenaltyQuote? Quote(string orderNumber)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(orderNumber);
         if (orders.Find(orderNumber) is not { } order) return null;     // "not found" is expected: no exception
 
-        // UTC date for simplicity. A site in India would convert to IST (UTC+5:30) first.
+        // UTC date for simplicity. A marketplace serving India would convert to IST (UTC+5:30) first,
+        // because "late" is judged by the customer's calendar day.
         var today = DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
         var asOf = order.DeliveredOn ?? today;
         var amount = PenaltyPolicy.Calculate(order.Value, order.PromisedOn, asOf, order.ForceMajeure);
         var isFinal = order.DeliveredOn is not null;
 
         if (!isFinal && amount >= AlertThreshold)
-            alerts.Send($"{order.Number} ({order.Supplier}) has accrued a penalty of {amount:N0} and is still undelivered.");
+            alerts.Send($"{order.Number} ({order.Seller}) has accrued a penalty of {amount:N0} and is still undelivered.");
 
         return new PenaltyQuote(order.Number, PenaltyPolicy.DaysLate(order.PromisedOn, asOf), amount, isFinal);
     }
@@ -548,15 +549,15 @@ public sealed class PenaltyService(IPurchaseOrderRepository orders, TimeProvider
 ```
 
 ```csharp file=Program.cs
-using Procurement.Api.Penalties;
+using Marketplace.Api.Penalties;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var repository = new InMemoryPurchaseOrderRepository();
-repository.Add(new PurchaseOrder("PO-2231", "Shree Steel", 1_20_00_000m, new DateOnly(2026, 9, 1), null, false));
-repository.Add(new PurchaseOrder("PO-2232", "Deccan Cement", 8_50_000m, new DateOnly(2026, 9, 10), new DateOnly(2026, 9, 12), false));
+var repository = new InMemoryOrderRepository();
+repository.Add(new CustomerOrder("ORD-2231", "Lakshmi Electronics", 84_000m, new DateOnly(2026, 10, 1), null, false));
+repository.Add(new CustomerOrder("ORD-2232", "Kaveri Home Decor", 3_450m, new DateOnly(2026, 10, 10), new DateOnly(2026, 10, 12), false));
 
-builder.Services.AddSingleton<IPurchaseOrderRepository>(repository);
+builder.Services.AddSingleton<IOrderRepository>(repository);
 builder.Services.AddSingleton(TimeProvider.System);            // tests pass a fixed clock instead
 builder.Services.AddSingleton<IAlertSender, LogAlertSender>();
 builder.Services.AddScoped<PenaltyService>();
@@ -573,9 +574,9 @@ What to notice:
 
 - **The rule is a pure static method.** All nine boundary cases from the step-by-step table can be tested with no setup at all.
 - **The service only coordinates.** It finds the order, works out "as of" which date, calls the rule and decides whether to alert. Each of those decisions is visible and testable with the doubles from the sequence diagram.
-- **`TimeProvider` instead of `DateTime.Now`.** In production it is `TimeProvider.System`; in tests a two-line stub. Without it, a test about "49 days late" would pass today and fail tomorrow.
-- **Interfaces at the edges only.** `IPurchaseOrderRepository` and `IAlertSender` exist because they wrap things we can't use in unit tests (a database, a notification channel). `PenaltyPolicy` has no interface: nothing needs to replace it.
-- **Limits.** The alert is sent on every `Quote` call, so an often-viewed order would spam the procurement team. A real system would record that an alert was sent. A test that calls `Quote` twice and asserts one alert would have caught that design gap, which is a good reason to think about tests while designing.
+- **`TimeProvider` instead of `DateTime.Now`.** In production it is `TimeProvider.System`; in tests a two-line stub. Without it, a test about "19 days late" would pass today and fail tomorrow.
+- **Interfaces at the edges only.** `IOrderRepository` and `IAlertSender` exist because they wrap things we can't use in unit tests (a database, a notification channel). `PenaltyPolicy` has no interface: nothing needs to replace it.
+- **Limits.** The alert is sent on every `Quote` call, so an often-viewed order would spam the seller-support team. A real system would record that an alert was sent (and send it from a background job, not from a read endpoint). A test that calls `Quote` twice and asserts one alert would have caught that design gap, which is a good reason to think about tests while designing.
 
 ## Bad design vs good design
 
@@ -586,14 +587,14 @@ public decimal Quote(string orderNo)
 {
     var order = new SqlOrderRepository(Config.ConnectionString).Find(orderNo);   // real database
     var days = (DateTime.Now - order.PromisedOn.ToDateTime(TimeOnly.MinValue)).Days;  // real clock
-    if (days > 2) EmailClient.Send("procurement@site.example", "Penalty!");       // real email
-    return days > 2 ? order.Value * 0.005m * ((days + 6) / 7) : 0;
+    if (days > 2) EmailClient.Send("seller-support@shop.example", "Penalty!");       // real email
+    return days > 2 ? order.Value * 0.02m * ((days + 6) / 7) : 0;
 }
 
 [Fact]
 public void Test1()                                   // name says nothing
 {
-    var result = new QuoteService().Quote("PO-2231");  // needs the production database
+    var result = new QuoteService().Quote("ORD-2231");  // needs the production database
     Thread.Sleep(2000);                                 // "wait for the email"
     Assert.True(result > 0);                            // passes for almost any bug
 }
@@ -632,7 +633,7 @@ public static class PenaltyPolicy
         int late = Math.Max(0, actual.DayNumber - promised.DayNumber);
         if (late <= 2) return 0m;
         int weeks = (late + 6) / 7;
-        decimal rate = Math.Min(weeks * 0.005m, 0.10m);
+        decimal rate = Math.Min(weeks * 0.02m, 0.10m);
         return Math.Round(orderValue * rate, 2, MidpointRounding.AwayFromZero);
     }
 }
@@ -669,12 +670,12 @@ public static class Program
         var promised = new DateOnly(2026, 10, 1);
 
         // Arrange-act-assert, compressed into one line each
-        Check("on time", 0m, PenaltyPolicy.Calculate(500000m, promised, promised, false));
-        Check("last grace day", 0m, PenaltyPolicy.Calculate(500000m, promised, promised.AddDays(2), false));
-        Check("first penalised day", 2500m, PenaltyPolicy.Calculate(500000m, promised, promised.AddDays(3), false));
-        Check("start of week two", 5000m, PenaltyPolicy.Calculate(500000m, promised, promised.AddDays(8), false));
-        Check("capped", 50000m, PenaltyPolicy.Calculate(500000m, promised, promised.AddDays(400), false));
-        Check("force majeure", 0m, PenaltyPolicy.Calculate(500000m, promised, promised.AddDays(30), true));
+        Check("on time", 0m, PenaltyPolicy.Calculate(50000m, promised, promised, false));
+        Check("last grace day", 0m, PenaltyPolicy.Calculate(50000m, promised, promised.AddDays(2), false));
+        Check("first penalised day", 1000m, PenaltyPolicy.Calculate(50000m, promised, promised.AddDays(3), false));
+        Check("start of week two", 2000m, PenaltyPolicy.Calculate(50000m, promised, promised.AddDays(8), false));
+        Check("capped", 5000m, PenaltyPolicy.Calculate(50000m, promised, promised.AddDays(60), false));
+        Check("force majeure", 0m, PenaltyPolicy.Calculate(50000m, promised, promised.AddDays(10), true));
 
         // 19 Oct 2026 is a Monday, 23 Oct a Friday
         Check("Mon to Fri", 5, LeaveCalculator.WorkingDays(new DateOnly(2026, 10, 19), new DateOnly(2026, 10, 23)));
@@ -1263,74 +1264,78 @@ With a mocking library such as NSubstitute or Moq, the doubles would be generate
 Add a test and code for "don't send between 9 pm and 8 am IST": convert the UTC time with `TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")` and return early.
 :::
 
-:::exercise id=m01-testing-debugging-ex4 difficulty=intermediate kind=written title="Design the test cases for a toll rule"
-A highway toll plaza applies this (illustrative) rule for cars:
+:::exercise id=m01-testing-debugging-ex4 difficulty=intermediate kind=written title="Design the test cases for a parking-fee rule"
+A shopping mall's car park applies this (illustrative) rule for cars:
 
-- Single journey: ₹120.
-- Return journey within 24 hours of the first crossing: ₹180 total, so the return costs ₹60.
-- Vehicles registered within 20 km of the plaza with a local pass: ₹0.
-- A FASTag with insufficient balance: double toll, paid in cash.
+- Stays of up to 15 minutes (drop-off): ₹0.
+- Up to 3 hours: ₹60.
+- After 3 hours: ₹30 for each extra hour or part-hour.
+- Shoppers with a validated bill of ₹2,000 or more from a mall store: the first 3 hours are free.
+- Lost parking ticket: a flat ₹500.
 - Emergency vehicles: ₹0.
 
-Design the unit test cases for a method `TollFor(Crossing crossing, Crossing? previous)` **before** any code exists. Present them as a table: case name, inputs, expected result, and why the case matters.
+Design the unit test cases for a method `FeeFor(ParkingSession session)` **before** any code exists. Present them as a table: case name, inputs, expected result, and why the case matters.
 ::acceptance
 - At least 10 cases, grouped by equivalence class.
-- Boundary cases for the 24-hour window (just under, exactly 24 hours, just over) and decide what "within 24 hours" means at exactly 24:00:00.
-- At least two cases that combine rules (for example a return journey with insufficient balance) and an explicit decision on which rule wins.
+- Boundary cases for the 3-hour window (just under, exactly 3 hours, just over) and an explicit decision on what "up to 3 hours" means at exactly 3:00:00. The same for the 15-minute drop-off window and the ₹2,000 bill.
+- At least two cases that combine rules (for example a validated bill with a lost ticket) and an explicit decision on which rule wins.
 - At least one question you would ask the business owner because the rule is ambiguous.
 ::hint
-List the equivalence classes first: single journey, return in window, return out of window, local pass, emergency, insufficient balance. Then look for boundaries in each.
+List the equivalence classes first: drop-off, short stay, long stay, validated bill, lost ticket, emergency. Then look for boundaries in each.
 ::hint
-"Within 24 hours" is ambiguous at exactly 24 hours. Write down your assumption as a test name, e.g. `Return_at_exactly_24_hours_is_still_discounted`, and flag it as a question.
+"Up to 3 hours" is ambiguous at exactly 3 hours. Write down your assumption as a test name, e.g. `Exactly_three_hours_pays_base_fee`, and flag it as a question. "Part-hour" needs a boundary too: 3 h 1 min is already one extra hour.
 ::hint
-Combinations reveal rule ordering. Does an emergency vehicle with zero FASTag balance pay double? Does a return journey paid with insufficient balance cost ₹120 (double of ₹60) or ₹240?
+Combinations reveal rule ordering. Does an emergency vehicle that lost its ticket pay ₹500? Does a validated bill reduce the lost-ticket charge? For a validated shopper who stays 4 hours, is the fee ₹30 (only the extra hour) or ₹90?
 ::solution
 | # | Case | Inputs | Expected | Why |
 |---|---|---|---|---|
-| 1 | Single journey | car, no previous, balance ok | ₹120 | Base class |
-| 2 | Return after 2 hours | previous 2 h ago | ₹60 | Return class |
-| 3 | Return at 23:59:59 | previous 23 h 59 m 59 s ago | ₹60 | Just inside boundary |
-| 4 | Return at exactly 24:00:00 | previous 24 h ago | ₹60 (assumption) | Boundary: ask the business |
-| 5 | Return at 24:00:01 | previous 24 h 1 s ago | ₹120 | Just outside boundary |
-| 6 | Third crossing in 24 h | previous was itself a discounted return | ₹120 | A return can't be the start of another return (assumption) |
-| 7 | Local pass | local pass holder | ₹0 | Exemption class |
-| 8 | Emergency vehicle | ambulance | ₹0 | Exemption class |
-| 9 | Insufficient balance, single | balance too low | ₹240 cash | Penalty class |
-| 10 | Insufficient balance, return | return in window, balance too low | ₹120 cash (double of ₹60) | Combination: penalty doubles the applicable fare (assumption) |
-| 11 | Emergency, insufficient balance | ambulance, balance zero | ₹0 | Combination: exemptions win over penalties |
-| 12 | Previous crossing in the future | clock skew between lanes | treat as single, ₹120, and log | Robustness |
+| 1 | Quick drop-off | 10 min | ₹0 | Drop-off class |
+| 2 | Exactly 15 minutes | 15 min 0 s | ₹0 (assumption) | Boundary: ask the business |
+| 3 | Just over drop-off | 15 min 1 s | ₹60 | Just outside boundary |
+| 4 | Typical short stay | 2 h | ₹60 | Short-stay class |
+| 5 | Exactly 3 hours | 3 h 0 min 0 s | ₹60 (assumption) | Boundary: ask the business |
+| 6 | Just over 3 hours | 3 h 1 min | ₹90 | Part-hour counts as an hour |
+| 7 | Long stay | 5 h 30 min | ₹150 (60 + 3 × 30) | Long-stay class, part-hour rounding |
+| 8 | Validated ₹2,000 bill | 2 h, bill ₹2,000 | ₹0 | Discount class, exactly at threshold |
+| 9 | Bill just below | 2 h, bill ₹1,999 | ₹60 | Just outside discount boundary |
+| 10 | Validated, long stay | 4 h, bill ₹2,500 | ₹30 (only the extra hour) | Combination (assumption) |
+| 11 | Lost ticket | entry time unknown | ₹500 | Penalty class |
+| 12 | Lost ticket, validated bill | bill ₹3,000 | ₹500 | Combination: the flat charge wins (assumption) |
+| 13 | Emergency vehicle, lost ticket | ambulance | ₹0 | Combination: exemptions win over penalties |
+| 14 | Exit time before entry time | clock skew between entry and exit gates | ₹0, and log an error | Robustness: never overcharge on bad data |
+| 15 | Overnight stay | 26 h | ₹750 (60 + 23 × 30) | Exposes a missing rule: is there a daily cap? |
 
-Questions for the business: Is exactly 24 hours inside the window? Does the discount apply to a crossing that was itself discounted? Is the penalty "double the applicable fare" or "double the full fare"? Which time source is authoritative when two lanes' clocks disagree?
+Questions for the business: Is exactly 15 minutes still free, and is exactly 3 hours still ₹60? Does validation cover the first 3 hours of a long stay, or the whole stay? Does a validated bill reduce the lost-ticket charge? Is there a daily maximum for overnight stays? Which clock is authoritative when the entry and exit gates disagree?
 
-The test names from this table (e.g. `Emergency_vehicle_pays_nothing_even_with_zero_balance`) become the first draft of the specification.
+The test names from this table (e.g. `Emergency_vehicle_pays_nothing_even_without_ticket`) become the first draft of the specification.
 ::mistakes
-- Only testing typical cases (2 hours, 30 hours) and missing the 24-hour edge.
+- Only testing typical cases (1 hour, 5 hours) and missing the 15-minute and 3-hour edges.
 - Deciding ambiguous rules silently in code instead of writing them down as named tests and asking.
 - Forgetting combinations, which is where real systems usually go wrong.
 :::
 
 :::exercise id=m01-testing-debugging-ex5 difficulty=advanced kind=code title="Refactor duplicated code safely"
-`InvoiceCalculator` has three methods that were copied and pasted, then slightly edited. A new material is coming next month, and nobody wants a fourth copy. Remove the duplication **without changing any behaviour**. The given tests are **characterisation tests**: they record what the code does today, including two odd behaviours. They all pass on the starter, and they must all still pass after your refactor.
+`InvoiceCalculator` has three methods that were copied and pasted, then slightly edited. The invoices come from a wholesale marketplace that supplies neighbourhood shops; a new product category is coming next month, and nobody wants a fourth copy. Remove the duplication **without changing any behaviour**. The given tests are **characterisation tests**: they record what the code does today, including two odd behaviours. They all pass on the starter, and they must all still pass after your refactor.
 ::requirements
 - Keep the three public methods and their signatures (other code calls them).
-- Move the shared logic into one private method, driven by a small description of each material's rules (GST rate, discount threshold and rate, and the two quirks).
-- Preserve both quirks exactly: steel rounds each **line** to paise before adding, while cement and aggregate add unrounded line amounts; and aggregate rejects an empty invoice with `ArgumentException` while the others return an all-zero invoice.
+- Move the shared logic into one private method, driven by a small description of each category's rules (GST rate, discount threshold and rate, and the two quirks).
+- Preserve both quirks exactly: cables (sold by the metre) round each **line** to paise before adding, while electronics and grocery add unrounded line amounts; and grocery rejects an empty invoice with `ArgumentException` while the others return an all-zero invoice.
 - Work in small steps and run the tests after every step.
 - The GST rates and thresholds in this exercise are illustrative only.
 ::acceptance
 - All characterisation tests pass after the refactor.
 - The calculation logic (loop, validation, discount, GST, rounding, total) appears **once**.
-- Adding a fourth material needs one new rules entry and one small public method, nothing else.
+- Adding a fourth category needs one new rules entry and one small public method, nothing else.
 - A short note lists the two quirks as questions for the business, not silently "fixed".
 ::hint
 Before touching anything, run the tests and confirm they pass. Read each method side by side and list every difference. Those differences become the fields of your rules type.
 ::hint
-A `sealed record MaterialRules(decimal GstRate, decimal DiscountThreshold, decimal DiscountRate, bool RoundEachLine, bool RejectEmpty)` captures every difference. Aggregate has no discount: model that as a rate of 0.
+A `sealed record CategoryRules(decimal GstRate, decimal DiscountThreshold, decimal DiscountRate, bool RoundEachLine, bool RejectEmpty)` captures every difference. Grocery has no discount: model that as a rate of 0.
 ::hint
-Refactor in steps: (1) extract the private method with all parameters, copy one method's body into it, make `ForCement` call it, run tests; (2) make `ForSteel` call it with `RoundEachLine: true`, run tests; (3) the same for `ForAggregate`; (4) replace the long parameter list with the rules record.
+Refactor in steps: (1) extract the private method with all parameters, copy one method's body into it, make `ForElectronics` call it, run tests; (2) make `ForCables` call it with `RoundEachLine: true`, run tests; (3) the same for `ForGrocery`; (4) replace the long parameter list with the rules record.
 ::hint
 ```csharp
-private static Invoice Calculate(IReadOnlyList<InvoiceLine> lines, MaterialRules rules)
+private static Invoice Calculate(IReadOnlyList<InvoiceLine> lines, CategoryRules rules)
 {
     if (rules.RejectEmpty && lines.Count == 0) throw new ArgumentException("An invoice needs at least one line.", nameof(lines));
     decimal subtotal = 0m;
@@ -1354,7 +1359,7 @@ public sealed record Invoice(decimal Subtotal, decimal Discount, decimal Gst, de
 /// <summary>Working but duplicated. Characterisation tests pin today's behaviour, quirks included.</summary>
 public static class InvoiceCalculator
 {
-    public static Invoice ForCement(IReadOnlyList<InvoiceLine> lines)
+    public static Invoice ForElectronics(IReadOnlyList<InvoiceLine> lines)
     {
         decimal subtotal = 0m;
         foreach (var l in lines)
@@ -1368,7 +1373,7 @@ public static class InvoiceCalculator
         return new Invoice(subtotal, discount, gst, subtotal - discount + gst);
     }
 
-    public static Invoice ForSteel(IReadOnlyList<InvoiceLine> lines)
+    public static Invoice ForCables(IReadOnlyList<InvoiceLine> lines)
     {
         decimal subtotal = 0m;
         foreach (var l in lines)
@@ -1382,7 +1387,7 @@ public static class InvoiceCalculator
         return new Invoice(subtotal, discount, gst, subtotal - discount + gst);
     }
 
-    public static Invoice ForAggregate(IReadOnlyList<InvoiceLine> lines)
+    public static Invoice ForGrocery(IReadOnlyList<InvoiceLine> lines)
     {
         if (lines.Count == 0) throw new ArgumentException("An invoice needs at least one line.", nameof(lines));
         decimal subtotal = 0m;
@@ -1404,71 +1409,73 @@ using Xunit;
 public class InvoiceCalculatorCharacterisationTests
 {
     private static InvoiceLine L(decimal qty, decimal price) => new InvoiceLine("item", qty, price);
+    // Illustrative wholesale orders from shops: earbuds at ₹4,750, electrical cable at ₹78.35 per metre,
+    // 10-kg rice bags at ₹1,450, loose dal at ₹140 per kg.
 
     [Fact]
-    public void Cement_above_threshold_gets_two_percent() =>
-        Assert.Equal(new Invoice(190_000m, 3_800m, 33_516m, 219_716m), InvoiceCalculator.ForCement(new[] { L(500m, 380m) }));
+    public void Electronics_above_threshold_gets_two_percent() =>
+        Assert.Equal(new Invoice(190_000m, 3_800m, 33_516m, 219_716m), InvoiceCalculator.ForElectronics(new[] { L(40m, 4_750m) }));
 
     [Fact]
-    public void Cement_below_threshold() =>
-        Assert.Equal(new Invoice(76_000m, 0m, 13_680m, 89_680m), InvoiceCalculator.ForCement(new[] { L(200m, 380m) }));
+    public void Electronics_below_threshold() =>
+        Assert.Equal(new Invoice(76_000m, 0m, 13_680m, 89_680m), InvoiceCalculator.ForElectronics(new[] { L(16m, 4_750m) }));
 
     [Fact]
-    public void Cement_does_not_round_lines()        // quirk: subtotal keeps fractions of a paisa
+    public void Electronics_does_not_round_lines()   // quirk: subtotal keeps fractions of a paisa (price from a per-dozen rate)
     {
-        var inv = InvoiceCalculator.ForCement(new[] { L(0.333m, 10.05m), L(0.333m, 10.05m) });
-        Assert.Equal(6.6933m, inv.Subtotal);
-        Assert.Equal(1.20m, inv.Gst);
-        Assert.Equal(7.8933m, inv.Total);
+        var inv = InvoiceCalculator.ForElectronics(new[] { L(3m, 3.3383m), L(3m, 3.3383m) });
+        Assert.Equal(20.0298m, inv.Subtotal);
+        Assert.Equal(3.61m, inv.Gst);
+        Assert.Equal(23.6398m, inv.Total);
     }
 
     [Fact]
-    public void Steel_rounds_each_line()             // quirk: per-line rounding
+    public void Cables_round_each_line()             // quirk: per-line rounding
     {
-        var inv = InvoiceCalculator.ForSteel(new[] { L(0.333m, 10.05m), L(0.333m, 10.05m) });
-        Assert.Equal(6.70m, inv.Subtotal);
-        Assert.Equal(1.21m, inv.Gst);
-        Assert.Equal(7.91m, inv.Total);
+        var inv = InvoiceCalculator.ForCables(new[] { L(3m, 3.3383m), L(3m, 3.3383m) });
+        Assert.Equal(20.02m, inv.Subtotal);
+        Assert.Equal(3.60m, inv.Gst);
+        Assert.Equal(23.62m, inv.Total);
     }
 
     [Fact]
-    public void Steel_below_threshold() =>
-        Assert.Equal(new Invoice(194_626.73m, 0m, 35_032.81m, 229_659.54m),
-            InvoiceCalculator.ForSteel(new[] { L(2.345m, 56_250.50m), L(1.115m, 56_250.50m) }));
+    public void Cables_below_threshold() =>
+        Assert.Equal(new Invoice(194_680.17m, 0m, 35_042.43m, 229_722.60m),
+            InvoiceCalculator.ForCables(new[] { L(1_234.5m, 78.35m), L(1_250.25m, 78.35m) }));
 
     [Fact]
-    public void Steel_above_threshold_gets_three_percent() =>
-        Assert.Equal(new Invoice(225_002m, 6_750.06m, 39_285.35m, 257_537.29m),
-            InvoiceCalculator.ForSteel(new[] { L(4m, 56_250.50m) }));
+    public void Cables_above_threshold_gets_three_percent() =>
+        Assert.Equal(new Invoice(203_710m, 6_111.30m, 35_567.77m, 233_166.47m),
+            InvoiceCalculator.ForCables(new[] { L(2_600m, 78.35m) }));
 
     [Fact]
-    public void Aggregate_never_discounts() =>
-        Assert.Equal(new Invoice(145_000m, 0m, 7_250m, 152_250m), InvoiceCalculator.ForAggregate(new[] { L(100m, 1_450m) }));
+    public void Grocery_never_discounts() =>
+        Assert.Equal(new Invoice(145_000m, 0m, 7_250m, 152_250m), InvoiceCalculator.ForGrocery(new[] { L(100m, 1_450m) }));
 
     [Fact]
-    public void Aggregate_small() =>
-        Assert.Equal(new Invoice(18_125m, 0m, 906.25m, 19_031.25m), InvoiceCalculator.ForAggregate(new[] { L(12.5m, 1_450m) }));
+    public void Grocery_small() =>
+        Assert.Equal(new Invoice(1_750m, 0m, 87.50m, 1_837.50m), InvoiceCalculator.ForGrocery(new[] { L(12.5m, 140m) }));
 
     [Fact]
-    public void Empty_invoice_differs_by_material()  // quirk: only aggregate rejects empty
+    public void Empty_invoice_differs_by_category()  // quirk: only grocery rejects empty
     {
-        Assert.Equal(new Invoice(0m, 0m, 0m, 0m), InvoiceCalculator.ForCement(Array.Empty<InvoiceLine>()));
-        Assert.Equal(new Invoice(0m, 0m, 0m, 0m), InvoiceCalculator.ForSteel(Array.Empty<InvoiceLine>()));
-        Assert.Throws<ArgumentException>(() => InvoiceCalculator.ForAggregate(Array.Empty<InvoiceLine>()));
+        Assert.Equal(new Invoice(0m, 0m, 0m, 0m), InvoiceCalculator.ForElectronics(Array.Empty<InvoiceLine>()));
+        Assert.Equal(new Invoice(0m, 0m, 0m, 0m), InvoiceCalculator.ForCables(Array.Empty<InvoiceLine>()));
+        Assert.Throws<ArgumentException>(() => InvoiceCalculator.ForGrocery(Array.Empty<InvoiceLine>()));
     }
 
     [Fact]
     public void Zero_quantity_rejected_everywhere()
     {
         var bad = new[] { L(0m, 100m) };
-        Assert.Throws<ArgumentOutOfRangeException>(() => InvoiceCalculator.ForCement(bad));
-        Assert.Throws<ArgumentOutOfRangeException>(() => InvoiceCalculator.ForSteel(bad));
-        Assert.Throws<ArgumentOutOfRangeException>(() => InvoiceCalculator.ForAggregate(bad));
+        Assert.Throws<ArgumentOutOfRangeException>(() => InvoiceCalculator.ForElectronics(bad));
+        Assert.Throws<ArgumentOutOfRangeException>(() => InvoiceCalculator.ForCables(bad));
+        Assert.Throws<ArgumentOutOfRangeException>(() => InvoiceCalculator.ForGrocery(bad));
     }
 }
 ```
 ::solution
-Every difference between the three methods became a field of `MaterialRules`. The logic exists once.
+Every difference between the three methods became a field of `CategoryRules`. The logic exists once.
 
 ```csharp file=InvoiceCalculator.cs
 using System;
@@ -1479,23 +1486,23 @@ public sealed record Invoice(decimal Subtotal, decimal Discount, decimal Gst, de
 
 public static class InvoiceCalculator
 {
-    /// <summary>Everything that differs between materials. Rates are illustrative.</summary>
-    private sealed record MaterialRules(
+    /// <summary>Everything that differs between categories. Rates are illustrative.</summary>
+    private sealed record CategoryRules(
         decimal GstRate,
         decimal DiscountThreshold,
         decimal DiscountRate,
-        bool RoundEachLine,       // quirk kept on purpose: steel rounds lines, others do not (question for finance)
-        bool RejectEmpty);        // quirk kept on purpose: only aggregate rejects empty invoices (question for finance)
+        bool RoundEachLine,       // quirk kept on purpose: cables round lines, others do not (question for finance)
+        bool RejectEmpty);        // quirk kept on purpose: only grocery rejects empty invoices (question for finance)
 
-    private static readonly MaterialRules Cement = new(0.18m, 100_000m, 0.02m, RoundEachLine: false, RejectEmpty: false);
-    private static readonly MaterialRules Steel = new(0.18m, 200_000m, 0.03m, RoundEachLine: true, RejectEmpty: false);
-    private static readonly MaterialRules Aggregate = new(0.05m, 0m, 0m, RoundEachLine: false, RejectEmpty: true);
+    private static readonly CategoryRules Electronics = new(0.18m, 100_000m, 0.02m, RoundEachLine: false, RejectEmpty: false);
+    private static readonly CategoryRules Cables = new(0.18m, 200_000m, 0.03m, RoundEachLine: true, RejectEmpty: false);
+    private static readonly CategoryRules Grocery = new(0.05m, 0m, 0m, RoundEachLine: false, RejectEmpty: true);
 
-    public static Invoice ForCement(IReadOnlyList<InvoiceLine> lines) => Calculate(lines, Cement);
-    public static Invoice ForSteel(IReadOnlyList<InvoiceLine> lines) => Calculate(lines, Steel);
-    public static Invoice ForAggregate(IReadOnlyList<InvoiceLine> lines) => Calculate(lines, Aggregate);
+    public static Invoice ForElectronics(IReadOnlyList<InvoiceLine> lines) => Calculate(lines, Electronics);
+    public static Invoice ForCables(IReadOnlyList<InvoiceLine> lines) => Calculate(lines, Cables);
+    public static Invoice ForGrocery(IReadOnlyList<InvoiceLine> lines) => Calculate(lines, Grocery);
 
-    private static Invoice Calculate(IReadOnlyList<InvoiceLine> lines, MaterialRules rules)
+    private static Invoice Calculate(IReadOnlyList<InvoiceLine> lines, CategoryRules rules)
     {
         // No new null check here: today a null list throws NullReferenceException, and a refactor must not change behaviour.
         if (rules.RejectEmpty && lines.Count == 0)
@@ -1519,24 +1526,24 @@ public static class InvoiceCalculator
 }
 ```
 
-Note the `DiscountRate > 0m` guard: aggregate's threshold of 0 would otherwise "qualify" every invoice, harmlessly multiplying by 0, but stating it explicitly makes the intent clear. A fourth material is now one `MaterialRules` line plus a one-line public method.
+Note the `DiscountRate > 0m` guard: grocery's threshold of 0 would otherwise "qualify" every invoice, harmlessly multiplying by 0, but stating it explicitly makes the intent clear. A fourth category is now one `CategoryRules` line plus a one-line public method.
 
-**Note for the business**: (1) Should every material round per line, or none? Today steel and cement invoices for the same quantities differ by a paisa or more. (2) Should an empty invoice ever be allowed? Fix these in separate, reviewed changes, each with its own test change, never hidden inside a refactor.
+**Note for the business**: (1) Should every category round per line, or none? Today cable and electronics invoices for the same quantities differ by a paisa or more. (2) Should an empty invoice ever be allowed? Fix these in separate, reviewed changes, each with its own test change, never hidden inside a refactor.
 ::alternatives
-Replace the three public methods with `Calculate(MaterialKind kind, ...)` and an enum, keeping the old methods as wrappers marked `[Obsolete]` until callers move. Rules could also come from configuration or a database table if finance wants to change rates without a deployment. If materials start needing genuinely different *logic*, not just different numbers, that is the point to consider the [Strategy pattern](#/lesson/m06-strategy).
+Replace the three public methods with `Calculate(ProductCategory category, ...)` and an enum, keeping the old methods as wrappers marked `[Obsolete]` until callers move. Rules could also come from configuration or a database table if finance wants to change rates without a deployment. If categories start needing genuinely different *logic*, not just different numbers, that is the point to consider the [Strategy pattern](#/lesson/m06-strategy).
 ::mistakes
 - "Fixing" the quirks during the refactor. The tests go red and you can no longer tell a refactoring mistake from an intended change.
 - Refactoring in one big step and then facing six failing tests with no idea which change caused which.
 - Deleting characterisation tests because they "test weird behaviour". They document what the system does today, which is exactly what you need before changing it.
 ::extensions
-Add a fourth material, "bricks" (GST 5 %, 1 % discount above ₹50,000, no per-line rounding), test-first. Then write the business-facing tests that you would add once finance answers the two questions.
+Add a fourth category, "toys" (GST 5 %, 1 % discount above ₹50,000, no per-line rounding; rates illustrative), test-first. Then write the business-facing tests that you would add once finance answers the two questions.
 :::
 
 ## Automated testing
 
 This whole lesson is about automated testing, so this section collects the practical habits that make a test suite something a team trusts.
 
-**Organise tests like the code.** One test project per production project (`Procurement.Api` → `Procurement.Tests`), one test class per class under test, and folders that mirror the namespace. A new teammate should find the tests for `PenaltyService` in seconds.
+**Organise tests like the code.** One test project per production project (`Marketplace.Api` → `Marketplace.Tests`), one test class per class under test, and folders that mirror the namespace. A new teammate should find the tests for `PenaltyService` in seconds.
 
 **Run them all the time.** In your editor, run the tests for the class you're editing on every save. Before committing, run the full suite with `dotnet test`. In the team's pipeline, every pull request runs every test, and a red build blocks the merge ([CI/CD](#/lesson/m15-ci-cd)).
 
@@ -1554,16 +1561,16 @@ public class PenaltyApiTests(WebApplicationFactory<Program> factory) : IClassFix
             s.AddSingleton<TimeProvider>(new FixedClock(new DateTimeOffset(2026, 10, 20, 3, 30, 0, TimeSpan.Zero)))))
             .CreateClient();
 
-        var response = await client.GetAsync("/orders/PO-2231/penalty");
+        var response = await client.GetAsync("/orders/ORD-2231/penalty");
 
         response.EnsureSuccessStatusCode();
         var quote = await response.Content.ReadFromJsonAsync<PenaltyQuote>();
-        Assert.Equal(4_20_000m, quote!.Amount);
+        Assert.Equal(5_040m, quote!.Amount);
     }
 }
 ```
 
-This one test checks routing, DI registration, JSON serialisation and the business rule together, which unit tests can't. Use a few of these for each important endpoint, and keep the detailed rule cases in fast unit tests. For a real database, Testcontainers can start PostgreSQL in Docker for the duration of the test run.
+This one test checks routing, DI registration, JSON serialisation and the business rule together, which unit tests can't. Use a few of these for each important endpoint, and keep the detailed rule cases in fast unit tests. For a real database, Testcontainers can start PostgreSQL in Docker for the duration of the test run. In .NET 10 the SDK generates a public `Program` class for top-level-statement apps, so `WebApplicationFactory<Program>` works without the old `public partial class Program {}` workaround.
 
 **Treat test code as production code.** Clear names, no copy-paste walls (use small helper methods like `L(qty, price)` in exercise 5), and refactor tests when they get hard to read. But keep each test's arrange-act-assert visible in the test itself; hiding everything in helpers makes failures hard to understand.
 
@@ -1571,7 +1578,7 @@ This one test checks routing, DI registration, JSON serialisation and the busine
 
 - **Every serious .NET codebase** (ASP.NET Core itself, EF Core, the runtime) has tens of thousands of automated tests that run on every pull request. Contributors are expected to add tests with every fix.
 - **Financial and billing systems** use theories and boundary tables exactly like the penalty example, because a rounding or `<=` bug in a rule that runs on lakhs of invoices becomes a real financial error. Many teams require a test for each rule in the specification.
-- **Infrastructure project software** (measurement books, running bills, price-escalation clauses) implements contract formulas that auditors check. A suite of tests named after the contract clauses doubles as evidence that the system implements the contract.
+- **GST billing and payment software** (tax invoices, credit notes, UPI refunds, settlement reports) implements tax and settlement rules that auditors check. A suite of tests named after each rule or government notification doubles as evidence that the system implements it, and shows exactly what changed when a rate changes.
 - **Legacy modernisation** starts with characterisation tests, as in exercise 5, before any refactoring. The [Refactoring legacy code](#/lesson/m04-refactoring-legacy) lesson builds on this.
 - **Production debugging** relies on the same mindset with different tools: logs and traces instead of breakpoints, and a reproduction turned into a failing test before the fix ships.
 
@@ -1679,9 +1686,9 @@ While debugging, execution is paused on the line `var amount = PenaltyPolicy.Cal
 - [ ] Continue
 > Step into enters the called method. Step over would run it completely and stop on the next line of the current method.
 ::q single
-A loop processes 8,000 purchase orders and only PO-2231 misbehaves. What is the most efficient way to stop at the right moment?
+A loop processes 8,000 orders and only ORD-2231 misbehaves. What is the most efficient way to stop at the right moment?
 - [ ] Press F5 about 2,231 times.
-- [x] A conditional breakpoint with `order.Number == "PO-2231"`.
+- [x] A conditional breakpoint with `order.Number == "ORD-2231"`.
 - [ ] Add `Console.WriteLine` for every order and read the output.
 - [ ] Delete the other orders from the database.
 > Conditional breakpoints pause only when the expression is true, so you skip straight to the interesting iteration.

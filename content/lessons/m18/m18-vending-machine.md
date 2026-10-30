@@ -594,9 +594,13 @@ public sealed class HasCreditState : VendingState
         var change = ChangeMaker.MakeChange(m.CreditValue - slot.Price, m.Coins.Snapshot());
         if (change is null) return new Response($"Exact change only for {slot.Name}. Choose another item or cancel.");
 
-        // 2. Drop, and trust only the sensor.
+        // 2. Drop, and trust only the sensor. A motor-driver fault counts as "nothing seen":
+        //    the customer is refunded, and telemetry lets the operator spot a rare free snack.
         slot.Take();
-        if (!m.Dispenser.Drop(slot.Code))
+        bool dropped;
+        try { dropped = m.Dispenser.Drop(slot.Code); }
+        catch (Exception) { dropped = false; }
+        if (!dropped)
         {
             slot.MarkJammed();
             return m.RefundAndEnd($"{slot.Name} got stuck. Your ₹{m.CreditValue} has been refunded.");
@@ -730,6 +734,8 @@ Things worth noticing:
 - **`Slot.Take()` happens before `Drop`.** If the drop fails, we don't put the count back: the item is physically stuck and can't be sold. The slot is marked jammed until the operator restocks it.
 - **The refund can always be paid.** Every coin the customer inserted went into the box, so at least one combination (those exact coins) exists. If `MakeChange` ever returns null for a refund, the box counts are wrong, and we throw rather than guess.
 - **`SlotView`** is a read-only copy for callers outside the lock, the same idea as snapshots in the [elevator](#/lesson/m18-elevator).
+- **A hardware fault during the drop is treated as a failed drop.** If the motor driver throws, we can't know whether the item fell, so the machine refunds and marks the slot jammed. That occasionally gives away a snack, but it never keeps a customer's money for nothing, which is the rule that matters.
+- **The coin payout can fail too.** A hopper can run dry or jam half-way through paying ₹6. Real hoppers report how many coins they actually paid; production code compares that with the plan, records the shortfall (print a slip or credit the customer's app wallet), raises a fault event, and moves the machine to a fault state until serviced. Our `ICoinPayout.Pay` returns nothing to keep the lesson small; a real port would return the coins actually paid.
 
 ## Automated testing
 

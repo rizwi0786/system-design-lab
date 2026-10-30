@@ -22,7 +22,7 @@ references:
     url: https://cheatsheetseries.owasp.org/cheatsheets/Multi_Tenant_Security_Cheat_Sheet.html
 ---
 
-In a software-as-a-service product, hundreds of customer organisations (**tenants**) share the same servers, the same code and often the same database tables. The single worst bug such a product can have is not an outage. It is one tenant seeing another tenant's data: a contractor seeing a rival's bid prices, a hospital seeing another hospital's patients. That bug is usually one missing `WHERE tenant_id = @t`, one cache key without a tenant prefix, or one background job that forgot whose data it was processing. This lesson is about making that bug hard to write and easy to catch.
+In a software-as-a-service product, hundreds of customer organisations (**tenants**) share the same servers, the same code and often the same database tables. The single worst bug such a product can have is not an outage. It is one tenant seeing another tenant's data: an agency seeing a rival agency's client rates, a hospital seeing another hospital's patients. That bug is usually one missing `WHERE tenant_id = @t`, one cache key without a tenant prefix, or one background job that forgot whose data it was processing. This lesson is about making that bug hard to write and easy to catch.
 
 ## Learning objectives
 
@@ -66,8 +66,8 @@ Think of every place where tenant data lives or flows, and ask "what if the tena
 
 | Leak path | Example | Typical cause |
 |---|---|---|
-| Database queries | `SELECT * FROM bills WHERE id = @id` without a tenant filter | One forgotten predicate, a raw SQL report |
-| Object references (IDOR) | `GET /api/bills/8812` returns tenant B's bill to a tenant A user | Authorization checks "logged in", not "belongs to my tenant" |
+| Database queries | `SELECT * FROM invoices WHERE id = @id` without a tenant filter | One forgotten predicate, a raw SQL report |
+| Object references (IDOR) | `GET /api/invoices/8812` returns tenant B's invoice to a tenant A user | Authorization checks "logged in", not "belongs to my tenant" |
 | Tenant id from the client | `X-Tenant-Id: 42` header trusted as is | Tenant taken from input, not from the authenticated identity |
 | Caches | Key `project:17:summary` shared by every tenant's project 17 | Per-tenant ids that are only unique within a tenant |
 | Files and object storage | `/uploads/invoice-2026-10.pdf` with guessable names | Paths not prefixed by tenant, public containers |
@@ -107,16 +107,16 @@ Use several layers, each of which would stop most leaks on its own:
 **Row-level security (RLS)** lets a table decide, per row, whether the current session may see or change it. You enable it on a table and write **policies**:
 
 ```sql
-ALTER TABLE bills ENABLE ROW LEVEL SECURITY;
-ALTER TABLE bills FORCE ROW LEVEL SECURITY;
+ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE invoices FORCE ROW LEVEL SECURITY;
 
-CREATE POLICY tenant_isolation ON bills
+CREATE POLICY tenant_isolation ON invoices
   USING      (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::bigint)
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::bigint);
 ```
 
 - `USING` filters the rows a statement can **see** (`SELECT`, and the rows `UPDATE`/`DELETE` can target).
-- `WITH CHECK` validates rows being **written** (`INSERT`, and the new version in `UPDATE`). Without it, a user could insert a row with another tenant's id, or "move" a row to another tenant with `UPDATE bills SET tenant_id = 99`.
+- `WITH CHECK` validates rows being **written** (`INSERT`, and the new version in `UPDATE`). Without it, a user could insert a row with another tenant's id, or "move" a row to another tenant with `UPDATE invoices SET tenant_id = 99`.
 - `current_setting('app.tenant_id', true)` reads a custom setting the application sets per transaction. The second argument `true` means "return null instead of erroring if it isn't set". `NULLIF(..., '')` turns an empty string into null, and `tenant_id = NULL` matches nothing. So **no tenant means no rows**, which is the safe failure.
 - Once RLS is enabled, if no policy applies to a role and command, the default is **deny**.
 
@@ -125,7 +125,7 @@ The application sets the tenant at the start of each transaction:
 ```sql
 BEGIN;
 SELECT set_config('app.tenant_id', '42', true);   -- true = local to this transaction
-SELECT * FROM bills WHERE status = 'pending';     -- RLS adds the tenant filter
+SELECT * FROM invoices WHERE status = 'pending';  -- RLS adds the tenant filter
 COMMIT;                                           -- the setting disappears with the transaction
 ```
 
@@ -135,15 +135,17 @@ RLS is powerful, and it has sharp edges. Each of these has caused real leaks.
 
 **1. Owners and superusers bypass RLS.** The table owner isn't subject to RLS unless the table has `FORCE ROW LEVEL SECURITY`. Superusers and roles with `BYPASSRLS` are never subject to it. If your app connects as the owner, `ENABLE` alone does nothing for you. Connect as a dedicated non-owner role (see [least privilege](#/lesson/m14-least-privilege-audit)), *and* set `FORCE` so the owner (migrations, maintenance scripts) is covered too.
 
-**2. Session-level settings leak through connection pools.** `set_config(..., false)` or plain `SET app.tenant_id = 42` lasts for the whole *connection*. Connection pools (Npgsql's built-in pool, PgBouncer) hand that connection to the next request, which may belong to another tenant and may forget to set its own. Always use transaction-local settings (`set_config(..., true)` or `SET LOCAL`) inside an explicit transaction. With PgBouncer in transaction mode this is the *only* safe option, because consecutive statements may run on different server connections.
+**2. Session-level settings leak through connection pools.** `set_config(..., false)` or plain `SET app.tenant_id = 42` lasts for the whole *connection*. Connection pools hand that connection to the next request, which may belong to another tenant and may forget to set its own. Npgsql's built-in pool resets session state (`DISCARD ALL`) when a connection goes back to the pool unless `No Reset On Close=true` is set, but PgBouncer in transaction mode does not reset anything between clients, and a reset you never asked for is not a safety mechanism you control. Always use transaction-local settings (`set_config(..., true)` or `SET LOCAL`) inside an explicit transaction. With PgBouncer in transaction mode this is the *only* safe option, because consecutive statements may run on different server connections.
 
 **3. Views run with the owner's rights.** A view normally accesses its tables with the permissions of the view's **owner**. If the owner is a superuser or the table owner, RLS is bypassed for everyone who queries the view. In PostgreSQL 15 and later, create views `WITH (security_invoker = true)` so the querying user's rights and policies apply.
 
 **4. `SECURITY DEFINER` functions also run as their owner.** A helper function created by the owner, called by the app role, sees all tenants' rows. Prefer `SECURITY INVOKER` (the default), or filter by tenant explicitly inside definer functions, and always set `search_path` on them.
 
-**5. Uniqueness and foreign keys cross tenants.** A global `UNIQUE (email)` makes registration fail with "email already exists" when the email exists in *another* tenant, which leaks information. Use `UNIQUE (tenant_id, email)`. A foreign key `bills.project_id → projects.id` lets tenant A's bill reference tenant B's project. Use composite keys: `PRIMARY KEY (tenant_id, id)` on projects and `FOREIGN KEY (tenant_id, project_id) REFERENCES projects (tenant_id, id)` on bills, so the database itself refuses cross-tenant references. Foreign-key checks run without RLS, so this is the way to make them tenant-safe.
+**5. Uniqueness and foreign keys cross tenants.** A global `UNIQUE (email)` makes registration fail with "email already exists" when the email exists in *another* tenant, which leaks information. Use `UNIQUE (tenant_id, email)`. A foreign key `invoices.project_id → projects.id` lets tenant A's invoice reference tenant B's project. Use composite keys: `PRIMARY KEY (tenant_id, id)` on projects and `FOREIGN KEY (tenant_id, project_id) REFERENCES projects (tenant_id, id)` on invoices, so the database itself refuses cross-tenant references. Foreign-key checks run without RLS, so this is the way to make them tenant-safe.
 
 **6. Side channels through functions.** A query like `WHERE tenant_id = current_tenant() AND expensive_or_erroring(secret_column)` can, in some plans, evaluate the user's function on rows the policy would hide, leaking information through errors or timing. PostgreSQL evaluates policy quals first unless functions are marked `LEAKPROOF` (only superusers can do that, and only for functions that leak nothing). In practice: don't expose user-defined functions over hidden columns, and keep error messages generic.
+
+**8. The setting is only as trustworthy as the SQL that runs.** `app.tenant_id` is an ordinary custom setting: *any* SQL running as the app role can change it with `SET app.tenant_id = '17'`. RLS keyed on a setting protects you from forgotten `WHERE` clauses, not from an attacker who can run arbitrary SQL (SQL injection) on the app's connection. Parameterised queries remain mandatory. For stronger guarantees, connect with a separate login per tenant (or per silo), so injected SQL can't switch tenants, at the cost of many roles and much less effective pooling.
 
 **7. Performance.** A policy is an extra predicate on every query. With `tenant_id` as the leading column of your indexes (`(tenant_id, status, created_at)`), the cost is negligible. Without it, RLS can turn index scans into sequential scans. Subqueries in policies (for example, membership checks) run often, so keep them indexable and simple.
 
@@ -178,7 +180,7 @@ The tenant must travel with the work, everywhere, without anyone passing it by h
 
 - **Database**: a session factory that opens a transaction and calls `set_config('app.tenant_id', @t, true)` before handing out the connection. For silo tenants, the same factory picks the tenant's connection string from a catalogue.
 - **Caches**: keys built by a helper that prefixes `t:{tenantId}:`, so no developer builds a raw key.
-- **Object storage**: paths like `tenants/{tenantId}/bills/{billId}.pdf`, a container per tenant for silo tiers, and signed URLs scoped to one object.
+- **Object storage**: paths like `tenants/{tenantId}/invoices/{invoiceId}.pdf`, a container per tenant for silo tiers, and signed URLs scoped to one object.
 - **Search**: a mandatory tenant filter, or an index (or alias with a filter) per tenant.
 - **Messages and jobs**: the tenant id is a required field in the envelope. The consumer sets the context *before* handling, and rejects messages without it.
 - **Logs and traces**: a logging scope and an OpenTelemetry attribute `tenant.id`, so every line is attributable. Make sure tenant admins never see other tenants' logs.
@@ -227,25 +229,25 @@ sequenceDiagram
     participant API as ASP.NET Core
     participant POOL as Connection pool
     participant PG as PostgreSQL
-    C->>API: GET /api/bills/8812 with bearer token (tenant_id 42)
+    C->>API: GET /api/invoices/8812 with bearer token (tenant_id 42)
     API->>API: Middleware sets tenant context to 42
     API->>POOL: Open connection
     POOL-->>API: Connection last used by tenant 17
     API->>PG: BEGIN
     API->>PG: SELECT set_config('app.tenant_id', '42', true)
-    API->>PG: SELECT * FROM bills WHERE id = 8812
+    API->>PG: SELECT * FROM invoices WHERE id = 8812
     PG->>PG: RLS adds tenant_id = 42
-    PG-->>API: 0 rows (bill 8812 belongs to tenant 17)
+    PG-->>API: 0 rows (invoice 8812 belongs to tenant 17)
     API->>PG: COMMIT (local setting is discarded)
     API->>POOL: Return connection
     API-->>C: 404 Not Found
 ```
 
-Two details make this safe. First, the connection previously served tenant 17, but because the setting was transaction-local, nothing of tenant 17 survives on it: the new transaction sets 42 before any query. Second, the API answers `404`, not `403`, for another tenant's id. A `403` would confirm to the attacker that bill 8812 exists, which turns the endpoint into an oracle for probing other tenants.
+Two details make this safe. First, the connection previously served tenant 17, but because the setting was transaction-local, nothing of tenant 17 survives on it: the new transaction sets 42 before any query. Second, the API answers `404`, not `403`, for another tenant's id. A `403` would confirm to the attacker that invoice 8812 exists, which turns the endpoint into an oracle for probing other tenants.
 
 ## Step-by-step example
 
-**Scenario.** *SiteBills* is a SaaS platform where 1,400 contractor companies manage subcontractor bills and site measurements. It runs in the pool model on one PostgreSQL cluster: about 60 million bill lines, 22,000 users, and peaks of around 300 requests a second at month-end (an estimate: 22,000 users × 120 requests on the last two days ÷ (2 × 8 working hours × 3,600 s) ≈ 46 per second on average, × 6 for the 30-minute rush before payment cut-off ≈ 280). A security review found one real leak (a CSV export of another tenant's bills, caused by a raw SQL report) and asked for systematic fixes.
+**Scenario.** *AgencyDesk* is a Jira-meets-invoicing SaaS tool where 1,400 design, marketing and IT-services agencies track client projects, log time and send invoices. It runs in the pool model on one PostgreSQL cluster: about 60 million invoice lines, 22,000 users, and peaks of around 300 requests a second at month-end, when every agency invoices its clients (an estimate: 22,000 users × 120 requests on the last two days ÷ (2 × 8 working hours × 3,600 s) ≈ 46 per second on average, × 6 for the 30-minute rush before the invoicing cut-off ≈ 280). A security review found one real leak (a CSV export of another tenant's invoices, caused by a raw SQL report) and asked for systematic fixes.
 
 ### Step 1 — composite keys
 
@@ -253,7 +255,7 @@ Every tenant table gets `tenant_id` as the first column of its primary key, and 
 
 ### Step 2 — RLS on every tenant table
 
-Enable and force RLS, with one `tenant_isolation` policy per table that has both `USING` and `WITH CHECK`. The app connects as `sitebills_app`, which is not the owner. Migrations run as `sitebills_migrator`. Views get `security_invoker = true`.
+Enable and force RLS, with one `tenant_isolation` policy per table that has both `USING` and `WITH CHECK`. The app connects as `agencydesk_app`, which is not the owner. Migrations run as `agencydesk_migrator`. Views get `security_invoker = true`.
 
 ### Step 3 — tenant context and session factory
 
@@ -267,14 +269,14 @@ Cache keys go through `TenantCacheKeys`. Blob paths are built by `TenantPaths`. 
 
 - A catalog test in CI fails if any table with a `tenant_id` column lacks enabled and forced RLS with a policy (exercise 2).
 - An API test seeds two tenants and calls every `GET /{id}` endpoint as tenant A with tenant B's ids, expecting `404`.
-- Two **canary rows** (a fake bill per tenant with a known id) trigger an alert if they are ever returned to a different tenant.
+- Two **canary rows** (a fake invoice per tenant with a known id) trigger an alert if they are ever returned to a different tenant.
 
 The raw SQL report that caused the leak now returns only the current tenant's rows, without any code change, because RLS applies.
 
 ## Production-style C# implementation
 
 ```text
-SiteBills.Api/
+AgencyDesk.Api/
   Program.cs
   Tenancy/TenantContext.cs
   Tenancy/TenantResolutionMiddleware.cs
@@ -284,7 +286,7 @@ SiteBills.Api/
 ```
 
 ```csharp file=Tenancy/TenantContext.cs
-namespace SiteBills.Api.Tenancy;
+namespace AgencyDesk.Api.Tenancy;
 
 public interface ITenantContext
 {
@@ -341,7 +343,7 @@ public sealed class InMemoryTenantDirectory(IReadOnlyDictionary<string, TenantSt
 using System.Security.Claims;
 using Microsoft.Extensions.Logging;
 
-namespace SiteBills.Api.Tenancy;
+namespace AgencyDesk.Api.Tenancy;
 
 /// <summary>Resolves the active tenant from the authenticated identity. A client may only *select* among tenants it belongs to.</summary>
 public sealed class TenantResolutionMiddleware(RequestDelegate next, ILogger<TenantResolutionMiddleware> log)
@@ -380,7 +382,7 @@ public sealed class TenantResolutionMiddleware(RequestDelegate next, ILogger<Ten
 ```
 
 ```csharp file=Tenancy/TenantKeys.cs
-namespace SiteBills.Api.Tenancy;
+namespace AgencyDesk.Api.Tenancy;
 
 /// <summary>The only way to build cache keys and storage paths, so none can be built without a tenant.</summary>
 public sealed class TenantKeys(ITenantContext tenant)
@@ -399,9 +401,9 @@ public sealed class TenantKeys(ITenantContext tenant)
 ```csharp file=Data/TenantDbSession.cs
 using System.Data;
 using System.Data.Common;
-using SiteBills.Api.Tenancy;
+using AgencyDesk.Api.Tenancy;
 
-namespace SiteBills.Api.Data;
+namespace AgencyDesk.Api.Data;
 
 /// <summary>Opens a transaction and sets app.tenant_id LOCAL to it, so RLS applies and nothing leaks to the next user of the pooled connection.</summary>
 public sealed class TenantDbSession(DbDataSource dataSource, ITenantContext tenant)
@@ -429,23 +431,23 @@ public sealed class TenantDbSession(DbDataSource dataSource, ITenantContext tena
     }
 }
 
-public sealed record BillSummary(long Id, string Status, decimal AmountInr);
+public sealed record InvoiceSummary(long Id, string Status, decimal AmountInr);
 
-public sealed class BillQueries(TenantDbSession session)
+public sealed class InvoiceQueries(TenantDbSession session)
 {
     /// <summary>No tenant predicate here on purpose: RLS adds it. The repository layer still adds one too (defence in depth).</summary>
-    public Task<BillSummary?> FindAsync(long id, CancellationToken ct) =>
+    public Task<InvoiceSummary?> FindAsync(long id, CancellationToken ct) =>
         session.RunAsync(async (conn, tx) =>
         {
             await using var cmd = conn.CreateCommand();
             cmd.Transaction = tx;
-            cmd.CommandText = "SELECT id, status, amount_inr FROM bills WHERE id = @id";
+            cmd.CommandText = "SELECT id, status, amount_inr FROM invoices WHERE id = @id";
             var p = cmd.CreateParameter();
             p.ParameterName = "id";
             p.Value = id;
             cmd.Parameters.Add(p);
             await using var r = await cmd.ExecuteReaderAsync(ct);
-            return await r.ReadAsync(ct) ? new BillSummary(r.GetInt64(0), r.GetString(1), r.GetDecimal(2)) : null;
+            return await r.ReadAsync(ct) ? new InvoiceSummary(r.GetInt64(0), r.GetString(1), r.GetDecimal(2)) : null;
         }, ct);
 }
 ```
@@ -454,9 +456,9 @@ public sealed class BillQueries(TenantDbSession session)
 using System.Threading.Channels;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using SiteBills.Api.Tenancy;
+using AgencyDesk.Api.Tenancy;
 
-namespace SiteBills.Api.Jobs;
+namespace AgencyDesk.Api.Jobs;
 
 /// <summary>Every job names its tenant. A job without one is rejected, never run "for all tenants".</summary>
 public sealed record TenantJob(string TenantId, string Kind, string Payload);
@@ -511,9 +513,9 @@ public sealed class TenantJobWorker(TenantJobQueue queue, IEnumerable<ITenantJob
 
 ```csharp file=Program.cs
 using Microsoft.AspNetCore.Authentication.Cookies;
-using SiteBills.Api.Data;
-using SiteBills.Api.Jobs;
-using SiteBills.Api.Tenancy;
+using AgencyDesk.Api.Data;
+using AgencyDesk.Api.Jobs;
+using AgencyDesk.Api.Tenancy;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -530,9 +532,9 @@ builder.Services.AddSingleton<TenantKeys>();
 builder.Services.AddMemoryCache();
 
 // Production: builder.Services.AddNpgsqlDataSource(connectionString) registers DbDataSource. The login is
-// sitebills_app: not the table owner, no BYPASSRLS.
+// agencydesk_app: not the table owner, no BYPASSRLS.
 builder.Services.AddScoped<TenantDbSession>();
-builder.Services.AddScoped<BillQueries>();
+builder.Services.AddScoped<InvoiceQueries>();
 
 builder.Services.AddSingleton<TenantJobQueue>();
 builder.Services.AddHostedService<TenantJobWorker>();
@@ -543,8 +545,8 @@ app.UseAuthentication();
 app.UseMiddleware<TenantResolutionMiddleware>();
 app.UseAuthorization();
 
-app.MapGet("/api/bills/{id:long}", async (long id, BillQueries bills, CancellationToken ct) =>
-    await bills.FindAsync(id, ct) is { } bill ? Results.Ok(bill) : Results.NotFound())   // 404, never 403, for other tenants' ids
+app.MapGet("/api/invoices/{id:long}", async (long id, InvoiceQueries invoices, CancellationToken ct) =>
+    await invoices.FindAsync(id, ct) is { } invoice ? Results.Ok(invoice) : Results.NotFound())   // 404, never 403, for other tenants' ids
    .RequireAuthorization();
 
 app.MapPost("/api/reports/monthly", async (TenantJobQueue queue, ITenantContext tenant, CancellationToken ct) =>
@@ -561,7 +563,7 @@ Points to notice:
 - **`TenantContextAccessor` is a singleton holding an `AsyncLocal`.** That is safe because the value is per async flow, not per object. A plain field on a singleton would be shared by every request, which is a classic leak.
 - **`EnqueueAsync` reads the tenant from the context** instead of taking it as a parameter, which removes a whole class of "passed the wrong id" bugs.
 - **The worker skips suspended and offboarded tenants.** Jobs queued before a tenant was offboarded must not resurrect its data.
-- **`BillQueries` has no tenant predicate**, to show that RLS enforces it. In real code, the repository adds `tenant_id = @t` as well. It helps the planner use the `(tenant_id, …)` index, and it is a second layer if a policy is ever dropped by mistake.
+- **`InvoiceQueries` has no tenant predicate**, to show that RLS enforces it. In real code, the repository adds `tenant_id = @t` as well. It helps the planner use the `(tenant_id, …)` index, and it is a second layer if a policy is ever dropped by mistake.
 
 The matching schema:
 
@@ -570,20 +572,20 @@ CREATE TABLE projects (
   tenant_id bigint NOT NULL, id bigint NOT NULL, name text NOT NULL,
   PRIMARY KEY (tenant_id, id)
 );
-CREATE TABLE bills (
+CREATE TABLE invoices (
   tenant_id bigint NOT NULL, id bigint NOT NULL, project_id bigint NOT NULL,
   status text NOT NULL, amount_inr numeric(14,2) NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (tenant_id, id),
   FOREIGN KEY (tenant_id, project_id) REFERENCES projects (tenant_id, id)
 );
-CREATE INDEX ON bills (tenant_id, status, created_at);
-ALTER TABLE bills ENABLE ROW LEVEL SECURITY;
-ALTER TABLE bills FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON bills
+CREATE INDEX ON invoices (tenant_id, status, created_at);
+ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE invoices FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON invoices
   USING      (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::bigint)
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::bigint);
-CREATE VIEW pending_bills WITH (security_invoker = true) AS
-  SELECT tenant_id, id, amount_inr FROM bills WHERE status = 'pending';
+CREATE VIEW pending_invoices WITH (security_invoker = true) AS
+  SELECT tenant_id, id, amount_inr FROM invoices WHERE status = 'pending';
 ```
 
 ## Bad design vs good design
@@ -602,7 +604,7 @@ CREATE VIEW pending_bills WITH (security_invoker = true) AS
 | Support staff use a `BYPASSRLS` login in the tenant app | Untraceable cross-tenant access | Time-boxed, audited impersonation through the normal path |
 
 :::callout type=warning title="RLS is a safety net, not a substitute for authorization"
-RLS answers "which tenant's rows may this session see?" It doesn't answer "may this user, inside the tenant, approve this bill?" That's still [RBAC or policy-based authorization](#/lesson/m14-rbac-pbac) in the application. And RLS only protects PostgreSQL. Caches, blob storage, search and queues need their own tenant enforcement.
+RLS answers "which tenant's rows may this session see?" It doesn't answer "may this user, inside the tenant, approve this invoice?" That's still [RBAC or policy-based authorization](#/lesson/m14-rbac-pbac) in the application. And RLS only protects PostgreSQL. Caches, blob storage, search and queues need their own tenant enforcement.
 :::
 
 :::callout type=tradeoff title="Cost of the extra layers"
@@ -611,40 +613,40 @@ Composite keys make every primary and foreign key a bit larger, and every query 
 
 ## Practical playground
 
-The setup creates a pooled `bills` table for two tenants with RLS **enabled but not forced**, an app role, an owner role and a report view without `security_invoker`. Explore the traps:
+The setup creates a pooled `invoices` table for two tenants with RLS **enabled but not forced**, an app role, an owner role and a report view without `security_invoker`. Explore the traps:
 
-1. `SET ROLE app_user; SELECT * FROM bills;` returns no rows (no tenant set).
-2. `SELECT set_config('app.tenant_id', '42', false); SELECT * FROM bills;` returns tenant 42's rows. Now `SELECT * FROM bills_report;`. The view leaks both tenants. Why?
-3. `RESET ROLE; SET ROLE bills_owner; SELECT count(*) FROM bills;` shows that the owner sees everything. Then, as the superuser (`RESET ROLE`), run `ALTER TABLE bills FORCE ROW LEVEL SECURITY;` and try again.
-4. As `app_user` with tenant 42, try `INSERT INTO bills VALUES (17, 900, 5, 'pending', 1);`. Which clause stops it?
-5. Try `INSERT INTO bills VALUES (42, 900, 5, 'pending', 1);`, a tenant-42 bill pointing at project 5, which exists only in tenant 17. Which constraint stops it?
+1. `SET ROLE app_user; SELECT * FROM invoices;` returns no rows (no tenant set).
+2. `SELECT set_config('app.tenant_id', '42', false); SELECT * FROM invoices;` returns tenant 42's rows. Now `SELECT * FROM invoices_report;`. The view leaks both tenants. Why?
+3. `RESET ROLE; SET ROLE invoices_owner; SELECT count(*) FROM invoices;` shows that the owner sees everything. Then, as the superuser (`RESET ROLE`), run `ALTER TABLE invoices FORCE ROW LEVEL SECURITY;` and try again.
+4. As `app_user` with tenant 42, try `INSERT INTO invoices VALUES (17, 900, 5, 'pending', 1);`. Which clause stops it?
+5. Try `INSERT INTO invoices VALUES (42, 900, 5, 'pending', 1);`, a tenant-42 invoice pointing at project 5, which exists only in tenant 17. Which constraint stops it?
 
 :::playground type=sql title="RLS traps lab"
 ```sql
-CREATE ROLE bills_owner NOLOGIN;
+CREATE ROLE invoices_owner NOLOGIN;
 CREATE ROLE app_user NOLOGIN;
 CREATE TABLE projects (tenant_id bigint NOT NULL, id bigint NOT NULL, name text NOT NULL, PRIMARY KEY (tenant_id, id));
-CREATE TABLE bills (
+CREATE TABLE invoices (
   tenant_id bigint NOT NULL, id bigint NOT NULL, project_id bigint NOT NULL,
   status text NOT NULL, amount_inr numeric(14,2) NOT NULL,
   PRIMARY KEY (tenant_id, id),
   FOREIGN KEY (tenant_id, project_id) REFERENCES projects (tenant_id, id)
 );
-INSERT INTO projects VALUES (42, 1, 'Jaipur ring road, package 2'), (42, 2, 'Ajmer flyover'), (17, 5, 'Surat metro depot');
-INSERT INTO bills VALUES
+INSERT INTO projects VALUES (42, 1, 'Website redesign for Jaipur Handlooms'), (42, 2, 'Diwali campaign for Ajmer Sweets'), (17, 5, 'Mobile app for Surat Diamonds');
+INSERT INTO invoices VALUES
   (42, 101, 1, 'pending', 1850000.00), (42, 102, 2, 'approved', 640000.00),
   (17, 101, 5, 'pending', 2210000.00), (17, 102, 5, 'paid', 95000.00);
-ALTER TABLE projects OWNER TO bills_owner;
-ALTER TABLE bills OWNER TO bills_owner;
-GRANT SELECT ON projects, bills TO bills_owner;
-ALTER TABLE bills ENABLE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON bills
+ALTER TABLE projects OWNER TO invoices_owner;
+ALTER TABLE invoices OWNER TO invoices_owner;
+GRANT SELECT ON projects, invoices TO invoices_owner;
+ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON invoices
   USING      (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::bigint)
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::bigint);
-GRANT SELECT, INSERT, UPDATE ON bills TO app_user;
+GRANT SELECT, INSERT, UPDATE ON invoices TO app_user;
 GRANT SELECT ON projects TO app_user;
-CREATE VIEW bills_report AS SELECT tenant_id, id, status, amount_inr FROM bills;
-GRANT SELECT ON bills_report TO app_user;
+CREATE VIEW invoices_report AS SELECT tenant_id, id, status, amount_inr FROM invoices;
+GRANT SELECT ON invoices_report TO app_user;
 ```
 :::
 
@@ -785,26 +787,26 @@ Filter with `WHERE NOT (relrowsecurity AND relforcerowsecurity AND policy_count 
 CREATE SCHEMA app;
 CREATE TABLE app.tenants (id bigint PRIMARY KEY, name text NOT NULL);
 CREATE TABLE app.projects (tenant_id bigint NOT NULL, id bigint NOT NULL, name text, PRIMARY KEY (tenant_id, id));
-CREATE TABLE app.bills (tenant_id bigint NOT NULL, id bigint NOT NULL, amount numeric, PRIMARY KEY (tenant_id, id));
-CREATE TABLE app.measurements (tenant_id bigint NOT NULL, id bigint NOT NULL, qty numeric, PRIMARY KEY (tenant_id, id));
+CREATE TABLE app.invoices (tenant_id bigint NOT NULL, id bigint NOT NULL, amount numeric, PRIMARY KEY (tenant_id, id));
+CREATE TABLE app.time_entries (tenant_id bigint NOT NULL, id bigint NOT NULL, hours numeric, PRIMARY KEY (tenant_id, id));
 CREATE TABLE app.attachments (tenant_id bigint NOT NULL, id bigint NOT NULL, path text, PRIMARY KEY (tenant_id, id));
-CREATE TABLE app.labour_attendance (tenant_id bigint NOT NULL, id bigint NOT NULL, worker text, PRIMARY KEY (tenant_id, id));
+CREATE TABLE app.expenses (tenant_id bigint NOT NULL, id bigint NOT NULL, description text, PRIMARY KEY (tenant_id, id));
 CREATE TABLE app.currency_rates (code text PRIMARY KEY, rate numeric);
-CREATE TABLE public.bills_archive (tenant_id bigint NOT NULL, id bigint NOT NULL);
+CREATE TABLE public.invoices_archive (tenant_id bigint NOT NULL, id bigint NOT NULL);
 
 ALTER TABLE app.projects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app.projects FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON app.projects USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::bigint);
 
-ALTER TABLE app.bills ENABLE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON app.bills USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::bigint);
+ALTER TABLE app.invoices ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON app.invoices USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::bigint);
 
-ALTER TABLE app.measurements ENABLE ROW LEVEL SECURITY;
-ALTER TABLE app.measurements FORCE ROW LEVEL SECURITY;
+ALTER TABLE app.time_entries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE app.time_entries FORCE ROW LEVEL SECURITY;
 
-ALTER TABLE app.labour_attendance ENABLE ROW LEVEL SECURITY;
-ALTER TABLE app.labour_attendance FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON app.labour_attendance USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::bigint);
+ALTER TABLE app.expenses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE app.expenses FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON app.expenses USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::bigint);
 ```
 ::check
 ```sql
@@ -837,7 +839,7 @@ WHERE NOT (rls_enabled AND rls_forced AND policy_count > 0)
 ORDER BY table_name;
 ```
 
-Result: `attachments` (nothing enabled), `bills` (enabled but not forced, so the owner bypasses it), `measurements` (forced but no policy, so the app sees nothing, which usually shows up as an outage right after a migration). `projects` and `labour_attendance` are fine. `tenants` and `currency_rates` have no `tenant_id`, and `public.bills_archive` is in another schema (worth a second check of its own!).
+Result: `attachments` (nothing enabled), `invoices` (enabled but not forced, so the owner bypasses it), `time_entries` (forced but no policy, so the app sees nothing, which usually shows up as an outage right after a migration). `projects` and `expenses` are fine. `tenants` and `currency_rates` have no `tenant_id`, and `public.invoices_archive` is in another schema (worth a second check of its own!).
 
 Run this query in CI against a database built from your migrations, and fail the build if it returns any rows. Extend it to check that each policy has a `WITH CHECK` expression (`pg_policy.polwithcheck IS NOT NULL`, or `polcmd = 'r'` for read-only policies), and that the app role doesn't own any of these tables.
 ::mistakes
@@ -1030,7 +1032,7 @@ public sealed class TenantJobRunner
 :::
 
 :::exercise id=m14-multi-tenant-security-ex4 difficulty=intermediate kind=sql ordered=true title="Membership and classification policies with RLS"
-Consultants can belong to several tenants. The setup has `memberships (user_id, tenant_id, role)` and `documents (tenant_id, id, title, classification)` with RLS **enabled and forced** but no policies. Write a script that:
+Freelancers can belong to several agencies (tenants). The setup has `memberships (user_id, tenant_id, role)` and `documents (tenant_id, id, title, classification)` with RLS **enabled and forced** but no policies. Write a script that:
 
 1. Creates a **permissive** policy `member_rows` on `documents` (for `SELECT`) that shows rows of every tenant the current user belongs to. The user comes from the setting `app.user_id`.
 2. Creates a **restrictive** policy `restricted_needs_admin` (for `SELECT`) so that documents with `classification = 'restricted'` are visible only to users whose membership role in that document's tenant is `admin`.
@@ -1061,13 +1063,13 @@ CREATE TABLE documents (
 );
 INSERT INTO memberships VALUES (101, 1, 'viewer'), (101, 3, 'admin'), (102, 2, 'admin'), (103, 1, 'admin');
 INSERT INTO documents VALUES
-  (1, 1, 'Jaipur ring road: measurement book, km 12-14', 'normal'),
-  (1, 2, 'Jaipur ring road: subcontractor rate negotiation', 'restricted'),
-  (1, 3, 'Jaipur ring road: daily progress report 19 Oct', 'normal'),
-  (2, 1, 'Surat metro depot: bid price schedule', 'restricted'),
-  (2, 2, 'Surat metro depot: site photos', 'normal'),
-  (3, 1, 'Guwahati bridge: design basis report', 'normal'),
-  (3, 2, 'Guwahati bridge: claims and disputes register', 'restricted');
+  (1, 1, 'Jaipur Handlooms website: wireframes v3', 'normal'),
+  (1, 2, 'Jaipur Handlooms website: fee negotiation notes', 'restricted'),
+  (1, 3, 'Jaipur Handlooms website: stand-up notes 19 Oct', 'normal'),
+  (2, 1, 'Surat Diamonds app: pricing proposal', 'restricted'),
+  (2, 2, 'Surat Diamonds app: design screenshots', 'normal'),
+  (3, 1, 'Guwahati Tea campaign: creative brief', 'normal'),
+  (3, 2, 'Guwahati Tea campaign: client disputes log', 'restricted');
 GRANT SELECT ON memberships, documents TO app_user;
 ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documents FORCE ROW LEVEL SECURITY;
@@ -1101,7 +1103,7 @@ SELECT set_config('app.user_id', '101', true);
 SELECT tenant_id, id, title FROM documents ORDER BY tenant_id, id;
 ```
 
-Result for user 101: tenant 1 documents 1 and 3 (the restricted rate negotiation is hidden, because 101 is only a viewer there), and tenant 3 documents 1 and 2 (admin, so the restricted claims register is visible). Tenant 2 is invisible.
+Result for user 101: tenant 1 documents 1 and 3 (the restricted fee negotiation notes are hidden, because 101 is only a viewer there), and tenant 3 documents 1 and 2 (admin, so the restricted disputes log is visible). Tenant 2 is invisible.
 
 Things to try next: set `app.user_id` to `103` (admin of tenant 1 only), or to nothing. Then think about the design. This policy shows *all* tenants a user belongs to at once. Most products show one **active** tenant at a time, so add a second restrictive policy `tenant_id = current_setting('app.tenant_id')::int` and make the app set both settings. The membership subquery runs per row, so `memberships` needs its primary key `(user_id, tenant_id)` to stay fast, and the `memberships` table itself must not be writable by `app_user`, or a user could add themselves to any tenant.
 ::alternatives
@@ -1113,16 +1115,16 @@ Put the membership lookup in a `STABLE` SQL function `app.user_tenants()` that r
 :::
 
 :::exercise id=m14-multi-tenant-security-ex5 difficulty=advanced kind=code title="A tenant-scoped repository with leak tests"
-Implement `TenantRepository<T>`, an application-level guard over a shared in-memory store (standing in for a pooled database), and a `BillService` that creates bills safely. Then make the provided cross-tenant leak tests pass.
+Implement `TenantRepository<T>`, an application-level guard over a shared in-memory store (standing in for a pooled database), and an `InvoiceService` that creates invoices safely. Then make the provided cross-tenant leak tests pass.
 ::requirements
 - Every method throws `InvalidOperationException` when there is no current tenant.
 - `Find(id)` returns the entity only if it belongs to the current tenant. Otherwise `null`, exactly as for a non-existent id (no existence oracle).
 - `List()` returns only the current tenant's entities of type `T`.
 - `Add(entity)` throws `TenantMismatchException` if `entity.TenantId` differs from the current tenant.
-- `BillService.Create(projectId, amount)` looks up the project through the tenant repository. If it isn't visible, it throws `KeyNotFoundException` (the same error as for a missing project). The bill gets the current tenant's id automatically, never one from the caller.
+- `InvoiceService.Create(projectId, amount)` looks up the project through the tenant repository. If it isn't visible, it throws `KeyNotFoundException` (the same error as for a missing project). The invoice gets the current tenant's id automatically, never one from the caller.
 ::acceptance
 - Tenant A can't find, list or reference any of tenant B's entities.
-- A bill for B's project, created as A, throws `KeyNotFoundException`, the same as a random id.
+- An invoice for B's project, created as A, throws `KeyNotFoundException`, the same as a random id.
 - Adding an entity with another tenant's id throws `TenantMismatchException`.
 - The "enumerate every id" leak test finds no cross-tenant reads.
 ::hint
@@ -1130,7 +1132,7 @@ The repository reads the tenant from `ICurrentTenant` on every call, not once in
 ::hint
 `Find` is `store.Get(id) is T e && e.TenantId == tenant ? e : null`.
 ::hint
-`BillService` should never accept a tenant id parameter. It builds `new Bill(Guid.NewGuid(), currentTenant, projectId, amount)`.
+`InvoiceService` should never accept a tenant id parameter. It builds `new Invoice(Guid.NewGuid(), currentTenant, projectId, amount)`.
 ::hint
 Return the same exception type and message for "not found" and "belongs to another tenant", so callers can't tell them apart.
 ::starter
@@ -1141,7 +1143,7 @@ using System.Linq;
 
 public interface ITenantOwned { Guid Id { get; } string TenantId { get; } }
 public sealed record Project(Guid Id, string TenantId, string Name) : ITenantOwned;
-public sealed record Bill(Guid Id, string TenantId, Guid ProjectId, decimal AmountInr) : ITenantOwned;
+public sealed record Invoice(Guid Id, string TenantId, Guid ProjectId, decimal AmountInr) : ITenantOwned;
 
 public interface ICurrentTenant { string? TenantId { get; } }
 
@@ -1167,16 +1169,16 @@ public sealed class TenantRepository<T> where T : class, ITenantOwned
     public void Add(T entity) => throw new NotImplementedException();
 }
 
-public sealed class BillService
+public sealed class InvoiceService
 {
-    private readonly TenantRepository<Bill> _bills;
+    private readonly TenantRepository<Invoice> _invoices;
     private readonly TenantRepository<Project> _projects;
     private readonly ICurrentTenant _tenant;
 
-    public BillService(TenantRepository<Bill> bills, TenantRepository<Project> projects, ICurrentTenant tenant)
-    { _bills = bills; _projects = projects; _tenant = tenant; }
+    public InvoiceService(TenantRepository<Invoice> invoices, TenantRepository<Project> projects, ICurrentTenant tenant)
+    { _invoices = invoices; _projects = projects; _tenant = tenant; }
 
-    public Bill Create(Guid projectId, decimal amountInr) => throw new NotImplementedException();
+    public Invoice Create(Guid projectId, decimal amountInr) => throw new NotImplementedException();
 }
 ```
 ::tests
@@ -1193,15 +1195,15 @@ public class TenantRepositoryTests
     private readonly SharedStore _store = new();
     private readonly SwitchableTenant _tenant = new();
     private readonly Project _a1, _a2, _b1;
-    private readonly Bill _bBill;
+    private readonly Invoice _bInvoice;
 
     public TenantRepositoryTests()
     {
-        _a1 = new Project(Guid.NewGuid(), "A", "Jaipur ring road");
-        _a2 = new Project(Guid.NewGuid(), "A", "Ajmer flyover");
-        _b1 = new Project(Guid.NewGuid(), "B", "Surat metro depot");
-        _bBill = new Bill(Guid.NewGuid(), "B", _b1.Id, 2_210_000m);
-        foreach (var e in new ITenantOwned[] { _a1, _a2, _b1, _bBill }) _store.Put(e);
+        _a1 = new Project(Guid.NewGuid(), "A", "Website redesign for Jaipur Handlooms");
+        _a2 = new Project(Guid.NewGuid(), "A", "Diwali campaign for Ajmer Sweets");
+        _b1 = new Project(Guid.NewGuid(), "B", "Mobile app for Surat Diamonds");
+        _bInvoice = new Invoice(Guid.NewGuid(), "B", _b1.Id, 2_210_000m);
+        foreach (var e in new ITenantOwned[] { _a1, _a2, _b1, _bInvoice }) _store.Put(e);
     }
 
     private TenantRepository<T> Repo<T>() where T : class, ITenantOwned => new(_store, _tenant);
@@ -1212,7 +1214,7 @@ public class TenantRepositoryTests
         _tenant.TenantId = "A";
         Assert.Same(_a1, Repo<Project>().Find(_a1.Id));
         Assert.Null(Repo<Project>().Find(_b1.Id));
-        Assert.Null(Repo<Bill>().Find(_bBill.Id));
+        Assert.Null(Repo<Invoice>().Find(_bInvoice.Id));
     }
 
     [Fact]
@@ -1220,7 +1222,7 @@ public class TenantRepositoryTests
     {
         _tenant.TenantId = "A";
         Assert.Equal(2, Repo<Project>().List().Count);
-        Assert.Empty(Repo<Bill>().List());
+        Assert.Empty(Repo<Invoice>().List());
     }
 
     [Fact]
@@ -1239,22 +1241,22 @@ public class TenantRepositoryTests
     }
 
     [Fact]
-    public void Bill_for_other_tenants_project_looks_like_missing_project()
+    public void Invoice_for_other_tenants_project_looks_like_missing_project()
     {
         _tenant.TenantId = "A";
-        var svc = new BillService(Repo<Bill>(), Repo<Project>(), _tenant);
+        var svc = new InvoiceService(Repo<Invoice>(), Repo<Project>(), _tenant);
         var crossTenant = Assert.Throws<KeyNotFoundException>(() => svc.Create(_b1.Id, 1000m));
         var missing = Assert.Throws<KeyNotFoundException>(() => svc.Create(Guid.NewGuid(), 1000m));
         Assert.Equal(missing.Message, crossTenant.Message);
     }
 
     [Fact]
-    public void Created_bill_gets_current_tenant()
+    public void Created_invoice_gets_current_tenant()
     {
         _tenant.TenantId = "A";
-        var bill = new BillService(Repo<Bill>(), Repo<Project>(), _tenant).Create(_a1.Id, 640_000m);
-        Assert.Equal("A", bill.TenantId);
-        Assert.Same(bill, Repo<Bill>().Find(bill.Id));
+        var invoice = new InvoiceService(Repo<Invoice>(), Repo<Project>(), _tenant).Create(_a1.Id, 640_000m);
+        Assert.Equal("A", invoice.TenantId);
+        Assert.Same(invoice, Repo<Invoice>().Find(invoice.Id));
     }
 
     [Fact]
@@ -1266,7 +1268,7 @@ public class TenantRepositoryTests
             _tenant.TenantId = viewer;
             foreach (var e in _store.All().Where(x => x.TenantId != viewer))
             {
-                if (Repo<Project>().Find(e.Id) is not null || Repo<Bill>().Find(e.Id) is not null)
+                if (Repo<Project>().Find(e.Id) is not null || Repo<Invoice>().Find(e.Id) is not null)
                     leaks.Add($"{viewer} read {e.TenantId}:{e.Id}");
             }
         }
@@ -1282,7 +1284,7 @@ using System.Linq;
 
 public interface ITenantOwned { Guid Id { get; } string TenantId { get; } }
 public sealed record Project(Guid Id, string TenantId, string Name) : ITenantOwned;
-public sealed record Bill(Guid Id, string TenantId, Guid ProjectId, decimal AmountInr) : ITenantOwned;
+public sealed record Invoice(Guid Id, string TenantId, Guid ProjectId, decimal AmountInr) : ITenantOwned;
 
 public interface ICurrentTenant { string? TenantId { get; } }
 
@@ -1328,21 +1330,21 @@ public sealed class TenantRepository<T> where T : class, ITenantOwned
     }
 }
 
-public sealed class BillService
+public sealed class InvoiceService
 {
-    private readonly TenantRepository<Bill> _bills;
+    private readonly TenantRepository<Invoice> _invoices;
     private readonly TenantRepository<Project> _projects;
     private readonly ICurrentTenant _tenant;
 
-    public BillService(TenantRepository<Bill> bills, TenantRepository<Project> projects, ICurrentTenant tenant)
-    { _bills = bills; _projects = projects; _tenant = tenant; }
+    public InvoiceService(TenantRepository<Invoice> invoices, TenantRepository<Project> projects, ICurrentTenant tenant)
+    { _invoices = invoices; _projects = projects; _tenant = tenant; }
 
-    public Bill Create(Guid projectId, decimal amountInr)
+    public Invoice Create(Guid projectId, decimal amountInr)
     {
         var project = _projects.Find(projectId) ?? throw new KeyNotFoundException("Project not found.");
-        var bill = new Bill(Guid.NewGuid(), project.TenantId, project.Id, amountInr);
-        _bills.Add(bill);
-        return bill;
+        var invoice = new Invoice(Guid.NewGuid(), project.TenantId, project.Id, amountInr);
+        _invoices.Add(invoice);
+        return invoice;
     }
 }
 ```
@@ -1372,15 +1374,15 @@ public async Task Rls_hides_other_tenants_and_blocks_cross_writes()
     await using var conn = await OpenAsAppRoleAsync();
     await using var tx = await conn.BeginTransactionAsync();
     await ExecAsync(conn, tx, "SELECT set_config('app.tenant_id', '42', true)");
-    Assert.Equal(0L, await ScalarAsync<long>(conn, tx, "SELECT count(*) FROM bills WHERE tenant_id = 17"));
-    await AssertFailsAsync(conn, tx, "INSERT INTO bills (tenant_id, id, project_id, status, amount_inr) VALUES (17, 999, 1, 'pending', 1)");
+    Assert.Equal(0L, await ScalarAsync<long>(conn, tx, "SELECT count(*) FROM invoices WHERE tenant_id = 17"));
+    await AssertFailsAsync(conn, tx, "INSERT INTO invoices (tenant_id, id, project_id, status, amount_inr) VALUES (17, 999, 1, 'pending', 1)");
 }
 
 [Fact]
 public async Task No_tenant_setting_means_no_rows()
 {
     await using var conn = await OpenAsAppRoleAsync();
-    Assert.Equal(0L, await ScalarAsync<long>(conn, null, "SELECT count(*) FROM bills"));
+    Assert.Equal(0L, await ScalarAsync<long>(conn, null, "SELECT count(*) FROM invoices"));
 }
 ```
 
@@ -1399,7 +1401,7 @@ Add the catalog check from exercise 2, and a test that the app role is not the o
 - **Managed SaaS platforms** commonly combine tenant ids in tokens, application-level filters and database enforcement, and publish their isolation model in security whitepapers because enterprise customers ask for it in every procurement.
 - **PostgreSQL RLS** is widely used in pooled SaaS backends, and hosted platforms such as Supabase make it the primary way to protect data accessed directly from clients.
 - **Cloud providers' guidance** (Azure Architecture Center on multitenant solutions, the AWS SaaS Lens) describes silo, bridge and pool models and stresses tenant context propagation and noisy-neighbour controls.
-- **Government and infrastructure platforms** that serve several departments or agencies on one deployment often have a contractual requirement that one department can't see another's files. Composite keys plus RLS is a defensible answer, and the leak tests are the evidence auditors ask for.
+- **Government platforms** that serve several departments or agencies on one deployment often have a contractual requirement that one department can't see another's files. Composite keys plus RLS is a defensible answer, and the leak tests are the evidence auditors ask for.
 
 ## Interview questions
 
@@ -1469,7 +1471,7 @@ A: A known fake record in a test tenant that raises an alert if it is ever read 
 
 :::quiz pass=70
 ::q single
-The app connects as the owner of `bills`. RLS is enabled with a tenant policy, but tenant A can still see tenant B's bills. Why?
+The app connects as the owner of `invoices`. RLS is enabled with a tenant policy, but tenant A can still see tenant B's invoices. Why?
 - [ ] The policy needs `WITH CHECK`.
 - [x] Table owners bypass RLS unless the table has `FORCE ROW LEVEL SECURITY`, and the app should not connect as the owner anyway.
 - [ ] RLS only works on views.
@@ -1483,7 +1485,7 @@ After moving to PgBouncer in transaction mode, a user occasionally sees another 
 - [ ] Add `DISCARD ALL` at the end of each request.
 > In transaction mode, consecutive statements can run on different server connections, and session settings stay on whichever connection they landed on. Transaction-local settings travel with the transaction.
 ::q single
-A reporting view `bills_report` was created by the migration user (the table owner). Analysts using `app_user` with tenant 42 see all tenants through it. What is the most direct fix?
+A reporting view `invoices_report` was created by the migration user (the table owner). Analysts using `app_user` with tenant 42 see all tenants through it. What is the most direct fix?
 - [ ] Grant `BYPASSRLS` to the analysts.
 - [x] Recreate the view `WITH (security_invoker = true)`.
 - [ ] Add `ORDER BY tenant_id` to the view.

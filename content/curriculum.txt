@@ -67,6 +67,7 @@ m04-ocp | Open/Closed Principle | intermediate | extension points; strategy
 m04-lsp | Liskov Substitution Principle | intermediate | contracts; preconditions; rectangle-square
 m04-isp | Interface Segregation Principle | intermediate | role interfaces; fat interfaces
 m04-dip | Dependency Inversion Principle | intermediate | abstractions; ownership of interfaces
+m04-solid-in-practice | SOLID in practice: one real feature, all five principles | intermediate | refactoring; SRP; OCP; LSP; ISP; DIP; when to stop
 m04-dry-kiss-yagni | DRY, KISS and YAGNI | beginner | duplication of knowledge; simplicity
 m04-code-smells | Code smells and technical debt | intermediate | long method; feature envy; shotgun surgery
 m04-composition-inheritance | Composition versus inheritance | intermediate | fragile base class; delegation
@@ -90,21 +91,17 @@ m05-c4-views | Context, container, component and code-level views | intermediate
 m05-reading-diagrams | Reading and creating architecture diagrams | intermediate | legends; levels of detail
 m05-diagrams-to-code | Mapping diagrams to code and database structures | intermediate | class to C#; ER to SQL
 
-## m06 | Design Patterns — The Complete Catalogue | lld | Every GoF pattern plus the enterprise patterns used in modern .NET.
+## m06 | Design Patterns for .NET Backends | lld | The GoF patterns you meet in .NET backends, plus the enterprise patterns used in modern ASP.NET Core.
 m06-intro-patterns | What design patterns are and how to learn them | beginner | GoF; categories; pattern language
 m06-singleton | Singleton | beginner | creational; lazy; thread safety; DI singleton
 m06-factory-method | Factory Method | beginner | creational
 m06-abstract-factory | Abstract Factory | intermediate | creational; families
 m06-builder | Builder | beginner | creational; fluent
-m06-prototype | Prototype | intermediate | creational; cloning
-m06-object-pool | Object Pool | intermediate | creational; ArrayPool; ObjectPool
 m06-adapter | Adapter | beginner | structural
 m06-decorator | Decorator | intermediate | structural
 m06-facade | Facade | beginner | structural
 m06-proxy | Proxy | intermediate | structural; lazy; caching; protection
 m06-composite | Composite | intermediate | structural; trees
-m06-bridge | Bridge | advanced | structural
-m06-flyweight | Flyweight | advanced | structural; interning
 m06-strategy | Strategy | beginner | behavioral
 m06-observer | Observer | intermediate | behavioral; events; IObservable
 m06-command | Command | intermediate | behavioral; undo; queues
@@ -112,10 +109,6 @@ m06-state | State | intermediate | behavioral; state machines
 m06-template-method | Template Method | beginner | behavioral
 m06-chain-of-responsibility | Chain of Responsibility | intermediate | behavioral; middleware
 m06-mediator | Mediator | intermediate | behavioral; MediatR-style
-m06-iterator | Iterator | beginner | behavioral; IEnumerable; yield
-m06-memento | Memento | intermediate | behavioral; snapshots; undo
-m06-visitor | Visitor | advanced | behavioral; double dispatch
-m06-interpreter | Interpreter | advanced | behavioral; grammars; expression trees
 m06-specification | Specification | intermediate | business rules; expressions
 m06-repository-uow | Repository and Unit of Work, including their limitations | intermediate | EF Core; DbContext
 m06-null-object | Null Object | beginner | behavioral; defaults
@@ -295,8 +288,10 @@ m16-cloud-design-patterns | Cloud design patterns catalogue | advanced | sidecar
 m16-multi-level-caching | Multi-level caching and rate limiting at scale | advanced | L1/L2; distributed limits
 m16-architecture-evolution | Cost-aware architecture and architecture evolution | advanced | fitness functions
 
-## m17 | Real-World HLD Case Studies | hld | Twenty complete system design walkthroughs.
+## m17 | Real-World HLD Case Studies | hld | Twenty-six complete system design walkthroughs, starting with one system scaled end to end.
+m17-scaling-journey | Scaling a real system from 100 to 10 million users: HLD to LLD end to end | intermediate | growth stages; bottlenecks; HLD; LLD; C# core service
 m17-url-shortener | URL shortener | beginner | ids; redirects; caching
+m17-unique-id-generator | Distributed unique ID generator (Snowflake-style) | intermediate | ordering; clock skew; Snowflake; ULID
 m17-pastebin | Pastebin | beginner | object storage; expiry
 m17-file-storage | File storage service (Drive-style) | advanced | chunking; sync; dedupe
 m17-notification-platform | Notification platform | intermediate | fan-out; channels; preferences
@@ -304,20 +299,24 @@ m17-chat | Chat application (WhatsApp-style) | advanced | websockets; delivery r
 m17-news-feed | Social media news feed | advanced | fan-out on write vs read
 m17-video-streaming | Video streaming platform (YouTube-style) | advanced | transcoding; ABR; CDN
 m17-ride-hailing | Ride-hailing platform (Uber-style) | advanced | geo index; matching
+m17-proximity-service | Nearby search and proximity service (Maps-style) | advanced | geohash; quadtree; read-heavy scaling
 m17-food-delivery | Food delivery platform | advanced | orders; dispatch; tracking
 m17-ecommerce | E-commerce platform (Amazon-style) | advanced | catalog; cart; checkout; inventory
+m17-flash-sale | Flash sale system (high-contention inventory) | advanced | hot rows; queues; Redis counters; fairness
 m17-movie-booking | Movie ticket booking system | intermediate | seat locking
 m17-hotel-reservation | Hotel reservation system | intermediate | inventory; overbooking
 m17-payment-system | Payment processing system | advanced | ledger; idempotency; reconciliation
 m17-autocomplete | Search autocomplete service | intermediate | tries; top-k
 m17-rate-limiter | Distributed rate limiter | intermediate | Redis; algorithms
+m17-job-scheduler | Distributed job scheduler | advanced | leases; exactly-once-ish; cron at scale
 m17-logging-analytics | Logging and analytics platform | advanced | ingestion; OLAP
+m17-web-crawler | Web crawler | advanced | frontier; politeness; dedupe; distributed workers
 m17-collaborative-editor | Real-time collaborative editor | advanced | OT; CRDT
 m17-online-exam | Online examination platform | intermediate | spikes; integrity
 m17-lms | Learning management system | intermediate | content; progress
-m17-multi-tenant-pm | Multi-tenant enterprise project management system | advanced | tenancy; permissions
+m17-multi-tenant-pm | Multi-tenant SaaS project management (Jira-style) | advanced | tenancy; permissions
 
-## m18 | Real-World LLD Case Studies | lld | Twenty object-oriented design problems, fully implemented.
+## m18 | Real-World LLD Case Studies | lld | Twenty-two object-oriented design problems, fully implemented.
 m18-parking-lot | Parking lot | beginner | spots; tickets; pricing
 m18-elevator | Elevator control system | advanced | scheduling; state
 m18-atm | ATM | intermediate | state; transactions
@@ -331,9 +330,11 @@ m18-card-games | Card games | intermediate | deck; rules engine
 m18-food-ordering | Food ordering | intermediate | cart; order states
 m18-hotel-booking | Hotel booking | intermediate | availability
 m18-payment-gateway | Payment gateway abstraction | intermediate | providers; adapters
+m18-splitwise | Expense sharing (Splitwise-style) | intermediate | balances; split strategies; debt simplification
 m18-notification-dispatcher | Notification dispatcher | intermediate | channels; retries
 m18-logging-framework | Logging framework | intermediate | sinks; levels
 m18-rate-limiter | Rate limiter (in-process) | intermediate | token bucket
+m18-lru-cache | LRU cache | intermediate | hash map + linked list; O(1); thread safety; TTL
 m18-file-system | File system abstraction | intermediate | composite
 m18-inventory-reservation | Inventory reservation | advanced | holds; expiry
 m18-order-processing | Order processing | advanced | state; events
@@ -350,6 +351,6 @@ m19-changing-requirements | Handling changing requirements and migrations | adva
 m19-mock-interviews | Mock interviews with rubrics | advanced | timed sessions
 
 ## m20 | Capstone Projects and Graduation | career | Three substantial projects that prove mastery.
-m20-capstone-a | Capstone A — Enterprise modular monolith | advanced | project and contract management
+m20-capstone-a | Capstone A — Enterprise modular monolith | advanced | hospital appointments, billing and pharmacy
 m20-capstone-b | Capstone B — Distributed order processing | advanced | services; RabbitMQ; saga
 m20-capstone-c | Capstone C — Production-style communication platform | advanced | real-time; search; observability

@@ -65,10 +65,10 @@ But be careful with the analogy. On the floor with the **cash vault**, a cardboa
 
 Some collaborators are optional:
 
-- Not every project has an SMS gateway configured. The free tier has none, and so do test environments.
+- Not every hospital on a lab-software platform has an SMS gateway configured. The free tier has none, and so do test environments.
 - Some modules want logging and some unit tests don't.
 - A discount may or may not apply.
-- An invoice may come from a vendor who isn't registered in your directory.
+- A lab sample may come from a referring clinic that isn't registered in your directory.
 
 The naive approach uses `null` to mean "not there", and checks everywhere:
 
@@ -106,14 +106,14 @@ Callers always get a real object, so they never check for null.
 | **Abstraction** | The interface or base class that callers depend on (`ISmsSender`) |
 | **Real object** | Does the actual work (`HttpSmsSender`) |
 | **Null Object** | Same interface, neutral behaviour (`NullSmsSender`). Usually stateless, so one shared instance is enough |
-| **Client** | Uses the abstraction with no null checks (`CubeTestAlertService`) |
+| **Client** | Uses the abstraction with no null checks (`CriticalResultAlertService`) |
 | **Chooser** | Decides which one to supply. In ASP.NET Core this is the DI registration at startup |
 
 ### Special Case: Null Object's bigger sibling
 
-Martin Fowler's **Special Case** generalises the idea from "nothing" to "a known unusual case". Instead of `Vendor?` that is sometimes null, you return an `UnregisteredVendor`. It is a real `Vendor` with the name "Unregistered vendor (GSTIN …)", a credit limit of ₹0, and `IsRegistered = false`. Callers display it, price against it and log it like any other vendor, and the rules for "unregistered" live in one class.
+Martin Fowler's **Special Case** generalises the idea from "nothing" to "a known unusual case". Instead of `Clinic?` that is sometimes null, you return an `UnregisteredClinic`. It is a real `Clinic` with the name "Unregistered clinic (code …)", a monthly billing credit of ₹0 (so its tests are paid upfront), and `IsRegistered = false`. Callers display it, bill against it and log it like any other clinic, and the rules for "unregistered" live in one class.
 
-Other common special cases: `GuestCustomer`, `UnassignedEngineer`, `MissingPhoto` (a placeholder image), `UnknownProject`.
+Other common special cases: `GuestCustomer`, `UnassignedDoctor`, `MissingPhoto` (a placeholder image), `WalkInPatient`.
 
 ### How it works internally
 
@@ -130,13 +130,13 @@ C# gives you several tools for "might not be there". Pick deliberately:
 | Situation | Best tool | Why |
 |---|---|---|
 | Optional collaborator where "do nothing" is correct (logging, optional notifications, metrics in tests) | **Null Object** | Removes checks; behaviour is genuinely neutral |
-| A well-known unusual *value* with sensible behaviour (guest, unregistered vendor) | **Special Case** | Rules for the unusual case live in one class |
+| A well-known unusual *value* with sensible behaviour (guest, unregistered clinic) | **Special Case** | Rules for the unusual case live in one class |
 | A lookup that may find nothing, where the caller must decide what to do | **`T?` with nullable reference types**, or **`Option<T>`** | Absence is visible in the type, and the compiler or the type forces handling |
 | Absence that means a bug or broken input (a required field missing, an id that must exist) | **Exception** | Fail loudly and early |
 | Absence of a *required* dependency because of misconfiguration | **Startup error** | Never let the app start half-working |
 | An operation that can fail in expected ways (validation, "not found" as a business outcome) | **Result type** (see [Options and Result](#/lesson/m06-options-result)) | Errors as values, with a reason |
 
-**Nullable reference types** (NRT, enabled with `<Nullable>enable</Nullable>`) deserve a special mention. With NRT on, `Vendor` means "never null" and `Vendor?` means "might be null", and the compiler warns when you dereference a `Vendor?` without checking. This catches most null bugs at compile time. NRT is **compile-time only**, though: JSON deserialisation, reflection, older libraries and the `!` operator can still hand you a null at runtime. Null Object and NRT work well together. A method returning `ISmsSender` (no `?`) can promise "never null" *because* it returns a Null Object when nothing is configured.
+**Nullable reference types** (NRT, enabled with `<Nullable>enable</Nullable>`) deserve a special mention. With NRT on, `Clinic` means "never null" and `Clinic?` means "might be null", and the compiler warns when you dereference a `Clinic?` without checking. This catches most null bugs at compile time. NRT is **compile-time only**, though: JSON deserialisation, reflection, older libraries and the `!` operator can still hand you a null at runtime. Null Object and NRT work well together. A method returning `ISmsSender` (no `?`) can promise "never null" *because* it returns a Null Object when nothing is configured.
 
 **`Option<T>`** (also called Maybe) is a type that is either `Some(value)` or `None`. Unlike `T?`, it forces the caller to handle both cases through `Match` or `GetValueOrDefault`, and it composes with `Map`/`Bind`. C# has no built-in `Option<T>`, so teams write a small one (you'll build it in exercise 3) or use a library. Use it when absence needs a *decision*, not a silent default.
 
@@ -146,8 +146,8 @@ A Null Object turns "missing" into "nothing happened, silently". That is dangero
 
 - **`NullPaymentGateway` returning success.** Orders are confirmed, goods ship, money is never collected.
 - **`NullAuditTrail` in production.** Legally required audit records are silently dropped, and you discover it during an audit months later.
-- **A repository that returns an empty list for an unknown tenant id.** A typo in configuration looks like "this tenant has no projects" instead of an error.
-- **`NullSmsSender` registered in production by accident** because a config key was misspelt. Concrete-cube failure alerts never reach site engineers.
+- **A repository that returns an empty list for an unknown tenant id.** A typo in configuration looks like "this hospital has no patients" instead of an error.
+- **`NullSmsSender` registered in production by accident** because a config key was misspelt. Critical lab-result alerts (a dangerously high potassium level, say) never reach the doctor on duty.
 
 Guardrails:
 
@@ -188,78 +188,78 @@ classDiagram
     class NullSmsSender {
         +SendAsync(...) Task~SmsResult~
     }
-    class Vendor {
-        +string Gstin
+    class Clinic {
+        +string Code
         +string Name
         +decimal CreditLimit
         +bool IsRegistered
     }
-    class UnregisteredVendor {
+    class UnregisteredClinic {
         +bool IsRegistered
     }
-    class IVendorDirectory {
+    class IClinicDirectory {
         <<interface>>
-        +Find(string gstin) Vendor
+        +Find(string code) Clinic
     }
-    class CubeTestAlertService {
-        +ReportAsync(CubeTestResult r, CancellationToken ct) Task~AlertOutcome~
+    class CriticalResultAlertService {
+        +ReportAsync(LabResult r, CancellationToken ct) Task~AlertOutcome~
     }
     ISmsSender <|.. HttpSmsSender
     ISmsSender <|.. NullSmsSender
-    Vendor <|-- UnregisteredVendor
-    CubeTestAlertService --> ISmsSender
-    CubeTestAlertService --> IVendorDirectory
-    IVendorDirectory ..> Vendor : never returns null
+    Clinic <|-- UnregisteredClinic
+    CriticalResultAlertService --> ISmsSender
+    CriticalResultAlertService --> IClinicDirectory
+    IClinicDirectory ..> Clinic : never returns null
 ```
 
-How to read it: `CubeTestAlertService` depends on two abstractions. Behind `ISmsSender` there are two implementations: the real HTTP gateway and the Null Object. The service can't tell them apart, and doesn't need to. Behind `IVendorDirectory`, `Find` always returns a `Vendor`. For an unknown GSTIN it returns the special case `UnregisteredVendor`, a subclass with its own rules (credit limit ₹0). Neither relationship needs a `?` anywhere.
+How to read it: `CriticalResultAlertService` depends on two abstractions. Behind `ISmsSender` there are two implementations: the real HTTP gateway and the Null Object. The service can't tell them apart, and doesn't need to. Behind `IClinicDirectory`, `Find` always returns a `Clinic`. For an unknown clinic code it returns the special case `UnregisteredClinic`, a subclass with its own rules (credit limit ₹0). Neither relationship needs a `?` anywhere.
 
-### Sequence diagram — a failed cube test in an environment with SMS disabled
+### Sequence diagram — a critical lab result in a test environment with SMS disabled
 
 ```mermaid
 sequenceDiagram
-    participant API as POST /cube-tests
-    participant S as CubeTestAlertService
-    participant V as IVendorDirectory
-    participant E as IEngineerDirectory
+    participant API as POST /lab-results
+    participant S as CriticalResultAlertService
+    participant V as IClinicDirectory
+    participant E as IDoctorRoster
     participant N as NullSmsSender
-    API->>S: ReportAsync(7-day result 14.2 MPa, required 20 MPa)
-    S->>V: Find("27AAAPL1234C1Z5")
-    V-->>S: UnregisteredVendor (special case, never null)
-    S->>E: FindOnDuty(project 12)
+    API->>S: ReportAsync(potassium 6.8 mmol/L, critical at 6.0)
+    S->>V: Find("LKO-9999")
+    V-->>S: UnregisteredClinic (special case, never null)
+    S->>E: FindOnDuty(ward 12)
     E-->>S: None (Option)
-    S->>E: ProjectManager(project 12)
-    E-->>S: Engineer "R. Iyer"
-    S->>N: SendAsync(mobile, "Cube test FAILED ...")
+    S->>E: HeadOfDepartment(ward 12)
+    E-->>S: Doctor "Dr R. Iyer"
+    S->>N: SendAsync(mobile, "CRITICAL result ...")
     N->>N: log at Debug: SMS disabled
     N-->>S: SmsResult.Skipped("SMS disabled")
-    S-->>API: AlertOutcome(BelowSpec, "R. Iyer", Skipped, "Unregistered vendor ...")
+    S-->>API: AlertOutcome(Critical, "Dr R. Iyer", Skipped, "Unregistered clinic ...")
 ```
 
-This one flow shows three different tools. The vendor lookup uses a **Special Case**: the service doesn't branch, and the special case supplies a display name. The on-duty engineer lookup uses an **Option**, because "nobody on duty" needs a *decision* (escalate to the project manager), not a silent default. The SMS sender is a **Null Object**: the service calls it unconditionally, and the result honestly says "Skipped", so the API response and logs show that no SMS went out.
+This one flow shows three different tools. The clinic lookup uses a **Special Case**: the service doesn't branch, and the special case supplies a display name. The on-duty doctor lookup uses an **Option**, because "nobody on duty" needs a *decision* (escalate to the head of department), not a silent default. The SMS sender is a **Null Object**: the service calls it unconditionally, and the result honestly says "Skipped", so the API response and logs show that no SMS went out.
 
 ## Step-by-step example
 
 ### Step 1 — the null-check version
 
 ```csharp
-public async Task<AlertOutcome> ReportAsync(CubeTestResult r, CancellationToken ct)
+public async Task<AlertOutcome> ReportAsync(LabResult r, CancellationToken ct)
 {
-    var vendor = _vendors.FindOrNull(r.VendorGstin);
-    var supplierName = vendor != null ? vendor.Name : "Unknown";              // default #1
-    if (r.StrengthMpa >= r.RequiredMpa) return new(false, "", null, supplierName);
+    var clinic = _clinics.FindOrNull(r.ClinicCode);
+    var clinicName = clinic != null ? clinic.Name : "Unknown";                  // default #1
+    if (r.Value < r.CriticalHigh) return new(false, "", null, clinicName);
 
-    var engineer = _engineers.FindOnDutyOrNull(r.ProjectId);
-    if (engineer == null) engineer = _engineers.ProjectManager(r.ProjectId);   // a real decision: keep it
+    var doctor = _doctors.FindOnDutyOrNull(r.WardId);
+    if (doctor == null) doctor = _doctors.HeadOfDepartment(r.WardId);          // a real decision: keep it
 
     if (_sms != null)                                                          // check #1 of many
-        await _sms.SendAsync(engineer.Mobile, $"... supplier {vendor?.Name ?? "N/A"}", ct);   // default #2, different!
-    _logger?.LogWarning("Cube test failed for {Pour}", r.PourId);             // check #2
-    return new(true, engineer.Name, null, supplierName);
+        await _sms.SendAsync(doctor.Mobile, $"... referred by {clinic?.Name ?? "N/A"}", ct);   // default #2, different!
+    _logger?.LogWarning("Critical result for sample {Sample}", r.SampleId);   // check #2
+    return new(true, doctor.Name, null, clinicName);
 }
 ```
 
-Two different defaults for the same unknown vendor ("Unknown" and "N/A"), two optional-dependency checks, and one genuine decision buried in the noise.
+Two different defaults for the same unknown clinic ("Unknown" and "N/A"), two optional-dependency checks, and one genuine decision buried in the noise.
 
 ### Step 2 — Null Object for the optional collaborator
 
@@ -269,29 +269,29 @@ Create `NullSmsSender`, and make `ISmsSender` a required constructor parameter. 
 
 Make `ILogger<T>` required too. In production DI supplies a real logger, and in unit tests you pass `NullLogger<T>.Instance`. The `?.` disappears.
 
-### Step 4 — Special Case for the unknown vendor
+### Step 4 — Special Case for the unknown clinic
 
-`IVendorDirectory.Find` always returns a `Vendor`. Unknown GSTINs get an `UnregisteredVendor`, whose name is defined once.
+`IClinicDirectory.Find` always returns a `Clinic`. Unknown clinic codes get an `UnregisteredClinic`, whose name is defined once.
 
 ### Step 5 — keep the real decision explicit
 
-"Nobody on duty → escalate" is *business logic*, not a neutral default, so don't hide it inside a Null Object. Return `Option<Engineer>` from `FindOnDuty` and handle both cases with `Match`. The full code follows.
+"Nobody on duty → escalate" is *business logic*, not a neutral default, so don't hide it inside a Null Object. Return `Option<Doctor>` from `FindOnDuty` and handle both cases with `Match`. The full code follows.
 
 ## Production-style C# implementation
 
 ```text
-SiteAlerts.Api/
+LabAlerts.Api/
   Program.cs
   Common/Option.cs
   Notifications/Sms.cs                # ISmsSender, HttpSmsSender, NullSmsSender, health check
-  Vendors/Vendor.cs                   # Vendor + UnregisteredVendor special case
-  Quality/CubeTestAlertService.cs
+  Clinics/Clinic.cs                   # Clinic + UnregisteredClinic special case
+  Alerts/CriticalResultAlertService.cs
 ```
 
 ```csharp file=Common/Option.cs
 using System.Diagnostics.CodeAnalysis;
 
-namespace SiteAlerts.Common;
+namespace LabAlerts.Common;
 
 /// <summary>Either Some(value) or None. Forces callers to decide what absence means.</summary>
 public readonly struct Option<T> where T : notnull
@@ -328,7 +328,7 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace SiteAlerts.Notifications;
+namespace LabAlerts.Notifications;
 
 public enum SmsStatus { Accepted, Skipped }
 
@@ -390,93 +390,94 @@ public sealed class SmsConfigurationHealthCheck(ISmsSender sender, IHostEnvironm
 }
 ```
 
-```csharp file=Vendors/Vendor.cs
-namespace SiteAlerts.Vendors;
+```csharp file=Clinics/Clinic.cs
+namespace LabAlerts.Clinics;
 
-public record Vendor(string Gstin, string Name, decimal CreditLimit)
+/// <summary>A clinic that refers samples to the lab. Registered clinics are billed monthly up to a credit limit.</summary>
+public record Clinic(string Code, string Name, decimal CreditLimit)
 {
     public virtual bool IsRegistered => true;
-    public bool CanSupplyOnCredit(decimal amount) => amount <= CreditLimit;
+    public bool CanBillOnCredit(decimal amount) => amount <= CreditLimit;
 }
 
-/// <summary>Special Case: a real Vendor whose rules for "not in our directory" are defined once.</summary>
-public sealed record UnregisteredVendor(string Gstin) : Vendor(Gstin, $"Unregistered vendor ({Gstin})", 0m)
+/// <summary>Special Case: a real Clinic whose rules for "not in our directory" are defined once.</summary>
+public sealed record UnregisteredClinic(string Code) : Clinic(Code, $"Unregistered clinic ({Code})", 0m)
 {
     public override bool IsRegistered => false;
 }
 
-public interface IVendorDirectory
+public interface IClinicDirectory
 {
-    /// <summary>Never returns null. Unknown GSTINs give an UnregisteredVendor.</summary>
-    Vendor Find(string gstin);
+    /// <summary>Never returns null. Unknown codes give an UnregisteredClinic.</summary>
+    Clinic Find(string code);
 }
 
-public sealed class InMemoryVendorDirectory : IVendorDirectory
+public sealed class InMemoryClinicDirectory : IClinicDirectory
 {
-    private readonly Dictionary<string, Vendor> _byGstin = new(StringComparer.OrdinalIgnoreCase)
+    private readonly Dictionary<string, Clinic> _byCode = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["06AABCR1234M1Z2"] = new Vendor("06AABCR1234M1Z2", "Haryana Ready-Mix Pvt Ltd", 2_500_000m),
-        ["09AACCK5678Q1Z9"] = new Vendor("09AACCK5678Q1Z9", "Kanpur Aggregates", 800_000m),
+        ["PUN-0012"] = new Clinic("PUN-0012", "Sahyadri Family Clinic", 2_50_000m),
+        ["LKO-0047"] = new Clinic("LKO-0047", "Gomti Diagnostics", 80_000m),
     };
 
-    public Vendor Find(string gstin) => _byGstin.GetValueOrDefault(gstin) ?? new UnregisteredVendor(gstin);
+    public Clinic Find(string code) => _byCode.GetValueOrDefault(code) ?? new UnregisteredClinic(code);
 }
 ```
 
-```csharp file=Quality/CubeTestAlertService.cs
+```csharp file=Alerts/CriticalResultAlertService.cs
 using Microsoft.Extensions.Logging;
-using SiteAlerts.Common;
-using SiteAlerts.Notifications;
-using SiteAlerts.Vendors;
+using LabAlerts.Common;
+using LabAlerts.Notifications;
+using LabAlerts.Clinics;
 
-namespace SiteAlerts.Quality;
+namespace LabAlerts.Alerts;
 
-public sealed record CubeTestResult(int ProjectId, string PourId, int AgeDays, decimal StrengthMpa, decimal RequiredMpa, string SupplierGstin);
-public sealed record Engineer(string Name, string Mobile);
-public sealed record AlertOutcome(bool BelowSpec, string? NotifiedPerson, SmsStatus? Sms, string SupplierName);
+public sealed record LabResult(int WardId, string SampleId, string Test, decimal Value, decimal CriticalHigh, string ClinicCode);
+public sealed record Doctor(string Name, string Mobile);
+public sealed record AlertOutcome(bool Critical, string? NotifiedPerson, SmsStatus? Sms, string ClinicName);
 
-public interface IEngineerDirectory
+public interface IDoctorRoster
 {
     /// <summary>Absence needs a decision (escalation), so it is an Option, not a Null Object.</summary>
-    Option<Engineer> FindOnDuty(int projectId);
-    Engineer ProjectManager(int projectId);
+    Option<Doctor> FindOnDuty(int wardId);
+    Doctor HeadOfDepartment(int wardId);
 }
 
-public sealed class InMemoryEngineerDirectory : IEngineerDirectory
+public sealed class InMemoryDoctorRoster : IDoctorRoster
 {
-    public Option<Engineer> FindOnDuty(int projectId) =>
-        projectId == 12 ? Option<Engineer>.None : Option<Engineer>.Some(new Engineer("A. Khan", "+919800000001"));
+    public Option<Doctor> FindOnDuty(int wardId) =>
+        wardId == 12 ? Option<Doctor>.None : Option<Doctor>.Some(new Doctor("Dr A. Khan", "+919800000001"));
 
-    public Engineer ProjectManager(int projectId) => new("R. Iyer", "+919800000099");
+    public Doctor HeadOfDepartment(int wardId) => new("Dr R. Iyer", "+919800000099");
 }
 
-public sealed class CubeTestAlertService(
-    ISmsSender sms, IVendorDirectory vendors, IEngineerDirectory engineers, ILogger<CubeTestAlertService> logger)
+public sealed class CriticalResultAlertService(
+    ISmsSender sms, IClinicDirectory clinics, IDoctorRoster doctors, ILogger<CriticalResultAlertService> logger)
 {
-    public async Task<AlertOutcome> ReportAsync(CubeTestResult r, CancellationToken ct)
+    public async Task<AlertOutcome> ReportAsync(LabResult r, CancellationToken ct)
     {
-        var supplier = vendors.Find(r.SupplierGstin);                 // Special Case: never null
-        if (r.StrengthMpa >= r.RequiredMpa) return new AlertOutcome(false, null, null, supplier.Name);
+        var clinic = clinics.Find(r.ClinicCode);                     // Special Case: never null
+        if (r.Value < r.CriticalHigh) return new AlertOutcome(false, null, null, clinic.Name);
 
-        var contact = engineers.FindOnDuty(r.ProjectId)              // Option: absence is a decision
-            .Match(e => e, () => engineers.ProjectManager(r.ProjectId));
+        var contact = doctors.FindOnDuty(r.WardId)                   // Option: absence is a decision
+            .Match(d => d, () => doctors.HeadOfDepartment(r.WardId));
 
-        var text = $"Cube test FAILED: pour {r.PourId}, {r.AgeDays}-day strength {r.StrengthMpa} MPa " +
-                   $"(required {r.RequiredMpa}). Supplier: {supplier.Name}.";
+        var text = $"CRITICAL result: sample {r.SampleId}, {r.Test} {r.Value} " +
+                   $"(critical at {r.CriticalHigh}). Referred by: {clinic.Name}.";
         var result = await sms.SendAsync(contact.Mobile, text, ct);  // Null Object: no check needed
 
-        logger.LogWarning("Cube test below spec for pour {PourId}: {Strength}/{Required} MPa; notified {Person}; SMS {SmsStatus}",
-            r.PourId, r.StrengthMpa, r.RequiredMpa, contact.Name, result.Status);
-        return new AlertOutcome(true, contact.Name, result.Status, supplier.Name);
+        logger.LogWarning("Critical {Test} for sample {SampleId}: {Value} (limit {Limit}); notified {Person}; SMS {SmsStatus}",
+            r.Test, r.SampleId, r.Value, r.CriticalHigh, contact.Name, result.Status);
+        return new AlertOutcome(true, contact.Name, result.Status, clinic.Name);
     }
 }
 ```
 
 ```csharp file=Program.cs
 using Microsoft.Extensions.Options;
-using SiteAlerts.Notifications;
-using SiteAlerts.Quality;
-using SiteAlerts.Vendors;
+using LabAlerts.Notifications;
+using LabAlerts.Alerts;
+using LabAlerts.Clinics;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -504,21 +505,21 @@ switch (sms.Provider.ToLowerInvariant())
         throw new InvalidOperationException($"Unknown Sms:Provider '{sms.Provider}'. Use 'Http' or 'None'.");
 }
 
-builder.Services.AddSingleton<IVendorDirectory, InMemoryVendorDirectory>();
-builder.Services.AddSingleton<IEngineerDirectory, InMemoryEngineerDirectory>();
-builder.Services.AddScoped<CubeTestAlertService>();
+builder.Services.AddSingleton<IClinicDirectory, InMemoryClinicDirectory>();
+builder.Services.AddSingleton<IDoctorRoster, InMemoryDoctorRoster>();
+builder.Services.AddScoped<CriticalResultAlertService>();
 builder.Services.AddHealthChecks().AddCheck<SmsConfigurationHealthCheck>("sms-configuration");
 
 var app = builder.Build();
 
-app.MapPost("/cube-tests", async (CubeTestResult result, CubeTestAlertService alerts, CancellationToken ct) =>
+app.MapPost("/lab-results", async (LabResult result, CriticalResultAlertService alerts, CancellationToken ct) =>
     Results.Ok(await alerts.ReportAsync(result, ct)));
 
 app.MapHealthChecks("/health");
 app.Run();
 ```
 
-Look at what `CubeTestAlertService` *doesn't* contain: no `!= null`, no `?.`, no `?? "Unknown"`. Each kind of absence has been handled by the right tool. The optional collaborator is a Null Object, the unusual value is a Special Case, the decision is an Option, and misconfiguration is a startup error.
+Look at what `CriticalResultAlertService` *doesn't* contain: no `!= null`, no `?.`, no `?? "Unknown"`. Each kind of absence has been handled by the right tool. The optional collaborator is a Null Object, the unusual value is a Special Case, the decision is an Option, and misconfiguration is a startup error.
 
 ### Null Objects you already use in .NET
 
@@ -569,7 +570,7 @@ If your Null Object returns `void` or `Task` and logs nothing, nobody can ever t
 
 ## Practical playground
 
-The playground compares a null-check style with a Null Object style for a site-diary exporter that optionally writes to a log. Run it. Then add a third style using `Option<string>` for an optional "remarks" field. Finally, make `NullAuditLog` print a one-line warning the first time it's used, and decide whether that's helpful or noisy.
+The playground compares a null-check style with a Null Object style for a ward-diary exporter that optionally writes to an audit log. Run it. Then add a third style using `Option<string>` for an optional "remarks" field. Finally, make `NullAuditLog` print a one-line warning the first time it's used, and decide whether that's helpful or noisy.
 
 :::playground type=csharp title="Null checks vs Null Object"
 ```csharp file=Program.cs
@@ -616,7 +617,7 @@ public static class Program
 {
     public static void Main()
     {
-        var entries = new List<string> { "07:30 Crew of 18 on site", "11:10 Slab S2 pour started", "16:45 Pour complete, 64 m3" };
+        var entries = new List<string> { "07:30 Ward round started, 18 patients", "11:10 Bed 4 discharged", "16:45 Night-shift handover done" };
 
         Console.WriteLine("With checks, no audit:");
         new DiaryExporterWithChecks(null).Export(entries);
@@ -778,7 +779,7 @@ Register `IDiscountPolicy` in DI so that `NoDiscount.Instance` is used unless co
 :::
 
 :::exercise id=m06-null-object-ex2 difficulty=beginner kind=code title="Special Case: the unregistered vendor"
-Invoices sometimes arrive from vendors who aren't in the vendor directory yet. Today `Find` returns `null`, and every caller invents its own default. Implement the Special Case `UnregisteredVendor` and make `VendorDirectory.Find` never return null.
+A hospital pharmacy sometimes receives invoices from medicine suppliers (vendors) who aren't in the vendor directory yet. Today `Find` returns `null`, and every caller invents its own default. Implement the Special Case `UnregisteredVendor` and make `VendorDirectory.Find` never return null.
 ::requirements
 - `UnregisteredVendor(gstin)` is a `Vendor` with name `"Unregistered vendor (<gstin>)"`, credit limit 0 and `IsRegistered = false`.
 - `CanSupplyOnCredit(amount)` is false for an unregistered vendor for any positive amount.
@@ -825,7 +826,7 @@ public class VendorsTests
 {
     private static VendorDirectory Directory() => new(new List<Vendor>
     {
-        new Vendor("06AABCR1234M1Z2", "Haryana Ready-Mix Pvt Ltd", 2_500_000m),
+        new Vendor("06AABCR1234M1Z2", "Haryana Medical Supplies Pvt Ltd", 2_500_000m),
     });
 
     [Fact]
@@ -938,13 +939,13 @@ using Xunit;
 
 public class OptionTests
 {
-    private static readonly Dictionary<int, string> EngineerByProject = new() { [12] = "A. Khan" };
-    private static readonly Dictionary<string, string> MobileByEngineer = new() { ["A. Khan"] = "+919800000001" };
+    private static readonly Dictionary<int, string> DoctorByWard = new() { [12] = "Dr A. Khan" };
+    private static readonly Dictionary<string, string> MobileByDoctor = new() { ["Dr A. Khan"] = "+919800000001" };
 
-    private static Option<string> EngineerFor(int project) =>
-        EngineerByProject.TryGetValue(project, out var e) ? Option<string>.Some(e) : Option<string>.None;
-    private static Option<string> MobileOf(string engineer) =>
-        MobileByEngineer.TryGetValue(engineer, out var m) ? Option<string>.Some(m) : Option<string>.None;
+    private static Option<string> DoctorFor(int ward) =>
+        DoctorByWard.TryGetValue(ward, out var d) ? Option<string>.Some(d) : Option<string>.None;
+    private static Option<string> MobileOf(string doctor) =>
+        MobileByDoctor.TryGetValue(doctor, out var m) ? Option<string>.Some(m) : Option<string>.None;
 
     [Fact] public void Map_some() => Assert.Equal(10, Option<int>.Some(5).Map(x => x * 2).GetValueOrDefault(0));
 
@@ -957,14 +958,14 @@ public class OptionTests
         Assert.False(called);
     }
 
-    [Fact] public void Bind_chains() => Assert.Equal("+919800000001", EngineerFor(12).Bind(MobileOf).GetValueOrDefault("none"));
-    [Fact] public void Bind_short_circuits() => Assert.Equal("none", EngineerFor(99).Bind(MobileOf).GetValueOrDefault("none"));
+    [Fact] public void Bind_chains() => Assert.Equal("+919800000001", DoctorFor(12).Bind(MobileOf).GetValueOrDefault("none"));
+    [Fact] public void Bind_short_circuits() => Assert.Equal("none", DoctorFor(99).Bind(MobileOf).GetValueOrDefault("none"));
 
     [Fact]
     public void Match_calls_one_branch()
     {
-        Assert.Equal("some:A. Khan", EngineerFor(12).Match(e => "some:" + e, () => "none"));
-        Assert.Equal("none", EngineerFor(1).Match(e => "some:" + e, () => "none"));
+        Assert.Equal("some:Dr A. Khan", DoctorFor(12).Match(d => "some:" + d, () => "none"));
+        Assert.Equal("none", DoctorFor(1).Match(d => "some:" + d, () => "none"));
     }
 
     [Fact] public void Default_is_none() => Assert.False(default(Option<string>).HasValue);
@@ -999,7 +1000,7 @@ public readonly struct Option<T> where T : notnull
 }
 ```
 
-How is this different from a Null Object? A Null Object *decides for you* that absence means "do nothing". An Option *makes you decide*. Use it when the right behaviour depends on the caller, as with escalating to the project manager when no engineer is on duty.
+How is this different from a Null Object? A Null Object *decides for you* that absence means "do nothing". An Option *makes you decide*. Use it when the right behaviour depends on the caller, as with escalating to the head of department when no doctor is on duty.
 ::alternatives
 With nullable reference types enabled, `string?` plus `?.` and `??` gives much of the same safety with no extra type. Teams often prefer NRT for simple lookups and Option for chains of lookups (`Bind`), or for public APIs where "must handle None" should be unmissable.
 ::mistakes
@@ -1008,74 +1009,74 @@ With nullable reference types enabled, `string?` plus `?.` and `??` gives much o
 :::
 
 :::exercise id=m06-null-object-ex4 difficulty=intermediate kind=design title="Refactor a service full of null checks"
-You inherit this method in a progress-reporting module:
+You inherit this method in a diagnostic lab's report-publishing module:
 
 ```csharp
-public async Task SubmitAsync(DailyProgress p)
+public async Task PublishAsync(LabReport p)
 {
-    _logger?.LogInformation("Submitting {Id}", p.Id);
-    var project = await _projects.FindAsync(p.ProjectId);
-    if (project == null) { return; }
-    var contractor = await _contractors.FindAsync(p.ContractorId);
-    var contractorName = contractor?.Name ?? "Unknown contractor";
-    if (_cache != null) _cache.Remove($"progress:{p.ProjectId}");
-    if (_audit != null) await _audit.RecordAsync("progress.submitted", p.Id);
-    if (_payments != null) await _payments.ReleaseMilestoneIfDueAsync(project, p);
-    if (_sms != null) await _sms.SendAsync(project.ManagerMobile, $"Progress from {contractorName}");
+    _logger?.LogInformation("Publishing {Id}", p.Id);
+    var patient = await _patients.FindAsync(p.PatientId);
+    if (patient == null) { return; }
+    var clinic = await _clinics.FindAsync(p.ClinicCode);
+    var clinicName = clinic?.Name ?? "Unknown clinic";
+    if (_cache != null) _cache.Remove($"reports:{p.PatientId}");
+    if (_audit != null) await _audit.RecordAsync("report.published", p.Id);
+    if (_billing != null) await _billing.RaiseInvoiceAsync(patient, p);
+    if (_sms != null) await _sms.SendAsync(patient.Mobile, $"Your report from {clinicName} is ready");
 }
 ```
 
 For each of the 8 null checks or null-propagating expressions, decide: **Null Object**, **Special Case**, **Option / nullable with explicit handling**, **exception**, or **required dependency (startup error)**. Justify each choice, then sketch the refactored method and the DI registrations.
 ::acceptance
 - Each of the 8 items has a decision and a one-line reason.
-- `_payments` and `_audit` are *not* Null Objects, with an explanation of the harm a silent no-op would cause.
-- The silent `return` for a missing project is replaced with something that can't be missed.
+- `_billing` and `_audit` are *not* Null Objects, with an explanation of the harm a silent no-op would cause.
+- The silent `return` for a missing patient is replaced with something that can't be missed.
 - The refactored method has no `?.` or `!= null` checks on dependencies.
 ::hint
 Ask the "silent for a week" question for each dependency: if it did nothing for a week, who would be harmed?
 ::hint
-A progress submission for a project that doesn't exist: is that a normal business outcome, or a bug or bad input?
+A report for a patient that doesn't exist: is that a normal business outcome, or a bug or bad input?
 ::hint
-Is "Unknown contractor" the same as "a contractor we haven't onboarded yet"? Is the default used anywhere else?
+Is "Unknown clinic" the same as "a clinic we haven't onboarded yet"? Is the default used anywhere else?
 ::solution
 | # | Item | Decision | Reason |
 |---|---|---|---|
 | 1 | `_logger?.` | Required dependency; `NullLogger` in tests | DI always provides a logger. Tests pass `NullLogger<T>.Instance` |
-| 2 | `project == null → return` | **Exception** (`ProjectNotFoundException` → 404) | A submission for a non-existent project is bad input or a bug; returning silently loses the user's data |
-| 3 | `contractor?.Name ?? "Unknown contractor"` | **Special Case** (`UnregisteredContractor`) | One consistent display name and rules everywhere |
+| 2 | `patient == null → return` | **Exception** (`PatientNotFoundException` → 404) | A report for a non-existent patient is bad input or a bug; returning silently means a finished report is never delivered |
+| 3 | `clinic?.Name ?? "Unknown clinic"` | **Special Case** (`UnregisteredClinic`) | One consistent display name and rules everywhere |
 | 4 | `_cache != null` | **Null Object** (`NoCache`) is acceptable, or simply required | Skipping cache invalidation is harmless when there is no cache |
 | 5 | `_audit != null` | **Required dependency** | Audit is a compliance requirement. Silently dropping it is a serious, late-discovered failure |
-| 6 | `_payments != null` | **Required dependency** | Milestone payments are money. A no-op would delay contractor payments with no error |
+| 6 | `_billing != null` | **Required dependency** | Billing is money. A no-op would mean tests are done and reported but never invoiced, with no error |
 | 7 | `_sms != null` | **Null Object** (`NullSmsSender`) with a `Skipped` result plus health check | Optional notification channel, provided its absence in Production is visible |
-| 8 | `project.ManagerMobile` (implicitly may be null) | **Nullable + explicit handling** (`string?` → skip SMS and log) | Missing contact data needs a decision and a data-quality log, not a crash |
+| 8 | `patient.Mobile` (implicitly may be null) | **Nullable + explicit handling** (`string?` → skip SMS and log) | Missing contact data needs a decision and a data-quality log, not a crash |
 
 ```csharp
-public async Task SubmitAsync(DailyProgress p, CancellationToken ct)
+public async Task PublishAsync(LabReport p, CancellationToken ct)
 {
-    _logger.LogInformation("Submitting {Id}", p.Id);
-    var project = await _projects.GetAsync(p.ProjectId, ct)
-                  ?? throw new ProjectNotFoundException(p.ProjectId);
-    var contractor = await _contractors.FindAsync(p.ContractorId, ct);    // Special Case, never null
+    _logger.LogInformation("Publishing {Id}", p.Id);
+    var patient = await _patients.GetAsync(p.PatientId, ct)
+                  ?? throw new PatientNotFoundException(p.PatientId);
+    var clinic = _clinics.Find(p.ClinicCode);                             // Special Case, never null
 
-    _cache.Remove($"progress:{p.ProjectId}");                             // NoCache in tests/dev
-    await _audit.RecordAsync("progress.submitted", p.Id, ct);             // required
-    await _payments.ReleaseMilestoneIfDueAsync(project, p, ct);           // required
+    _cache.Remove($"reports:{p.PatientId}");                              // NoCache in tests/dev
+    await _audit.RecordAsync("report.published", p.Id, ct);               // required
+    await _billing.RaiseInvoiceAsync(patient, p, ct);                     // required
 
-    if (project.ManagerMobile is { } mobile)
-        await _sms.SendAsync(mobile, $"Progress from {contractor.Name}", ct);   // Null Object when SMS disabled
+    if (patient.Mobile is { } mobile)
+        await _sms.SendAsync(mobile, $"Your report from {clinic.Name} is ready", ct);   // Null Object when SMS disabled
     else
-        _logger.LogWarning("Project {ProjectId} has no manager mobile; SMS skipped", project.Id);
+        _logger.LogWarning("Patient {PatientId} has no mobile number; SMS skipped", patient.Id);
 }
 ```
 
-DI: `AddScoped<IAuditTrail, PostgresAuditTrail>()` and `AddScoped<IMilestonePayments, ...>()` always, failing startup if their configuration is missing. `ISmsSender` is chosen by config with the Production guard. `IProgressCache` is a real cache or `NoCache.Instance`.
+DI: `AddScoped<IAuditTrail, PostgresAuditTrail>()` and `AddScoped<ILabBilling, ...>()` always, failing startup if their configuration is missing. `ISmsSender` is chosen by config with the Production guard. `IReportCache` is a real cache or `NoCache.Instance`.
 ::mistakes
-- Making every dependency a Null Object "for consistency". Payments and audit must never silently no-op.
-- Keeping the silent `return` for a missing project.
+- Making every dependency a Null Object "for consistency". Billing and audit must never silently no-op.
+- Keeping the silent `return` for a missing patient.
 :::
 
 :::exercise id=m06-null-object-ex5 difficulty=advanced kind=code title="Make an accidental Null Object impossible to deploy"
-After an incident where a misspelt config key silently registered `NullSmsSender` in Production, and cube-test failure alerts went undelivered for days, you're asked to make SMS registration fail fast. Implement `SmsRegistration.AddSms`.
+After an incident where a misspelt config key silently registered `NullSmsSender` in Production, and critical lab-result alerts went undelivered for days, you're asked to make SMS registration fail fast. Implement `SmsRegistration.AddSms`.
 ::requirements
 - `Sms:Provider = "Gateway"` (case-insensitive) registers a singleton `GatewaySmsSender` built from `Sms:BaseUrl` and `Sms:ApiKey`. If either is missing or blank, throw `InvalidOperationException` whose message names the missing key.
 - `Sms:Provider = "None"`, or no provider at all, registers `NullSmsSender.Instance`. In **Production**, this is allowed only when `Sms:AllowDisabledInProduction` is `"true"`; otherwise throw `InvalidOperationException`.
@@ -1144,7 +1145,7 @@ using Xunit;
 public sealed class FakeEnv(string name) : IHostEnvironment
 {
     public string EnvironmentName { get; set; } = name;
-    public string ApplicationName { get; set; } = "SiteAlerts";
+    public string ApplicationName { get; set; } = "LabAlerts";
     public string ContentRootPath { get; set; } = "/";
     public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();   // a Null Object, used for real
 }
@@ -1290,7 +1291,7 @@ public class NullSmsSenderTests
 **2. Use Null Objects to simplify other tests.** `NullLogger<T>.Instance` is the most common one. Pass it wherever a logger is required but irrelevant to the test. For collaborators whose calls you *do* want to verify, write a small recording fake instead. A Null Object can't tell you whether it was called.
 
 ```csharp
-public class CubeTestAlertServiceTests
+public class CriticalResultAlertServiceTests
 {
     private sealed class RecordingSms : ISmsSender
     {
@@ -1300,16 +1301,16 @@ public class CubeTestAlertServiceTests
     }
 
     [Fact]
-    public async Task Escalates_to_manager_when_nobody_on_duty()
+    public async Task Escalates_to_head_of_department_when_nobody_on_duty()
     {
         var sms = new RecordingSms();
-        var svc = new CubeTestAlertService(sms, new InMemoryVendorDirectory(), new InMemoryEngineerDirectory(),
-                                           NullLogger<CubeTestAlertService>.Instance);
-        var outcome = await svc.ReportAsync(new CubeTestResult(12, "S2-P3", 7, 14.2m, 20m, "UNKNOWN"), CancellationToken.None);
+        var svc = new CriticalResultAlertService(sms, new InMemoryClinicDirectory(), new InMemoryDoctorRoster(),
+                                                 NullLogger<CriticalResultAlertService>.Instance);
+        var outcome = await svc.ReportAsync(new LabResult(12, "S-20261028-114", "Potassium (mmol/L)", 6.8m, 6.0m, "UNKNOWN"), CancellationToken.None);
 
-        Assert.Equal("R. Iyer", outcome.NotifiedPerson);
+        Assert.Equal("Dr R. Iyer", outcome.NotifiedPerson);
         Assert.Equal("+919800000099", Assert.Single(sms.Sent));
-        Assert.StartsWith("Unregistered vendor", outcome.SupplierName);
+        Assert.StartsWith("Unregistered clinic", outcome.ClinicName);
     }
 }
 ```
@@ -1325,7 +1326,7 @@ public class CubeTestAlertServiceTests
 - **Logging and diagnostics.** `NullLogger`, `NullLoggerFactory` and "no-op" tracer and meter providers in observability SDKs let libraries log unconditionally while the host decides whether anything is recorded.
 - **Optional integrations.** SMS, push, chat-ops and email channels per tenant: tenants without a channel get a Null Object, and the result is reported as "skipped" in the delivery log.
 - **Feature flags.** A disabled feature's service can be replaced with a no-op implementation, provided disabling it is a business decision, not an accident.
-- **UI placeholders.** A missing site photo shows a placeholder image (a Special Case), not a broken image.
+- **UI placeholders.** A missing profile photo shows a placeholder image (a Special Case), not a broken image.
 - **Collections everywhere.** APIs return `[]` instead of `null`, and .NET's own design guidelines recommend never returning null from collection-returning members.
 - **Where it went wrong.** Silent fallbacks for *required* dependencies, such as payments, audit and security checks, are a recurring theme in incident reviews. The fix is always the same: fail at startup and alert, never "succeed" quietly.
 
@@ -1409,16 +1410,16 @@ The payments API key is missing in Production. What should happen?
 - [ ] Log a warning on the first payment.
 > Payments are required. A missing key means the app is misconfigured and must not start in a broken state.
 ::q single
-`FindOnDuty(projectId)` might find no engineer. In that case the system must escalate to the project manager. Which return type fits best?
-- [ ] `Engineer`, returning a `NullEngineer` that does nothing.
-- [x] `Option<Engineer>` (or `Engineer?`), so the caller decides to escalate.
-- [ ] `Engineer`, throwing when nobody is on duty.
+`FindOnDuty(wardId)` might find no doctor. In that case the system must escalate to the head of department. Which return type fits best?
+- [ ] `Doctor`, returning a `NullDoctor` that does nothing.
+- [x] `Option<Doctor>` (or `Doctor?`), so the caller decides to escalate.
+- [ ] `Doctor`, throwing when nobody is on duty.
 - [ ] `object`.
-> Absence here triggers a business decision, so it must be visible in the type. A `NullEngineer` would silently swallow the alert.
+> Absence here triggers a business decision, so it must be visible in the type. A `NullDoctor` would silently swallow a critical alert.
 ::q single
-Invoices from vendors not yet in the directory should show a consistent name and get a ₹0 credit limit everywhere. What fits?
+Samples from clinics not yet in the directory should show a consistent name and get a ₹0 credit limit everywhere. What fits?
 - [ ] Return `null` and let each screen choose a name.
-- [x] A Special Case, `UnregisteredVendor`, returned by the directory.
+- [x] A Special Case, `UnregisteredClinic`, returned by the directory.
 - [ ] A Null Object that returns an empty name.
 - [ ] An exception.
 > A Special Case defines the unusual case's behaviour once, and every caller benefits.
@@ -1430,7 +1431,7 @@ Which make an accidental Null Object in Production visible or impossible? (Selec
 - [x] Return a "Skipped" status and log when the Null Object is used.
 > Silent defaults are the problem, not the fix. Validation, health checks and honest results make absence visible.
 ::q single
-A method returns `IReadOnlyList<Photo>`. When a site visit has no photos, what should it return?
+A method returns `IReadOnlyList<Photo>`. When a patient's visit has no scan images, what should it return?
 - [ ] `null`
 - [x] An empty list
 - [ ] A list containing one placeholder photo

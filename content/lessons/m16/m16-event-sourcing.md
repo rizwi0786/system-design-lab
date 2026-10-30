@@ -70,8 +70,8 @@ Instead of storing the current state of an entity (a row you update), you store 
 Updating rows in place destroys information:
 
 - **History**: `UPDATE wallet SET balance = 7450` loses *why* the balance changed. You can add an audit table, but then the audit and the state can disagree.
-- **Business intent**: "balance decreased by ₹150" does not say whether that was a toll charge, a fee or a correction. Events (`TollCharged`, `FeeApplied`, `ChargeReversed`) keep the intent.
-- **New questions later**: "how much toll did each vehicle pay per plaza per month last year?" — with events you build a new projection and replay; with state, the data is gone.
+- **Business intent**: "balance decreased by ₹150" does not say whether that was a payment at a shop, a fee or a correction. Events (`PaymentMade`, `FeeApplied`, `ChargeReversed`) keep the intent.
+- **New questions later**: "how much did each customer spend at each merchant per month last year?" — with events you build a new projection and replay; with state, the data is gone.
 - **Debugging**: you can replay a stream to the exact moment a bug happened.
 - **Integration**: the events are already there for other systems to consume.
 
@@ -87,16 +87,16 @@ Updating rows in place destroys information:
 | Rebuilds take time | Replaying billions of events takes hours or days |
 | Team learning curve | Modelling events well is a skill; bad event design is very expensive to fix |
 
-### Back-of-the-envelope: a prepaid toll-tag wallet
+### Back-of-the-envelope: a prepaid mobile wallet
 
 Assumptions (estimates for the exercise):
 
-- 8 million active wallets. A commercial truck crosses about 15 plazas a day; a private car about 1.5. Average: 3 toll charges per wallet per day, plus about 4 top-ups per month.
-- Events per day: 8,000,000 × (3 + 4 ÷ 30) ≈ 8,000,000 × 3.13 ≈ **25 million** → 25,000,000 ÷ 86,400 ≈ **290 events/s** average; peak (morning freight hours, ×4) ≈ **1,200 events/s**.
+- **PocketPay** is a prepaid mobile wallet used for small QR payments at shops, canteens and auto-rickshaws. 8 million active wallets. A delivery rider or small shopkeeper pays about 15 times a day (fuel, tea, supplies); a typical customer about 1.5. Average: 3 payments per wallet per day, plus about 4 top-ups per month.
+- Events per day: 8,000,000 × (3 + 4 ÷ 30) ≈ 8,000,000 × 3.13 ≈ **25 million** → 25,000,000 ÷ 86,400 ≈ **290 events/s** average; peak (lunch and evening hours, ×4) ≈ **1,200 events/s**.
 - Storage: about 400 bytes per event row including JSONB and indexes (estimate) → 25 M × 400 B = **10 GB per day**, about **3.6 TB per year**.
-- Stream length: a busy truck's wallet gets 15 × 365 ≈ **5,500 events per year**.
+- Stream length: a busy rider's wallet gets 15 × 365 ≈ **5,500 events per year**.
 
-Loading 5,500 events on every toll charge would be wasteful. With a snapshot every 200 events, a load reads one snapshot plus at most 199 events. That sizing decision comes straight from this arithmetic.
+Loading 5,500 events on every payment would be wasteful. With a snapshot every 200 events, a load reads one snapshot plus at most 199 events. That sizing decision comes straight from this arithmetic.
 
 ### The event store schema (PostgreSQL)
 
@@ -110,7 +110,7 @@ CREATE TABLE events (
   global_position bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   stream_id       text   NOT NULL REFERENCES streams(stream_id),
   stream_version  bigint NOT NULL,         -- 1, 2, 3 ... within the stream
-  event_type      text   NOT NULL,         -- e.g. 'TollCharged'
+  event_type      text   NOT NULL,         -- e.g. 'PaymentMade'
   schema_version  int    NOT NULL,         -- version of this event type's payload shape
   data            jsonb  NOT NULL,
   metadata        jsonb  NOT NULL DEFAULT '{}',  -- correlation id, causation id, user, source
@@ -133,8 +133,9 @@ Notes on each piece:
 - **`UNIQUE (stream_id, stream_version)`** is the optimistic-concurrency guard. Two commands that both loaded version 41 both try to insert version 42; one fails with a unique violation and must reload and retry.
 - **`streams.version`** lets you check the expected version cheaply: `UPDATE streams SET version = $new WHERE stream_id = $id AND version = $expected` — 0 rows updated means someone else appended first.
 - **`schema_version`** tells the reader which upcasters to run.
-- **`metadata`** carries correlation and causation ids, so you can trace "this charge came from this plaza's request".
+- **`metadata`** carries correlation and causation ids, so you can trace "this payment came from this merchant's QR request".
 - **Never `UPDATE` or `DELETE` rows in `events`** in normal operation. Grant the application role `INSERT` and `SELECT` only.
+- **Plan for size.** At about 3.6 TB a year, `events` will need partitioning (for example by month of `recorded_at`) so old partitions can move to cheaper storage. On a partitioned table every unique constraint must include the partition key, so `UNIQUE (stream_id, stream_version)` can no longer be global; the conditional `UPDATE streams ... WHERE version = $expected` then becomes the concurrency guard, which is one more reason to keep the `streams` table.
 
 ### The ordering trap: gaps in the global position
 
@@ -171,7 +172,7 @@ An alternative to snapshots for very long-lived entities is **closing the books*
 Events are immutable, but your understanding of the domain is not. Techniques, in the order you should reach for them:
 
 1. **Additive change with a tolerant reader.** Add an optional field (`channel` on `MoneyLoaded`); old events lack it and readers apply a default. No version bump needed if every reader tolerates missing fields.
-2. **New event type for new meaning.** If "charge" now means something different, introduce `TollChargedV2` or, better, a differently named event (`TollChargedWithDiscount`). Do not reuse the old name with new meaning.
+2. **New event type for new meaning.** If "charge" now means something different, introduce `PaymentMadeV2` or, better, a differently named event (`PaymentMadeWithCashback`). Do not reuse the old name with new meaning.
 3. **Upcasting.** When the shape of an event must change (amount in rupees as decimal → amount in paise as integer), keep the stored JSON as it is and transform it **on read**: an upcaster takes `(type, schema_version 1, json)` and returns `(type, 2, json)`. Chain them: 1 → 2 → 3. Your domain code only ever sees the latest shape.
 4. **Copy-and-transform the stream** (rewrite into a new store). A last resort for large structural mistakes: expensive, risky, and it breaks the "never change history" promise. Keep the old store as an archive.
 
@@ -181,15 +182,15 @@ Rules: never change the meaning of an existing event type and version; never del
 
 Laws like the EU GDPR and India's Digital Personal Data Protection Act, 2023 give people rights over their personal data, including erasure in many circumstances. Financial and tax laws may *also* require you to keep transaction records for years. Your legal team decides which applies to which field; your design must make both possible. Techniques:
 
-- **Keep personal data out of events.** Store a reference (`ownerId`) in the event, and the name, phone and vehicle number in a normal, deletable table. Simple and effective — the first choice.
-- **Crypto-shredding.** When personal data must be in the event, encrypt those fields with a **key per data subject**, stored in a key store (a vault or a keys table). To "forget" a person, delete their key. The events stay immutable, but the personal fields become unreadable everywhere — including backups and copies of the event log. Non-personal fields (amounts, plaza codes, timestamps) remain usable for audit and accounting.
+- **Keep personal data out of events.** Store a reference (`ownerId`) in the event, and the name, mobile number and KYC details in a normal, deletable table. Simple and effective — the first choice.
+- **Crypto-shredding.** When personal data must be in the event, encrypt those fields with a **key per data subject**, stored in a key store (a vault or a keys table). To "forget" a person, delete their key. The events stay immutable, but the personal fields become unreadable everywhere — including backups and copies of the event log. Non-personal fields (amounts, merchant codes, timestamps) remain usable for audit and accounting.
 - **Rewriting streams.** Physically removing events or fields. Possible with copy-and-transform, but slow and error-prone. Avoid.
 
 Do not forget the copies: **read models, search indexes, caches, logs and analytics exports** contain personal data too. After shredding, rebuild or purge affected read models, and keep personal data out of logs in the first place.
 
 ### Projections and side effects: rebuild safely
 
-A projection (statement view, balance table) can be rebuilt by replaying from position 0 into a new table, blue/green, exactly as in [CQRS](#/lesson/m16-cqrs). But some event handlers do things in the world: send an SMS "₹150 charged at plaza 0421", call a bank, raise a GST invoice. If you replay those, customers get 20,000 SMS.
+A projection (statement view, balance table) can be rebuilt by replaying from position 0 into a new table, blue/green, exactly as in [CQRS](#/lesson/m16-cqrs). But some event handlers do things in the world: send an SMS "₹150 paid to merchant 0421", call a bank, raise a GST invoice. If you replay those, customers get 20,000 SMS.
 
 Separate the two kinds of handlers:
 
@@ -216,7 +217,7 @@ Separate the two kinds of handlers:
 - **Other systems need your changes**: **change data capture** from the database log ([see the lesson](#/lesson/m16-cdc)) or a transactional outbox, with state tables as the source of truth.
 - **CRUD-shaped domain**: master data, settings, catalogue pages. Event sourcing adds cost and no insight.
 
-A good rule: event-source only the aggregates where the history itself is valuable to the business (wallets, ledgers, claims, contract variations), and use plain state everywhere else — even inside the same service.
+A good rule: event-source only the aggregates where the history itself is valuable to the business (wallets, ledgers, insurance claims, order lifecycles), and use plain state everywhere else — even inside the same service.
 
 ## Visual explanation
 
@@ -238,15 +239,15 @@ flowchart LR
 
 The command handler loads a wallet from its latest snapshot plus the events after it, makes a decision, and appends new events with the expected version (optimistic concurrency). Personal fields are encrypted with the owner's key before they are written; deleting that key makes them unreadable. Projection workers read all events in global-position order to build read models, and can be rebuilt from scratch. Reactors also read events, but cause side effects, so they track their own checkpoint from "now" and are never replayed. Queries read only the read models.
 
-### Sequence: a toll charge with a concurrency conflict
+### Sequence: a QR payment with a concurrency conflict
 
 ```mermaid
 sequenceDiagram
-    participant P1 as Plaza 0421 request
+    participant P1 as Shop QR payment (merchant 0421)
     participant P2 as Mobile top-up request
     participant H as Command handler
     participant S as Event store
-    P1->>H: charge 150 rupees
+    P1->>H: pay 150 rupees
     P2->>H: load 500 rupees
     H->>S: load wallet W7 (snapshot v200 plus events 201 to 214)
     S-->>H: balance 220, version 214
@@ -254,27 +255,27 @@ sequenceDiagram
     S-->>H: balance 220, version 214
     H->>S: append MoneyLoaded expecting version 214
     S-->>H: ok, now version 215
-    H->>S: append TollCharged expecting version 214
+    H->>S: append PaymentMade expecting version 214
     S-->>H: conflict, actual version 215
     H->>S: reload W7 (events after 214)
     S-->>H: balance 720, version 215
-    H->>S: append TollCharged expecting version 215
+    H->>S: append PaymentMade expecting version 215
     S-->>H: ok, now version 216
 ```
 
-Two requests arrive for the same wallet at nearly the same moment. Both load version 214. The top-up appends first and moves the stream to 215. The toll charge's append expected 214, so the store rejects it. The handler reloads, re-runs the decision against the new state (balance 720 is enough), and appends at 215. No lock was held while deciding, yet no update was lost.
+Two requests arrive for the same wallet at nearly the same moment. Both load version 214. The top-up appends first and moves the stream to 215. The payment's append expected 214, so the store rejects it. The handler reloads, re-runs the decision against the new state (balance 720 is enough), and appends at 215. No lock was held while deciding, yet no update was lost.
 
 ## Step-by-step example
 
-Scenario: the toll-tag wallet from the arithmetic above.
+Scenario: the PocketPay wallet from the arithmetic above.
 
 ### Step 1 — name the events with the business
 
-With the operations team, list what happens to a wallet: `WalletOpened`, `MoneyLoaded`, `TollCharged`, `ChargeReversed` (plaza charged twice, or wrong vehicle class), `WalletBlocked` (tag reported stolen), `WalletClosed`. Notice what is **not** there: `WalletUpdated`, `BalanceChanged`. Those describe database writes, not business facts.
+With the operations team, list what happens to a wallet: `WalletOpened`, `MoneyLoaded`, `PaymentMade`, `ChargeReversed` (merchant charged twice, or wrong amount), `WalletBlocked` (phone reported lost or stolen), `WalletClosed`. Notice what is **not** there: `WalletUpdated`, `BalanceChanged`. Those describe database writes, not business facts.
 
 ### Step 2 — decide which fields are personal
 
-`WalletOpened` includes owner name and vehicle registration number — personal data. The owner id (an internal identifier) is needed to link events. Decision: amounts, plaza codes and timestamps in clear; owner name and vehicle number encrypted with the owner's key.
+`WalletOpened` includes owner name and mobile number — personal data. The owner id (an internal identifier) is needed to link events. Decision: amounts, merchant codes and timestamps in clear; owner name and mobile number encrypted with the owner's key.
 
 ### Step 3 — choose the ordering strategy
 
@@ -282,7 +283,7 @@ With the operations team, list what happens to a wallet: `WalletOpened`, `MoneyL
 
 ### Step 4 — snapshot rule
 
-Typical car wallet: about 550 events a year; truck: 5,500. Snapshot every 200 events. A load reads at most 1 snapshot + 199 events.
+Typical customer wallet: about 550 events a year; a busy rider's: 5,500. Snapshot every 200 events. A load reads at most 1 snapshot + 199 events.
 
 ### Step 5 — versioning in practice
 
@@ -290,14 +291,14 @@ Version 1 of `MoneyLoaded` stored `amount` in rupees as a decimal and `upiRef`. 
 
 ### Step 6 — read models and reactors
 
-Projections: `wallet_balance` (for the app), `statement_lines` (monthly statement), `plaza_daily_totals` (settlement with plaza operators). Reactor: "send SMS on TollCharged", starting from the current position on first deploy.
+Projections: `wallet_balance` (for the app), `statement_lines` (monthly statement), `merchant_daily_totals` (daily settlement with merchants). Reactor: "send SMS on PaymentMade", starting from the current position on first deploy.
 
 ## Production-style C# implementation
 
 The code below is a compact but complete slice: an event store interface with optimistic concurrency (in-memory implementation; the SQL is shown alongside), the wallet aggregate, a serializer with an upcaster chain, crypto-shredding of personal fields with AES-GCM, a snapshotting repository, a statement projection that can be rebuilt, and the endpoints.
 
 ```text
-TollWallet.Api/
+PocketPay.Api/
   Program.cs
   EventStore/EventStore.cs
   Wallets/WalletEvents.cs
@@ -309,7 +310,7 @@ TollWallet.Api/
 ```
 
 ```csharp file=EventStore/EventStore.cs
-namespace TollWallet.EventStore;
+namespace PocketPay.EventStore;
 
 public sealed record EventData(string Type, int SchemaVersion, string Json, string? SubjectId);
 public sealed record RecordedEvent(string StreamId, long StreamVersion, long GlobalPosition, string Type,
@@ -404,7 +405,7 @@ public sealed class InMemoryEventStore(TimeProvider clock) : IEventStore, ISnaps
 ```
 
 ```csharp file=Wallets/WalletEvents.cs
-namespace TollWallet.Wallets;
+namespace PocketPay.Wallets;
 
 /// <summary>Business facts, past tense. These are the *current* shapes; older shapes are upcast on read.</summary>
 public interface IWalletEvent
@@ -412,15 +413,15 @@ public interface IWalletEvent
     string WalletId { get; }
 }
 
-/// <summary>OwnerName and VehicleNumber are personal data: they are encrypted with the owner's key before storage.</summary>
-public sealed record WalletOpened(string WalletId, string OwnerId, string OwnerName, string VehicleNumber) : IWalletEvent;
+/// <summary>OwnerName and PhoneNumber are personal data: they are encrypted with the owner's key before storage.</summary>
+public sealed record WalletOpened(string WalletId, string OwnerId, string OwnerName, string PhoneNumber) : IWalletEvent;
 public sealed record MoneyLoaded(string WalletId, long AmountPaise, string Channel, string Reference) : IWalletEvent;
-public sealed record TollCharged(string WalletId, string ChargeId, string PlazaCode, long AmountPaise) : IWalletEvent;
+public sealed record PaymentMade(string WalletId, string ChargeId, string MerchantCode, long AmountPaise) : IWalletEvent;
 public sealed record ChargeReversed(string WalletId, string ChargeId, long AmountPaise, string Reason) : IWalletEvent;
 ```
 
 ```csharp file=Wallets/Wallet.cs
-namespace TollWallet.Wallets;
+namespace PocketPay.Wallets;
 
 public sealed class InsufficientBalanceException(long balancePaise, long requiredPaise)
     : Exception($"Balance {balancePaise} paise is less than {requiredPaise} paise.");
@@ -447,12 +448,12 @@ public sealed class Wallet
 
     private Wallet() { }
 
-    public static Wallet Open(string walletId, string ownerId, string ownerName, string vehicleNumber)
+    public static Wallet Open(string walletId, string ownerId, string ownerName, string phoneNumber)
     {
         if (string.IsNullOrWhiteSpace(walletId) || string.IsNullOrWhiteSpace(ownerId))
             throw new ArgumentException("Wallet id and owner id are required.");
         var w = new Wallet();
-        w.Raise(new WalletOpened(walletId, ownerId, ownerName, vehicleNumber));
+        w.Raise(new WalletOpened(walletId, ownerId, ownerName, phoneNumber));
         return w;
     }
 
@@ -480,13 +481,13 @@ public sealed class Wallet
         Raise(new MoneyLoaded(Id, amountPaise, channel, reference));
     }
 
-    /// <summary>Idempotent by charge id: a plaza retrying the same charge does not charge twice.</summary>
-    public void Charge(string chargeId, string plazaCode, long amountPaise)
+    /// <summary>Idempotent by charge id: a terminal retrying the same payment does not charge twice.</summary>
+    public void Charge(string chargeId, string merchantCode, long amountPaise)
     {
         if (_charges.ContainsKey(chargeId)) return;
         if (amountPaise <= 0) throw new ArgumentOutOfRangeException(nameof(amountPaise));
         if (BalancePaise < amountPaise) throw new InsufficientBalanceException(BalancePaise, amountPaise);
-        Raise(new TollCharged(Id, chargeId, plazaCode, amountPaise));
+        Raise(new PaymentMade(Id, chargeId, merchantCode, amountPaise));
     }
 
     public void Reverse(string chargeId, string reason)
@@ -519,7 +520,7 @@ public sealed class Wallet
         {
             case WalletOpened o: Id = o.WalletId; OwnerId = o.OwnerId; break;
             case MoneyLoaded m: BalancePaise += m.AmountPaise; break;
-            case TollCharged c: BalancePaise -= c.AmountPaise; _charges[c.ChargeId] = c.AmountPaise; break;
+            case PaymentMade c: BalancePaise -= c.AmountPaise; _charges[c.ChargeId] = c.AmountPaise; break;
             case ChargeReversed r: BalancePaise += r.AmountPaise; _reversed.Add(r.ChargeId); break;
             default: throw new InvalidOperationException($"Unknown event {e.GetType().Name}");
         }
@@ -530,10 +531,10 @@ public sealed class Wallet
 ```csharp file=Serialization/EventSerializer.cs
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using TollWallet.EventStore;
-using TollWallet.Wallets;
+using PocketPay.EventStore;
+using PocketPay.Wallets;
 
-namespace TollWallet.Serialization;
+namespace PocketPay.Serialization;
 
 /// <summary>
 /// Maps event types to names and current schema versions, and upcasts old payloads on read.
@@ -586,7 +587,7 @@ public sealed class EventSerializer
     public static EventSerializer CreateDefault() => new EventSerializer()
         .Register<WalletOpened>("WalletOpened", 1)
         .Register<MoneyLoaded>("MoneyLoaded", 2)
-        .Register<TollCharged>("TollCharged", 1)
+        .Register<PaymentMade>("PaymentMade", 1)
         .Register<ChargeReversed>("ChargeReversed", 1)
         // v1: { walletId, amount: 500.50 (rupees, decimal), upiRef } → v2: { walletId, amountPaise, channel, reference }
         .Upcaster("MoneyLoaded", 1, v1 => new JsonObject
@@ -606,7 +607,7 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace TollWallet.Privacy;
+namespace PocketPay.Privacy;
 
 public interface ISubjectKeyStore
 {
@@ -667,11 +668,11 @@ public sealed class PiiProtector(ISubjectKeyStore keys)
 
 ```csharp file=Wallets/WalletRepository.cs
 using System.Text.Json;
-using TollWallet.EventStore;
-using TollWallet.Privacy;
-using TollWallet.Serialization;
+using PocketPay.EventStore;
+using PocketPay.Privacy;
+using PocketPay.Serialization;
 
-namespace TollWallet.Wallets;
+namespace PocketPay.Wallets;
 
 public sealed class WalletRepository(IEventStore events, ISnapshotStore snapshots, EventSerializer serializer, PiiProtector pii)
 {
@@ -697,11 +698,11 @@ public sealed class WalletRepository(IEventStore events, ISnapshotStore snapshot
     }
 
     /// <summary>Loads personal details for display; returns "[erased]" values after crypto-shredding.</summary>
-    public async Task<(string OwnerName, string VehicleNumber)?> LoadOwnerDetailsAsync(string walletId, CancellationToken ct)
+    public async Task<(string OwnerName, string PhoneNumber)?> LoadOwnerDetailsAsync(string walletId, CancellationToken ct)
     {
         var first = (await events.ReadStreamAsync(StreamId(walletId), 0, ct)).FirstOrDefault();
         if (first is null || serializer.Deserialize(first) is not WalletOpened opened) return null;
-        return (pii.Reveal(opened.OwnerId, opened.OwnerName), pii.Reveal(opened.OwnerId, opened.VehicleNumber));
+        return (pii.Reveal(opened.OwnerId, opened.OwnerName), pii.Reveal(opened.OwnerId, opened.PhoneNumber));
     }
 
     public async Task SaveAsync(Wallet wallet, CancellationToken ct)
@@ -718,7 +719,7 @@ public sealed class WalletRepository(IEventStore events, ISnapshotStore snapshot
     }
 
     private IWalletEvent ProtectPersonalData(IWalletEvent e) => e is WalletOpened o
-        ? o with { OwnerName = pii.Protect(o.OwnerId, o.OwnerName), VehicleNumber = pii.Protect(o.OwnerId, o.VehicleNumber) }
+        ? o with { OwnerName = pii.Protect(o.OwnerId, o.OwnerName), PhoneNumber = pii.Protect(o.OwnerId, o.PhoneNumber) }
         : e;
 }
 ```
@@ -726,11 +727,11 @@ public sealed class WalletRepository(IEventStore events, ISnapshotStore snapshot
 The statement projection uses no personal data at all — a deliberate choice that keeps it out of erasure work. It can be rebuilt from position 0 at any time.
 
 ```csharp file=Projections/StatementProjection.cs
-using TollWallet.EventStore;
-using TollWallet.Serialization;
-using TollWallet.Wallets;
+using PocketPay.EventStore;
+using PocketPay.Serialization;
+using PocketPay.Wallets;
 
-namespace TollWallet.Projections;
+namespace PocketPay.Projections;
 
 public sealed record StatementLine(long Position, DateTimeOffset At, string Description, long AmountPaise, long BalanceAfterPaise);
 
@@ -752,7 +753,7 @@ public sealed class StatementProjection(EventSerializer serializer)
                 var (description, delta) = serializer.Deserialize(r) switch
                 {
                     MoneyLoaded m => ($"Top-up via {m.Channel}", m.AmountPaise),
-                    TollCharged c => ($"Toll at plaza {c.PlazaCode}", -c.AmountPaise),
+                    PaymentMade c => ($"Paid to merchant {c.MerchantCode}", -c.AmountPaise),
                     ChargeReversed v => ($"Reversal: {v.Reason}", v.AmountPaise),
                     _ => ((string?)null, 0L),
                 };
@@ -789,11 +790,11 @@ public sealed class StatementProjection(EventSerializer serializer)
 ```
 
 ```csharp file=Program.cs
-using TollWallet.EventStore;
-using TollWallet.Privacy;
-using TollWallet.Projections;
-using TollWallet.Serialization;
-using TollWallet.Wallets;
+using PocketPay.EventStore;
+using PocketPay.Privacy;
+using PocketPay.Projections;
+using PocketPay.Serialization;
+using PocketPay.Wallets;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -832,7 +833,7 @@ static async Task<IResult> Decide(WalletRepository repo, string walletId, Action
 
 app.MapPost("/wallets", async (OpenWallet body, WalletRepository repo, CancellationToken ct) =>
 {
-    var wallet = Wallet.Open(body.WalletId, body.OwnerId, body.OwnerName, body.VehicleNumber);
+    var wallet = Wallet.Open(body.WalletId, body.OwnerId, body.OwnerName, body.PhoneNumber);
     try { await repo.SaveAsync(wallet, ct); }
     catch (WrongExpectedVersionException) { return Results.Conflict(new { error = "Wallet already exists." }); }
     return Results.Created($"/wallets/{wallet.Id}", new { wallet.Id });
@@ -841,15 +842,15 @@ app.MapPost("/wallets", async (OpenWallet body, WalletRepository repo, Cancellat
 app.MapPost("/wallets/{id}/loads", (string id, LoadMoney b, WalletRepository repo, CancellationToken ct) =>
     Decide(repo, id, w => w.Load(b.AmountPaise, b.Channel, b.Reference), ct));
 
-app.MapPost("/wallets/{id}/charges", (string id, ChargeToll b, WalletRepository repo, CancellationToken ct) =>
-    Decide(repo, id, w => w.Charge(b.ChargeId, b.PlazaCode, b.AmountPaise), ct));
+app.MapPost("/wallets/{id}/charges", (string id, PayMerchant b, WalletRepository repo, CancellationToken ct) =>
+    Decide(repo, id, w => w.Charge(b.ChargeId, b.MerchantCode, b.AmountPaise), ct));
 
 app.MapPost("/wallets/{id}/reversals", (string id, ReverseCharge b, WalletRepository repo, CancellationToken ct) =>
     Decide(repo, id, w => w.Reverse(b.ChargeId, b.Reason), ct));
 
 app.MapGet("/wallets/{id}/owner", async (string id, WalletRepository repo, CancellationToken ct) =>
     await repo.LoadOwnerDetailsAsync(id, ct) is { } d
-        ? Results.Ok(new { ownerName = d.OwnerName, vehicleNumber = d.VehicleNumber })
+        ? Results.Ok(new { ownerName = d.OwnerName, phoneNumber = d.PhoneNumber })
         : Results.NotFound());
 
 app.MapGet("/wallets/{id}/statement", async (string id, StatementProjection projection, IEventStore store, CancellationToken ct) =>
@@ -858,22 +859,22 @@ app.MapGet("/wallets/{id}/statement", async (string id, StatementProjection proj
     return Results.Ok(projection.For(id));
 });
 
-// Right to erasure for personal fields: delete the subject's key. Amounts and plaza codes remain for audit.
+// Right to erasure for personal fields: delete the subject's key. Amounts and merchant codes remain for audit.
 app.MapDelete("/subjects/{ownerId}/personal-data", (string ownerId, PiiProtector pii) =>
     pii.Forget(ownerId) ? Results.NoContent() : Results.NotFound());
 
 app.Run();
 
-public sealed record OpenWallet(string WalletId, string OwnerId, string OwnerName, string VehicleNumber);
+public sealed record OpenWallet(string WalletId, string OwnerId, string OwnerName, string PhoneNumber);
 public sealed record LoadMoney(long AmountPaise, string Channel, string Reference);
-public sealed record ChargeToll(string ChargeId, string PlazaCode, long AmountPaise);
+public sealed record PayMerchant(string ChargeId, string MerchantCode, long AmountPaise);
 public sealed record ReverseCharge(string ChargeId, string Reason);
 ```
 
 **Design notes**
 
 - All state changes go through `When`, used both for new events (`Raise`) and for replay. There is no second code path that could disagree.
-- `Charge` is idempotent by `ChargeId`, so a plaza that retries after a timeout does not double-charge. That rule lives in the aggregate, where the history is.
+- `Charge` is idempotent by `ChargeId`, so a merchant's QR terminal that retries after a timeout does not double-charge. That rule lives in the aggregate, where the history is.
 - Snapshots are taken when the version crosses a multiple of 200, and an old-format snapshot is ignored rather than migrated.
 - Erasure deletes a key; it does not touch events. The `/owner` endpoint then shows `[erased]`, while statements (which never contained personal data) keep working.
 
@@ -883,14 +884,14 @@ public sealed record ReverseCharge(string ChargeId, string Reason);
 
 ```csharp
 // "Event sourcing" that is really a change log of rows
-record WalletUpdated(string WalletId, decimal Balance, string OwnerName, string OwnerPhone, string Vehicle);
+record WalletUpdated(string WalletId, decimal Balance, string OwnerName, string OwnerPhone, string KycNumber);
 
-events.Add(new WalletUpdated(id, wallet.Balance, wallet.OwnerName, wallet.Phone, wallet.Vehicle));
+events.Add(new WalletUpdated(id, wallet.Balance, wallet.OwnerName, wallet.Phone, wallet.KycNumber));
 ```
 
 Problems:
 
-- No intent: was the drop in balance a toll, a fee or a fraud? The history cannot answer.
+- No intent: was the drop in balance a payment, a fee or a fraud? The history cannot answer.
 - Personal data repeated in every event, in clear text, forever. One erasure request means rewriting thousands of events.
 - `decimal Balance` in rupees with no schema version. When you move to paise, there is no way to tell old from new.
 - Concurrent updates overwrite each other's balance (no expected version).
@@ -898,7 +899,7 @@ Problems:
 **Good:** past-tense business events with amounts as integers in paise; personal data only in `WalletOpened`, encrypted per subject; a `schema_version` on every stored event with upcasters; appends guarded by expected version.
 
 :::callout type=tradeoff title="Event-source the core, not everything"
-Within one service you can event-source the wallet (where history is the product) and keep plaza master data, user preferences and notification settings as ordinary tables. Mixing is normal and healthy.
+Within one service you can event-source the wallet (where history is the product) and keep merchant master data, user preferences and notification settings as ordinary tables. Mixing is normal and healthy.
 :::
 
 :::callout type=warning title="Erasure is a legal question first"
@@ -907,9 +908,9 @@ Whether a specific field must be erased, retained, or retained but restricted de
 
 ## Practical playground
 
-The database below is a minimal event store for the toll wallet, with a few streams already written. Try:
+The database below is a minimal event store for the PocketPay wallet, with a few streams already written. Try:
 
-1. Rebuild a wallet's current balance by summing its events (`MoneyLoaded` +, `TollCharged` −, `ChargeReversed` +).
+1. Rebuild a wallet's current balance by summing its events (`MoneyLoaded` +, `PaymentMade` −, `ChargeReversed` +).
 2. Ask a time-travel question: what was every wallet's balance at the end of 31 March 2026?
 3. Simulate a concurrency conflict: insert a new event for `wallet-W1` with `stream_version` 4 (which already exists) and watch the unique constraint reject it.
 
@@ -928,15 +929,15 @@ CREATE TABLE events (
 INSERT INTO events (stream_id, stream_version, event_type, schema_version, data, recorded_at) VALUES
   ('wallet-W1', 1, 'WalletOpened',   1, '{"walletId":"W1","ownerId":"U1"}', '2026-03-01 09:00+05:30'),
   ('wallet-W1', 2, 'MoneyLoaded',    2, '{"walletId":"W1","amountPaise":100000,"channel":"UPI"}', '2026-03-01 09:05+05:30'),
-  ('wallet-W1', 3, 'TollCharged',    1, '{"walletId":"W1","chargeId":"C1","plazaCode":"0421","amountPaise":15000}', '2026-03-20 07:10+05:30'),
-  ('wallet-W1', 4, 'TollCharged',    1, '{"walletId":"W1","chargeId":"C2","plazaCode":"0433","amountPaise":22500}', '2026-04-02 18:40+05:30'),
+  ('wallet-W1', 3, 'PaymentMade',    1, '{"walletId":"W1","chargeId":"C1","merchantCode":"0421","amountPaise":15000}', '2026-03-20 07:10+05:30'),
+  ('wallet-W1', 4, 'PaymentMade',    1, '{"walletId":"W1","chargeId":"C2","merchantCode":"0433","amountPaise":22500}', '2026-04-02 18:40+05:30'),
   ('wallet-W2', 1, 'WalletOpened',   1, '{"walletId":"W2","ownerId":"U2"}', '2026-03-10 12:00+05:30'),
   ('wallet-W2', 2, 'MoneyLoaded',    2, '{"walletId":"W2","amountPaise":50000,"channel":"NETBANKING"}', '2026-03-10 12:01+05:30'),
-  ('wallet-W2', 3, 'TollCharged',    1, '{"walletId":"W2","chargeId":"C3","plazaCode":"0421","amountPaise":15000}', '2026-03-31 23:30+05:30'),
-  ('wallet-W2', 4, 'ChargeReversed', 1, '{"walletId":"W2","chargeId":"C3","amountPaise":15000,"reason":"double read"}', '2026-04-01 10:00+05:30');
+  ('wallet-W2', 3, 'PaymentMade',    1, '{"walletId":"W2","chargeId":"C3","merchantCode":"0421","amountPaise":15000}', '2026-03-31 23:30+05:30'),
+  ('wallet-W2', 4, 'ChargeReversed', 1, '{"walletId":"W2","chargeId":"C3","amountPaise":15000,"reason":"duplicate QR scan"}', '2026-04-01 10:00+05:30');
 -- Current balance per wallet
 SELECT stream_id,
-       SUM(CASE event_type WHEN 'TollCharged' THEN -(data->>'amountPaise')::bigint
+       SUM(CASE event_type WHEN 'PaymentMade' THEN -(data->>'amountPaise')::bigint
                            WHEN 'MoneyLoaded' THEN (data->>'amountPaise')::bigint
                            WHEN 'ChargeReversed' THEN (data->>'amountPaise')::bigint
                            ELSE 0 END) AS balance_paise
@@ -946,7 +947,7 @@ FROM events GROUP BY stream_id ORDER BY stream_id;
 
 ## Exercises
 
-:::exercise id=m16-event-sourcing-ex1 difficulty=beginner kind=code title="Decide and evolve: a toll account"
+:::exercise id=m16-event-sourcing-ex1 difficulty=beginner kind=code title="Decide and evolve: a prepaid wallet account"
 Implement a small event-sourced account in the "decide, then evolve" style: commands return new events; only `Apply` changes state.
 ::requirements
 - `FromHistory(events)` builds an account by applying events in order; `Version` is the number of events applied.
@@ -974,7 +975,7 @@ public IReadOnlyList<AccountEvent> Charge(string id, long amount)
 }
 ```
 ::starter
-```csharp file=TollAccount.cs
+```csharp file=PrepaidAccount.cs
 using System;
 using System.Collections.Generic;
 
@@ -985,28 +986,28 @@ public sealed record Reversed(string ChargeId) : AccountEvent;
 
 public sealed class InsufficientBalanceException : Exception { }
 
-public sealed class TollAccount
+public sealed class PrepaidAccount
 {
     public long Balance { get; private set; }
     public long Version { get; private set; }
 
-    public static TollAccount FromHistory(IEnumerable<AccountEvent> events) => throw new NotImplementedException();
+    public static PrepaidAccount FromHistory(IEnumerable<AccountEvent> events) => throw new NotImplementedException();
     public void Apply(AccountEvent e) => throw new NotImplementedException();
     public IReadOnlyList<AccountEvent> Charge(string chargeId, long amountPaise) => throw new NotImplementedException();
     public IReadOnlyList<AccountEvent> Reverse(string chargeId) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=TollAccountTests.cs
+```csharp file=PrepaidAccountTests.cs
 using System;
 using Xunit;
 
-public class TollAccountTests
+public class PrepaidAccountTests
 {
     [Fact]
     public void Rehydrates_balance_and_version()
     {
-        var a = TollAccount.FromHistory(new AccountEvent[] { new Loaded(1000), new Charged("C1", 150) });
+        var a = PrepaidAccount.FromHistory(new AccountEvent[] { new Loaded(1000), new Charged("C1", 150) });
         Assert.Equal(850, a.Balance);
         Assert.Equal(2, a.Version);
     }
@@ -1014,7 +1015,7 @@ public class TollAccountTests
     [Fact]
     public void Charge_returns_event_without_changing_state()
     {
-        var a = TollAccount.FromHistory(new AccountEvent[] { new Loaded(1000) });
+        var a = PrepaidAccount.FromHistory(new AccountEvent[] { new Loaded(1000) });
         var events = a.Charge("C1", 150);
         Assert.Equal(new Charged("C1", 150), Assert.Single(events));
         Assert.Equal(1000, a.Balance);
@@ -1025,19 +1026,19 @@ public class TollAccountTests
     [Fact]
     public void Duplicate_charge_is_idempotent()
     {
-        var a = TollAccount.FromHistory(new AccountEvent[] { new Loaded(1000), new Charged("C1", 150) });
+        var a = PrepaidAccount.FromHistory(new AccountEvent[] { new Loaded(1000), new Charged("C1", 150) });
         Assert.Empty(a.Charge("C1", 150));
     }
 
     [Fact]
     public void Insufficient_balance_throws() =>
         Assert.Throws<InsufficientBalanceException>(() =>
-            TollAccount.FromHistory(new AccountEvent[] { new Loaded(100) }).Charge("C1", 150));
+            PrepaidAccount.FromHistory(new AccountEvent[] { new Loaded(100) }).Charge("C1", 150));
 
     [Fact]
     public void Reverse_restores_amount_once()
     {
-        var a = TollAccount.FromHistory(new AccountEvent[] { new Loaded(1000), new Charged("C1", 150) });
+        var a = PrepaidAccount.FromHistory(new AccountEvent[] { new Loaded(1000), new Charged("C1", 150) });
         var r = a.Reverse("C1");
         a.Apply(Assert.Single(r));
         Assert.Equal(1000, a.Balance);
@@ -1046,11 +1047,11 @@ public class TollAccountTests
 
     [Fact]
     public void Reverse_unknown_charge_throws() =>
-        Assert.Throws<InvalidOperationException>(() => TollAccount.FromHistory(new AccountEvent[] { new Loaded(10) }).Reverse("X"));
+        Assert.Throws<InvalidOperationException>(() => PrepaidAccount.FromHistory(new AccountEvent[] { new Loaded(10) }).Reverse("X"));
 }
 ```
 ::solution
-```csharp file=TollAccount.cs
+```csharp file=PrepaidAccount.cs
 using System;
 using System.Collections.Generic;
 
@@ -1061,7 +1062,7 @@ public sealed record Reversed(string ChargeId) : AccountEvent;
 
 public sealed class InsufficientBalanceException : Exception { }
 
-public sealed class TollAccount
+public sealed class PrepaidAccount
 {
     private readonly Dictionary<string, long> _charges = new(StringComparer.Ordinal);
     private readonly HashSet<string> _reversed = new(StringComparer.Ordinal);
@@ -1069,9 +1070,9 @@ public sealed class TollAccount
     public long Balance { get; private set; }
     public long Version { get; private set; }
 
-    public static TollAccount FromHistory(IEnumerable<AccountEvent> events)
+    public static PrepaidAccount FromHistory(IEnumerable<AccountEvent> events)
     {
-        var account = new TollAccount();
+        var account = new PrepaidAccount();
         foreach (var e in events) account.Apply(e);
         return account;
     }
@@ -1109,41 +1110,41 @@ The "decide returns events, apply changes state" split makes the aggregate easy 
 Notice that `Reversed` carries only the charge id and looks the amount up from state. That works, but the lesson's production `ChargeReversed` also carries the amount — so projections can compute balances from the event alone without rebuilding aggregate state. Prefer events that are self-describing for consumers.
 ::mistakes
 - Changing `Balance` inside `Charge` *and* inside `Apply`, so replayed and live state differ.
-- Throwing on a duplicate charge id instead of returning no events; a plaza retry then shows the driver an error.
+- Throwing on a duplicate charge id instead of returning no events; a terminal retry then shows the customer an error.
 - Using `decimal` rupees for money in events and then rounding differently in projections.
 :::
 
 :::exercise id=m16-event-sourcing-ex2 difficulty=beginner kind=written title="Good events, bad events"
-Review these proposed events for an infrastructure contract system and rewrite the bad ones. For each, say what is wrong.
+PocketPay's merchant team proposes these events for its merchant onboarding and payout system. Review them and rewrite the bad ones. For each, say what is wrong.
 
-1. `ContractUpdated { contractId, status, value, contractorName, contractorPan }`
-2. `VariationOrderApproved { contractId, variationId, amountPaise, approvedBy, approvedAt }`
-3. `SetMilestoneDone { milestoneId }`
-4. `MeasurementRecorded { contractId, boqItem, quantity, unit, measuredBy }`
-5. `ContractRowChanged { table, column, oldValue, newValue }`
-6. `PaymentReleased { contractId, raBillNo, amount: 1250000.50 }`
+1. `MerchantUpdated { merchantId, status, commissionRate, ownerName, ownerPan }`
+2. `SettlementApproved { merchantId, settlementId, amountPaise, approvedBy, approvedAt }`
+3. `SetKycDone { merchantId }`
+4. `CashbackGranted { walletId, chargeId, campaignId, ratePercent: 2.5, cashbackPaise }`
+5. `MerchantRowChanged { table, column, oldValue, newValue }`
+6. `PayoutReleased { merchantId, settlementNo, amount: 1250000.50 }`
 ::acceptance
 - Each event is judged on: past-tense business fact, intent, personal data, money representation.
 - Rewrites split vague events into specific ones.
-- Personal data handling is addressed for the contractor PAN.
+- Personal data handling is addressed for the owner's PAN.
 ::hint
-Read each name aloud as "the business says: X happened". Does it sound like something a site engineer or accountant would say?
+Read each name aloud as "the business says: X happened". Does it sound like something a shop owner, a risk analyst or an accountant would say?
 ::hint
 `Updated` and `Changed` events usually hide several different business facts.
 ::hint
 A PAN (permanent account number) identifies a person or business for tax. Where should it live?
 ::hint
-How should money be stored so that every reader rounds the same way?
+How should money and rates be stored so that every reader rounds the same way?
 ::solution
-1. **Bad.** "Updated" hides intent; it mixes status, value and contractor details; PAN in every event is personal/sensitive data repeated forever. Rewrite as specific facts: `ContractAwarded { contractId, contractorId, valuePaise }`, `ContractSuspended { contractId, reason }`, `ContractValueRevised { contractId, oldValuePaise, newValuePaise, variationId }`. Contractor name and PAN live in a contractor record (deletable or access-restricted), referenced by `contractorId`; if they must be in an event, crypto-shred them.
-2. **Good.** Past tense, business language, amount in paise, who and when. (`approvedBy` is a user id — fine as a reference.)
-3. **Bad.** Imperative ("Set…") — that is a command, not an event. Rewrite: `MilestoneCompleted { contractId, milestoneId, completedOn, certifiedBy }`.
-4. **Good,** with one caution: quantities should have a defined precision and unit list (`unit` from a fixed set like `CUM`, `SQM`, `MT`) so projections agree.
+1. **Bad.** "Updated" hides intent; it mixes status, commission and owner details; the PAN in every event is personal, sensitive data repeated forever. Rewrite as specific facts: `MerchantOnboarded { merchantId, ownerId, category }`, `MerchantSuspended { merchantId, reason }`, `CommissionRateRevised { merchantId, oldRateBps, newRateBps, effectiveFrom }`. Owner name and PAN live in an owner record (deletable or access-restricted), referenced by `ownerId`; if they must be in an event, crypto-shred them.
+2. **Good.** Past tense, business language, amount in paise, who and when. (`approvedBy` is a user id, which is fine as a reference.)
+3. **Bad.** Imperative ("Set…"): that is a command, not an event. Rewrite: `KycVerified { merchantId, verifiedOn, verifiedBy, documentType }`, and store the document itself outside the event.
+4. **Good,** with one caution: a decimal percentage invites rounding differences between readers. Store the rate as an integer in basis points (`rateBps: 250`) and keep `cashbackPaise` as the authoritative amount, so projections never recompute it.
 5. **Bad.** A database change log, not a domain event. It couples history to today's table layout. If you need this, it is change data capture, not event sourcing.
-6. **Mostly good name, bad money.** A floating-point or decimal-with-fractions amount invites rounding differences. Use `amountPaise: 125000050` (a long). Consider including `tdsDeductedPaise` and `gstPaise` if the business treats them as part of the fact.
+6. **Mostly good name, bad money.** A floating-point or decimal-with-fractions amount invites rounding differences. Use `amountPaise: 125000050` (a long). Consider including `tdsDeductedPaise` and `gstOnFeesPaise` if the business treats them as part of the fact.
 ::mistakes
-- Accepting `ContractUpdated` because it is "flexible" — flexibility here means no meaning.
-- Ignoring that PAN in an immutable log is very hard to erase later.
+- Accepting `MerchantUpdated` because it is "flexible": flexibility here means no meaning.
+- Ignoring that a PAN in an immutable log is very hard to erase later.
 :::
 
 :::exercise id=m16-event-sourcing-ex3 difficulty=intermediate kind=code title="An upcaster chain"
@@ -1206,7 +1207,7 @@ public class UpcasterChainTests
         })
         // v2 → v3: channel became mandatory; all v2 loads were UPI
         .Register("MoneyLoaded", 2, j => { j["channel"] ??= "UPI"; return j; })
-        .Register("TollCharged", 1, j => { j["currency"] = "INR"; return j; });
+        .Register("PaymentMade", 1, j => { j["currency"] = "INR"; return j; });
 
     [Fact]
     public void Upcasts_v1_to_v3()
@@ -1230,7 +1231,7 @@ public class UpcasterChainTests
     public void Same_version_returns_equal_copy()
     {
         var input = JsonNode.Parse("{\"x\":1}")!.AsObject();
-        var result = Chain().Upcast("TollCharged", 2, input, 2);
+        var result = Chain().Upcast("PaymentMade", 2, input, 2);
         Assert.NotSame(input, result);
         Assert.Equal(1, result["x"]!.GetValue<int>());
     }
@@ -1248,8 +1249,8 @@ public class UpcasterChainTests
     public void Missing_step_throws()
     {
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            Chain().Upcast("TollCharged", 1, new JsonObject(), 3));
-        Assert.Contains("TollCharged v2", ex.Message);
+            Chain().Upcast("PaymentMade", 1, new JsonObject(), 3));
+        Assert.Contains("PaymentMade v2", ex.Message);
     }
 
     [Fact]
@@ -1324,11 +1325,11 @@ CREATE TABLE events (
 INSERT INTO events (stream_id, stream_version, event_type, schema_version, data, recorded_at) VALUES
   ('wallet-W1', 1, 'WalletOpened',   1, '{"walletId":"W1"}', '2026-03-01 09:00+05:30'),
   ('wallet-W1', 2, 'MoneyLoaded',    2, '{"amountPaise":100000}', '2026-03-01 09:05+05:30'),
-  ('wallet-W1', 3, 'TollCharged',    1, '{"chargeId":"C1","amountPaise":15000}', '2026-03-20 07:10+05:30'),
-  ('wallet-W1', 4, 'TollCharged',    1, '{"chargeId":"C2","amountPaise":22500}', '2026-04-02 18:40+05:30'),
+  ('wallet-W1', 3, 'PaymentMade',    1, '{"chargeId":"C1","amountPaise":15000}', '2026-03-20 07:10+05:30'),
+  ('wallet-W1', 4, 'PaymentMade',    1, '{"chargeId":"C2","amountPaise":22500}', '2026-04-02 18:40+05:30'),
   ('wallet-W2', 1, 'WalletOpened',   1, '{"walletId":"W2"}', '2026-03-10 12:00+05:30'),
   ('wallet-W2', 2, 'MoneyLoaded',    2, '{"amountPaise":50000}', '2026-03-10 12:01+05:30'),
-  ('wallet-W2', 3, 'TollCharged',    1, '{"chargeId":"C3","amountPaise":15000}', '2026-03-31 23:30+05:30'),
+  ('wallet-W2', 3, 'PaymentMade',    1, '{"chargeId":"C3","amountPaise":15000}', '2026-03-31 23:30+05:30'),
   ('wallet-W2', 4, 'ChargeReversed', 1, '{"chargeId":"C3","amountPaise":15000}', '2026-04-01 10:00+05:30'),
   ('wallet-W3', 1, 'WalletOpened',   1, '{"walletId":"W3"}', '2026-03-31 18:00+05:30'),
   ('wallet-W4', 1, 'WalletOpened',   1, '{"walletId":"W4"}', '2026-04-05 08:00+05:30'),
@@ -1339,7 +1340,7 @@ INSERT INTO events (stream_id, stream_version, event_type, schema_version, data,
 SELECT stream_id AS wallet,
        SUM(CASE event_type
              WHEN 'MoneyLoaded'    THEN  (data->>'amountPaise')::bigint
-             WHEN 'TollCharged'    THEN -(data->>'amountPaise')::bigint
+             WHEN 'PaymentMade'    THEN -(data->>'amountPaise')::bigint
              WHEN 'ChargeReversed' THEN  (data->>'amountPaise')::bigint
              ELSE 0 END) AS balance_paise,
        MAX(stream_version) AS version
@@ -1365,7 +1366,7 @@ A `CASE` on `event_type` turns each event into a signed amount; `WalletOpened` c
 SELECT stream_id AS wallet,
        SUM(CASE event_type
              WHEN 'MoneyLoaded'    THEN  (data->>'amountPaise')::bigint
-             WHEN 'TollCharged'    THEN -(data->>'amountPaise')::bigint
+             WHEN 'PaymentMade'    THEN -(data->>'amountPaise')::bigint
              WHEN 'ChargeReversed' THEN  (data->>'amountPaise')::bigint
              ELSE 0 END) AS balance_paise,
        MAX(stream_version) AS version
@@ -1447,10 +1448,10 @@ public class PiiVaultTests
     public void Round_trip_including_unicode()
     {
         var v = new PiiVault(new InMemoryKeyStore());
-        var p = v.Protect("U1", "राजेश कुमार · HR26DK8337");
+        var p = v.Protect("U1", "राजेश कुमार · +91 98765 43210");
         Assert.StartsWith(PiiVault.Prefix, p);
-        Assert.DoesNotContain("HR26DK8337", p);
-        Assert.Equal("राजेश कुमार · HR26DK8337", v.Reveal("U1", p));
+        Assert.DoesNotContain("98765", p);
+        Assert.Equal("राजेश कुमार · +91 98765 43210", v.Reveal("U1", p));
     }
 
     [Fact]
@@ -1592,13 +1593,13 @@ public void Charge_after_reversal_window_uses_current_balance()
     {
         new WalletOpened("W7", "U7", "x", "y"),
         new MoneyLoaded("W7", 20_000, "UPI", "R1"),
-        new TollCharged("W7", "C1", "0421", 15_000),
-        new ChargeReversed("W7", "C1", 15_000, "double read"),
+        new PaymentMade("W7", "C1", "0421", 15_000),
+        new ChargeReversed("W7", "C1", 15_000, "duplicate QR scan"),
     }, lastVersion: 4);
 
     wallet.Charge("C2", "0433", 20_000);
 
-    var e = Assert.IsType<TollCharged>(Assert.Single(wallet.Uncommitted));
+    var e = Assert.IsType<PaymentMade>(Assert.Single(wallet.Uncommitted));
     Assert.Equal(20_000, e.AmountPaise);
     Assert.Equal(0, wallet.BalancePaise);
 }
@@ -1615,10 +1616,10 @@ public void Charge_after_reversal_window_uses_current_balance()
 ## Real-world application
 
 - **Ledgers and wallets** are the classic fit: balances are derived, corrections are reversing entries, and auditors want history. Many payment systems use an append-only ledger even when they do not event-source anything else.
-- **Insurance claims and contract variations** in infrastructure projects (variation orders, measurements, RA bills, approvals) benefit from full history: disputes and arbitration hinge on "who approved what, when, based on which measurement".
+- **Insurance claims and loan applications** (submissions, assessor reports, approvals, payouts) benefit from full history: disputes and regulators' questions hinge on "who approved what, when, based on which document".
 - **Logistics** platforms often event-source shipments (scans are naturally events), feeding tracking and SLA projections.
 - **Collaborative and versioned documents** store operations as events so they can rebuild any version.
-- **In .NET**, teams use dedicated event-store databases, PostgreSQL-based libraries that implement much of this lesson (streams table, events table, projections, snapshots), or a hand-rolled store like the one above for a narrow, well-understood aggregate.
+- **In .NET**, teams use dedicated event-store databases (such as KurrentDB, formerly EventStoreDB), PostgreSQL-based libraries such as Marten that implement much of this lesson (streams table, events table, projections, snapshots, upcasting), or a hand-rolled store like the one above for a narrow, well-understood aggregate.
 
 ## Interview questions
 
@@ -1626,7 +1627,7 @@ public void Charge_after_reversal_window_uses_current_balance()
 ::q beginner
 What is event sourcing?
 ::a
-Storing the history of changes as an append-only sequence of events per entity (a stream), instead of storing only the current state. The current state is derived by replaying the events in order. Events are immutable business facts in the past tense, such as `TollCharged` or `MoneyLoaded`. Read models for queries are built from the events by projections.
+Storing the history of changes as an append-only sequence of events per entity (a stream), instead of storing only the current state. The current state is derived by replaying the events in order. Events are immutable business facts in the past tense, such as `PaymentMade` or `MoneyLoaded`. Read models for queries are built from the events by projections.
 ::q beginner
 What is a snapshot and why would you use one?
 ::a
@@ -1688,7 +1689,7 @@ A: An audit table written in the same transaction, or an append-only double-entr
 
 :::quiz pass=70
 ::q single
-Two toll plazas charge the same wallet at the same moment. Both commands loaded version 41. What should happen?
+A customer taps "pay" on two shops' QR codes at almost the same moment, so two payments hit the same wallet. Both commands loaded version 41. What should happen?
 - [ ] Both appends succeed; balances are recalculated later.
 - [x] One append succeeds at version 42; the other fails its expected-version check, reloads and re-decides.
 - [ ] The database deadlocks.
@@ -1730,7 +1731,7 @@ Under heavy concurrent load, a projector reading `events` by `global_position` o
 - [ ] Too many snapshots.
 > Positions are allocated at insert time, not commit time. Serialise appends or read only below the oldest in-flight transaction.
 ::q single
-A system needs "who changed this supplier's bank details and when", and nothing else historical. Best approach?
+A system needs "who changed this merchant's bank details and when", and nothing else historical. Best approach?
 - [ ] Event-source the supplier aggregate.
 - [x] An audit table written in the same transaction as the change.
 - [ ] A Kafka topic with infinite retention.

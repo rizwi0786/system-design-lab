@@ -588,7 +588,7 @@ public sealed record UploadRequest(string FileName, string ContentType, long Siz
 Design notes:
 
 - **The API validates before signing**: type allow-list, size limit, permission on the claim. A presigned URL can't be taken back, so checks happen before it exists.
-- **The server owns the key.** The client's file name is stored only for display and for the download's `Content-Disposition`.
+- **The server owns the key.** The client's file name is stored only for display and for the download's `Content-Disposition`. Sanitise it before it reaches that header (strip quotes, path characters and control characters, and use the RFC 6266 `filename*` form for non-ASCII names), or a crafted name can break or inject headers.
 - **`ConfirmAsync` trusts storage, not the client.** It checks real size and type with `HEAD`, and it is idempotent, so the client callback and the storage event can both call it safely.
 - **The sweeper deletes bytes before updating the row.** If it crashes in between, the next run retries the (idempotent) delete. The opposite order could leave an orphan object that no row points to.
 - **Presigned lifetimes are capped in code** at one hour, so nobody "temporarily" issues week-long links.
@@ -1224,10 +1224,10 @@ public async Task Mismatched_size_is_rejected_and_deleted()
 ## Real-world application
 
 - **Photo and video apps** upload directly from devices with presigned or multipart uploads, then process media asynchronously into several sizes and formats.
-- **Document-heavy systems** such as insurance claims, KYC, tender documents or construction drawings keep files in object storage, metadata and permissions in a database, and use object lock for records with legal retention.
+- **Document-heavy systems** such as insurance claims, bank KYC, hospital reports or job-portal résumés keep files in object storage, metadata and permissions in a database, and use object lock for records with legal retention.
 - **Backups and database archives**: PostgreSQL base backups and WAL archives commonly go to object storage, with lifecycle rules for retention.
 - **Data lakes**: analytics systems store large columnar files (such as Parquet) in object storage and query them in place.
-- **Drone survey and mapping platforms** store large orthomosaics and point clouds as objects, often split into tiles served through a CDN.
+- **Streaming and map apps** store large video files and map imagery as objects, often split into small segments or tiles served through a CDN.
 
 ## Interview questions
 

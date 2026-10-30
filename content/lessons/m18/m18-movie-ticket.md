@@ -28,7 +28,7 @@ Movie ticket booking is a favourite interview problem because it looks like simp
 
 By the end of this case study you will be able to:
 
-1. Turn a fuzzy brief ("build BookMyShow-style seat booking") into functional requirements, non-functional requirements and clarifying questions.
+1. Turn a fuzzy brief ("build seat booking for our cinema app") into functional requirements, non-functional requirements and clarifying questions.
 2. Identify the classes for shows, seats, holds, bookings and pricing, and give each one a single job.
 3. Model a booking's lifecycle (Held → Confirmed → Cancelled, or Held → Expired) as a guarded state machine.
 4. Make seat holds **all-or-nothing** and safe under concurrent requests, and explain why the lock is per show.
@@ -64,7 +64,7 @@ If you remember the clerk, the chart, the pencil and the ink, the rest of this l
 1. A cinema has screens. Each screen has seats with a row letter, a number and a category: Classic, Prime or Recliner.
 2. A show is one movie on one screen at one start time.
 3. A user can see which seats are available for a show.
-4. A user can **hold** 1–10 seats for a show. The hold lasts 10 minutes. The hold is **all-or-nothing**: if any requested seat is unavailable, nothing is held, and the user is told which seats clashed.
+4. A user can **hold** 1–10 seats for a show. The hold lasts 10 minutes, but never past the show's start time. The hold is **all-or-nothing**: if any requested seat is unavailable, nothing is held, and the user is told which seats clashed.
 5. A user can **confirm** a hold by supplying a payment reference before it expires. Confirmation turns held seats into booked seats.
 6. A user can **release** a hold early (they pressed "back").
 7. Holds that are not confirmed in time **expire**, and their seats become available again.
@@ -246,6 +246,12 @@ Pricing changes on a marketing calendar. Booking logic changes on an engineering
 
 Every time comparison uses `TimeProvider`. Tests use a manual clock that they move forward by 10 minutes in one line. No `Thread.Sleep`, and no flaky tests that fail at midnight.
 
+### Decision 7 — idempotent holds and abuse limits
+
+A reviewer will ask two more questions. First: "the app timed out and the user tapped *Hold* again; what happens?" As written, the retry fails with `SeatsUnavailable`, because the seats are held by the user's own first attempt. The fix is an idempotency key: the client sends a request id (for example an `Idempotency-Key` header), and the service stores `requestId → bookingId` alongside the booking, under the same per-show lock. A retry with the same key returns the original booking instead of trying again. (Confirm is already idempotent on the payment reference.)
+
+Second: "what stops a bot from holding all 300 seats every 10 minutes?" Nothing in the core model, so add a policy check in `HoldSeats`: at most one live hold per user per show, plus rate limiting at the API edge. On the opening day of a blockbuster this matters more than any lock choice; the HLD side of that problem is in [Flash sale](#/lesson/m17-flash-sale).
+
 ### The hold-and-confirm flow
 
 ```mermaid
@@ -257,7 +263,7 @@ sequenceDiagram
     A->>S: HoldSeats(42, [F7, F8])
     S->>I: lock Gate, TryHold([F7,F8], hold=a1, expires 19:10)
     I-->>S: true
-    S-->>A: Ok(Booking a1, ₹1375)
+    S-->>A: Ok(Booking a1, ₹1376)
     B->>S: HoldSeats(42, [F8, F9])
     S->>I: lock Gate, TryHold([F8,F9], hold=b1)
     I-->>S: false, conflicts=[F8]
@@ -268,7 +274,7 @@ sequenceDiagram
     S-->>A: Ok(Booking a1 Confirmed)
 ```
 
-User B's request fails as a whole, so F9 is **not** left half-held. User B gets the exact clashing seat back, and the app can say "F8 was just taken" instead of a generic error. Both requests went through the same per-show `Gate`, so they could not interleave halfway through.
+User A's two Recliner seats cost ₹550 each, plus the 25 % peak uplift: ₹687.50, rounded to ₹688, so ₹1,376 in total. User B's request fails as a whole, so F9 is **not** left half-held. User B gets the exact clashing seat back, and the app can say "F8 was just taken" instead of a generic error. Both requests went through the same per-show `Gate`, so they could not interleave halfway through.
 
 ## State transitions
 
@@ -716,7 +722,8 @@ public sealed class BookingService(
             if (now >= show.StartsAt) return BookingResult.Fail(BookingError.ShowAlreadyStarted);
 
             var bookingId = Guid.CreateVersion7(now);
-            var expiresAt = now + _o.HoldDuration;
+            var holdEnds = now + _o.HoldDuration;
+            var expiresAt = holdEnds < show.StartsAt ? holdEnds : show.StartsAt;   // a hold never outlives the show's start
             if (!inventory.TryHold(requested, bookingId, now, expiresAt, out var conflicts))
                 return BookingResult.Fail(BookingError.SeatsUnavailable, conflicts);
 
@@ -876,8 +883,11 @@ public static class Program
         foreach (var row in "ABCDE") for (var n = 1; n <= 12; n++) seats.Add(new Seat(new SeatId(row, n), SeatCategory.Classic));
         for (var n = 1; n <= 8; n++) seats.Add(new Seat(new SeatId('F', n), SeatCategory.Recliner));
         var screen = new Screen("PUN-AUDI-3", "Audi 3", seats);
+        // Tomorrow at 19:15 IST, so the demo never tries to book a show that has already started.
+        var ist = TimeSpan.FromHours(5.5);
+        var tomorrow = DateTimeOffset.UtcNow.ToOffset(ist).Date.AddDays(1);
         var show = new Show("show-42", new Movie("m-1", "Monsoon Express", 148), screen,
-                            new DateTimeOffset(2026, 11, 14, 19, 15, 0, TimeSpan.FromHours(5.5)));
+                            new DateTimeOffset(tomorrow.AddHours(19).AddMinutes(15), ist));
 
         var services = new ServiceCollection()
             .AddLogging()
@@ -900,6 +910,7 @@ A few details worth calling out:
 - **The price is computed outside the lock.** Pricing is pure and might one day call a slow offers service. Keeping slow work out of the critical section keeps the per-show queue short.
 - **`Guid.CreateVersion7(now)`** (.NET 9+) produces time-ordered ids. They sort by creation time and index well in PostgreSQL if you persist them later.
 - **`Debug.Assert(Gate.IsHeldByCurrentThread)`** documents and checks the locking contract in debug builds. It catches the "someone called `TryHold` without the lock" bug during tests.
+- **A hold ends at the show's start at the latest.** Without that cap, someone holding seats at 21:55 for a 22:00 show could still confirm at 22:04, after the film began.
 - **`HoldSweeper` catches all exceptions.** An unhandled exception in `ExecuteAsync` stops the background service (and by default, since .NET 6, the whole host). One corrupt record shouldn't stop all housekeeping.
 
 ## Automated testing
@@ -1660,6 +1671,7 @@ Route every request for a show to the same instance (consistent hashing on `show
 - Using `SELECT ... FOR UPDATE` on seat rows that don't exist yet. You can't lock a row that isn't there; rely on the primary key and `ON CONFLICT`.
 - Using SERIALIZABLE without retry logic. Serialization failures are expected and must be retried.
 - Trusting the app server's clock for expiry across machines.
+- Passing a seat list with duplicates. One `INSERT ... ON CONFLICT DO UPDATE` can't touch the same row twice; PostgreSQL raises "command cannot affect row a second time". De-duplicate (and sort) the seats first, as the in-memory `HoldSeats` does with `Distinct()`.
 :::
 
 ## Interview questions

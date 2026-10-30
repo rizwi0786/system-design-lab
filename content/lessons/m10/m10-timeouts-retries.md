@@ -173,7 +173,33 @@ builder.Services.AddHttpClient<InventoryClient>(c => c.BaseAddress = new Uri("ht
     });
 ```
 
-At the time of writing, the standard handler's defaults are: total timeout 30 s, up to 3 retries with exponential backoff and jitter starting at 2 s, a circuit breaker (10 % failure ratio over 30 s, at least 100 requests, 5 s break), and a 10 s attempt timeout. Those defaults are generous; for a user-facing call like ours, tighten them to your budget. By default its retry strategy handles transient failures for *every* HTTP method, POST included; to stop it retrying unsafe methods, call `o.Retry.DisableForUnsafeHttpMethods()` (available in recent versions of the package; check the docs for yours).
+The standard handler chains five strategies, from outermost to innermost: a **rate limiter** (a concurrency limiter, 1,000 permits by default), a **total request timeout** (30 s), a **retry** (up to 3 retries, exponential backoff with jitter starting at 2 s, honouring `Retry-After`), a **circuit breaker** (opens at a 10 % failure ratio over 30 s with at least 100 requests, breaks for 5 s) and an **attempt timeout** (10 s). Because the attempt timeout sits inside the retry, each try gets its own 10 s; because the total timeout sits outside, all tries and waits together are capped at 30 s. Those defaults are generous; for a user-facing call like ours, tighten them to your budget. Three details trip people up:
+
+- **Unsafe methods.** By default the retry strategy handles transient failures for *every* HTTP method, POST included. Call `o.Retry.DisableForUnsafeHttpMethods()` (or `o.Retry.DisableFor(HttpMethod.Post, ...)`) unless every POST you send carries an idempotency key.
+- **`HttpClient.Timeout` still applies.** It wraps the whole handler pipeline, so its 100 s default sits *outside* the resilience pipeline. If you set it below `TotalRequestTimeout`, it wins and cuts retries short; most teams leave it as a loose backstop above the total timeout, or set it to `Timeout.InfiniteTimeSpan` and let the pipeline own time.
+- **Don't stack retry layers.** Adding the standard handler *and* your own retry handler (or a second resilience handler) multiplies attempts. One retry strategy per client.
+
+For idempotent reads where tail latency matters more than load, the sibling `AddStandardHedgingHandler()` sends a second attempt after a delay and takes whichever answer arrives first. For non-HTTP calls (publishing to a broker, a database command), use Polly v8 directly; the old v7 `Policy.Handle<T>().WaitAndRetryAsync(...)` syntax is legacy:
+
+```csharp
+// Polly v8 (package Polly.Core); registered in DI with services.AddResiliencePipeline("publish", ...)
+ResiliencePipeline pipeline = new ResiliencePipelineBuilder()
+    .AddTimeout(TimeSpan.FromSeconds(2))                 // outer: total time for all attempts
+    .AddRetry(new RetryStrategyOptions
+    {
+        ShouldHandle = new PredicateBuilder().Handle<TimeoutRejectedException>().Handle<IOException>(),
+        MaxRetryAttempts = 2,
+        BackoffType = DelayBackoffType.Exponential,
+        UseJitter = true,                                // Polly's jittered exponential backoff (decorrelated-jitter based)
+        Delay = TimeSpan.FromMilliseconds(100),
+    })
+    .AddTimeout(TimeSpan.FromMilliseconds(500))          // inner: per attempt
+    .Build();
+
+await pipeline.ExecuteAsync(async ct => await publisher.PublishAsync(evt, ct), cancellationToken);
+```
+
+Order matters in v8 exactly as it does with handlers: the first strategy added is the outermost. Polly has no built-in *retry budget*; if you need one (exercise 5), implement it as a `ShouldHandle` predicate that also asks a shared budget, or rely on a service mesh that provides one.
 
 Use the library in production. We hand-roll a retry handler below for two reasons: to understand exactly what the library does, and because the checker that compiles this lesson has no NuGet access.
 

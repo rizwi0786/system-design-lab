@@ -222,7 +222,7 @@ Each accepted move is pushed onto a `Stack<Position>`. The mark is implied by th
 
 ### Observer for UIs
 
-`event Action<Mark, Position, GameStatus>? MovePlayed` lets a console renderer, a SignalR hub or a logger react without the game knowing about them.
+`event Action<Mark, Position, GameStatus>? MovePlayed` lets a console renderer, a SignalR hub or a logger react without the game knowing about them. Undo changes the board too, so it raises its own `MoveUndone` event. A UI that only listens to `MovePlayed` would keep showing a mark that is no longer there.
 
 ### One move, step by step
 
@@ -424,6 +424,9 @@ public sealed class Game
     /// <summary>Raised after each accepted move with the mover, the cell and the new status.</summary>
     public event Action<Mark, Position, GameStatus>? MovePlayed;
 
+    /// <summary>Raised after Undo with the cell that was cleared.</summary>
+    public event Action<Position>? MoveUndone;
+
     public IReadOnlyBoard Board => _board;
     public Mark Turn { get; private set; }
     public GameStatus Status { get; private set; } = GameStatus.InProgress;
@@ -455,6 +458,7 @@ public sealed class Game
         Turn = _board.At(last);   // the mover gets the turn back
         _board.Clear(last);
         Status = GameStatus.InProgress;
+        MoveUndone?.Invoke(last);
         return true;
     }
 
@@ -571,6 +575,7 @@ Design notes on the code:
 - **`Board.Place` throws, but `Game.Play` never lets it.** The board guards its own invariant ("never overwrite a mark") as a safety net. The game returns friendly results before reaching it. Two layers, two purposes.
 - **`Undo` reads the mark from the cell** to decide whose turn it is again. That stays correct even if the first player was O.
 - **`Match.Run` throws when a bot cheats.** An illegal move from code is a bug, not a user mistake.
+- **`Game` is not thread-safe.** Every guard in `Play` is a check-then-act: "is it X's turn?" then "place X". Two web requests for the same game running at once could both pass the guards. Keep the domain class single-threaded and serialise access per game outside it (a lock per game id, or a version check when saving), as the last interview answer describes.
 
 ## Automated testing
 

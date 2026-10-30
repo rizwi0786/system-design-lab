@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 85
 prerequisites: [m11-latency-numbers, m10-http-fundamentals, m11-stateless]
-related: [m11-cdn, m12-why-caching, m12-cache-patterns, m12-invalidation-ttl, m03-caching, m16-multi-level-caching]
+related: [m11-cdn, m12-why-caching, m12-cache-patterns, m12-invalidation-ttl, m03-caching, m16-multi-level-caching, m18-lru-cache, m17-scaling-journey]
 tags: [hld, caching, http-caching, cdn, output-caching, hybridcache, redis, postgresql]
 patterns: [Cache-Aside, Multi-Level Cache, Conditional Request]
 summary: A request can be answered by the browser, a CDN, a reverse proxy, the app's memory, a distributed cache or the database's buffer cache before it ever touches disk. Learn what belongs in each layer, how HTTP caching headers control the outer layers, how ASP.NET Core output caching and HybridCache handle the inner ones, and how staleness and invalidation add up across layers.
@@ -126,7 +126,7 @@ Worst case ≈ 600 + 300 + 60 = 960 s of staleness, not 60 s.
 
 ### HTTP caching headers: controlling the outer layers
 
-You cannot run code in a browser cache or (usually) a CDN's cache logic, so you control them with response headers defined in RFC 9111.
+You cannot run code in a browser cache or (usually) a CDN's cache logic, so you control them with response headers defined in RFC 9111 (plus `stale-while-revalidate` and `stale-if-error`, which come from the RFC 5861 extension; most CDNs honour them, but check yours).
 
 | Directive | Meaning |
 |---|---|
@@ -163,7 +163,7 @@ Fingerprinting (putting a content hash in the file name) is what makes year-long
 
 **Output caching** (`AddOutputCache` / `UseOutputCache`, .NET 7+) is a server-controlled cache of whole responses. You decide per endpoint how long to cache, what to vary by (query keys, route values, headers) and which **tags** to attach; you can evict by tag when data changes. It ignores the client's attempts to bypass it, protects against stampedes by default (concurrent requests for the same uncached response wait for one to finish), and by default does not cache authenticated requests or responses that set cookies. The store is in-memory per instance by default; a Redis-backed store is available for sharing across instances.
 
-**`IMemoryCache`** is a per-instance key-value cache for data. **`IDistributedCache`** is the shared byte-array abstraction for Redis and others. **HybridCache** (.NET 9+) combines them: an in-memory L1 in front of an optional distributed L2, with serialization, **stampede protection** (only one caller per key runs the factory), and **tags** for group invalidation. It is the recommended default for caching data in new ASP.NET Core code.
+**`IMemoryCache`** is a per-instance key-value cache for data. It has no size limit unless you set `SizeLimit` (and a `Size` on every entry), so an unbounded key space can grow until the process runs out of memory; how a bounded cache chooses what to evict is covered in [LRU cache](#/lesson/m18-lru-cache). **`IDistributedCache`** is the shared byte-array abstraction for Redis and others. **HybridCache** (.NET 9+) combines them: an in-memory L1 in front of an optional distributed L2, with serialization, **stampede protection** (only one caller per key runs the factory), and **tags** for group invalidation. It is the recommended default for caching data in new ASP.NET Core code.
 
 Choosing between them:
 
@@ -1344,6 +1344,7 @@ public async Task Endpoints_declare_their_cache_policy(string path, string expec
 - **E-commerce and ticketing** cache catalogues and search results heavily but keep stock, seat and payment decisions on the database. A system like a ticketing platform during a big sale typically shows availability from a short-lived cache and confirms it transactionally.
 - **Government portals** in India (tax, transport, land records) serve large static forms and documents that benefit from CDN caching with fingerprinted URLs, while personal records stay `private` or `no-store`.
 - **ASP.NET Core apps** commonly combine output caching for public GET endpoints with HybridCache over Redis for shared data, and use output-cache tags plus `RemoveByTagAsync` for invalidation.
+- **Growing products add layers in stages.** In [Scaling a real system from 100 to 10 million users](#/lesson/m17-scaling-journey), a grocery-delivery app runs with no application cache at first, adds a CDN for product images and HybridCache with a Redis L2 for the catalogue only when database CPU says so, and keeps stock and checkout on PostgreSQL throughout.
 - **PostgreSQL** operators watch buffer hit ratios and plan memory so the working set fits; a sudden drop often signals a new query pattern or table bloat rather than a need for an application cache.
 
 ## Interview questions

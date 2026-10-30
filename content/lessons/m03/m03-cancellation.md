@@ -22,7 +22,7 @@ references:
     url: https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-FLOW-CANCELING-REQUESTS
 ---
 
-A user opens the monthly toll-collection report, waits five seconds, gives up and closes the tab. On the server, the report keeps running: it scans 2.4 million rows in PostgreSQL, aggregates them, builds a 6 MB response and writes it to a connection that no longer exists. Multiply that by forty impatient users at month-end and the database is busy doing work nobody will ever read. **Cancellation** is how .NET lets you stop that work early, cleanly, and only where it is safe to stop.
+A city operations manager at a ride-hailing company opens the monthly trips report for Bengaluru, waits five seconds, gives up and closes the tab. On the server, the report keeps running: it scans 2.4 million rows in PostgreSQL, aggregates them into daily totals per ride type, and writes the answer to a connection that no longer exists. Multiply that by forty impatient users at month-end and the database is busy doing work nobody will ever read. **Cancellation** is how .NET lets you stop that work early, cleanly, and only where it is safe to stop.
 
 ## Learning objectives
 
@@ -93,8 +93,8 @@ A method that accepts a `CancellationToken` and ignores it is lying to its calle
 `HttpContext.RequestAborted` is cancelled when the client disconnects (closed tab, killed app, network loss detected by the server) or when the server aborts the request. You rarely read it directly; minimal APIs and controllers bind it for you:
 
 ```csharp
-app.MapGet("/reports/toll/{plaza}", (string plaza, int year, int month, IReportService svc, CancellationToken ct) =>
-    svc.BuildAsync(plaza, year, month, ct));   // ct == HttpContext.RequestAborted
+app.MapGet("/reports/trips/{city}", (string city, int year, int month, IReportService svc, CancellationToken ct) =>
+    svc.BuildAsync(city, year, month, ct));   // ct == HttpContext.RequestAborted
 ```
 
 Any `CancellationToken` parameter in a minimal API handler or controller action receives the request-aborted token. From there, **you** must pass it down: endpoint to service, service to repository, repository to the database driver. The convention is to make `CancellationToken ct` (or `cancellationToken`) the **last** parameter, and to give it a default only in public library APIs, not in internal services (a default makes it too easy to forget).
@@ -219,12 +219,12 @@ sequenceDiagram
     participant U as Browser tab
     participant K as Kestrel
     participant E as Report endpoint
-    participant S as MonthlyTollReportService
+    participant S as MonthlyTripReportService
     participant N as Npgsql
     participant PG as PostgreSQL
-    U->>K: GET /reports/toll/KHD?year=2026 and month=9
+    U->>K: GET /reports/trips/BLR?year=2026 and month=9
     K->>E: invoke with ct = RequestAborted
-    E->>S: BuildAsync(plaza, year, month, ct)
+    E->>S: BuildAsync(city, year, month, ct)
     S->>S: link ct with a 60 s timeout
     S->>N: ExecuteReaderAsync(linked token)
     N->>PG: run aggregate query over 2.4 M rows
@@ -259,15 +259,15 @@ Three sources feed one linked source, which cancels when any of them does. The s
 
 ## Step-by-step example
 
-We build the monthly toll-collection report for a toll plaza operator. It aggregates a month of transactions (about 80,000 a day at a busy plaza, so roughly 2.4 million rows for a 30-day month) by vehicle class.
+We build the monthly trips report for one city of a ride-hailing service. It aggregates a month of completed trips (about 80,000 a day in a big city such as Bengaluru, an estimate, so roughly 2.4 million rows for a 30-day month) by ride type: bike, auto, mini, sedan and SUV.
 
 ### Step 1 — the naive version
 
-The endpoint calls `service.BuildAsync(plaza, year, month)` with no token. The service streams rows and sums them. Close the browser tab after one second: the server log shows the report finishing 20 seconds later anyway, and the database connection was busy the whole time.
+The endpoint calls `service.BuildAsync(city, year, month)` with no token. The service streams rows and sums them. Close the browser tab after one second: the server log shows the report finishing 20 seconds later anyway, and the database connection was busy the whole time.
 
 ### Step 2 — accept and pass the token
 
-Add `CancellationToken ct` to the endpoint, the service method, and the transaction source's `ReadMonthAsync`. Pass it to the data reader. Close the tab again: the log now shows an `OperationCanceledException` within milliseconds, and the database stops the query.
+Add `CancellationToken ct` to the endpoint, the service method, and the trip source's `ReadMonthAsync`. Pass it to the data reader. Close the tab again: the log now shows an `OperationCanceledException` within milliseconds, and the database stops the query.
 
 ### Step 3 — check in the aggregation loop
 
@@ -275,7 +275,7 @@ The aggregation is CPU work on rows already in memory. A check every 10,000 rows
 
 ### Step 4 — a time budget
 
-Month-end reports at a 24-lane plaza may take too long. Link the request token with a 60-second timeout. If the timeout fires and the client is still connected, throw a `ReportTimeoutException` (a `TimeoutException`) so the user sees "report took too long, try a smaller date range or request it by email". If the client left, let the OCE propagate quietly.
+Month-end reports for the busiest cities may take too long. Link the request token with a 60-second timeout. If the timeout fires and the client is still connected, throw a `ReportTimeoutException` (a `TimeoutException`) so the user sees "report took too long, try a smaller date range or request it by email". If the client left, let the OCE propagate quietly.
 
 ### Step 5 — protect the capacity with a server-side limit
 
@@ -293,24 +293,24 @@ Add `statement_timeout = '60s'` to the reporting database role, and the `reports
 Layout:
 
 ```text
-TollReports.Api/
+TripReports.Api/
   Program.cs
-  Reports/TollTransaction.cs
-  Reports/ITransactionSource.cs
-  Reports/SyntheticTransactionSource.cs
+  Reports/TripRecord.cs
+  Reports/ITripSource.cs
+  Reports/SyntheticTripSource.cs
   Reports/ReportOptions.cs
-  Reports/MonthlyTollReportService.cs
+  Reports/MonthlyTripReportService.cs
   Reports/CsvExporter.cs
 ```
 
-```csharp file=Reports/TollTransaction.cs
-namespace TollReports.Reports;
+```csharp file=Reports/TripRecord.cs
+namespace TripReports.Reports;
 
-public sealed record TollTransaction(string PlazaCode, DateOnly Date, string VehicleClass, decimal Amount);
+public sealed record TripRecord(string CityCode, DateOnly Date, string RideType, decimal Amount);
 
-public sealed record VehicleClassTotal(string VehicleClass, int Count, decimal Amount);
+public sealed record RideTypeTotal(string RideType, int Count, decimal Amount);
 
-public sealed record TollReport(string PlazaCode, int Year, int Month, int Transactions, IReadOnlyList<VehicleClassTotal> ByClass);
+public sealed record TripReport(string CityCode, int Year, int Month, int Trips, IReadOnlyList<RideTypeTotal> ByRideType);
 
 /// <summary>Our own time budget ran out (as opposed to the client leaving).</summary>
 public sealed class ReportTimeoutException(TimeSpan budget, Exception inner)
@@ -320,20 +320,20 @@ public sealed class ReportTimeoutException(TimeSpan budget, Exception inner)
 }
 ```
 
-```csharp file=Reports/ITransactionSource.cs
-namespace TollReports.Reports;
+```csharp file=Reports/ITripSource.cs
+namespace TripReports.Reports;
 
-public interface ITransactionSource
+public interface ITripSource
 {
-    /// <summary>Streams one plaza-month of transactions. Implementations must pass ct to the database reader.</summary>
-    IAsyncEnumerable<TollTransaction> ReadMonthAsync(string plazaCode, int year, int month, CancellationToken ct);
+    /// <summary>Streams one city-month of completed trips. Implementations must pass ct to the database reader.</summary>
+    IAsyncEnumerable<TripRecord> ReadMonthAsync(string cityCode, int year, int month, CancellationToken ct);
 }
 ```
 
-```csharp file=Reports/SyntheticTransactionSource.cs
+```csharp file=Reports/SyntheticTripSource.cs
 using System.Runtime.CompilerServices;
 
-namespace TollReports.Reports;
+namespace TripReports.Reports;
 
 /// <summary>
 /// Stand-in for an Npgsql reader so the sample runs without a database. The real version is:
@@ -341,24 +341,24 @@ namespace TollReports.Reports;
 ///   await using var reader = await cmd.ExecuteReaderAsync(ct);
 ///   while (await reader.ReadAsync(ct)) yield return Map(reader);
 /// </summary>
-public sealed class SyntheticTransactionSource : ITransactionSource
+public sealed class SyntheticTripSource : ITripSource
 {
-    private static readonly (string Class, decimal Rate)[] Classes =
-        [("CAR", 120m), ("LCV", 190m), ("BUS", 405m), ("TRUCK", 405m), ("MAV", 635m)];
+    private static readonly (string Type, decimal Fare)[] RideTypes =
+        [("BIKE", 85m), ("AUTO", 140m), ("MINI", 230m), ("SEDAN", 320m), ("SUV", 450m)];   // average fares, illustrative
 
-    public async IAsyncEnumerable<TollTransaction> ReadMonthAsync(
-        string plazaCode, int year, int month, [EnumeratorCancellation] CancellationToken ct)
+    public async IAsyncEnumerable<TripRecord> ReadMonthAsync(
+        string cityCode, int year, int month, [EnumeratorCancellation] CancellationToken ct)
     {
         var days = DateTime.DaysInMonth(year, month);
-        const int perDay = 2_000;   // the real plaza has ~80,000 a day; kept small for the demo
+        const int perDay = 2_000;   // a big city has ~80,000 trips a day; kept small for the demo
         for (var day = 1; day <= days; day++)
         {
             // A real reader would await network I/O here; ReadAsync(ct) is where cancellation is observed.
             await Task.Delay(1, ct);
             for (var i = 0; i < perDay; i++)
             {
-                var (cls, rate) = Classes[(day * 31 + i) % Classes.Length];
-                yield return new TollTransaction(plazaCode, new DateOnly(year, month, day), cls, rate);
+                var (type, fare) = RideTypes[(day * 31 + i) % RideTypes.Length];
+                yield return new TripRecord(cityCode, new DateOnly(year, month, day), type, fare);
             }
         }
     }
@@ -366,7 +366,7 @@ public sealed class SyntheticTransactionSource : ITransactionSource
 ```
 
 ```csharp file=Reports/ReportOptions.cs
-namespace TollReports.Reports;
+namespace TripReports.Reports;
 
 public sealed class ReportOptions
 {
@@ -376,24 +376,24 @@ public sealed class ReportOptions
 }
 ```
 
-```csharp file=Reports/MonthlyTollReportService.cs
+```csharp file=Reports/MonthlyTripReportService.cs
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace TollReports.Reports;
+namespace TripReports.Reports;
 
-public interface IMonthlyTollReportService
+public interface IMonthlyTripReportService
 {
-    Task<TollReport> BuildAsync(string plazaCode, int year, int month, CancellationToken requestAborted);
+    Task<TripReport> BuildAsync(string cityCode, int year, int month, CancellationToken requestAborted);
 }
 
-public sealed class MonthlyTollReportService(
-    ITransactionSource source,
+public sealed class MonthlyTripReportService(
+    ITripSource source,
     IOptions<ReportOptions> options,
     TimeProvider clock,
-    ILogger<MonthlyTollReportService> logger) : IMonthlyTollReportService
+    ILogger<MonthlyTripReportService> logger) : IMonthlyTripReportService
 {
-    public async Task<TollReport> BuildAsync(string plazaCode, int year, int month, CancellationToken requestAborted)
+    public async Task<TripReport> BuildAsync(string cityCode, int year, int month, CancellationToken requestAborted)
     {
         var budget = options.Value.MaxDuration;
         var checkEvery = Math.Max(1, options.Value.CancellationCheckInterval);
@@ -407,27 +407,27 @@ public sealed class MonthlyTollReportService(
         var rows = 0;
         try
         {
-            await foreach (var t in source.ReadMonthAsync(plazaCode, year, month, ct))
+            await foreach (var t in source.ReadMonthAsync(cityCode, year, month, ct))
             {
                 if (++rows % checkEvery == 0) ct.ThrowIfCancellationRequested();   // CPU work between awaits
-                totals[t.VehicleClass] = totals.TryGetValue(t.VehicleClass, out var x)
+                totals[t.RideType] = totals.TryGetValue(t.RideType, out var x)
                     ? (x.Count + 1, x.Amount + t.Amount)
                     : (1, t.Amount);
             }
         }
         catch (OperationCanceledException ex) when (timeout.IsCancellationRequested && !requestAborted.IsCancellationRequested)
         {
-            logger.LogWarning("Toll report {Plaza} {Year}-{Month} exceeded {Budget} after {Rows} rows",
-                plazaCode, year, month, budget, rows);
+            logger.LogWarning("Trip report {City} {Year}-{Month} exceeded {Budget} after {Rows} rows",
+                cityCode, year, month, budget, rows);
             throw new ReportTimeoutException(budget, ex);
         }
         // A client abort is NOT caught here: it propagates as OperationCanceledException.
 
-        var byClass = totals
+        var byRideType = totals
             .OrderByDescending(kv => kv.Value.Amount)
-            .Select(kv => new VehicleClassTotal(kv.Key, kv.Value.Count, kv.Value.Amount))
+            .Select(kv => new RideTypeTotal(kv.Key, kv.Value.Count, kv.Value.Amount))
             .ToList();
-        return new TollReport(plazaCode, year, month, rows, byClass);
+        return new TripReport(cityCode, year, month, rows, byRideType);
     }
 }
 ```
@@ -436,20 +436,20 @@ public sealed class MonthlyTollReportService(
 using System.Globalization;
 using System.Text;
 
-namespace TollReports.Reports;
+namespace TripReports.Reports;
 
 /// <summary>Streams rows as CSV. Validation happens before the first byte, so errors can still become proper status codes.</summary>
-public sealed class CsvExporter(ITransactionSource source)
+public sealed class CsvExporter(ITripSource source)
 {
-    public async Task WriteAsync(Stream body, string plazaCode, int year, int month, CancellationToken ct)
+    public async Task WriteAsync(Stream body, string cityCode, int year, int month, CancellationToken ct)
     {
         await using var writer = new StreamWriter(body, new UTF8Encoding(false), bufferSize: 64 * 1024, leaveOpen: true);
-        await writer.WriteLineAsync("date,plaza,class,amount".AsMemory(), ct);
+        await writer.WriteLineAsync("date,city,ride_type,fare".AsMemory(), ct);
         var n = 0;
-        await foreach (var t in source.ReadMonthAsync(plazaCode, year, month, ct))
+        await foreach (var t in source.ReadMonthAsync(cityCode, year, month, ct))
         {
             await writer.WriteLineAsync(string.Create(CultureInfo.InvariantCulture,
-                $"{t.Date:yyyy-MM-dd},{t.PlazaCode},{t.VehicleClass},{t.Amount}").AsMemory(), ct);
+                $"{t.Date:yyyy-MM-dd},{t.CityCode},{t.RideType},{t.Amount}").AsMemory(), ct);
             if (++n % 5_000 == 0) await writer.FlushAsync(ct);   // flushing to a closed socket fails fast too
         }
         await writer.FlushAsync(ct);
@@ -459,14 +459,14 @@ public sealed class CsvExporter(ITransactionSource source)
 
 ```csharp file=Program.cs
 using Microsoft.AspNetCore.Http.Timeouts;
-using TollReports.Reports;
+using TripReports.Reports;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.Configure<ReportOptions>(builder.Configuration.GetSection(ReportOptions.SectionName));
-builder.Services.AddSingleton<ITransactionSource, SyntheticTransactionSource>();
-builder.Services.AddScoped<IMonthlyTollReportService, MonthlyTollReportService>();
+builder.Services.AddSingleton<ITripSource, SyntheticTripSource>();
+builder.Services.AddScoped<IMonthlyTripReportService, MonthlyTripReportService>();
 builder.Services.AddScoped<CsvExporter>();
 
 builder.Services.AddRequestTimeouts(o =>
@@ -484,13 +484,13 @@ app.UseRequestTimeouts();
 
 static bool ValidMonth(int year, int month) => year is >= 2020 and <= 2100 && month is >= 1 and <= 12;
 
-app.MapGet("/reports/toll/{plaza}", async (string plaza, int year, int month,
-                                           IMonthlyTollReportService reports, CancellationToken ct) =>
+app.MapGet("/reports/trips/{city}", async (string city, int year, int month,
+                                           IMonthlyTripReportService reports, CancellationToken ct) =>
 {
     if (!ValidMonth(year, month)) return Results.Problem(statusCode: 400, title: "Invalid year or month");
     try
     {
-        return Results.Ok(await reports.BuildAsync(plaza, year, month, ct));
+        return Results.Ok(await reports.BuildAsync(city, year, month, ct));
     }
     catch (ReportTimeoutException ex)
     {
@@ -500,12 +500,12 @@ app.MapGet("/reports/toll/{plaza}", async (string plaza, int year, int month,
     }
 }).WithRequestTimeout("reports");
 
-app.MapGet("/exports/toll/{plaza}.csv", async (string plaza, int year, int month, CsvExporter exporter,
+app.MapGet("/exports/trips/{city}.csv", async (string city, int year, int month, CsvExporter exporter,
                                                HttpContext http, CancellationToken ct) =>
 {
     if (!ValidMonth(year, month)) { http.Response.StatusCode = 400; return; }   // before the first byte
     http.Response.ContentType = "text/csv";
-    await exporter.WriteAsync(http.Response.Body, plaza, year, month, ct);
+    await exporter.WriteAsync(http.Response.Body, city, year, month, ct);
 }).WithRequestTimeout("reports");
 
 app.Run();
@@ -523,10 +523,10 @@ Points to notice:
 **Bad**: the token is accepted at the top and lost on the way down.
 
 ```csharp
-app.MapGet("/reports/toll/{plaza}", async (string plaza, int year, int month, IMonthlyTollReportService svc, CancellationToken ct) =>
-    await svc.BuildAsync(plaza, year, month, CancellationToken.None));   // dropped here
+app.MapGet("/reports/trips/{city}", async (string city, int year, int month, IMonthlyTripReportService svc, CancellationToken ct) =>
+    await svc.BuildAsync(city, year, month, CancellationToken.None));   // dropped here
 
-public async Task<TollReport> BuildAsync(string plaza, int year, int month, CancellationToken ct)
+public async Task<TripReport> BuildAsync(string city, int year, int month, CancellationToken ct)
 {
     var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));       // never disposed, not linked to ct
     try
@@ -537,12 +537,12 @@ public async Task<TollReport> BuildAsync(string plaza, int year, int month, Canc
     catch (Exception ex)                                                   // swallows cancellation too
     {
         _logger.LogError(ex, "Report failed");
-        return TollReport.Empty;                                           // client sees an empty report as success
+        return TripReport.Empty;                                           // client sees an empty report as success
     }
 }
 ```
 
-Problems: the endpoint passes `None`, so a closed tab never stops the work; the timeout source is not linked to the request token and is never disposed; `catch (Exception)` logs a client abort as an error and then returns an empty report with status 200, which looks like "no transactions this month"; and the timeout cannot be distinguished from any other failure.
+Problems: the endpoint passes `None`, so a closed tab never stops the work; the timeout source is not linked to the request token and is never disposed; `catch (Exception)` logs a client abort as an error and then returns an empty report with status 200, which looks like "no trips this month"; and the timeout cannot be distinguished from any other failure.
 
 **Good**: the implementation above. The token flows unbroken, the timeout is linked and disposed, the reason for stopping is identified with a `when` filter, cancellation propagates, and timeouts produce an honest error.
 
@@ -607,11 +607,11 @@ Notice that each cancelled request stops within one chunk (about 300 ms here) of
 ## Exercises
 
 :::exercise id=m03-cancellation-ex1 difficulty=beginner kind=code title="Check for cancellation in a CPU-bound loop"
-A pavement survey vehicle records road surface depth every 10 cm, so a 50 km stretch produces 500,000 readings. Implement `PavementScan.CountPotholes`, which counts readings at or above a threshold and stops promptly when cancelled.
+A cab's GPS tracker reports its speed once a second, so one driver's month of shifts produces about 500,000 readings (roughly 140 hours of driving). Implement `SpeedScan.CountOverspeeding`, which counts readings at or above a speed limit and stops promptly when cancelled.
 ::requirements
 - Throw `OperationCanceledException` immediately if the token is already cancelled.
 - While iterating, call `ct.ThrowIfCancellationRequested()` every `CheckEvery` (256) items.
-- Count readings `>= thresholdMm`.
+- Count readings `>= limitKmph`.
 ::acceptance
 - Returns the correct count when not cancelled.
 - A pre-cancelled token throws before reading any item.
@@ -623,49 +623,49 @@ Keep an index and check when `index % CheckEvery == 0`.
 ::hint
 ```csharp
 var i = 0;
-foreach (var d in depthsMm)
+foreach (var v in speedsKmph)
 {
     if (++i % CheckEvery == 0) ct.ThrowIfCancellationRequested();
-    if (d >= thresholdMm) count++;
+    if (v >= limitKmph) count++;
 }
 ```
 ::starter
-```csharp file=PavementScan.cs
+```csharp file=SpeedScan.cs
 using System;
 using System.Collections.Generic;
 using System.Threading;
 
-public static class PavementScan
+public static class SpeedScan
 {
     public const int CheckEvery = 256;
 
-    public static int CountPotholes(IEnumerable<double> depthsMm, double thresholdMm, CancellationToken ct)
+    public static int CountOverspeeding(IEnumerable<double> speedsKmph, double limitKmph, CancellationToken ct)
         => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=PavementScanTests.cs
+```csharp file=SpeedScanTests.cs
 using System;
 using System.Collections.Generic;
 using System.Threading;
 using Xunit;
 
-public class PavementScanTests
+public class SpeedScanTests
 {
     [Fact]
     public void Counts_readings_at_or_above_threshold()
     {
-        Assert.Equal(2, PavementScan.CountPotholes(new[] { 10.0, 50.0, 62.5, 20.0 }, 50.0, CancellationToken.None));
+        Assert.Equal(2, SpeedScan.CountOverspeeding(new[] { 42.0, 80.0, 96.5, 30.0 }, 80.0, CancellationToken.None));
     }
 
     [Fact]
     public void Pre_cancelled_token_throws_before_reading()
     {
         var read = 0;
-        IEnumerable<double> Readings() { while (true) { read++; yield return 1.0; } }
+        IEnumerable<double> Readings() { while (true) { read++; yield return 40.0; } }
         using var cts = new CancellationTokenSource();
         cts.Cancel();
-        Assert.Throws<OperationCanceledException>(() => PavementScan.CountPotholes(Readings(), 50, cts.Token));
+        Assert.Throws<OperationCanceledException>(() => SpeedScan.CountOverspeeding(Readings(), 80, cts.Token));
         Assert.Equal(0, read);
     }
 
@@ -679,34 +679,34 @@ public class PavementScanTests
             for (var i = 0; i < 100_000; i++)
             {
                 read++;
-                if (read == 1_000) cts.Cancel();   // the user presses Stop mid-scan
-                yield return i % 97 == 0 ? 80.0 : 5.0;
+                if (read == 1_000) cts.Cancel();   // the analyst presses Stop mid-scan
+                yield return i % 97 == 0 ? 95.0 : 35.0;
             }
         }
-        Assert.Throws<OperationCanceledException>(() => PavementScan.CountPotholes(Readings(), 50, cts.Token));
-        Assert.InRange(read, 1_000, 1_000 + PavementScan.CheckEvery);
+        Assert.Throws<OperationCanceledException>(() => SpeedScan.CountOverspeeding(Readings(), 80, cts.Token));
+        Assert.InRange(read, 1_000, 1_000 + SpeedScan.CheckEvery);
     }
 }
 ```
 ::solution
-```csharp file=PavementScan.cs
+```csharp file=SpeedScan.cs
 using System;
 using System.Collections.Generic;
 using System.Threading;
 
-public static class PavementScan
+public static class SpeedScan
 {
     public const int CheckEvery = 256;
 
-    public static int CountPotholes(IEnumerable<double> depthsMm, double thresholdMm, CancellationToken ct)
+    public static int CountOverspeeding(IEnumerable<double> speedsKmph, double limitKmph, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         var count = 0;
         var i = 0;
-        foreach (var d in depthsMm)
+        foreach (var v in speedsKmph)
         {
             if (++i % CheckEvery == 0) ct.ThrowIfCancellationRequested();
-            if (d >= thresholdMm) count++;
+            if (v >= limitKmph) count++;
         }
         return count;
     }
@@ -715,32 +715,32 @@ public static class PavementScan
 `ThrowIfCancellationRequested` throws `OperationCanceledException` carrying the token, so callers can check `ex.CancellationToken == ct` if they need to know whose cancellation it was.
 ::mistakes
 - Checking only before the loop, so a 500,000-item scan cannot be stopped.
-- Returning a partial count instead of throwing, so the caller cannot tell "3 potholes" from "stopped after 1,000 readings".
+- Returning a partial count instead of throwing, so the caller cannot tell "3 overspeeding readings" from "stopped after 1,000 readings".
 ::extensions
-Turn it into `CountPotholesAsync(IAsyncEnumerable<double>, ...)` with `[EnumeratorCancellation]` on a generator in the test, and observe that `await foreach` with the token needs no manual checks when the source checks.
+Turn it into `CountOverspeedingAsync(IAsyncEnumerable<double>, ...)` with `[EnumeratorCancellation]` on a generator in the test, and observe that `await foreach` with the token needs no manual checks when the source checks.
 :::
 
 :::exercise id=m03-cancellation-ex2 difficulty=beginner kind=written title="Find the cancellation bugs"
-Review this code from a tender-portal search API and list every cancellation problem, with a fix for each.
+Review this code from an online pharmacy's medicine-search API and list every cancellation problem, with a fix for each.
 
 ```csharp
-app.MapGet("/tenders/search", async (string q, ITenderSearch search) =>
+app.MapGet("/medicines/search", async (string q, IMedicineSearch search) =>
     Results.Ok(await search.FindAsync(q)));
 
-public async Task<IReadOnlyList<Tender>> FindAsync(string q, CancellationToken ct = default)
+public async Task<IReadOnlyList<Medicine>> FindAsync(string q, CancellationToken ct = default)
 {
     var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
     try
     {
         var ids = await _index.QueryAsync(q, cts.Token);
-        var tenders = new List<Tender>();
+        var medicines = new List<Medicine>();
         foreach (var id in ids)
-            tenders.Add(await _repo.GetAsync(id));
-        return tenders;
+            medicines.Add(await _repo.GetAsync(id));
+        return medicines;
     }
     catch (TaskCanceledException)
     {
-        return Array.Empty<Tender>();
+        return Array.Empty<Medicine>();
     }
 }
 ```
@@ -762,7 +762,7 @@ Which exception type do framework methods throw, and which type should you catch
 3. **Timeout not linked.** Use `using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5)); using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);` and pass `linked.Token` everywhere. The original also never disposed the source.
 4. **`_repo.GetAsync(id)` has no token.** Pass `linked.Token`. Better still, replace the loop with one query (`WHERE id = ANY(@ids)`), because 50 sequential lookups are slow and each is another place the token can be forgotten.
 5. **Catching `TaskCanceledException` only.** Some APIs throw the base `OperationCanceledException`, which this misses. Catch `OperationCanceledException`.
-6. **Returning an empty list on cancellation.** A timeout looks like "no tenders match", which is false and misleading. On timeout (timeout cancelled, client still there) throw a `TimeoutException` or return a 504 problem; on client abort, let the exception propagate.
+6. **Returning an empty list on cancellation.** A timeout looks like "no medicines match", which is false and misleading. On timeout (timeout cancelled, client still there) throw a `TimeoutException` or return a 504 problem; on client abort, let the exception propagate.
 ::mistakes
 - Fixing the endpoint but not the repository call, so the token still stops halfway.
 - Replacing the catch with `catch (Exception)`, which makes things worse.
@@ -1040,7 +1040,7 @@ Return the index of the next row so the user can resume the upload from row 301,
 :::
 
 :::exercise id=m03-cancellation-ex5 difficulty=advanced kind=code title="Latest-wins search: cancel the previous request"
-A tender search box sends a query on every keystroke. Only the latest query matters. Implement `LatestOnlySearch`, which cancels the previous in-flight search whenever a new one starts.
+The medicine search box in a pharmacy app sends a query on every keystroke. Only the latest query matters. Implement `LatestOnlySearch`, which cancels the previous in-flight search whenever a new one starts.
 ::requirements
 - `SearchAsync(query, callerToken)` creates a linked source from `callerToken`, makes it the current search, and **cancels the previous current search** if any.
 - The previous search's task ends with an `OperationCanceledException` (from the backend observing its token).
@@ -1122,9 +1122,9 @@ public class LatestOnlySearchTests
     {
         var backend = new ControlledBackend();
         using var s = new LatestOnlySearch(backend);
-        var t = s.SearchAsync("bridge", CancellationToken.None);
-        backend.Pending["bridge"].SetResult(new[] { "T-2026-101" });
-        Assert.Equal(new[] { "T-2026-101" }, await t);
+        var t = s.SearchAsync("paracetamol", CancellationToken.None);
+        backend.Pending["paracetamol"].SetResult(new[] { "MED-101" });
+        Assert.Equal(new[] { "MED-101" }, await t);
     }
 
     [Fact]
@@ -1132,14 +1132,14 @@ public class LatestOnlySearchTests
     {
         var backend = new ControlledBackend();
         using var s = new LatestOnlySearch(backend);
-        var first = s.SearchAsync("bri", CancellationToken.None);
-        var second = s.SearchAsync("bridge repair", CancellationToken.None);
+        var first = s.SearchAsync("para", CancellationToken.None);
+        var second = s.SearchAsync("paracetamol 650", CancellationToken.None);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
-        Assert.True(backend.Tokens["bri"].IsCancellationRequested);
-        Assert.False(backend.Tokens["bridge repair"].IsCancellationRequested);
+        Assert.True(backend.Tokens["para"].IsCancellationRequested);
+        Assert.False(backend.Tokens["paracetamol 650"].IsCancellationRequested);
 
-        backend.Pending["bridge repair"].SetResult(new[] { "T-2026-118", "T-2026-122" });
+        backend.Pending["paracetamol 650"].SetResult(new[] { "MED-118", "MED-122" });
         Assert.Equal(2, (await second).Count);
     }
 
@@ -1149,7 +1149,7 @@ public class LatestOnlySearchTests
         var backend = new ControlledBackend();
         using var s = new LatestOnlySearch(backend);
         using var caller = new CancellationTokenSource();
-        var t = s.SearchAsync("culvert", caller.Token);
+        var t = s.SearchAsync("insulin", caller.Token);
         caller.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => t);
     }
@@ -1159,7 +1159,7 @@ public class LatestOnlySearchTests
     {
         var backend = new ControlledBackend();
         var s = new LatestOnlySearch(backend);
-        var t = s.SearchAsync("flyover", CancellationToken.None);
+        var t = s.SearchAsync("cetirizine", CancellationToken.None);
         s.Dispose();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => t);
         await Assert.ThrowsAsync<ObjectDisposedException>(() => s.SearchAsync("again", CancellationToken.None));
@@ -1267,8 +1267,8 @@ Cancellation paths are easy to forget and hard to trigger manually, so automate 
 
 ```csharp
 var clock = new FakeTimeProvider();
-var svc = new MonthlyTollReportService(new SlowSource(), Options.Create(new ReportOptions { MaxDuration = TimeSpan.FromSeconds(60) }), clock, NullLogger<MonthlyTollReportService>.Instance);
-var task = svc.BuildAsync("KHD", 2026, 9, CancellationToken.None);
+var svc = new MonthlyTripReportService(new SlowSource(), Options.Create(new ReportOptions { MaxDuration = TimeSpan.FromSeconds(60) }), clock, NullLogger<MonthlyTripReportService>.Instance);
+var task = svc.BuildAsync("BLR", 2026, 9, CancellationToken.None);
 clock.Advance(TimeSpan.FromSeconds(61));
 await Assert.ThrowsAsync<ReportTimeoutException>(() => task);
 ```
@@ -1281,8 +1281,8 @@ Edge cases worth a test: cancellation exactly when work completes (the result sh
 
 ## Real-world application
 
-- **Search-as-you-type.** Tender portals, railway station pickers and e-commerce search boxes fire a request per keystroke. Client-side debouncing plus server-side cancellation of abandoned requests keeps database load proportional to real searches, not keystrokes.
-- **Reports and exports.** Month-end MIS reports in infrastructure, banking and government systems scan millions of rows. Cancellation, request budgets and `statement_timeout` together prevent a few abandoned reports from exhausting the connection pool. Long ones move to a background job that emails a link (see [Background processing and job queues](#/lesson/m11-background-processing)).
+- **Search-as-you-type.** Pharmacy apps, railway station pickers and e-commerce search boxes fire a request per keystroke. Client-side debouncing plus server-side cancellation of abandoned requests keeps database load proportional to real searches, not keystrokes.
+- **Reports and exports.** Month-end MIS reports in ride-hailing, banking and government systems scan millions of rows. Cancellation, request budgets and `statement_timeout` together prevent a few abandoned reports from exhausting the connection pool. Long ones move to a background job that emails a link (see [Background processing and job queues](#/lesson/m11-background-processing)).
 - **Fan-out calls.** An API that calls three services in parallel for a dashboard can cancel the other two calls as soon as one fails, by sharing a linked source and cancelling it on the first error.
 - **Graceful shutdown.** During a Kubernetes rolling deployment, `ApplicationStopping` lets long-running work stop at a safe point before the pod is killed ([Health checks and graceful shutdown](#/lesson/m03-health-shutdown)).
 - **Payments.** Payment flows deliberately stop honouring the client's token once money moves, and rely on idempotency keys and reconciliation jobs instead. Cancelling is a read-side optimisation, never a write-side shortcut.

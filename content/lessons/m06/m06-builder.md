@@ -7,8 +7,8 @@ status: reviewed
 template: lesson
 minutes: 70
 prerequisites: [m01-constructors, m01-interfaces-abstract, m07-immutability, m03-dependency-injection]
-related: [m06-factory-method, m06-abstract-factory, m06-prototype, m06-composite, m06-options-result, m07-validation-rules]
-tags: [creational, gof, fluent, approvals, notifications, reports]
+related: [m06-factory-method, m06-abstract-factory, m06-composite, m06-options-result, m07-validation-rules]
+tags: [creational, gof, fluent, approvals, notifications, travel]
 patterns: [Builder]
 summary: Build a complicated object step by step, check it once at the end, and hand back a finished, valid result. Learn the GoF Builder with a Director, the fluent builder you meet in ASP.NET Core, and when C# records and `required` make a builder unnecessary.
 references:
@@ -22,7 +22,7 @@ references:
     url: https://learn.microsoft.com/dotnet/csharp/language-reference/keywords/required
 ---
 
-You use builders every day in .NET: `StringBuilder`, `UriBuilder`, `WebApplication.CreateBuilder(args)`, `AuthorizationPolicyBuilder`, `ConfigurationBuilder`. This lesson explains the two ideas hiding under the one name, the GoF Builder (one construction process, several output formats) and the fluent builder (a readable way to assemble a complicated object and validate it once), and when modern C# features let you skip the pattern altogether.
+You use builders every day in .NET: `StringBuilder`, `UriBuilder`, `WebApplication.CreateBuilder(args)`, `Host.CreateApplicationBuilder(args)`, `services.AddHttpClient(...)` (which hands back an `IHttpClientBuilder`), `AuthorizationPolicyBuilder`, `ConfigurationBuilder`. This lesson explains the two ideas hiding under the one name, the GoF Builder (one construction process, several output formats) and the fluent builder (a readable way to assemble a complicated object and validate it once), and when modern C# features let you skip the pattern altogether.
 
 ## Learning objectives
 
@@ -64,21 +64,21 @@ Now a twist. The same tailor's assistant reads out your order to two people: the
 
 ### Problem 1: complicated construction
 
-Suppose a monthly progress report request has 2 required fields and 6 optional ones. Without a builder you get a *telescoping constructor*:
+Suppose a travel portal lets a company download a monthly bookings report for its corporate account. The request has 3 required values and 5 optional ones. Without a builder you get a *telescoping constructor*:
 
 ```csharp
-new ReportRequest("NH-48-P3", new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 30),
+new ReportRequest("ACME-BLR", new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 30),
                   "pdf", true, false, "hi", null);
 ```
 
-What do `true, false` mean? Is `"hi"` the language or a title? Which `null` did you mean to set? Positional arguments of the same type are easy to swap silently. Worse, some combinations are invalid ("financials require the Finance role", "`to` must be after `from`"), and nothing checks that the *combination* makes sense until something fails later.
+What do `true, false` mean? Is `"hi"` the language or a title? Which `null` did you mean to set? Positional arguments of the same type are easy to swap silently. Worse, some combinations are invalid ("receipt images can't go into an Excel file", "`to` must be after `from`"), and nothing checks that the *combination* makes sense until something fails later.
 
 A builder gives every decision a name, applies defaults for the rest, and checks the whole combination once:
 
 ```csharp
-var request = new ReportRequestBuilder("NH-48-P3", from, to)
+var request = new ReportRequestBuilder("ACME-BLR", from, to)
     .AsPdf()
-    .IncludePhotos()
+    .IncludeReceipts()
     .InLanguage("hi")
     .Build();      // validates the combination, returns an immutable ReportRequest
 ```
@@ -87,7 +87,7 @@ var request = new ReportRequestBuilder("NH-48-P3", from, to)
 
 The 1994 example was a document converter. An RTF reader walks through a document and, for each piece (a paragraph, a font change), calls a builder. A `TeXBuilder` produces TeX, an `AsciiBuilder` produces plain text, and a `TextWidgetBuilder` produces an on-screen editor widget. The reader (the **director**) knows the *order of steps*. The builders know the *representation*. Adding a new output format means writing a new builder, and the reader doesn't change.
 
-A modern equivalent: an approval request notification has the same parts in the same order (title, a few lines of details, an amount, an action link), but it must be produced as a 160-character SMS, an HTML email and a chat card. One director, three builders.
+A modern equivalent: a corporate travel portal sends "please approve this trip" notifications. Each has the same parts in the same order (title, a few lines of details, an amount, an action link), but it must be produced as a 160-character SMS, an HTML email and a Slack or Teams card. One director, three builders.
 
 ### Participants
 
@@ -113,7 +113,7 @@ ASP.NET Core uses a variation everywhere:
 
 ```csharp
 builder.Services.AddAuthorization(o =>
-    o.AddPolicy("CanApproveLargePO", p => p.RequireRole("FinanceHead").RequireClaim("unit", "Roads")));
+    o.AddPolicy("CanApproveLargeTrips", p => p.RequireRole("FinanceHead").RequireClaim("cost_center", "Sales")));
 ```
 
 The framework creates the builder (`AuthorizationPolicyBuilder`), hands it to your lambda to configure, then calls `Build()` itself. You never see `new` or `Build()`. This style is great for *nested* builders (a workflow made of steps, each step configured by its own builder) and for library APIs where the library must control when building happens.
@@ -125,10 +125,14 @@ The framework creates the builder (`AuthorizationPolicyBuilder`), hands it to yo
 | `StringBuilder` | `string` | Avoids allocating a new string per concatenation |
 | `UriBuilder` | `Uri` | Set scheme, host, path and query separately |
 | `WebApplication.CreateBuilder(args)` | `WebApplication` | Services, configuration and logging are configured, then `Build()` freezes them |
-| `ConfigurationBuilder` | `IConfigurationRoot` | Add sources in order, then build |
+| `Host.CreateApplicationBuilder(args)` (`HostApplicationBuilder`) | `IHost` | The same idea for worker services and console apps without HTTP |
+| `ConfigurationBuilder` | `IConfigurationRoot` | Add sources in order, then build; later sources override earlier ones |
+| `IHttpClientBuilder` (returned by `AddHttpClient`) | Named or typed `HttpClient` | `.AddHttpMessageHandler<T>()`, `.AddStandardResilienceHandler()`; the factory builds the handler chain when a client is first created |
+| `ResiliencePipelineBuilder` (Polly v8, used by `Microsoft.Extensions.Resilience`) | `ResiliencePipeline` | `.AddRetry(...)`, `.AddTimeout(...)`, validated when built |
 | `AuthorizationPolicyBuilder`, `CorsPolicyBuilder` | Policies | Usually used via configure lambdas |
 | `RouteHandlerBuilder` | Endpoint metadata | `.RequireAuthorization().WithName("x")` |
-| `DbConnectionStringBuilder` and provider subclasses | Connection string | Escapes values correctly, avoiding string-concatenation bugs |
+| `DbConnectionStringBuilder` and provider subclasses such as `NpgsqlConnectionStringBuilder` | Connection string | Typed properties (`Host`, `Port`, `Pooling`), and values are escaped correctly, avoiding string-concatenation and injection bugs |
+| `NpgsqlDataSourceBuilder` | `NpgsqlDataSource` | Configure type mappings and logging for PostgreSQL once, then `Build()` a thread-safe data source |
 | `ImmutableArray.CreateBuilder<T>()` | `ImmutableArray<T>` | Mutable while building, then `ToImmutable()` or `MoveToImmutable()` |
 
 ### When C# makes a builder unnecessary
@@ -138,20 +142,20 @@ Modern C# covers many cases that once needed a builder:
 ```csharp
 public sealed record ReportRequest
 {
-    public required string ProjectId { get; init; }
+    public required string AccountId { get; init; }
     public required DateOnly From { get; init; }
     public required DateOnly To { get; init; }
     public string Format { get; init; } = "pdf";
-    public bool IncludePhotos { get; init; }
+    public bool IncludeReceipts { get; init; }
     public string Language { get; init; } = "en";
 }
 
-var r = new ReportRequest { ProjectId = "NH-48-P3", From = from, To = to, IncludePhotos = true };
+var r = new ReportRequest { AccountId = "ACME-BLR", From = from, To = to, IncludeReceipts = true };
 var hindi = r with { Language = "hi" };   // copy with one change
 ```
 
 - **Named values**: object initializers name every value.
-- **Required values**: the `required` keyword makes the *compiler* reject a missing `ProjectId`.
+- **Required values**: the `required` keyword makes the *compiler* reject a missing `AccountId`.
 - **Defaults**: property initializers.
 - **Immutability**: `init` accessors.
 - **Variations**: `with` expressions copy and change.
@@ -166,6 +170,7 @@ What this *doesn't* give you is **cross-field validation at construction** (you 
 | One place to validate the whole combination | Builders can drift from products: a new product field nobody added to the builder |
 | Immutable products, mutable assembly | `Build()` validation happens at *runtime*; the compiler can't help (unless you use a staged builder, exercise 5) |
 | Several representations from one director | The director-and-builder split is extra indirection if you only ever produce one format |
+| Easy, step-by-step assembly | Builders are mutable and not thread-safe: never register one as a singleton or share it between requests |
 
 ### When not to use it
 
@@ -173,6 +178,8 @@ What this *doesn't* give you is **cross-field validation at construction** (you 
 - **All fields required, none optional.** A constructor with named arguments (`new Money(amount: 100m, currency: "INR")`) is enough.
 - **DTOs and request models.** Use `required` + `init` and validate at the API boundary (see [validation](#/lesson/m07-validation-rules)).
 - **Only one representation and no complicated assembly.** The director/builder split adds nothing.
+- **Application settings.** Bind them with the options pattern and check them with `ValidateDataAnnotations().ValidateOnStart()` (see [Options and Result](#/lesson/m06-options-result)) instead of hand-writing a settings builder.
+- **"Builder" as a fancy setter wrapper.** If `Build()` validates nothing and copies nothing, you have added a class and gained only a chain of dots.
 
 ## Visual explanation
 
@@ -204,51 +211,53 @@ classDiagram
     IMessageBuilder <|.. HtmlEmailBuilder
 ```
 
-The director knows only the builder interface. It contains the *recipe*: title first, then requester, document and amount, then the action. Each concrete builder holds a partial result (a list of short parts for SMS, a `StringBuilder` of HTML for email) and turns each step into its own format. Adding a chat-card format means one new class implementing `IMessageBuilder`; the director doesn't change.
+The director knows only the builder interface. It contains the *recipe*: title first, then the trip number, the traveller and the amount, then the action. Each concrete builder holds a partial result (a list of short parts for SMS, a `StringBuilder` of HTML for email) and turns each step into its own format. Adding a chat-card format means one new class implementing `IMessageBuilder`; the director doesn't change.
 
 ### Sequence diagram: one recipe, two products
 
 ```mermaid
 sequenceDiagram
-    participant C as Approval service
+    participant C as Trip approval service
     participant D as ApprovalMessageDirector
     participant S as SmsMessageBuilder
     participant H as HtmlEmailBuilder
-    C->>D: BuildApprovalRequest(sms, request)
+    C->>D: BuildApprovalRequest(sms, request, step)
     D->>S: AddTitle("Approval needed")
-    D->>S: AddLine("PO", "PO-2026-0417")
+    D->>S: AddLine("Trip", "TRIP-2026-0417")
+    D->>S: AddLine("Requested by", "Asha Rao")
     D->>S: AddAmount(640000)
+    D->>S: AddLine("Respond within", "72 hours")
     D->>S: AddAction("Review", url)
     C->>S: Build()
-    S-->>C: "Approval needed. PO: PO-2026-0417. ₹6,40,000. Review: https://..."
-    C->>D: BuildApprovalRequest(email, request)
-    D->>H: same four steps, same order
+    S-->>C: "Approval needed. Trip: TRIP-2026-0417. ... ₹6,40,000 ... Review: https://..."
+    C->>D: BuildApprovalRequest(email, request, step)
+    D->>H: same six steps, same order
     C->>H: Build()
     H-->>C: "<h2>Approval needed</h2><table>...</table><a href=...>Review</a>"
 ```
 
-The director is called twice with the same request and two different builders. It issues identical steps both times. The *caller* asks each builder for its result at the end, because only the caller knows what concrete type it holds. The SMS builder shortens and joins; the email builder escapes and wraps in HTML. Notice that the amount is formatted in the Indian digit grouping (₹6,40,000) by both builders, because that rule lives in one shared helper.
+The director is called twice with the same request (a ₹6,40,000 team trip to a conference in Singapore) and two different builders. It issues identical steps both times. The *caller* asks each builder for its result at the end, because only the caller knows what concrete type it holds. The SMS builder shortens and joins; the email builder escapes and wraps in HTML. Notice that the amount is formatted in the Indian digit grouping (₹6,40,000) by both builders, because that rule lives in one shared helper.
 
 ## Step-by-step example
 
-We'll build the fluent half of this lesson: a definition of an approval workflow for purchase orders.
+We'll build the fluent half of this lesson: the approval workflow of a corporate travel portal. Employees request trips (flights plus hotel); who must approve depends on the cost.
 
 ### Step 1 — the requirements
 
-- A purchase order needs the project manager (any amount), the finance head (₹50,000 and above) and a director (₹5,00,000 and above).
+- A trip request needs the traveller's manager (any amount), the finance head (₹50,000 and above, roughly a return flight plus three hotel nights) and a VP (₹5,00,000 and above, usually international or group travel).
 - Each step has a service-level time (SLA): 24, 48 and 72 hours.
-- Unapproved steps escalate to the COO.
+- Unapproved steps escalate to the CFO.
 - Rules: at least one step; step names unique; every step has a role; SLAs positive; thresholds don't decrease from one step to the next; the first step applies to every amount (threshold 0), so nothing goes unapproved.
 
 ### Step 2 — the naive version
 
 ```csharp
-var wf = new ApprovalWorkflowDefinition("PurchaseOrder", new List<ApprovalStep>
+var wf = new ApprovalWorkflowDefinition("TripRequest", new List<ApprovalStep>
 {
-    new("pm", "ProjectManager", 0m, TimeSpan.FromHours(24)),
+    new("manager", "Manager", 0m, TimeSpan.FromHours(24)),
     new("finance", "FinanceHead", 50_000m, TimeSpan.FromHours(48)),
-    new("director", "Director", 500_000m, TimeSpan.FromHours(-72)),   // negative SLA, nobody notices
-}, "COO");
+    new("vp", "VP", 500_000m, TimeSpan.FromHours(-72)),   // negative SLA, nobody notices
+}, "CFO");
 wf.Steps.Add(new("intern", "", 0m, TimeSpan.Zero));                     // the list is still mutable!
 ```
 
@@ -264,21 +273,21 @@ The product, `ApprovalWorkflowDefinition`, gets an `internal` constructor and ex
 
 ### Step 5 — validate once, report everything
 
-`Build()` walks the steps, collects every problem into a list, and throws one `WorkflowValidationException` listing them all. Workflows are built at application startup, so a bad definition stops the app from starting instead of failing on the first large purchase order.
+`Build()` walks the steps, collects every problem into a list, and throws one `WorkflowValidationException` listing them all. Workflows are built at application startup, so a bad definition stops the app from starting instead of failing on the first expensive trip.
 
 ## Production-style C# implementation
 
 ```text
-Approvals.Api/
+TravelApprovals.Api/
   Program.cs
-  Approvals/ApprovalWorkflowDefinition.cs
-  Approvals/ApprovalWorkflowBuilder.cs
-  Approvals/WorkflowCatalog.cs
-  Approvals/Messages.cs
+  TravelApprovals/ApprovalWorkflowDefinition.cs
+  TravelApprovals/ApprovalWorkflowBuilder.cs
+  TravelApprovals/WorkflowCatalog.cs
+  TravelApprovals/Messages.cs
 ```
 
-```csharp file=Approvals/ApprovalWorkflowDefinition.cs
-namespace Approvals;
+```csharp file=TravelApprovals/ApprovalWorkflowDefinition.cs
+namespace TravelApprovals;
 
 public sealed record ApprovalStep(string Name, string Role, decimal MinAmountInr, TimeSpan Sla);
 
@@ -308,8 +317,8 @@ public sealed class WorkflowValidationException(string documentType, IReadOnlyLi
 }
 ```
 
-```csharp file=Approvals/ApprovalWorkflowBuilder.cs
-namespace Approvals;
+```csharp file=TravelApprovals/ApprovalWorkflowBuilder.cs
+namespace TravelApprovals;
 
 /// <summary>Builder for one step. Configured through a lambda, ASP.NET Core style.</summary>
 public sealed class StepBuilder
@@ -373,8 +382,8 @@ public sealed class ApprovalWorkflowBuilder(string documentType)
 }
 ```
 
-```csharp file=Approvals/WorkflowCatalog.cs
-namespace Approvals;
+```csharp file=TravelApprovals/WorkflowCatalog.cs
+namespace TravelApprovals;
 
 /// <summary>Holds every workflow, built once at startup.</summary>
 public sealed class WorkflowCatalog
@@ -392,8 +401,12 @@ public sealed class WorkflowCatalogBuilder
 {
     private readonly List<ApprovalWorkflowBuilder> _workflows = new();
 
+    private readonly HashSet<string> _types = new(StringComparer.OrdinalIgnoreCase);
+
     public WorkflowCatalogBuilder Add(string documentType, Action<ApprovalWorkflowBuilder> configure)
     {
+        if (!_types.Add(documentType))
+            throw new InvalidOperationException($"Workflow '{documentType}' is defined twice.");
         var b = new ApprovalWorkflowBuilder(documentType);
         configure(b);
         _workflows.Add(b);
@@ -405,7 +418,7 @@ public sealed class WorkflowCatalogBuilder
 
 public static class ApprovalServiceCollectionExtensions
 {
-    /// <summary>Builds eagerly, so an invalid workflow stops the app at startup, not on the first large PO.</summary>
+    /// <summary>Builds eagerly, so an invalid workflow stops the app at startup, not on the first expensive trip.</summary>
     public static IServiceCollection AddApprovalWorkflows(this IServiceCollection services, Action<WorkflowCatalogBuilder> configure)
     {
         var builder = new WorkflowCatalogBuilder();
@@ -417,14 +430,14 @@ public static class ApprovalServiceCollectionExtensions
 }
 ```
 
-```csharp file=Approvals/Messages.cs
+```csharp file=TravelApprovals/Messages.cs
 using System.Globalization;
 using System.Net;
 using System.Text;
 
-namespace Approvals;
+namespace TravelApprovals;
 
-public sealed record ApprovalRequest(string DocumentNumber, string RequestedBy, decimal AmountInr, Uri ReviewUrl);
+public sealed record ApprovalRequest(string TripNumber, string RequestedBy, decimal AmountInr, Uri ReviewUrl);
 
 /// <summary>GoF Builder interface: the construction steps.</summary>
 public interface IMessageBuilder
@@ -482,7 +495,7 @@ public sealed class ApprovalMessageDirector
 {
     public void BuildApprovalRequest(IMessageBuilder b, ApprovalRequest r, ApprovalStep step) => b
         .AddTitle("Approval needed")
-        .AddLine("Document", r.DocumentNumber)
+        .AddLine("Trip", r.TripNumber)
         .AddLine("Requested by", r.RequestedBy)
         .AddAmount(r.AmountInr)
         .AddLine("Respond within", $"{step.Sla.TotalHours:0} hours")
@@ -491,19 +504,19 @@ public sealed class ApprovalMessageDirector
 ```
 
 ```csharp file=Program.cs
-using Approvals;
+using TravelApprovals;
 
 var builder = WebApplication.CreateBuilder(args);   // a builder for the whole app
 
 builder.Services.AddApprovalWorkflows(w => w
-    .Add("PurchaseOrder", po => po
-        .Step("pm", s => s.Role("ProjectManager").Sla(TimeSpan.FromHours(24)))
+    .Add("TripRequest", trip => trip
+        .Step("manager", s => s.Role("Manager").Sla(TimeSpan.FromHours(24)))
         .Step("finance", s => s.Role("FinanceHead").WhenAmountAtLeast(50_000m).Sla(TimeSpan.FromHours(48)))
-        .Step("director", s => s.Role("Director").WhenAmountAtLeast(5_00_000m).Sla(TimeSpan.FromHours(72)))
-        .EscalateTo("COO"))
-    .Add("SiteExpense", se => se
-        .Step("site-engineer", s => s.Role("SiteEngineer").Sla(TimeSpan.FromHours(8)))
-        .Step("pm", s => s.Role("ProjectManager").WhenAmountAtLeast(25_000m))));
+        .Step("vp", s => s.Role("VP").WhenAmountAtLeast(5_00_000m).Sla(TimeSpan.FromHours(72)))
+        .EscalateTo("CFO"))
+    .Add("CabClaim", cab => cab
+        .Step("team-lead", s => s.Role("TeamLead").Sla(TimeSpan.FromHours(8)))
+        .Step("manager", s => s.Role("Manager").WhenAmountAtLeast(5_000m))));
 
 var app = builder.Build();
 
@@ -516,12 +529,14 @@ app.MapPost("/approvals/{documentType}/preview", (string documentType, string ch
     WorkflowCatalog catalog, ApprovalMessageDirector director) =>
 {
     if (!catalog.TryGet(documentType, out var wf)) return Results.NotFound();
-    IMessageBuilder b = channel switch
+    if (request.AmountInr < 0) return Results.Problem("Amount cannot be negative.", statusCode: StatusCodes.Status400BadRequest);
+    IMessageBuilder? b = channel switch
     {
         "sms" => new SmsMessageBuilder(),
         "email" => new HtmlEmailBuilder(),
-        _ => throw new BadHttpRequestException($"Unknown channel '{channel}'."),
+        _ => null,
     };
+    if (b is null) return Results.Problem($"Unknown channel '{channel}'.", statusCode: StatusCodes.Status400BadRequest);
     var lastStep = wf.StepsFor(request.AmountInr)[^1];
     director.BuildApprovalRequest(b, request, lastStep);
     return Results.Text(b.Build(), channel == "email" ? "text/html" : "text/plain");
@@ -533,7 +548,8 @@ app.Run();
 Design notes:
 
 - **Two builder styles, side by side.** `ApprovalWorkflowBuilder` is a fluent builder that validates and freezes. `IMessageBuilder` with a director is the GoF form: one recipe, several formats.
-- **Fail at startup.** `AddApprovalWorkflows` builds eagerly. If someone sets a director threshold lower than the finance threshold, the app refuses to start and the exception lists every problem. Compare that with discovering it when a ₹6 lakh order skips the director.
+- **Fail at startup.** `AddApprovalWorkflows` builds eagerly. If someone sets the VP threshold lower than the finance threshold, the app refuses to start and the exception lists every problem. Compare that with discovering it when a ₹6.4 lakh trip skips VP approval. Defining the same workflow twice fails too, instead of one silently replacing the other.
+- **A builder per request, never a shared one.** The preview endpoint creates a new message builder for every call. Builders hold mutable state, so a singleton builder shared between concurrent requests would mix two people's messages.
 - **The product can't be built any other way.** `ApprovalWorkflowDefinition` has an `internal` constructor, so code outside the module must use the builder and its validation.
 - **Defensive copies.** `Build()` creates new arrays, and the product wraps them read-only, so calling `.Step(...)` on the builder after `Build()` can't change a workflow that's already in use.
 - **Shared formatting stays shared.** Both message builders use `Inr.Format`, so the Indian digit grouping (6,40,000 rather than 640,000) is applied consistently.
@@ -544,8 +560,8 @@ Design notes:
 
 ```csharp
 var wf = new ApprovalWorkflow();
-wf.DocumentType = "PurchaseOrder";
-wf.AddStep("pm", "ProjectManager", 0m);
+wf.DocumentType = "TripRequest";
+wf.AddStep("manager", "Manager", 0m);
 wf.AddStep("finance", "", 50_000m);      // missing role
 service.Start(wf);                         // validated? partially? never?
 wf.AddStep("late", "Intern", 0m);          // mutates a workflow other requests are using
@@ -575,7 +591,7 @@ A `Build()` that skips validation "because the UI already checked" moves the pro
 
 ## Practical playground
 
-The program builds a small tender notice with a fluent builder and prints validation errors for a bad one. Run it, then try the TODO: add a `.Corrigendum(string note)` step that can be called several times and appears in the output.
+The program builds a flight itinerary with a fluent builder and prints the validation errors for a bad one. Run it, then try the TODO: add a `.SpecialRequest(string note)` step ("window seat", "vegetarian meal") that can be called several times and appears in the output.
 
 :::playground type=csharp title="Fluent builder with validation"
 ```csharp file=Program.cs
@@ -584,40 +600,41 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 
-public sealed class TenderNotice
+public sealed class FlightItinerary
 {
-    internal TenderNotice(string project, decimal estimateInr, DateOnly closesOn, IReadOnlyList<string> documents)
-    { Project = project; EstimateInr = estimateInr; ClosesOn = closesOn; Documents = documents; }
-    public string Project { get; }
-    public decimal EstimateInr { get; }
-    public DateOnly ClosesOn { get; }
-    public IReadOnlyList<string> Documents { get; }
+    internal FlightItinerary(string traveller, decimal fareInr, DateOnly departsOn, IReadOnlyList<string> segments)
+    { Traveller = traveller; FareInr = fareInr; DepartsOn = departsOn; Segments = segments; }
+    public string Traveller { get; }
+    public decimal FareInr { get; }
+    public DateOnly DepartsOn { get; }
+    public IReadOnlyList<string> Segments { get; }
     public override string ToString() =>
-        $"{Project}: estimate ₹{EstimateInr.ToString("N0", CultureInfo.GetCultureInfo("en-IN"))}, closes {ClosesOn:dd MMM yyyy}, docs: {string.Join(", ", Documents)}";
+        $"{Traveller}: fare ₹{FareInr.ToString("N0", CultureInfo.GetCultureInfo("en-IN"))}, departs {DepartsOn:dd MMM yyyy}, flights: {string.Join(", ", Segments)}";
 }
 
-public sealed class TenderNoticeBuilder(DateOnly publishedOn)
+public sealed class FlightItineraryBuilder(DateOnly bookedOn)
 {
-    private string? _project;
-    private decimal _estimate;
-    private DateOnly? _closesOn;
-    private readonly List<string> _docs = new();
+    private string? _traveller;
+    private decimal _fare;
+    private DateOnly? _departsOn;
+    private readonly List<string> _segments = new();
 
-    public TenderNoticeBuilder ForProject(string name) { _project = name; return this; }
-    public TenderNoticeBuilder Estimate(decimal inr) { _estimate = inr; return this; }
-    public TenderNoticeBuilder ClosesOn(DateOnly date) { _closesOn = date; return this; }
-    public TenderNoticeBuilder Document(string name) { _docs.Add(name); return this; }
+    public FlightItineraryBuilder ForTraveller(string name) { _traveller = name; return this; }
+    public FlightItineraryBuilder Fare(decimal inr) { _fare = inr; return this; }
+    public FlightItineraryBuilder DepartsOn(DateOnly date) { _departsOn = date; return this; }
+    public FlightItineraryBuilder Segment(string flight) { _segments.Add(flight); return this; }
 
-    public TenderNotice Build()
+    public FlightItinerary Build()
     {
         var errors = new List<string>();
-        if (string.IsNullOrWhiteSpace(_project)) errors.Add("project is required");
-        if (_estimate <= 0) errors.Add("estimate must be positive");
-        if (_closesOn is null) errors.Add("closing date is required");
-        else if (_closesOn.Value < publishedOn.AddDays(21)) errors.Add("bids must stay open at least 21 days (illustrative rule)");
-        if (_docs.Count == 0) errors.Add("at least one document is required");
+        if (string.IsNullOrWhiteSpace(_traveller)) errors.Add("traveller name is required");
+        if (_fare <= 0) errors.Add("fare must be positive");
+        if (_departsOn is null) errors.Add("departure date is required");
+        else if (_departsOn.Value < bookedOn) errors.Add("departure cannot be before the booking date");
+        else if (_departsOn.Value > bookedOn.AddDays(330)) errors.Add("airlines open bookings about 330 days ahead (illustrative rule)");
+        if (_segments.Count == 0) errors.Add("at least one flight segment is required");
         if (errors.Count > 0) throw new InvalidOperationException(string.Join("; ", errors));
-        return new TenderNotice(_project!, _estimate, _closesOn!.Value, _docs.ToArray());
+        return new FlightItinerary(_traveller!, _fare, _departsOn!.Value, _segments.ToArray());
     }
 }
 
@@ -625,19 +642,19 @@ public static class Program
 {
     public static void Main()
     {
-        var published = new DateOnly(2026, 10, 1);
-        var ok = new TenderNoticeBuilder(published)
-            .ForProject("Bridge over Ganga at km 112")
-            .Estimate(48_50_00_000m)
-            .ClosesOn(new DateOnly(2026, 11, 5))
-            .Document("NIT.pdf").Document("BOQ.xlsx")
+        var booked = new DateOnly(2026, 10, 1);
+        var ok = new FlightItineraryBuilder(booked)
+            .ForTraveller("Asha Rao")
+            .Fare(18_640m)
+            .DepartsOn(new DateOnly(2026, 11, 5))
+            .Segment("BLR-DEL 6E 2134").Segment("DEL-SXR AI 821")
             .Build();
         Console.WriteLine(ok);
 
-        try { new TenderNoticeBuilder(published).Estimate(-1).ClosesOn(new DateOnly(2026, 10, 10)).Build(); }
+        try { new FlightItineraryBuilder(booked).Fare(-1).DepartsOn(new DateOnly(2026, 9, 10)).Build(); }
         catch (InvalidOperationException ex) { Console.WriteLine("Rejected: " + ex.Message); }
 
-        // TODO: add .Corrigendum(string note) (repeatable) and show the notes in ToString().
+        // TODO: add .SpecialRequest(string note) (repeatable) and show the notes in ToString().
     }
 }
 ```
@@ -646,7 +663,7 @@ public static class Program
 ## Exercises
 
 :::exercise id=m06-builder-ex1 difficulty=beginner kind=code title="A builder for email notifications"
-Write `EmailNotificationBuilder`, which builds an immutable `EmailNotification`. Recipients and a subject are required; attachments are optional but limited.
+A travel portal emails travellers their booking confirmations, with the e-ticket and hotel voucher attached. Write `EmailNotificationBuilder`, which builds an immutable `EmailNotification`. Recipients and a subject are required; attachments are optional but limited.
 ::requirements
 - Methods: `To(string)` (repeatable), `Subject(string)`, `Body(string)`, `HighPriority()`, `Attach(string fileName, long sizeBytes)` (repeatable). Each returns the builder.
 - `Build()` validates and throws `ArgumentException` whose message lists **every** problem, separated by `; `:
@@ -706,11 +723,11 @@ public class EmailNotificationBuilderTests
     public void Builds_valid_notification()
     {
         var n = new EmailNotificationBuilder()
-            .To("pm@site.in").To("PM@site.in").To("qs@site.in")
-            .Subject("RFI-204 overdue").Body("Please respond.").HighPriority()
+            .To("asha@acme.in").To("ASHA@acme.in").To("travel-desk@acme.in")
+            .Subject("Booking TRIP-204 confirmed").Body("Your e-ticket is attached.").HighPriority()
             .Build();
-        Assert.Equal(new[] { "pm@site.in", "qs@site.in" }, n.To);
-        Assert.Equal("RFI-204 overdue", n.Subject);
+        Assert.Equal(new[] { "asha@acme.in", "travel-desk@acme.in" }, n.To);
+        Assert.Equal("Booking TRIP-204 confirmed", n.Subject);
         Assert.True(n.HighPriority);
     }
 
@@ -726,14 +743,14 @@ public class EmailNotificationBuilderTests
     public void Limits_attachment_count()
     {
         var b = new EmailNotificationBuilder().To("a@b.in").Subject("s");
-        for (var i = 0; i < 6; i++) b.Attach($"f{i}.pdf", 1000);
+        for (var i = 0; i < 6; i++) b.Attach($"boarding-pass-{i}.pdf", 1000);
         Assert.Contains("at most 5 attachments", Assert.Throws<ArgumentException>(() => b.Build()).Message);
     }
 
     [Fact]
     public void Limits_attachment_size()
     {
-        var b = new EmailNotificationBuilder().To("a@b.in").Subject("s").Attach("drawing.dwg", 11L * 1024 * 1024);
+        var b = new EmailNotificationBuilder().To("a@b.in").Subject("s").Attach("hotel-photos.zip", 11L * 1024 * 1024);
         Assert.Contains("attachments exceed 10 MB", Assert.Throws<ArgumentException>(() => b.Build()).Message);
     }
 
@@ -806,21 +823,21 @@ public sealed class EmailNotificationBuilder
 :::
 
 :::exercise id=m06-builder-ex2 difficulty=beginner kind=code title="Refactor a telescoping constructor"
-A report request is created like this all over the codebase:
+A corporate travel portal lets each company download a bookings report for its account. The request is created like this all over the codebase:
 
 ```csharp
-new ReportRequest("NH-48-P3", from, to, "pdf", true, false, "hi", null);
+new ReportRequest("ACME-BLR", from, to, "pdf", true, false, "hi", null);
 ```
 
-The positional `true, false` have already caused one bug (photos were swapped with financials). Write `ReportRequestBuilder` with named steps and defaults, and validate the combination in `Build()`.
+The positional `true, false` have already caused one bug (receipt images were swapped with the GST breakup, so a client got 400 pages of scanned bills). Write `ReportRequestBuilder` with named steps and defaults, and validate the combination in `Build()`.
 ::requirements
-- Constructor: `ReportRequestBuilder(string projectId, DateOnly from, DateOnly to)`, the three required values.
-- Steps: `AsPdf()`, `AsExcel()`, `IncludePhotos()`, `IncludeFinancials()`, `InLanguage(string)`, `MaxRows(int)`.
-- Defaults: format `pdf`, no photos, no financials, language `en`, no row limit.
-- Rules (throw `InvalidOperationException`): `to` must not be before `from`; the period can't exceed 366 days; photos aren't supported in Excel; `MaxRows` must be between 1 and 100,000; language must be one of `en`, `hi`, `mr`.
+- Constructor: `ReportRequestBuilder(string accountId, DateOnly from, DateOnly to)`, the three required values.
+- Steps: `AsPdf()`, `AsExcel()`, `IncludeReceipts()` (scanned receipt images), `IncludeGstBreakup()`, `InLanguage(string)`, `MaxRows(int)`.
+- Defaults: format `pdf`, no receipts, no GST breakup, language `en`, no row limit.
+- Rules (throw `InvalidOperationException`): `to` must not be before `from`; the period can't exceed 366 days; receipt images aren't supported in Excel; `MaxRows` must be between 1 and 100,000; language must be one of `en`, `hi`, `mr`.
 ::acceptance
 - A request with only the required values uses all defaults.
-- `IncludePhotos().AsExcel()` is rejected.
+- `IncludeReceipts().AsExcel()` is rejected.
 - A 400-day period is rejected.
 - The resulting `ReportRequest` has the expected values.
 ::hint
@@ -828,7 +845,7 @@ The required values go in the builder's constructor; everything optional becomes
 ::hint
 Store defaults in the builder's fields so that `Build()` just copies them.
 ::hint
-Check rules that involve *two* values (photos + Excel, from + to) in `Build()`, never in the setters, because the caller may set them in either order.
+Check rules that involve *two* values (receipts + Excel, from + to) in `Build()`, never in the setters, because the caller may set them in either order.
 ::hint
 `to.DayNumber - from.DayNumber` gives the period length in days.
 ::starter
@@ -836,16 +853,16 @@ Check rules that involve *two* values (photos + Excel, from + to) in `Build()`, 
 using System;
 using System.Collections.Generic;
 
-public sealed record ReportRequest(string ProjectId, DateOnly From, DateOnly To, string Format,
-    bool IncludePhotos, bool IncludeFinancials, string Language, int? MaxRows);
+public sealed record ReportRequest(string AccountId, DateOnly From, DateOnly To, string Format,
+    bool IncludeReceipts, bool IncludeGstBreakup, string Language, int? MaxRows);
 
 public sealed class ReportRequestBuilder
 {
-    public ReportRequestBuilder(string projectId, DateOnly from, DateOnly to) { }
+    public ReportRequestBuilder(string accountId, DateOnly from, DateOnly to) { }
     public ReportRequestBuilder AsPdf() => throw new NotImplementedException();
     public ReportRequestBuilder AsExcel() => throw new NotImplementedException();
-    public ReportRequestBuilder IncludePhotos() => throw new NotImplementedException();
-    public ReportRequestBuilder IncludeFinancials() => throw new NotImplementedException();
+    public ReportRequestBuilder IncludeReceipts() => throw new NotImplementedException();
+    public ReportRequestBuilder IncludeGstBreakup() => throw new NotImplementedException();
     public ReportRequestBuilder InLanguage(string language) => throw new NotImplementedException();
     public ReportRequestBuilder MaxRows(int rows) => throw new NotImplementedException();
     public ReportRequest Build() => throw new NotImplementedException();
@@ -864,25 +881,25 @@ public class ReportRequestBuilderTests
     [Fact]
     public void Defaults()
     {
-        var r = new ReportRequestBuilder("NH-48-P3", From, To).Build();
-        Assert.Equal(new ReportRequest("NH-48-P3", From, To, "pdf", false, false, "en", null), r);
+        var r = new ReportRequestBuilder("ACME-BLR", From, To).Build();
+        Assert.Equal(new ReportRequest("ACME-BLR", From, To, "pdf", false, false, "en", null), r);
     }
 
     [Fact]
     public void Named_steps_set_values()
     {
-        var r = new ReportRequestBuilder("NH-48-P3", From, To).IncludeFinancials().InLanguage("hi").MaxRows(500).Build();
-        Assert.True(r.IncludeFinancials);
-        Assert.False(r.IncludePhotos);
+        var r = new ReportRequestBuilder("ACME-BLR", From, To).IncludeGstBreakup().InLanguage("hi").MaxRows(500).Build();
+        Assert.True(r.IncludeGstBreakup);
+        Assert.False(r.IncludeReceipts);
         Assert.Equal("hi", r.Language);
         Assert.Equal(500, r.MaxRows);
     }
 
     [Fact]
-    public void Photos_not_allowed_in_excel_in_either_order()
+    public void Receipts_not_allowed_in_excel_in_either_order()
     {
-        Assert.Throws<InvalidOperationException>(() => new ReportRequestBuilder("P", From, To).IncludePhotos().AsExcel().Build());
-        Assert.Throws<InvalidOperationException>(() => new ReportRequestBuilder("P", From, To).AsExcel().IncludePhotos().Build());
+        Assert.Throws<InvalidOperationException>(() => new ReportRequestBuilder("P", From, To).IncludeReceipts().AsExcel().Build());
+        Assert.Throws<InvalidOperationException>(() => new ReportRequestBuilder("P", From, To).AsExcel().IncludeReceipts().Build());
     }
 
     [Fact]
@@ -908,49 +925,49 @@ public class ReportRequestBuilderTests
 using System;
 using System.Collections.Generic;
 
-public sealed record ReportRequest(string ProjectId, DateOnly From, DateOnly To, string Format,
-    bool IncludePhotos, bool IncludeFinancials, string Language, int? MaxRows);
+public sealed record ReportRequest(string AccountId, DateOnly From, DateOnly To, string Format,
+    bool IncludeReceipts, bool IncludeGstBreakup, string Language, int? MaxRows);
 
-public sealed class ReportRequestBuilder(string projectId, DateOnly from, DateOnly to)
+public sealed class ReportRequestBuilder(string accountId, DateOnly from, DateOnly to)
 {
     private static readonly HashSet<string> Languages = new(StringComparer.OrdinalIgnoreCase) { "en", "hi", "mr" };
 
     private string _format = "pdf";
-    private bool _photos;
-    private bool _financials;
+    private bool _receipts;
+    private bool _gstBreakup;
     private string _language = "en";
     private int? _maxRows;
 
     public ReportRequestBuilder AsPdf() { _format = "pdf"; return this; }
     public ReportRequestBuilder AsExcel() { _format = "xlsx"; return this; }
-    public ReportRequestBuilder IncludePhotos() { _photos = true; return this; }
-    public ReportRequestBuilder IncludeFinancials() { _financials = true; return this; }
+    public ReportRequestBuilder IncludeReceipts() { _receipts = true; return this; }
+    public ReportRequestBuilder IncludeGstBreakup() { _gstBreakup = true; return this; }
     public ReportRequestBuilder InLanguage(string language) { _language = language; return this; }
     public ReportRequestBuilder MaxRows(int rows) { _maxRows = rows; return this; }
 
     public ReportRequest Build()
     {
         var errors = new List<string>();
-        if (string.IsNullOrWhiteSpace(projectId)) errors.Add("project is required");
+        if (string.IsNullOrWhiteSpace(accountId)) errors.Add("account is required");
         if (to < from) errors.Add("'to' is before 'from'");
         else if (to.DayNumber - from.DayNumber > 366) errors.Add("period cannot exceed 366 days");
-        if (_photos && _format == "xlsx") errors.Add("photos are not supported in Excel");
+        if (_receipts && _format == "xlsx") errors.Add("receipt images are not supported in Excel");
         if (_maxRows is < 1 or > 100_000) errors.Add("max rows must be between 1 and 100,000");
         if (!Languages.Contains(_language)) errors.Add($"language '{_language}' is not supported");
         if (errors.Count > 0) throw new InvalidOperationException(string.Join("; ", errors));
 
-        return new ReportRequest(projectId, from, to, _format, _photos, _financials, _language.ToLowerInvariant(), _maxRows);
+        return new ReportRequest(accountId, from, to, _format, _receipts, _gstBreakup, _language.ToLowerInvariant(), _maxRows);
     }
 }
 ```
 
-Call sites change from `new ReportRequest("NH-48-P3", from, to, "pdf", true, false, "hi", null)` to `new ReportRequestBuilder("NH-48-P3", from, to).IncludePhotos().InLanguage("hi").Build()`. The swapped-boolean bug can't happen any more, because each flag has a name.
+Call sites change from `new ReportRequest("ACME-BLR", from, to, "pdf", true, false, "hi", null)` to `new ReportRequestBuilder("ACME-BLR", from, to).IncludeReceipts().InLanguage("hi").Build()`. The swapped-boolean bug can't happen any more, because each flag has a name.
 
 **Refactoring tip:** don't change all call sites at once. Add the builder, make the old constructor `[Obsolete("Use ReportRequestBuilder")]`, and move callers over in small pull requests while the compiler warnings show you what remains.
 ::alternatives
-If the only problem were unreadable arguments, named arguments (`IncludePhotos: true`) or an object initializer with `required` would fix it with no new class. The builder is justified here by the *cross-field rules* (photos + Excel, period length).
+If the only problem were unreadable arguments, named arguments (`IncludeReceipts: true`) or an object initializer with `required` would fix it with no new class. The builder is justified here by the *cross-field rules* (receipts + Excel, period length).
 ::mistakes
-- Checking "photos not in Excel" inside `AsExcel()`, which fails or passes depending on the order the caller used.
+- Checking "receipts not in Excel" inside `AsExcel()`, which fails or passes depending on the order the caller used.
 - Making `MaxRows` default to `0` and treating 0 as "no limit". Use `null` for "not set"; magic values cause bugs.
 :::
 
@@ -1144,7 +1161,7 @@ For each type, choose the construction approach: **constructor**, **record with 
 
 1. `Money(decimal Amount, string Currency)`: two required values, always both.
 2. `CreateUserRequest`: an API request DTO with 3 required and 5 optional fields, validated by the API layer.
-3. A bill-of-quantities (BOQ) export that must produce PDF, Excel and an e-procurement XML format with the same sections in the same order.
+3. A booking confirmation that must be produced as a PDF e-ticket, an HTML email and a calendar invite (`.ics`), with the same sections (traveller, flights, hotel, fare summary) in the same order.
 4. An HTTP retry policy with retries, back-off, jitter, a timeout and a circuit breaker, where some combinations are invalid (jitter without back-off).
 5. `Percentage.FromBasisPoints(1250)`: a value created from different units.
 6. A test-only `Invoice` that needs 15 fields set to valid values, but each test cares about one or two.
@@ -1163,8 +1180,8 @@ For item 6: what would make each test show only the fields it cares about?
 ::solution
 1. **Constructor** (or a positional record). Both values are required and there are no options. `new Money(1499.50m, "INR")` is already clear. A builder would be ceremony.
 2. **Record with `required` and `init`.** The compiler enforces the required fields, initializers name every value, and validation belongs at the API boundary (validation filters, data annotations or FluentValidation). A builder adds nothing for a DTO.
-3. **Builder with a director.** The director walks the BOQ sections in order; `PdfBoqBuilder`, `ExcelBoqBuilder` and `EProcurementXmlBuilder` produce each format. A new format is a new builder; a section-order change is one edit in the director.
-4. **Fluent builder.** Many optional settings, cross-field rules checked in `Build()`, and a readable chain. This is how resilience libraries such as Polly's `ResiliencePipelineBuilder` are designed.
+3. **Builder with a director.** The director walks the confirmation sections in order; `PdfTicketBuilder`, `HtmlEmailConfirmationBuilder` and `IcsInviteBuilder` produce each format. A new format (a WhatsApp message) is a new builder; a section-order change is one edit in the director.
+4. **Fluent builder.** Many optional settings, cross-field rules checked in `Build()`, and a readable chain. This is exactly how Polly v8's `ResiliencePipelineBuilder` works, and in ASP.NET Core you usually reach it through `services.AddHttpClient<T>().AddResilienceHandler("name", b => b.AddRetry(...).AddTimeout(...))` or simply `.AddStandardResilienceHandler()`.
 5. **Static factory method.** A named constructor makes the unit explicit (`FromBasisPoints`, `FromPercent`) and can validate. No builder needed.
 6. **Test data builder.** `new InvoiceBuilder().WithAmount(0).Build()` starts from a valid default invoice and changes only what the test is about. Tests become short and resistant to new required fields: add the default in one place, not in 200 tests.
 ::mistakes
@@ -1173,204 +1190,221 @@ For item 6: what would make each test show only the fields it cares about?
 :::
 
 :::exercise id=m06-builder-ex5 difficulty=advanced kind=code title="A staged builder the compiler checks"
-A normal fluent builder can only report a missing required value at runtime. Build a **staged builder** for a tender notice, where each required step returns a *different interface*, so `Build()` simply doesn't exist until the required steps have been called.
+A normal fluent builder can only report a missing required value at runtime. Build a **staged builder** for a hotel booking, where each required step returns a *different interface*, so `Build()` simply doesn't exist until the required steps have been called.
 
-Stages: `TenderNoticeBuilder.Start(DateOnly publishedOn)` → `IProjectStage.ForProject(string name, decimal estimateInr)` → `IDeadlineStage.BidsCloseOn(DateOnly date)` → `IOptionalStage`, which has `PreBidMeeting(DateOnly)`, `Document(string)` (repeatable) and `Build()`.
+Stages: `HotelBookingBuilder.Start(DateOnly bookedOn)` → `IHotelStage.AtHotel(string hotel, decimal nightlyRateInr)` → `IStayStage.Stay(DateOnly checkIn, DateOnly checkOut)` → `IOptionalStage`, which has `FreeCancellationUntil(DateOnly)`, `Guest(string)` (repeatable) and `Build()`.
 ::requirements
-- `IProjectStage` and `IDeadlineStage` have exactly one method each, and neither has `Build`.
-- Runtime rules in `Build()` (throw `InvalidOperationException`): bids close at least 21 days after publishing (an illustrative rule); the pre-bid meeting, if set, is after publishing and at least 7 days before closing; at least one document; estimate positive.
-- The earnest money deposit (EMD) is computed as 2 % of the estimate, rounded **up** to the nearest ₹1,000 (illustrative rule).
-- The product, `TenderNotice`, is immutable.
+- `IHotelStage` and `IStayStage` have exactly one method each, and neither has `Build`.
+- Runtime rules in `Build()` (throw `InvalidOperationException`): the nightly rate is positive; check-in is not before the booking date; the stay is 1 to 30 nights; the free-cancellation deadline, if set, is on or after the booking date and at least 1 day before check-in; there are 1 to 3 guests per room.
+- The total is nightly rate × nights. The advance deposit is 20 % of the total, rounded **up** to the nearest ₹100 (illustrative rule).
+- The product, `HotelBooking`, is immutable.
 ::acceptance
-- A valid chain builds a notice with the right EMD (2 % of ₹48,50,00,000 is ₹97,00,000).
-- A closing date 10 days after publishing is rejected.
-- A pre-bid meeting 3 days before closing is rejected.
-- Reflection confirms that `IProjectStage` and `IDeadlineStage` expose no `Build` method.
+- A valid chain builds a booking with the right numbers: 3 nights at ₹8,450 is ₹25,350, and 20 % of that (₹5,070) rounds up to a ₹5,100 deposit.
+- A deposit of ₹3,020 (2 nights at ₹7,550) rounds up to ₹3,100, not down to ₹3,000.
+- A check-in before the booking date, or a 31-night stay, is rejected.
+- A free-cancellation deadline on the day of check-in is rejected.
+- Reflection confirms that `IHotelStage` and `IStayStage` expose no `Build` method.
 ::hint
 One class can implement all the stage interfaces. Each method returns `this`, typed as the *next* interface.
 ::hint
-`Start` is a static method returning `IProjectStage`, so callers can't skip ahead.
+`Start` is a static method returning `IHotelStage`, so callers can't skip ahead.
 ::hint
-Rounding up to ₹1,000: `Math.Ceiling(value / 1000m) * 1000m`.
+Nights: `checkOut.DayNumber - checkIn.DayNumber`. Rounding up to ₹100: `Math.Ceiling(value / 100m) * 100m`.
 ::hint
 ```csharp
-public sealed class TenderNoticeBuilder : IProjectStage, IDeadlineStage, IOptionalStage
+public sealed class HotelBookingBuilder : IHotelStage, IStayStage, IOptionalStage
 {
-    public static IProjectStage Start(DateOnly publishedOn) => new TenderNoticeBuilder(publishedOn);
-    public IDeadlineStage ForProject(string name, decimal estimateInr) { ...; return this; }
+    public static IHotelStage Start(DateOnly bookedOn) => new HotelBookingBuilder(bookedOn);
+    public IStayStage AtHotel(string hotel, decimal nightlyRateInr) { ...; return this; }
     ...
 }
 ```
 ::starter
-```csharp file=TenderNotice.cs
+```csharp file=HotelBooking.cs
 using System;
 using System.Collections.Generic;
 
-public sealed class TenderNotice
+public sealed class HotelBooking
 {
-    internal TenderNotice(string project, decimal estimateInr, decimal emdInr, DateOnly publishedOn, DateOnly closesOn,
-        DateOnly? preBidMeeting, IReadOnlyList<string> documents)
+    internal HotelBooking(string hotel, decimal nightlyRateInr, int nights, decimal totalInr, decimal depositInr,
+        DateOnly bookedOn, DateOnly checkIn, DateOnly? freeCancellationUntil, IReadOnlyList<string> guests)
     {
-        Project = project; EstimateInr = estimateInr; EmdInr = emdInr; PublishedOn = publishedOn;
-        ClosesOn = closesOn; PreBidMeeting = preBidMeeting; Documents = documents;
+        Hotel = hotel; NightlyRateInr = nightlyRateInr; Nights = nights; TotalInr = totalInr; DepositInr = depositInr;
+        BookedOn = bookedOn; CheckIn = checkIn; FreeCancellationUntil = freeCancellationUntil; Guests = guests;
     }
-    public string Project { get; }
-    public decimal EstimateInr { get; }
-    public decimal EmdInr { get; }
-    public DateOnly PublishedOn { get; }
-    public DateOnly ClosesOn { get; }
-    public DateOnly? PreBidMeeting { get; }
-    public IReadOnlyList<string> Documents { get; }
+    public string Hotel { get; }
+    public decimal NightlyRateInr { get; }
+    public int Nights { get; }
+    public decimal TotalInr { get; }
+    public decimal DepositInr { get; }
+    public DateOnly BookedOn { get; }
+    public DateOnly CheckIn { get; }
+    public DateOnly? FreeCancellationUntil { get; }
+    public IReadOnlyList<string> Guests { get; }
 }
 
-public interface IProjectStage { IDeadlineStage ForProject(string name, decimal estimateInr); }
-public interface IDeadlineStage { IOptionalStage BidsCloseOn(DateOnly date); }
+public interface IHotelStage { IStayStage AtHotel(string hotel, decimal nightlyRateInr); }
+public interface IStayStage { IOptionalStage Stay(DateOnly checkIn, DateOnly checkOut); }
 public interface IOptionalStage
 {
-    IOptionalStage PreBidMeeting(DateOnly date);
-    IOptionalStage Document(string fileName);
-    TenderNotice Build();
+    IOptionalStage FreeCancellationUntil(DateOnly date);
+    IOptionalStage Guest(string name);
+    HotelBooking Build();
 }
 
-public sealed class TenderNoticeBuilder
+public sealed class HotelBookingBuilder
 {
-    public static IProjectStage Start(DateOnly publishedOn) => throw new NotImplementedException();
+    public static IHotelStage Start(DateOnly bookedOn) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=TenderNoticeTests.cs
+```csharp file=HotelBookingTests.cs
 using System;
 using System.Linq;
 using Xunit;
 
-public class TenderNoticeTests
+public class HotelBookingTests
 {
-    private static readonly DateOnly Published = new(2026, 10, 1);
+    private static readonly DateOnly Booked = new(2026, 10, 1);
 
     [Fact]
-    public void Valid_chain_builds_with_emd()
+    public void Valid_chain_builds_with_total_and_deposit()
     {
-        var n = TenderNoticeBuilder.Start(Published)
-            .ForProject("Bridge over Ganga at km 112", 48_50_00_000m)
-            .BidsCloseOn(new DateOnly(2026, 11, 5))
-            .PreBidMeeting(new DateOnly(2026, 10, 15))
-            .Document("NIT.pdf").Document("BOQ.xlsx")
+        var b = HotelBookingBuilder.Start(Booked)
+            .AtHotel("Lakeview Residency, Udaipur", 8_450m)
+            .Stay(new DateOnly(2026, 11, 5), new DateOnly(2026, 11, 8))
+            .FreeCancellationUntil(new DateOnly(2026, 11, 2))
+            .Guest("Asha Rao").Guest("Vikram Rao")
             .Build();
-        Assert.Equal(97_00_000m, n.EmdInr);
-        Assert.Equal(2, n.Documents.Count);
-        Assert.Equal(new DateOnly(2026, 10, 15), n.PreBidMeeting);
+        Assert.Equal(3, b.Nights);
+        Assert.Equal(25_350m, b.TotalInr);
+        Assert.Equal(5_100m, b.DepositInr);
+        Assert.Equal(2, b.Guests.Count);
+        Assert.Equal(new DateOnly(2026, 11, 2), b.FreeCancellationUntil);
     }
 
     [Fact]
-    public void Emd_rounds_up_to_thousand() =>
-        Assert.Equal(21_000m, TenderNoticeBuilder.Start(Published).ForProject("Culvert", 10_25_000m)
-            .BidsCloseOn(Published.AddDays(30)).Document("NIT.pdf").Build().EmdInr);
+    public void Deposit_rounds_up_to_hundred() =>
+        Assert.Equal(3_100m, HotelBookingBuilder.Start(Booked).AtHotel("City Inn, Pune", 7_550m)
+            .Stay(Booked.AddDays(10), Booked.AddDays(12)).Guest("Asha Rao").Build().DepositInr);
 
     [Fact]
-    public void Short_bid_window_rejected() =>
-        Assert.Throws<InvalidOperationException>(() => TenderNoticeBuilder.Start(Published).ForProject("X", 1_00_000m)
-            .BidsCloseOn(Published.AddDays(10)).Document("NIT.pdf").Build());
+    public void Check_in_before_booking_date_rejected() =>
+        Assert.Throws<InvalidOperationException>(() => HotelBookingBuilder.Start(Booked).AtHotel("X", 3_000m)
+            .Stay(Booked.AddDays(-1), Booked.AddDays(2)).Guest("Asha Rao").Build());
 
     [Fact]
-    public void Pre_bid_too_close_to_closing_rejected() =>
-        Assert.Throws<InvalidOperationException>(() => TenderNoticeBuilder.Start(Published).ForProject("X", 1_00_000m)
-            .BidsCloseOn(Published.AddDays(30)).PreBidMeeting(Published.AddDays(27)).Document("NIT.pdf").Build());
+    public void Stay_longer_than_30_nights_rejected() =>
+        Assert.Throws<InvalidOperationException>(() => HotelBookingBuilder.Start(Booked).AtHotel("X", 3_000m)
+            .Stay(Booked.AddDays(5), Booked.AddDays(36)).Guest("Asha Rao").Build());
 
     [Fact]
-    public void Documents_required() =>
-        Assert.Throws<InvalidOperationException>(() => TenderNoticeBuilder.Start(Published).ForProject("X", 1_00_000m)
-            .BidsCloseOn(Published.AddDays(30)).Build());
+    public void Cancellation_deadline_on_check_in_day_rejected() =>
+        Assert.Throws<InvalidOperationException>(() => HotelBookingBuilder.Start(Booked).AtHotel("X", 3_000m)
+            .Stay(Booked.AddDays(10), Booked.AddDays(12)).FreeCancellationUntil(Booked.AddDays(10)).Guest("Asha Rao").Build());
+
+    [Fact]
+    public void Guests_required() =>
+        Assert.Throws<InvalidOperationException>(() => HotelBookingBuilder.Start(Booked).AtHotel("X", 3_000m)
+            .Stay(Booked.AddDays(10), Booked.AddDays(12)).Build());
 
     [Fact]
     public void Early_stages_have_no_build_method()
     {
-        Assert.DoesNotContain(typeof(IProjectStage).GetMethods(), m => m.Name == "Build");
-        Assert.DoesNotContain(typeof(IDeadlineStage).GetMethods(), m => m.Name == "Build");
-        Assert.Single(typeof(IProjectStage).GetMethods());
-        Assert.Single(typeof(IDeadlineStage).GetMethods());
+        Assert.DoesNotContain(typeof(IHotelStage).GetMethods(), m => m.Name == "Build");
+        Assert.DoesNotContain(typeof(IStayStage).GetMethods(), m => m.Name == "Build");
+        Assert.Single(typeof(IHotelStage).GetMethods());
+        Assert.Single(typeof(IStayStage).GetMethods());
     }
 }
 ```
 ::solution
-```csharp file=TenderNotice.cs
+```csharp file=HotelBooking.cs
 using System;
 using System.Collections.Generic;
 
-public sealed class TenderNotice
+public sealed class HotelBooking
 {
-    internal TenderNotice(string project, decimal estimateInr, decimal emdInr, DateOnly publishedOn, DateOnly closesOn,
-        DateOnly? preBidMeeting, IReadOnlyList<string> documents)
+    internal HotelBooking(string hotel, decimal nightlyRateInr, int nights, decimal totalInr, decimal depositInr,
+        DateOnly bookedOn, DateOnly checkIn, DateOnly? freeCancellationUntil, IReadOnlyList<string> guests)
     {
-        Project = project; EstimateInr = estimateInr; EmdInr = emdInr; PublishedOn = publishedOn;
-        ClosesOn = closesOn; PreBidMeeting = preBidMeeting; Documents = documents;
+        Hotel = hotel; NightlyRateInr = nightlyRateInr; Nights = nights; TotalInr = totalInr; DepositInr = depositInr;
+        BookedOn = bookedOn; CheckIn = checkIn; FreeCancellationUntil = freeCancellationUntil; Guests = guests;
     }
-    public string Project { get; }
-    public decimal EstimateInr { get; }
-    public decimal EmdInr { get; }
-    public DateOnly PublishedOn { get; }
-    public DateOnly ClosesOn { get; }
-    public DateOnly? PreBidMeeting { get; }
-    public IReadOnlyList<string> Documents { get; }
+    public string Hotel { get; }
+    public decimal NightlyRateInr { get; }
+    public int Nights { get; }
+    public decimal TotalInr { get; }
+    public decimal DepositInr { get; }
+    public DateOnly BookedOn { get; }
+    public DateOnly CheckIn { get; }
+    public DateOnly? FreeCancellationUntil { get; }
+    public IReadOnlyList<string> Guests { get; }
 }
 
-public interface IProjectStage { IDeadlineStage ForProject(string name, decimal estimateInr); }
-public interface IDeadlineStage { IOptionalStage BidsCloseOn(DateOnly date); }
+public interface IHotelStage { IStayStage AtHotel(string hotel, decimal nightlyRateInr); }
+public interface IStayStage { IOptionalStage Stay(DateOnly checkIn, DateOnly checkOut); }
 public interface IOptionalStage
 {
-    IOptionalStage PreBidMeeting(DateOnly date);
-    IOptionalStage Document(string fileName);
-    TenderNotice Build();
+    IOptionalStage FreeCancellationUntil(DateOnly date);
+    IOptionalStage Guest(string name);
+    HotelBooking Build();
 }
 
 /// <summary>Staged builder: the type system enforces the order of required steps.</summary>
-public sealed class TenderNoticeBuilder : IProjectStage, IDeadlineStage, IOptionalStage
+public sealed class HotelBookingBuilder : IHotelStage, IStayStage, IOptionalStage
 {
-    private const int MinBidDays = 21;
-    private const int PreBidLeadDays = 7;
-    private const decimal EmdRate = 0.02m;
+    private const int MaxNights = 30;
+    private const int MaxGuests = 3;
+    private const decimal DepositRate = 0.20m;
 
-    private readonly DateOnly _publishedOn;
-    private readonly List<string> _documents = new();
-    private string _project = "";
-    private decimal _estimate;
-    private DateOnly _closesOn;
-    private DateOnly? _preBid;
+    private readonly DateOnly _bookedOn;
+    private readonly List<string> _guests = new();
+    private string _hotel = "";
+    private decimal _rate;
+    private DateOnly _checkIn;
+    private DateOnly _checkOut;
+    private DateOnly? _freeCancellationUntil;
 
-    private TenderNoticeBuilder(DateOnly publishedOn) => _publishedOn = publishedOn;
+    private HotelBookingBuilder(DateOnly bookedOn) => _bookedOn = bookedOn;
 
-    public static IProjectStage Start(DateOnly publishedOn) => new TenderNoticeBuilder(publishedOn);
+    public static IHotelStage Start(DateOnly bookedOn) => new HotelBookingBuilder(bookedOn);
 
-    public IDeadlineStage ForProject(string name, decimal estimateInr) { _project = name; _estimate = estimateInr; return this; }
-    public IOptionalStage BidsCloseOn(DateOnly date) { _closesOn = date; return this; }
-    public IOptionalStage PreBidMeeting(DateOnly date) { _preBid = date; return this; }
-    public IOptionalStage Document(string fileName) { _documents.Add(fileName); return this; }
+    public IStayStage AtHotel(string hotel, decimal nightlyRateInr) { _hotel = hotel; _rate = nightlyRateInr; return this; }
+    public IOptionalStage Stay(DateOnly checkIn, DateOnly checkOut) { _checkIn = checkIn; _checkOut = checkOut; return this; }
+    public IOptionalStage FreeCancellationUntil(DateOnly date) { _freeCancellationUntil = date; return this; }
+    public IOptionalStage Guest(string name) { _guests.Add(name); return this; }
 
-    public TenderNotice Build()
+    public HotelBooking Build()
     {
         var errors = new List<string>();
-        if (string.IsNullOrWhiteSpace(_project)) errors.Add("project name is required");
-        if (_estimate <= 0) errors.Add("estimate must be positive");
-        if (_closesOn < _publishedOn.AddDays(MinBidDays)) errors.Add($"bids must stay open at least {MinBidDays} days");
-        if (_preBid is { } pb && (pb <= _publishedOn || pb > _closesOn.AddDays(-PreBidLeadDays)))
-            errors.Add($"pre-bid meeting must be after publishing and at least {PreBidLeadDays} days before closing");
-        if (_documents.Count == 0) errors.Add("at least one document is required");
+        var nights = _checkOut.DayNumber - _checkIn.DayNumber;
+        if (string.IsNullOrWhiteSpace(_hotel)) errors.Add("hotel is required");
+        if (_rate <= 0) errors.Add("nightly rate must be positive");
+        if (_checkIn < _bookedOn) errors.Add("check-in cannot be before the booking date");
+        if (nights is < 1 or > MaxNights) errors.Add($"a stay must be 1 to {MaxNights} nights");
+        if (_freeCancellationUntil is { } fc && (fc < _bookedOn || fc > _checkIn.AddDays(-1)))
+            errors.Add("free cancellation must end on or after the booking date and at least 1 day before check-in");
+        if (_guests.Count is < 1 or > MaxGuests) errors.Add($"a room needs 1 to {MaxGuests} guests");
         if (errors.Count > 0) throw new InvalidOperationException(string.Join("; ", errors));
 
-        var emd = Math.Ceiling(_estimate * EmdRate / 1000m) * 1000m;
-        return new TenderNotice(_project, _estimate, emd, _publishedOn, _closesOn, _preBid, _documents.ToArray());
+        var total = _rate * nights;
+        var deposit = Math.Ceiling(total * DepositRate / 100m) * 100m;
+        return new HotelBooking(_hotel, _rate, nights, total, deposit, _bookedOn, _checkIn, _freeCancellationUntil, _guests.ToArray());
     }
 }
 ```
 
-How it works: one private class implements three interfaces, and each step returns `this` typed as the next stage. Callers only ever see the interface types, so `TenderNoticeBuilder.Start(d).Build()` doesn't compile: `IProjectStage` has no `Build`. Required-ness is now checked by the compiler, and `Build()` only validates cross-field rules (dates, EMD), which the type system can't express.
+How it works: one class with a private constructor implements three interfaces, and each step returns `this` typed as the next stage. Callers only ever see the interface types, so `HotelBookingBuilder.Start(d).Build()` doesn't compile: `IHotelStage` has no `Build`. Required-ness is now checked by the compiler, and `Build()` only validates cross-field rules (dates, nights, deposit), which the type system can't express.
 
-The trade-off: more interfaces, a fixed order for required steps, and a harder-to-extend API (adding a required step changes the chain for every caller). Staged builders suit public APIs and high-risk objects such as tender notices, payments or legal documents. For internal code, a plain fluent builder with runtime validation is usually enough.
+The trade-off: more interfaces, a fixed order for required steps, and a harder-to-extend API (adding a required step changes the chain for every caller). Staged builders suit public SDKs and high-risk objects such as bookings, payment instructions or legal documents. For internal code, a plain fluent builder with runtime validation is usually enough.
 ::alternatives
 C#'s `required` members give compile-time checking of required values with far less code, if you can live without fluent steps and ordered stages. For most internal types, `required` beats a staged builder.
 ::mistakes
-- Exposing the concrete `TenderNoticeBuilder` type to callers, which lets them call any method in any order and bypasses the stages.
-- Rounding EMD with `Math.Round`, which rounds ₹20,500 down to ₹20,000. The rule says *up*.
-- Putting the 21-day rule in `BidsCloseOn`, where it can't see a publish date supplied later in another design.
+- Exposing the concrete `HotelBookingBuilder` type to callers, which lets them call any method in any order and bypasses the stages.
+- Rounding the deposit with `Math.Round`, which turns ₹3,020 into ₹3,000. The rule says *up*, so it must be ₹3,100.
+- Using `double` for money. Binary floating point can't represent most rupee-and-paise values exactly; use `decimal`.
+- Putting the date rules in `Stay(...)`, where they can't see a cancellation deadline that is supplied later.
 :::
 
 ## Automated testing
@@ -1381,42 +1415,42 @@ Builders affect testing in two directions: you test the builder, and you use bui
 
 - Every validation rule, both alone and combined (do you report *all* errors?).
 - Defaults: a minimal valid chain produces the documented defaults.
-- Order independence: `.IncludePhotos().AsExcel()` and `.AsExcel().IncludePhotos()` behave the same.
+- Order independence: `.IncludeReceipts().AsExcel()` and `.AsExcel().IncludeReceipts()` behave the same.
 - Isolation: changing the builder after `Build()` doesn't change the product.
 - For a director and builders: one exact-output test per builder with a fixed input, plus edge cases (encoding, truncation).
 
-**2. Test data builders.** Tests that build domain objects by hand become long and fragile: add one required field to `PurchaseOrder` and 200 tests break. A test data builder starts from a *valid default* and lets each test change only what it cares about:
+**2. Test data builders.** Tests that build domain objects by hand become long and fragile: add one required field to `TripRequest` and 200 tests break. A test data builder starts from a *valid default* and lets each test change only what it cares about:
 
 ```csharp
-public sealed class PurchaseOrderBuilder
+public sealed class TripRequestBuilder
 {
-    private string _unit = "Roads";
+    private string _costCenter = "Sales";
     private decimal _amount = 10_000m;
-    private readonly List<(string Item, decimal Qty, decimal Rate)> _lines = new() { ("Cement OPC 53, bag", 100m, 100m) };
+    private readonly List<(string Item, decimal AmountInr)> _lines = new() { ("Flight BLR-BOM return", 10_000m) };
     private bool _submitted;
 
-    public PurchaseOrderBuilder ForUnit(string unit) { _unit = unit; return this; }
-    public PurchaseOrderBuilder WithAmount(decimal amount) { _amount = amount; return this; }
-    public PurchaseOrderBuilder Submitted() { _submitted = true; return this; }
+    public TripRequestBuilder ForCostCenter(string costCenter) { _costCenter = costCenter; return this; }
+    public TripRequestBuilder WithAmount(decimal amount) { _amount = amount; return this; }
+    public TripRequestBuilder Submitted() { _submitted = true; return this; }
 
-    public PurchaseOrder Build()
+    public TripRequest Build()
     {
-        var po = new PurchaseOrder(Guid.NewGuid(), _unit, _lines.ToList(), _amount);
-        if (_submitted) po.Submit();
-        return po;
+        var trip = new TripRequest(Guid.NewGuid(), _costCenter, _lines.ToList(), _amount);
+        if (_submitted) trip.Submit();
+        return trip;
     }
 }
 
 [Fact]
-public void Large_order_needs_director()
+public void Expensive_trip_needs_vp()
 {
-    var po = new PurchaseOrderBuilder().WithAmount(6_40_000m).Submitted().Build();
-    var steps = workflow.StepsFor(po.Amount);
-    Assert.Contains(steps, s => s.Role == "Director");
+    var trip = new TripRequestBuilder().WithAmount(6_40_000m).Submitted().Build();
+    var steps = workflow.StepsFor(trip.Amount);
+    Assert.Contains(steps, s => s.Role == "VP");
 }
 ```
 
-The test reads like the requirement ("a large submitted order needs a director") and says nothing about lines, units or IDs it doesn't care about.
+The test reads like the requirement ("an expensive submitted trip needs a VP") and says nothing about lines, cost centres or IDs it doesn't care about.
 
 **3. Startup validation test.** If your app builds definitions at startup (like `AddApprovalWorkflows`), add a test that builds the real `ServiceCollection` and resolves `WorkflowCatalog`. A broken workflow definition then fails CI instead of production startup.
 
@@ -1424,10 +1458,10 @@ The test reads like the requirement ("a large submitted order needs a director")
 
 - **ASP.NET Core hosting**: `WebApplication.CreateBuilder(args)` returns a builder for services, configuration, logging and the host; `Build()` freezes the service collection, which is why registering services after `Build()` throws.
 - **Policies**: authorization (`AuthorizationPolicyBuilder`), CORS (`CorsPolicyBuilder`), rate limiting and output caching all use builders, usually through configure lambdas.
-- **Resilience**: retry, timeout and circuit-breaker pipelines (for example `ResiliencePipelineBuilder` in Polly v8) are assembled with fluent builders and validated on build.
-- **Data access**: `DbConnectionStringBuilder` subclasses escape values correctly, avoiding connection-string injection and quoting bugs. EF Core's `ModelBuilder` and `EntityTypeBuilder<T>` configure the model fluently.
+- **HTTP clients and resilience**: `AddHttpClient` returns an `IHttpClientBuilder` on which you chain `.AddHttpMessageHandler<T>()` and `.AddStandardResilienceHandler()`; retry, timeout and circuit-breaker pipelines (`ResiliencePipelineBuilder` in Polly v8, wrapped by `Microsoft.Extensions.Resilience`) are assembled fluently and validated on build.
+- **Data access**: `NpgsqlConnectionStringBuilder` (a `DbConnectionStringBuilder` subclass) escapes values correctly, avoiding connection-string injection and quoting bugs; `NpgsqlDataSourceBuilder` configures a PostgreSQL data source once and builds a thread-safe `NpgsqlDataSource`. EF Core's `ModelBuilder` and `EntityTypeBuilder<T>` configure the model fluently.
 - **Documents and messages**: report, invoice and notification generators commonly use a director with per-format builders: one recipe, several outputs (PDF, Excel, email, SMS).
-- **Domain configuration**: workflow, approval-matrix and pricing-rule definitions are often built from code or configuration at startup with fluent builders, so invalid definitions fail fast.
+- **Domain configuration**: travel-policy, approval-matrix and pricing-rule definitions are often built from code or configuration at startup with fluent builders, so invalid definitions fail fast.
 
 ## Interview questions
 
@@ -1478,7 +1512,7 @@ Q: What is a telescoping constructor?
 A: A constructor with many positional parameters (often several overloads) where values of the same type are easy to swap and hard to read.
 Q: Why does Build() copy lists into the product?
 A: So later calls on the builder cannot change an object that has already been built (and may be in use).
-Q: Where should a rule like "photos are not allowed in Excel" be checked?
+Q: Where should a rule like "receipt images are not allowed in Excel" be checked?
 A: In Build(), because it involves two values that may be set in any order.
 Q: What does the Director know, and what doesn't it know?
 A: It knows the recipe (which steps, in which order); it doesn't know the output format.
@@ -1538,7 +1572,7 @@ Why does the lesson build approval workflows at application startup instead of p
 ::q single
 Which is the best fit for a staged builder?
 - [ ] An internal options class with three settings.
-- [x] A public API for creating tender notices, where forgetting a required step has serious consequences.
+- [x] A public SDK for creating hotel bookings, where forgetting a required step (dates, rate) has serious consequences.
 - [ ] A DTO bound from JSON.
 - [ ] A `StringBuilder` replacement.
 > Staged builders cost extra interfaces and flexibility. They pay off where compile-time safety for required steps matters, such as public or high-risk APIs.

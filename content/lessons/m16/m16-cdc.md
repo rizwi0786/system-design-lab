@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 95
 prerequisites: [m12-outbox, m12-kafka, m13-replication, m12-idempotent-consumers]
-related: [m16-strangler-acl, m16-cqrs, m16-search-architecture, m15-db-migrations-deploy, m12-delivery-guarantees, m09-replicas]
+related: [m16-strangler-acl, m16-cqrs, m17-scaling-journey, m16-search-architecture, m15-db-migrations-deploy, m12-delivery-guarantees, m09-replicas]
 tags: [cdc, logical-replication, debezium, wal, kafka, outbox, schema-evolution]
 patterns: [Change Data Capture, Transactional Outbox, Tolerant Reader, Expand and Contract]
 summary: Turn every committed database change into an ordered stream of events by reading the database's own log, with PostgreSQL logical replication or Debezium, and run it safely in production through slot monitoring, idempotent consumers and careful schema changes.
@@ -69,14 +69,14 @@ Log-based CDC is the standard choice at scale because it sees every committed ch
 
 ### The running example
 
-MaterialMart is a marketplace for building materials: cement, TMT steel, sand, tiles. Its catalogue service owns PostgreSQL tables `products` (about 2 million rows) and `product_prices` (price per city and supplier). Four consumers need changes:
+GizmoMart is an online marketplace for electronics: phones, laptops, TVs, headphones and accessories. Its catalogue service owns PostgreSQL tables `products` (about 2 million rows) and `product_prices` (price per city and seller). Four consumers need changes:
 
 1. **Search** (OpenSearch): the product listing and filters, updated within a few seconds.
 2. **Cache**: Redis entries for product pages must be invalidated when a product or price changes.
 3. **Warehouse**: analytics wants every price change, including the old value.
-4. **Orders service**: needs "price changed" business events for open quotes.
+4. **Orders service** (another team): needs "price changed" business events to re-price open carts and send price-drop alerts.
 
-Volumes (estimates): 300,000 price updates on a normal day ≈ 3.5 per second average. Steel prices are revised in bulk: a supplier uploads 200,000 rows in about 10 minutes ≈ 333 changes per second, for a few minutes. The whole database (all tables, not just these two) writes about 20 GB of WAL a day ≈ 0.8 GB an hour. That last number turns out to matter most.
+Volumes (estimates): 300,000 price updates on a normal day ≈ 3.5 per second average. Prices are revised in bulk: when a festival sale starts or ends, a large seller uploads 200,000 rows in about 10 minutes ≈ 333 changes per second, for a few minutes. The whole database (all tables, not just these two) writes about 20 GB of WAL a day ≈ 0.8 GB an hour. That last number turns out to matter most.
 
 ### How PostgreSQL makes log-based CDC possible
 
@@ -92,22 +92,25 @@ Volumes (estimates): 300,000 price updates on a normal day ≈ 3.5 per second av
 
 ```sql
 -- postgresql.conf (restart required): wal_level = logical
-CREATE PUBLICATION catalogue_pub FOR TABLE products (id, sku, name, category, unit, is_active), product_prices;
+CREATE PUBLICATION catalogue_pub FOR TABLE products (id, sku, name, category, brand, is_active), product_prices;
 ALTER TABLE product_prices REPLICA IDENTITY FULL;              -- old values on update and delete
 SELECT pg_create_logical_replication_slot('catalogue_search', 'pgoutput');
 
--- Safety valve: never keep more than 50 GB of WAL for slots (a lagging slot is invalidated instead)
+-- Safety valve: never keep more than 50 GB of WAL for slots (a lagging slot is invalidated instead).
+-- The default is -1 (unlimited). The setting needs only a reload, not a restart.
 ALTER SYSTEM SET max_slot_wal_keep_size = '50GB';
+SELECT pg_reload_conf();
 
 -- The query every CDC dashboard needs
-SELECT slot_name, active,
+SELECT slot_name, active, inactive_since,                       -- inactive_since is new in PostgreSQL 17
        pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn)) AS lag,
-       wal_status
+       wal_status,                                              -- reserved | extended | unreserved | lost
+       pg_size_pretty(safe_wal_size) AS safe_wal_size           -- WAL that can still be written before invalidation
 FROM pg_replication_slots
 WHERE slot_type = 'logical';
 ```
 
-Notice the column list on `products`: supplier contact details and internal margin columns never leave the database.
+Notice the column list on `products`: seller contact details and internal margin columns never leave the database. Create the publication yourself, as above, rather than letting Debezium create one `FOR ALL TABLES`; then the CDC user needs only the `REPLICATION` attribute and `SELECT` on the published tables (for the snapshot), not superuser.
 
 ### The slot-lag danger, with numbers
 
@@ -116,13 +119,13 @@ A slot retains WAL for the **whole database**, not only for the published tables
 Defences, in order:
 
 1. **Monitor slot lag** in bytes and its growth rate; alert when lag exceeds, say, 5 GB or when "time to disk full" drops below 12 hours.
-2. **Set `max_slot_wal_keep_size`.** PostgreSQL invalidates a slot that falls further behind than this, protecting the primary. The consumer must then re-snapshot, which is painful but far better than an outage.
+2. **Set `max_slot_wal_keep_size`.** PostgreSQL invalidates a slot that falls further behind than this (its `wal_status` becomes `lost`), protecting the primary. The consumer must then re-snapshot, which is painful but far better than an outage. PostgreSQL 18 adds `idle_replication_slot_timeout`, which also invalidates slots that have been inactive for too long.
 3. **Drop slots you no longer use.** An abandoned slot from a proof of concept is a classic cause of incidents.
-4. **Heartbeats on quiet databases.** If published tables rarely change but other tables do, the slot's position may not advance even though the consumer is healthy (it has nothing to confirm). Debezium's heartbeat setting periodically writes to a small heartbeat table so the slot keeps moving.
+4. **Heartbeats on quiet databases.** If published tables rarely change but other tables do, the slot's position may not advance even though the consumer is healthy (it has nothing to confirm). Debezium's `heartbeat.interval.ms` combined with a `heartbeat.action.query` (for example an `UPDATE` of a one-row heartbeat table that is in the publication) gives the connector a change to confirm, so the slot keeps moving.
 
 ### Failover and slots
 
-Before PostgreSQL 17, logical slots existed only on the primary. After a failover to a standby, the slot was gone, and consumers had to re-snapshot or risk missing changes. PostgreSQL 17 adds **failover slots**: a logical slot created with the failover option is synchronised to standbys (with `sync_replication_slots` on the standby), so CDC can continue after promotion. Managed services differ in what they support; check before relying on it, and test failover with CDC running.
+Before PostgreSQL 17, logical slots existed only on the primary. After a failover to a standby, the slot was gone, and consumers had to re-snapshot or risk missing changes. PostgreSQL 17 adds **failover slots**: a logical slot created with the failover option (`pg_create_logical_replication_slot(..., failover => true)`, or the connector's equivalent setting) is synchronised to physical standbys. The standby needs `sync_replication_slots = on`, `hot_standby_feedback = on`, a `primary_slot_name` and a `dbname` in `primary_conninfo`; the primary lists that standby in `synchronized_standby_slots` so logical consumers never get ahead of it. Then CDC can continue after promotion. Managed services differ in what they support; check before relying on it, and test failover with CDC running.
 
 ### What Debezium adds
 
@@ -130,7 +133,7 @@ Debezium is an open-source set of CDC connectors, most often run inside **Kafka 
 
 - **Initial snapshot.** A new consumer needs existing rows, not just future changes. Debezium reads the tables in a consistent snapshot and then streams changes from the exact LSN the snapshot corresponds to, so nothing is lost or duplicated between the two (snapshot events carry `op = r`, for "read"). Incremental snapshots can re-read a table later without stopping streaming.
 - **A standard event envelope.** Each change becomes a record with `before`, `after`, `op` (`c` create, `u` update, `d` delete, `r` snapshot read), `ts_ms`, and a `source` block with the LSN, transaction id, table and timestamp.
-- **Topics per table, keyed by primary key.** `materialmart.public.product_prices`, with the row's primary key as the Kafka message key, so all changes to one row land in one partition, in order.
+- **Topics per table, keyed by primary key.** `gizmomart.public.product_prices`, with the row's primary key as the Kafka message key, so all changes to one row land in one partition, in order.
 - **Offsets.** Kafka Connect stores the last processed LSN; after a restart the connector resumes there and confirms positions to the slot as Kafka acknowledges them.
 - **Tombstones.** After a delete event, Debezium can emit a message with the same key and a null value, so Kafka log compaction can eventually remove the key entirely.
 - **Transforms.** The **outbox event router** turns rows inserted into an `outbox` table into clean business events on topics named by aggregate type, which is how [outbox via CDC](#/lesson/m12-outbox) usually works.
@@ -139,8 +142,8 @@ A simplified update event:
 
 ```json
 {
-  "before": { "id": 88121, "city": "Pune", "supplier_id": 412, "price_inr": 38000, "version": 17 },
-  "after":  { "id": 88121, "city": "Pune", "supplier_id": 412, "price_inr": 39500, "version": 18 },
+  "before": { "id": 88121, "product_id": 501, "city": "Pune", "seller_id": 412, "price_inr": 38000, "version": 17 },
+  "after":  { "id": 88121, "product_id": 501, "city": "Pune", "seller_id": 412, "price_inr": 39500, "version": 18 },
   "op": "u",
   "ts_ms": 1760851200123,
   "source": { "lsn": 97456123912, "txId": 5531209, "table": "product_prices", "snapshot": "false" }
@@ -164,7 +167,7 @@ After a connector crash, it resumes from the last **committed** offset, so event
 |---|---|---|
 | Effort for producers | None: no code changes | Write an outbox row in the same transaction |
 | Contract | The table schema is the contract | A designed, versioned event schema |
-| Meaning | "Row changed" (consumers infer why) | "PriceRevised for quote holders" |
+| Meaning | "Row changed" (consumers infer why) | "PriceRevised: shoppers with this phone in their cart should see ₹39,500" |
 | Schema changes | Every column change can break consumers | Internal schema can change freely |
 | Good for | Replication, search indexing, cache invalidation, warehouse loads, migrations | Integration events between services and teams |
 
@@ -201,6 +204,8 @@ PostgreSQL logical replication does **not** replicate DDL. When you change a pub
 - **Timestamp polling** is fine for a small append-only table read every few minutes by a report.
 - **Read replicas** solve "reporting queries slow down the primary" without any events at all.
 - **Do nothing.** If one service owns the data and others can call its API, you may not need copies at all.
+
+In the [scaling journey](#/lesson/m17-scaling-journey) case study, CDC shows up late: only once the product already has a separate search store, a warehouse and several teams. Before that stage a polling outbox relay and a read replica cover the same needs with far less to operate.
 
 ### What it costs
 
@@ -315,7 +320,7 @@ The code consumes Debezium-style envelopes (from Kafka in production; from an in
 using System.Globalization;
 using System.Text.Json;
 
-namespace MaterialMart.Cdc;
+namespace GizmoMart.Cdc;
 
 /// <summary>A PostgreSQL log sequence number: a 64-bit WAL byte position, printed as "hi/lo" in hex.</summary>
 public readonly record struct Lsn(ulong Value) : IComparable<Lsn>
@@ -392,7 +397,7 @@ public static class Fields
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Caching.Memory;
 
-namespace MaterialMart.Cdc;
+namespace GizmoMart.Cdc;
 
 public sealed record SearchDocument(string ProductId, string Name, string? Category, decimal? LowestPriceInr, bool Active, Lsn Position);
 
@@ -488,7 +493,7 @@ public sealed class CacheInvalidation(IMemoryCache cache) : IChangeHandler
 using System.Diagnostics.Metrics;
 using System.Threading.Channels;
 
-namespace MaterialMart.Cdc;
+namespace GizmoMart.Cdc;
 
 /// <summary>Stands in for a Kafka consumer of the Debezium topics.</summary>
 public sealed class InMemoryChangeStream
@@ -504,8 +509,8 @@ public sealed class ChangeStreamConsumer(
     IMeterFactory meters,
     ILogger<ChangeStreamConsumer> logger) : BackgroundService
 {
-    private readonly Counter<long> _processed = meters.Create("MaterialMart.Cdc").CreateCounter<long>("cdc.events.processed");
-    private readonly Counter<long> _failed = meters.Create("MaterialMart.Cdc").CreateCounter<long>("cdc.events.failed");
+    private readonly Counter<long> _processed = meters.Create("GizmoMart.Cdc").CreateCounter<long>("cdc.events.processed");
+    private readonly Counter<long> _failed = meters.Create("GizmoMart.Cdc").CreateCounter<long>("cdc.events.failed");
 
     public void Process(ChangeEvent e)
     {
@@ -547,7 +552,7 @@ public sealed class ChangeStreamConsumer(
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 
-namespace MaterialMart.Cdc;
+namespace GizmoMart.Cdc;
 
 public sealed record SlotStatus(string SlotName, bool Active, Lsn CurrentWal, Lsn ConfirmedFlush, long FreeDiskBytes);
 
@@ -598,7 +603,7 @@ public sealed class FakeSlotStatusReader : ISlotStatusReader
 
 ```csharp file=Program.cs
 using System.Text.Json;
-using MaterialMart.Cdc;
+using GizmoMart.Cdc;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -725,9 +730,9 @@ INSERT INTO product_prices (id, product_id, city, price_inr) VALUES
 :::exercise id=m16-cdc-ex1 difficulty=beginner kind=written title="Polling, triggers or the log?"
 Choose a change-capture approach for each case and justify it in two or three sentences, naming one risk of your choice.
 
-1. A nightly report copies new rows from an append-only `site_attendance` table (50,000 rows a day) to a reporting database.
-2. MaterialMart's search index must reflect price changes and deletions within 5 seconds; 300,000 price updates a day with bursts of 333 per second.
-3. A managed database service gives you no access to logical replication, and auditors need a permanent record of every change to `contracts`, including the old values.
+1. A nightly report copies new rows from an append-only `app_login_events` table (50,000 rows a day) to a reporting database.
+2. GizmoMart's search index must reflect price changes and deletions within 5 seconds; 300,000 price updates a day with bursts of 333 per second.
+3. A managed database service gives you no access to logical replication, and auditors need a permanent record of every change to `seller_payouts`, including the old values.
 4. The Orders team (a different team) needs to react when catalogue prices change.
 ::acceptance
 - Case 1 uses timestamp or id polling, noting it is safe because rows are never updated or deleted.
@@ -743,7 +748,7 @@ When you cannot read the log, what can still capture old and new values inside t
 ::solution
 1. **Polling** by an increasing id (better than a timestamp): `WHERE id > @last ORDER BY id LIMIT 10000`. Safe because the table is append-only, so nothing is missed. Risk: if rows are ever back-dated or deleted, polling will not notice.
 2. **Log-based CDC** (Debezium on a replication slot). It captures deletes, keeps per-row order and adds sub-second to seconds of latency even during bursts. Risk: a stalled indexer makes the slot retain WAL; monitor lag and set `max_slot_wal_keep_size`.
-3. **Triggers** writing `before` and `after` images to an append-only audit table in the same transaction. Works without log access and the audit record is transactionally consistent. Risk: every write to `contracts` does extra work; keep the trigger simple and the audit table partitioned by month.
+3. **Triggers** writing `before` and `after` images to an append-only audit table in the same transaction. Works without log access and the audit record is transactionally consistent. Risk: every write to `seller_payouts` does extra work; keep the trigger simple and the audit table partitioned by month.
 4. **Outbox.** The catalogue service writes a `PriceRevised` event (product, city, old and new price, effective time) into an outbox in the same transaction, relayed by CDC's outbox router or a polling relay. Raw-table CDC would make `product_prices` columns a contract the catalogue team could never change.
 ::mistakes
 - Using timestamp polling where deletes matter.
@@ -820,10 +825,10 @@ public class MaterializedViewTests
     public void Deletes_are_remembered()
     {
         var v = new MaterializedView();
-        v.Apply(new RowChange("9", Op.Create, "Tiles", 10));
+        v.Apply(new RowChange("9", Op.Create, "Earbuds", 10));
         Assert.True(v.Apply(new RowChange("9", Op.Delete, null, 20)));
         Assert.Null(v.Get("9"));
-        Assert.False(v.Apply(new RowChange("9", Op.Create, "Tiles", 10)));
+        Assert.False(v.Apply(new RowChange("9", Op.Create, "Earbuds", 10)));
         Assert.Equal(0, v.Count);
     }
 
@@ -1117,7 +1122,7 @@ A window function works too: `ROW_NUMBER() OVER (PARTITION BY row_key ORDER BY s
 :::
 
 :::exercise id=m16-cdc-ex5 difficulty=advanced kind=hld title="A CDC platform for five consumers"
-MaterialMart's catalogue database (PostgreSQL 17, primary plus one synchronous standby, 20 GB of WAL a day, 120 GB free on the WAL volume) must feed: search (5 s freshness), cache invalidation (2 s), the warehouse (hourly, with old and new values), the Orders team (business events), and a new recommendations team that wants "everything". Design the CDC platform: slots and connectors, topics and keys, raw versus outbox, protection of the primary, failover, schema-change process and personal-data controls. Extend the starter graph and justify each decision. Say what breaks first.
+GizmoMart's catalogue database (PostgreSQL 17, primary plus one synchronous standby, 20 GB of WAL a day, 120 GB free on the WAL volume) must feed: search (5 s freshness), cache invalidation (2 s), the warehouse (hourly, with old and new values), the Orders team (business events), and a new recommendations team that wants "everything". Design the CDC platform: slots and connectors, topics and keys, raw versus outbox, protection of the primary, failover, schema-change process and personal-data controls. Extend the starter graph and justify each decision. Say what breaks first.
 ::acceptance
 - A clear split between raw-table CDC (own team) and outbox events (other teams), including what the recommendations team gets.
 - Slot strategy (how many slots, why) with lag monitoring, `max_slot_wal_keep_size` and arithmetic on hours of headroom.
@@ -1199,7 +1204,7 @@ Put monitoring on both the database (slot lag, time to full) and Kafka (consumer
 
 **Schema changes.** Every change to a published table or event goes through review: additive only, expand and contract for renames and type changes, and the schema registry enforces backward compatibility so an incompatible change fails in CI.
 
-**Personal data.** Publication column lists exclude supplier contact details and internal margins; topics have 7-day retention and encryption at rest; consumers of raw topics are only catalogue-team services.
+**Personal data.** Publication column lists exclude seller contact details and internal margins; topics have 7-day retention and encryption at rest; consumers of raw topics are only catalogue-team services.
 
 **What breaks first.** Not throughput: 333 changes per second is modest for Kafka. The first failure is operational: the connector stalls (bad message, expired credentials, an incompatible schema change) and slot lag grows silently. That is why the lag and time-to-full alerts page on-call.
 ::mistakes

@@ -126,7 +126,7 @@ Environments start identical and slowly diverge: someone hot-fixes a setting in 
 
 ### Configuration per environment in ASP.NET Core
 
-ASP.NET Core reads the environment name from the `ASPNETCORE_ENVIRONMENT` variable (or `DOTNET_ENVIRONMENT` for non-web hosts). The built-in names are `Development`, `Staging` and `Production`. If nothing is set, the app assumes **Production**. That default is deliberate: forgetting to set it gives you the safest behaviour (no developer error pages), not the most dangerous one.
+ASP.NET Core reads the environment name from the `ASPNETCORE_ENVIRONMENT` variable (or `DOTNET_ENVIRONMENT` for non-web hosts). The built-in names are `Development`, `Staging` and `Production`. If nothing is set, the app assumes **Production**. That default is deliberate: forgetting to set it gives you the safest behaviour (no developer error pages), not the most dangerous one. You can use your own names too, such as `Test` or `UAT`: `appsettings.Test.json` is picked up automatically, and `env.IsEnvironment("Test")` checks for it, but `IsDevelopment()`, `IsStaging()` and `IsProduction()` only match the three built-in names. A guardrail written as `!env.IsProduction()` therefore treats `Test` and `UAT` as non-production, which is what you want.
 
 `WebApplication.CreateBuilder` then loads configuration sources in this order. **Later sources override earlier ones** for the same key:
 
@@ -168,7 +168,7 @@ Non-production environments need data, and the data must be realistic enough to 
 2. **Masked copy of production**: real structure and volumes, with personal fields replaced. Realistic, but you must mask *every* personal field, including those hidden in JSON columns, free-text notes, logs and file attachments. Masking must be **deterministic** (the same input gives the same output) so that relationships survive: if a phone number appears in two tables, both get the same fake number.
 3. **Subset**: a slice of production (say, 2 of 40 city wards) with referential integrity kept, then masked. Smaller, faster to restore, cheaper.
 
-India's Digital Personal Data Protection Act, 2023, the EU's GDPR and most sector rules expect personal data to be used only for the purpose it was collected for and protected accordingly. Copying real citizens' phone numbers into a QA database that 30 contractors can query is hard to defend under any of them. Treat "real personal data outside production" as an exception that needs approval, not a default.
+India's Digital Personal Data Protection Act, 2023, the EU's GDPR and most sector rules expect personal data to be used only for the purpose it was collected for and protected accordingly. Copying real consumers' phone numbers into a QA database that 30 people, including an outsourced testing vendor, can query is hard to defend under any of them. Treat "real personal data outside production" as an exception that needs approval, not a default.
 
 Even with perfect masking, add a second line of defence for **side effects**: anything that leaves the system (SMS, email, push notifications, webhooks, payments, files sent to government portals). Outside production, these should go to a sandbox or be captured in a local "outbox viewer" so testers can see them, with an explicit allowlist of team phone numbers and email domains for real delivery tests.
 
@@ -233,7 +233,7 @@ sequenceDiagram
     Host->>Val: ValidateOnStart for Payments and OutboundSafety
     alt settings are safe for Staging
         Val-->>Host: success
-        Host-->>LB: /health/live returns 200
+        Host-->>LB: /health/ready returns 200
         LB->>Host: start sending traffic
     else live gateway configured in Staging
         Val-->>Host: OptionsValidationException
@@ -242,7 +242,7 @@ sequenceDiagram
     end
 ```
 
-The platform starts the process and tells it which environment it is in. The host reads configuration layer by layer, and each later layer wins: shared file, environment file, environment variables, then the vault. Before accepting requests, the host runs the validators registered with `ValidateOnStart`. If the settings are safe, the health endpoint answers and the load balancer starts sending traffic. If someone pasted the live payment key into staging, validation throws, the process exits, and the instance never receives a request. During a rolling deployment the old version keeps serving, so a bad configuration costs a failed deployment, not an outage.
+The platform starts the process and tells it which environment it is in. The host reads configuration layer by layer, and each later layer wins: shared file, environment file, environment variables, then the vault. Before accepting requests, the host runs the validators registered with `ValidateOnStart`. If the settings are safe, the readiness endpoint answers and the load balancer starts sending traffic. If someone pasted the live payment key into staging, validation throws, the process exits, and the instance never receives a request. During a rolling deployment the old version keeps serving, so a bad configuration costs a failed deployment, not an outage.
 
 ## Step-by-step example
 
@@ -518,6 +518,7 @@ builder.Services.AddSingleton<INotificationSender>(sp => new EnvironmentGuardedS
 
 builder.Services.AddHealthChecks()
     .AddCheck("self", () => HealthCheckResult.Healthy(), tags: ["live"]);
+// Add dependency checks (database, vault) tagged "ready" in a real app; they gate traffic, not restarts.
 
 var app = builder.Build();
 
@@ -530,6 +531,7 @@ app.MapGet("/error", () => Results.Problem("Something went wrong. The error has 
    .ExcludeFromDescription();
 
 app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = r => r.Tags.Contains("live") });
+app.MapHealthChecks("/health/ready");   // all checks; the load balancer routes traffic only when this is 200
 app.MapGet("/version", (DeploymentInfo info) => info);
 
 app.MapPost("/bills/{consumerNo}/remind", async (string consumerNo, string phone, INotificationSender sender, CancellationToken ct) =>
@@ -563,6 +565,7 @@ Design notes:
 - **Two-way guardrails.** Production refuses the sandbox (otherwise customers' payments silently go nowhere), and non-production refuses live. Both mistakes have happened to real teams.
 - **One code path.** `/bills/{consumerNo}/remind` runs the same code in every environment. Only the decorator's settings differ.
 - **`IOptionsMonitor`** lets an operator change the allowlist in staging without a restart, if the configuration source supports reload.
+- **`/dev/captured` holds personal data.** Captured messages contain phone numbers and message text. In a real app, protect the endpoint with the team's sign-in (`RequireAuthorization`) and keep the store bounded, as `InMemoryCapturedMessageStore` does. With several instances, each one captures only its own messages; use a shared store (a table or a mail-catcher service) if testers need one view.
 - **`/version`** must not reveal secrets. It shows the environment name, version, commit and region: enough to answer "is staging running what we're about to ship?".
 
 ## Bad design vs good design
@@ -684,7 +687,7 @@ Item 8 is not about infrastructure at all. What exactly is being promoted?
 Item 5: think about redirects to HTTPS, secure cookies and the client IP address the app sees.
 ::solution
 1. **Acceptable.** Same behaviour, smaller size. Staging can't predict production capacity; load-test separately.
-2. **Dangerous.** A major PostgreSQL version changes the planner, defaults and features. A migration or query that works on 16 can behave differently on 17. Upgrade staging first, always.
+2. **Dangerous.** A major PostgreSQL version changes the planner, defaults and features (and `pg_dump`/restore and extension versions are tied to it). A migration or query that works on 16 can behave differently on 17. Upgrade staging first, always.
 3. **Acceptable with a mitigation.** Functionally fine, but a query that is fast on 30 GB may pick a different plan on 600 GB. Run performance tests in a temporary full-size environment, or compare `EXPLAIN` plans on a production-sized masked copy before risky releases.
 4. **Acceptable and required.** Same API, no real money. Make sure the sandbox is the *same API version* as live.
 5. **Dangerous.** Without the proxy, staging never tests forwarded headers, HTTPS redirects, `Secure` cookies, request size limits or IIS-specific behaviour. Put the same kind of proxy and TLS in staging.
@@ -916,7 +919,7 @@ public class PiiMaskerTests
 }
 ```
 ::solution
-One keyed hash function feeds all three masks. Keying with a salt (HMAC) matters: a plain SHA-256 of a phone number can be reversed by hashing all ~900 million possible mobile numbers, which takes minutes on a laptop. With a secret salt that is thrown away after the copy, nobody can rebuild the mapping.
+One keyed hash function feeds all three masks. Keying with a salt (HMAC) matters: a plain SHA-256 of a phone number can be reversed by hashing every possible Indian mobile number. There are only about 4 billion (10 digits starting with 6–9), which a single GPU hashes in seconds and a laptop CPU in well under an hour. With a secret salt that is thrown away after the copy, nobody can rebuild the mapping.
 
 ```csharp file=PiiMasker.cs
 using System;
@@ -1326,7 +1329,7 @@ public class PaymentGatewayValidatorTests
 - **Payment providers** (card networks, UPI apps, gateways) all publish sandbox environments with test credentials and fake card or VPA numbers. Integrations are certified in the sandbox before live keys are issued, which forces exactly the separation in this lesson.
 - **Government integrations** in India, such as the GST e-invoice registration portal and e-way bill APIs, provide sandbox endpoints for developers. Systems that file data with the government must keep test filings out of the live portal.
 - **Large web platforms** commonly use ephemeral preview environments per pull request (popularised by hosting platforms that create one per branch) and keep staging for final release checks.
-- **Infrastructure project platforms** that track site progress, drone surveys and contractor bills typically run a UAT environment where the client signs off a release with masked project data before it reaches production. The UAT sign-off is a promotion gate in the pipeline.
+- **Hospital and clinic software** (appointment booking, lab reports, pharmacy billing) typically runs a UAT environment where the hospital's own staff sign off a release with masked patient data before it reaches production. The UAT sign-off is a promotion gate in the pipeline, and appointment-reminder SMS in UAT go to a capture sink, exactly like AquaBill's.
 - **Regulated sectors** (banking, health) usually forbid unmasked production data in lower environments by policy and audit it.
 
 ## Interview questions
@@ -1433,7 +1436,7 @@ QA needs realistic consumer data. Which approach best balances realism and safet
 ::q single
 Why is unsalted SHA-256 of a mobile number a poor masking method?
 - [ ] SHA-256 is too slow.
-- [x] There are only around a billion possible mobile numbers, so anyone can hash them all and reverse the mapping.
+- [x] There are only a few billion possible mobile numbers, so anyone can hash them all and reverse the mapping.
 - [ ] SHA-256 output is not deterministic.
 - [ ] It changes the length of the column.
 > Small input spaces make plain hashes reversible. A secret key (HMAC) that is thrown away after the copy prevents it.

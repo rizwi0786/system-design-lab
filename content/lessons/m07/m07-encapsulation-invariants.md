@@ -26,7 +26,7 @@ references:
 
 You have found your classes, given them responsibilities and connected them. Now the hardest part: making sure they can never be put into a state that makes no sense. A stock item with −40 units reserved. A leave balance of 52 days when the policy allows 30. A percentage of 150. These bugs rarely come from one obviously wrong line. They come from many small paths around the rules: a public setter, a leaked list, a `with` expression, two requests at the same time.
 
-This lesson shows you how to close those paths. The running example is warehouse inventory (stock on hand, reservations and shipments), with leave balances, library loans, prices and bank accounts in the exercises.
+This lesson shows you how to close those paths. The running example is the warehouse inventory of an online grocery store (stock on hand, reservations for customer orders and shipments; SKUs such as `ATTA-00053`, a 10 kg bag of wheat flour, and `OIL-00012`, a 1 L bottle of sunflower oil), with leave balances, library loans, prices and bank accounts in the exercises.
 
 ## Learning objectives
 
@@ -320,8 +320,8 @@ sequenceDiagram
     participant S as ReservationService
     participant R as IStockRepository
     participant DB as PostgreSQL
-    A->>S: Reserve(order 1, CEM-00053, GGN, 10)
-    B->>S: Reserve(order 2, CEM-00053, GGN, 10)
+    A->>S: Reserve(order 1, ATTA-00053, GGN, 10)
+    B->>S: Reserve(order 2, ATTA-00053, GGN, 10)
     S->>R: Find (A) returns version 7, available 10
     S->>R: Find (B) returns version 7, available 10
     S->>S: item A: Reserve(10) passes guards
@@ -559,7 +559,8 @@ public interface IStockRepository
 
 /// <summary>
 /// Demo store that mimics "UPDATE ... WHERE version = @expected". It keeps the version it last saved per key,
-/// so two in-memory copies of the same item cannot both win.
+/// so two copies of the same item cannot both win. Simplification: Find returns the shared instance, so this demo
+/// shows the version check but not per-request isolation (see the note below the code).
 /// </summary>
 public sealed class InMemoryStockRepository : IStockRepository
 {
@@ -625,9 +626,9 @@ using Inventory.Stock;
 var builder = WebApplication.CreateBuilder(args);
 
 var repository = new InMemoryStockRepository();
-var cement = new StockItem("CEM-00053", "GGN", new ReorderPolicy(reorderLevel: 100, reorderQuantity: 500));
-cement.Receive(400, "GRN-2026-0815", DateTimeOffset.UtcNow);
-repository.Seed(cement);
+var atta = new StockItem("ATTA-00053", "GGN", new ReorderPolicy(reorderLevel: 100, reorderQuantity: 500));
+atta.Receive(400, "GRN-2026-0815", DateTimeOffset.UtcNow);   // GRN = goods received note
+repository.Seed(atta);
 
 builder.Services.AddSingleton<IStockRepository>(repository);
 builder.Services.AddScoped<ReservationService>();
@@ -651,7 +652,10 @@ app.MapGet("/stock/{warehouse}/{sku}", (string warehouse, string sku, IStockRepo
 app.Run();
 ```
 
+A note on the demo store: it hands the *same* `StockItem` object to every request, so two concurrent requests would be mutating one unsynchronised object, and a reservation made before a failed save would stay on it. A real repository (EF Core with a scoped `DbContext`) materialises a fresh copy per request; a failed `SaveChanges` with a concurrency token simply throws that copy away, and the retry loop reloads clean data. Keep this in mind before copying the in-memory class into anything beyond a demo or a unit test.
+
 The same invariants, as a database backstop in PostgreSQL:
+
 
 ```sql
 CREATE TABLE stock_items (
@@ -745,13 +749,13 @@ public sealed record SafePercent
 
 public sealed class Leaky
 {
-    private readonly List<string> _lines = new() { "CEM-00053 x 10" };
+    private readonly List<string> _lines = new() { "ATTA-00053 x 10" };
     public IReadOnlyList<string> Lines => _lines;                 // castable back to List<string>
 }
 
 public sealed class Sealed
 {
-    private readonly List<string> _lines = new() { "CEM-00053 x 10" };
+    private readonly List<string> _lines = new() { "ATTA-00053 x 10" };
     public IReadOnlyList<string> Lines => _lines.AsReadOnly();    // ReadOnlyCollection wrapper
 }
 
@@ -1261,8 +1265,8 @@ An order reserves several SKUs at once. Either every line is reserved or none is
 - `Release(orderId)` returns all of that order's quantities.
 - `Available(sku)` and `ReservedFor(orderId, sku)` report state. All public methods are thread-safe.
 ::acceptance
-- Reserving `CEM × 10, STL × 500` when steel has 200 throws for `STL-00012` and leaves cement availability unchanged.
-- Two lines `CEM × 30` and `CEM × 30` with 50 available throw (60 > 50).
+- Reserving `ATTA × 10, OIL × 500` when oil has 200 throws for `OIL-00012` and leaves atta availability unchanged.
+- Two lines `ATTA × 30` and `ATTA × 30` with 50 available throw (60 > 50).
 - After `Release`, availability is restored exactly.
 - 200 parallel orders each reserving 1 unit of a SKU with 50 available: exactly 50 succeed and availability ends at 0.
 - An unknown SKU throws `InsufficientStockException` with `Available = 0`.
@@ -1317,7 +1321,7 @@ using Xunit;
 
 public class ReservationBookTests
 {
-    private static ReservationBook Book() => new(new Dictionary<string, int> { ["CEM-00053"] = 50, ["STL-00012"] = 200 });
+    private static ReservationBook Book() => new(new Dictionary<string, int> { ["ATTA-00053"] = 50, ["OIL-00012"] = 200 });
 
     [Fact]
     public void Failing_line_reserves_nothing()
@@ -1325,11 +1329,11 @@ public class ReservationBookTests
         var b = Book();
         var ex = Assert.Throws<InsufficientStockException>(() => b.Reserve(Guid.NewGuid(), new[]
         {
-            new ReservationLine("CEM-00053", 10), new ReservationLine("STL-00012", 500),
+            new ReservationLine("ATTA-00053", 10), new ReservationLine("OIL-00012", 500),
         }));
-        Assert.Equal("STL-00012", ex.Sku);
+        Assert.Equal("OIL-00012", ex.Sku);
         Assert.Equal(200, ex.Available);
-        Assert.Equal(50, b.Available("CEM-00053"));
+        Assert.Equal(50, b.Available("ATTA-00053"));
     }
 
     [Fact]
@@ -1338,9 +1342,9 @@ public class ReservationBookTests
         var b = Book();
         Assert.Throws<InsufficientStockException>(() => b.Reserve(Guid.NewGuid(), new[]
         {
-            new ReservationLine("CEM-00053", 30), new ReservationLine("CEM-00053", 30),
+            new ReservationLine("ATTA-00053", 30), new ReservationLine("ATTA-00053", 30),
         }));
-        Assert.Equal(50, b.Available("CEM-00053"));
+        Assert.Equal(50, b.Available("ATTA-00053"));
     }
 
     [Fact]
@@ -1348,13 +1352,13 @@ public class ReservationBookTests
     {
         var b = Book();
         var order = Guid.NewGuid();
-        b.Reserve(order, new[] { new ReservationLine("CEM-00053", 20), new ReservationLine("STL-00012", 75) });
-        Assert.Equal(30, b.Available("CEM-00053"));
-        Assert.Equal(75, b.ReservedFor(order, "STL-00012"));
+        b.Reserve(order, new[] { new ReservationLine("ATTA-00053", 20), new ReservationLine("OIL-00012", 75) });
+        Assert.Equal(30, b.Available("ATTA-00053"));
+        Assert.Equal(75, b.ReservedFor(order, "OIL-00012"));
         b.Release(order);
-        Assert.Equal(50, b.Available("CEM-00053"));
-        Assert.Equal(200, b.Available("STL-00012"));
-        Assert.Equal(0, b.ReservedFor(order, "STL-00012"));
+        Assert.Equal(50, b.Available("ATTA-00053"));
+        Assert.Equal(200, b.Available("OIL-00012"));
+        Assert.Equal(0, b.ReservedFor(order, "OIL-00012"));
     }
 
     [Fact]
@@ -1362,10 +1366,10 @@ public class ReservationBookTests
     {
         var b = Book();
         var order = Guid.NewGuid();
-        b.Reserve(order, new[] { new ReservationLine("CEM-00053", 1) });
-        Assert.Throws<InvalidOperationException>(() => b.Reserve(order, new[] { new ReservationLine("CEM-00053", 1) }));
+        b.Reserve(order, new[] { new ReservationLine("ATTA-00053", 1) });
+        Assert.Throws<InvalidOperationException>(() => b.Reserve(order, new[] { new ReservationLine("ATTA-00053", 1) }));
         Assert.Throws<ArgumentException>(() => b.Reserve(Guid.NewGuid(), Array.Empty<ReservationLine>()));
-        Assert.Throws<ArgumentOutOfRangeException>(() => b.Reserve(Guid.NewGuid(), new[] { new ReservationLine("CEM-00053", 0) }));
+        Assert.Throws<ArgumentOutOfRangeException>(() => b.Reserve(Guid.NewGuid(), new[] { new ReservationLine("ATTA-00053", 0) }));
     }
 
     [Fact]
@@ -1382,11 +1386,11 @@ public class ReservationBookTests
         var successes = 0;
         Parallel.For(0, 200, new ParallelOptions { MaxDegreeOfParallelism = 16 }, _ =>
         {
-            try { b.Reserve(Guid.NewGuid(), new[] { new ReservationLine("CEM-00053", 1) }); Interlocked.Increment(ref successes); }
+            try { b.Reserve(Guid.NewGuid(), new[] { new ReservationLine("ATTA-00053", 1) }); Interlocked.Increment(ref successes); }
             catch (InsufficientStockException) { }
         });
         Assert.Equal(50, successes);
-        Assert.Equal(0, b.Available("CEM-00053"));
+        Assert.Equal(0, b.Available("ATTA-00053"));
     }
 }
 ```
@@ -1481,7 +1485,7 @@ public class StockItemInvariantTests
 {
     private static StockItem WithStock(int onHand)
     {
-        var item = new StockItem("CEM-00053", "GGN", new ReorderPolicy(100, 500));
+        var item = new StockItem("ATTA-00053", "GGN", new ReorderPolicy(100, 500));
         item.Receive(onHand, "GRN-1", DateTimeOffset.UnixEpoch);
         return item;
     }
@@ -1527,7 +1531,8 @@ Beyond example tests:
 - **E-commerce and quick-commerce inventory**: "never sell what you do not have" is an invariant on stock with reservations, protected by in-process guards and database-level conditional updates, because flash sales produce exactly the race in the sequence diagram.
 - **Banking and UPI**: balance and overdraft invariants, idempotent posting by transaction reference, and freezing are textbook preconditions and invariants. Regulators expect the system, not the UI, to enforce them.
 - **HR and leave systems**: balances, carry-forward caps and "no overlapping leave" are invariants that must hold whether leave is applied from the web, the mobile app or a bulk HR import.
-- **Infrastructure project billing**: a running-account bill must not claim more quantity than the measurement book records, and cumulative payments must not exceed the contract value. These are cross-object invariants that belong to an aggregate root, see [Aggregates](#/lesson/m08-aggregates).
+- **Ticket booking (movies, trains, flights)**: a show or a train coach must never sell more seats than it has, and one seat must never be held by two bookings at once. These are cross-object invariants (they span every booking for the show) that belong to an aggregate root or a database constraint, see [Aggregates](#/lesson/m08-aggregates).
+
 
 ## Interview questions
 

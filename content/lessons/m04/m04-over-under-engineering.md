@@ -44,20 +44,20 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Imagine a family of four asking you to build them a house.
+Imagine a friend opening a small cloud kitchen in Indore that delivers biryani through food-delivery apps. She expects about 40 orders a day.
 
-**Overengineered:** you build 20 bedrooms "in case they have more children", a helipad "in case they get a helicopter", and wiring for a factory. It costs five times as much, takes three years, and every room needs cleaning. The family wanted a house in a year.
+**Overengineered:** she rents a 200-seat restaurant "in case dine-in takes off", installs a drive-through window "in case customers want to pick up by car", and prints a 12-cuisine menu. Rent is five times higher, opening takes a year, and the cooks spend their days maintaining equipment nobody uses. She wanted to sell biryani next month.
 
-**Underengineered:** you build quickly and cheaply, but with no foundation, no fire exit, and electrical wiring that isn't earthed. It looks fine on day one. In the first monsoon, the walls crack.
+**Underengineered:** she opens in two weeks with no fridge thermometer, no fire extinguisher, no food-safety (FSSAI) licence, and orders written on paper slips that sometimes get lost. It looks fine on day one. Then one batch of spoiled raita makes ten customers sick, and the kitchen is shut down.
 
-**Right-sized:** you build for four people, with a **foundation strong enough for a second floor later**. Why the foundation? Because adding a stronger foundation under an existing house is almost impossible, while adding a floor on a good foundation is routine. You don't build the second floor, though; they may never need it.
+**Right-sized:** a small kitchen sized for 40–80 orders a day, but with **proper refrigeration, gas safety, the licence and an order system that records every order and payment**. Why those? Because a food-poisoning case or a lost day of payments can't be undone, while adding a second stove or a new dish is routine. She doesn't rent the dining hall, though; she may never need it.
 
 That's the whole lesson in one picture:
 
-- Things that are **cheap to change later** (number of rooms, paint, furniture): keep them simple now, add when needed. In software: class structure, internal interfaces, folder layout, which library sits behind an interface.
-- Things that are **very expensive to change later** (foundation, fire safety, earthing): get them right on day one. In software: how money is stored, data integrity, security, public API and event contracts, idempotency of payments.
+- Things that are **cheap to change later** (the menu, extra stoves, the packaging design): keep them simple now, add when needed. In software: class structure, internal interfaces, folder layout, which library sits behind an interface.
+- Things that are **very expensive to change later** (food safety, fire safety, the licence, accurate records of money): get them right on day one. In software: how money is stored, data integrity, security, public API and event contracts, idempotency of payments.
 
-Overengineering is building the helipad. Underengineering is skipping the foundation. Both feel productive while you're doing them.
+Overengineering is renting the dining hall. Underengineering is skipping the fridge thermometer. Both feel productive while you're doing them.
 
 ## First-principles explanation
 
@@ -177,7 +177,7 @@ flowchart TD
     H -- No --> J["Don't build it. Keep code easy to change."]
 ```
 
-Start at the top. The first question filters out the "foundation" items: guarantees around money, data, security and contracts are built now, regardless of YAGNI. For everything else, you need evidence of a current need, and then the simplest version that meets it. With no evidence, the only reason to act now is that waiting would be expensive or irreversible, and even then, the answer is usually a *cheap exit* (a thin interface, a contract test), not the full speculative feature.
+Start at the top. The first question filters out the "food-safety" items: guarantees around money, data, security and contracts are built now, regardless of YAGNI. For everything else, you need evidence of a current need, and then the simplest version that meets it. With no evidence, the only reason to act now is that waiting would be expensive or irreversible, and even then, the answer is usually a *cheap exit* (a thin interface, a contract test), not the full speculative feature.
 
 ### Same feature, two designs
 
@@ -220,9 +220,9 @@ The top-left cluster is a real-world style of overengineering: a controller, a s
 
 ## Step-by-step example
 
-### Scenario: contractor payouts
+### Scenario: freelancer payouts
 
-A platform releases payments to subcontractors on infrastructure projects once their bills are approved. Today there's one bank integration, around 400 payouts a day, and a team of five developers.
+A freelance marketplace (clients hire designers, developers and translators) releases money to freelancers once the client approves their milestone bill. Today there's one bank integration, around 400 payouts a day, and a team of five developers.
 
 ### Step 1 — the overengineered proposal
 
@@ -234,7 +234,7 @@ A design document proposes:
 - A generic `IRepository<T>` and `IUnitOfWork` over EF Core.
 - CQRS with separate read and write databases.
 
-Run the checklist. Evidence: one bank, 400 payouts a day (well under one per minute on average). Team: five people. Cost of adding later: a second provider behind an interface is a one-week change. Reversibility: splitting a well-modularised monolith into services later is feasible; merging three services with three databases back together is painful. Verdict: most of this is a helipad.
+Run the checklist. Evidence: one bank, 400 payouts a day (well under one per minute on average). Team: five people. Cost of adding later: a second provider behind an interface is a one-week change. Reversibility: splitting a well-modularised monolith into services later is feasible; merging three services with three databases back together is painful. Verdict: most of this is a 200-seat dining hall for a delivery kitchen.
 
 ### Step 2 — the underengineered alternative
 
@@ -250,7 +250,7 @@ app.MapPost("/payouts", async (PayoutDto dto, AppDb db, HttpClient http) =>
 });
 ```
 
-Run the checklist on *guarantees*. The amount is sent as `double`. There's no check that the amount matches the approved bill. A client retry after a timeout sends the money twice. `HttpClient` has the default 100-second timeout. If the bank call succeeds and `SaveChangesAsync` fails, money has moved with no record. This isn't simple; it's missing its foundation.
+Run the checklist on *guarantees*. The amount is sent as `double`. There's no check that the amount matches the approved bill. A client retry after a timeout sends the money twice. `HttpClient` has the default 100-second timeout. If the bank call succeeds and `SaveChangesAsync` fails, money has moved with no record. This isn't simple; it's missing its fridge thermometer and fire extinguisher.
 
 ### Step 3 — the right-sized design
 
@@ -468,6 +468,10 @@ app.Run();
 
 What's deliberately **absent**: a mediator, a generic repository, a plugin loader, separate services, event sourcing, a strategy factory for one bank. What's deliberately **present**: idempotency, decimal money with currency, validation against the approved bill, a timeout, and an honest `Unknown` state. That's the "lazy about structure, paranoid about guarantees" rule in code.
 
+:::callout type=warning title="One guarantee the in-memory store hides"
+Two payouts with *different* idempotency keys for the same bill can both pass the "unpaid balance" check before either is recorded, and together overpay the freelancer. In PostgreSQL, close that race in the database, not in C#: reserve the amount when you insert the payout, inside one transaction that locks the bill row (`SELECT ... FROM bills WHERE id = $1 FOR UPDATE`), or with a single conditional update (`UPDATE bills SET reserved = reserved + $2 WHERE id = $1 AND approved - paid - reserved >= $2`, then check that one row changed). Release the reservation if the bank rejects the transfer. This is still one class and one table — a guarantee, not extra structure.
+:::
+
 ## Bad design vs good design
 
 ### Overengineering in the wild
@@ -477,10 +481,10 @@ public interface IEntity<TKey> { TKey Id { get; } }
 public interface IRepository<T, TKey> where T : IEntity<TKey> { Task<T?> GetAsync(TKey id); Task AddAsync(T e); /* 14 more */ }
 public interface IUnitOfWork { Task CommitAsync(); }
 public abstract class ServiceBase<TEntity, TDto, TKey> { /* mapping, validation, logging hooks */ }
-public sealed class SiteService : ServiceBase<Site, SiteDto, int> { }
+public sealed class CategoryService : ServiceBase<Category, CategoryDto, int> { }
 ```
 
-Five abstractions for a CRUD screen with 3 fields. EF Core's `DbContext` is already a unit of work and `DbSet<T>` is already a repository, so this wraps a repository in a repository. Every query that doesn't fit `GetAsync(id)` leaks around the abstraction, which then grows 14 more methods.
+Five abstractions for a CRUD screen with 3 fields (a list of skill categories such as "Logo design"). EF Core's `DbContext` is already a unit of work and `DbSet<T>` is already a repository, so this wraps a repository in a repository. Every query that doesn't fit `GetAsync(id)` leaks around the abstraction, which then grows 14 more methods.
 
 **Simpler**: use `DbContext` directly in a small, feature-focused service or endpoint handler. Introduce a repository *per aggregate* when real domain logic needs a persistence-ignorant boundary (see [Repository and Unit of Work](#/lesson/m06-repository-uow)).
 
@@ -589,13 +593,13 @@ Things to try:
 :::exercise id=m04-over-under-engineering-ex1 difficulty=beginner kind=code title="Collapse an overengineered GST calculator"
 A teammate built GST calculation with `IGstService`, `IGstStrategyFactory`, three strategy classes and a generic repository, for three fixed rates. Replace it with a single `GstCalculator.Compute` method.
 ::requirements
-- Example rates for this exercise: `essential` 5 %, `standard` 18 %, `luxury` 28 %. Category matching ignores case.
+- Example rates for this exercise, matching the slabs after India's September 2025 GST reform: `essential` 5 %, `standard` 18 %, `luxury` 40 %. Category matching ignores case.
 - **Intra-state** supply: tax is split equally into CGST and SGST. **Inter-state**: all of it is IGST.
 - Round each component to 2 decimals, half away from zero. `Total` = sum of the components.
 - Unknown category → `ArgumentException`. Negative taxable value → `ArgumentOutOfRangeException`.
 ::acceptance
 - `standard`, ₹10,000, intra-state → CGST 900, SGST 900, IGST 0, total 1,800.
-- `luxury`, ₹10,000, inter-state → IGST 2,800.
+- `luxury`, ₹10,000, inter-state → IGST 4,000.
 - `Essential`, ₹333.33, intra-state → CGST 8.33, SGST 8.33, total 16.66.
 - `unknown` → `ArgumentException`.
 ::hint
@@ -639,7 +643,7 @@ public class GstCalculatorTests
 
     [Fact]
     public void Luxury_inter_state_is_igst() =>
-        Assert.Equal(new GstBreakup(0m, 0m, 2800m, 2800m), GstCalculator.Compute("luxury", 10_000m, interState: true));
+        Assert.Equal(new GstBreakup(0m, 0m, 4000m, 4000m), GstCalculator.Compute("luxury", 10_000m, interState: true));
 
     [Fact]
     public void Rounds_each_component_and_ignores_case() =>
@@ -673,7 +677,7 @@ public static class GstCalculator
     {
         ["essential"] = 0.05m,
         ["standard"] = 0.18m,
-        ["luxury"] = 0.28m,
+        ["luxury"] = 0.40m,
     };
 
     public static GstBreakup Compute(string category, decimal taxableValue, bool interState)
@@ -697,7 +701,7 @@ public static class GstCalculator
 }
 ```
 
-When would you move back towards more structure? If rates change at runtime (load them from configuration or a table, still no strategies), or if categories get genuinely different *rules* (cess on top for some items, reverse charge for others). Then you'd have real variants to design around.
+When would you move back towards more structure? If rates change at runtime — the 2025 reform moved hundreds of items between slabs overnight — load them from configuration or a table, still with no strategies; or if categories get genuinely different *rules* (cess on top for some items, reverse charge for others). Then you'd have real variants to design around.
 ::mistakes
 - Keeping the factory "in case rules get complex". That's the cost of carry, paid every day for a future that may never come.
 - Computing the total, rounding it, then halving it. ₹333.33 at 5 % is 16.6665; rounding the total gives 16.67, halves of 8.335 each, which don't round consistently. Round each printed component.
@@ -939,7 +943,7 @@ Some teams don't remember rejected events, so a provider can fix data and redeli
 :::
 
 :::exercise id=m04-over-under-engineering-ex4 difficulty=intermediate kind=written title="One-way doors for a new product"
-Your team is starting a platform that lets city municipalities track road-repair complaints from citizens (photos, location, status), with an API for other government apps. Classify each decision as a **one-way door** or a **two-way door**, and say how much effort it deserves now.
+Your team is starting a platform that lets city municipalities track civic complaints from citizens — missed garbage pickups, broken streetlights, water-supply cuts (photos, location, status) — with an API for other government apps. Classify each decision as a **one-way door** or a **two-way door**, and say how much effort it deserves now.
 
 1. Whether to use Clean Architecture folders or vertical slices.
 2. The public API's URL and JSON shape for `GET /complaints/{id}`.
@@ -978,7 +982,7 @@ For the broker, compare "add a broker later behind an `INotificationPublisher` i
 Your SMS vendor contract is up for renewal. Make switching vendors a two-way door: implement two adapters behind one `ISmsSender` port, plus the shared logic both need. The tests include a **contract test suite** that runs identically against both adapters.
 ::requirements
 - `PhoneNumber.NormalizeIndian(raw)` returns `+91XXXXXXXXXX`. Accept spaces, dashes, a leading `0`, `91` or `+91`. The 10-digit number must start with 6–9. Anything else → `ArgumentException`.
-- `SmsSegments.Count(text)`: if every character is ASCII, 160 characters fit in 1 segment and longer messages use 153 per segment; otherwise (for example, Hindi text) 70 fit in 1 and longer messages use 67 per segment. Empty text → `ArgumentException`.
+- `SmsSegments.Count(text)` (a simplification of the real GSM-7 rules, where a few ASCII characters such as `{`, `}`, `[` and `~` count double and some accented letters still fit in one 7-bit character): if every character is ASCII, 160 characters fit in 1 segment and longer messages use 153 per segment; otherwise (for example, Hindi text) 70 fit in 1 and longer messages use 67 per segment. Empty text → `ArgumentException`.
 - `AlphaSmsSender` uses `AlphaSmsApi.Send(string msisdn, string text)`: the number **without** `+` (e.g. `919812345678`); the reply is `"OK:<id>"` or `"ERR:<reason>"`.
 - `BetaSmsSender` uses `BetaSmsClient.Submit(BetaRequest)`: the number **with** `+`; the reply is a `BetaResponse(bool Accepted, string? MessageId, string? Error)`.
 - Both return `SmsResult(bool Sent, string? ProviderMessageId, string? Error, int Segments)`. Invalid phone numbers throw `ArgumentException` **before** calling the vendor.
@@ -1280,7 +1284,7 @@ public async Task Bank_timeout_is_unknown_not_failed()
 
 - **Startups and MVPs** commonly suffer from premature microservices and Kubernetes. Many well-known products started as monoliths and split only parts that needed independent scaling or ownership. A modular monolith keeps that option open cheaply.
 - **Payments and fintech** are where underengineering is most expensive: idempotency, exact decimal arithmetic, reconciliation of "unknown" outcomes and audit trails are standard practice, not gold-plating.
-- **Government and infrastructure platforms** often have strict data, audit and integration requirements (APIs consumed by other departments, retention rules), which are one-way doors. Internal structure can stay simple; contracts and data handling can't.
+- **Government and healthcare platforms** often have strict data, audit and integration requirements (APIs consumed by other departments, retention rules), which are one-way doors. Internal structure can stay simple; contracts and data handling can't.
 - **Vendor integrations** (SMS, maps, e-sign, payment gateways) are where a thin port plus contract tests pays off, because commercial terms change more often than code.
 - **Enterprise "frameworks"** built in-house (custom base services, generic repositories, layered abstractions) are a common source of carry cost. Teams often get faster by deleting layers that only pass parameters through.
 
@@ -1304,9 +1308,9 @@ What are one-way and two-way door decisions in software? Give examples of each.
 ::a
 Two-way doors are cheap to reverse: internal class structure, folder layout, a library behind your own interface, a cache policy. Make them quickly and adjust later. One-way doors are expensive or impossible to reverse: published API contracts and event schemas used by others, public identifier formats, money representation, data retention and deletion, tenant isolation model, anything sent to regulators or banks. Spend design effort on these, record them in ADRs, and where possible make them more reversible cheaply (versioned APIs, a thin port over a vendor, additive schema changes).
 ::q advanced
-A design review proposes event sourcing, CQRS and three microservices for a new contractor-payout feature: one bank, about 400 payouts a day, five developers. How do you respond?
+A design review proposes event sourcing, CQRS and three microservices for a new freelancer-payout feature: one bank, about 400 payouts a day, five developers. How do you respond?
 ::a
-I'd ask for the evidence behind each choice. At 400 payouts a day (well under one a minute on average) and five developers, three services add deployment, monitoring and distributed-consistency costs with little benefit; a modular monolith with a clear Payouts module keeps the option to split later. Event sourcing is a one-way door with a high learning and operational cost; the stated need, auditability, is met by an append-only audit table of state changes. CQRS with separate stores isn't justified by the read load. I'd redirect the effort to the guarantees that matter: idempotency keys with a unique constraint, decimal money with currency, validation against the approved bill, timeouts and an explicit "unknown" state with reconciliation for bank calls, and a thin `IBankGateway` port with contract tests so a second bank is cheap. I'd record the decisions and the conditions that would make us revisit them (for example, a second bank, 50,000 payouts a day, or a separate payouts team).
+I'd ask for the evidence behind each choice. At 400 payouts a day (well under one a minute on average) and five developers, three services add deployment, monitoring and distributed-consistency costs with little benefit; a modular monolith with a clear Payouts module keeps the option to split later. Event sourcing is a one-way door with a high learning and operational cost; the stated need, auditability, is met by an append-only audit table of state changes. CQRS with separate stores isn't justified by the read load. I'd redirect the effort to the guarantees that matter: idempotency keys with a unique constraint, decimal money with currency, validation against the approved bill (with the unpaid balance reserved under a row lock, so two payouts can't overpay), timeouts and an explicit "unknown" state with reconciliation for bank calls, and a thin `IBankGateway` port with contract tests so a second bank is cheap. I'd record the decisions and the conditions that would make us revisit them (for example, a second bank, 50,000 payouts a day, or a separate payouts team).
 ::q advanced
 How do you prevent a codebase from drifting into overengineering or underengineering over time?
 ::a

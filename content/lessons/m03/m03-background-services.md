@@ -685,6 +685,7 @@ Things to notice:
 - The endpoint never waits for the SMS. It writes the challan, tries to enqueue, and reports honestly whether the notification was queued.
 - The worker holds no scoped services. Each successful send opens its own scope; the sweeper opens one per tick.
 - The send uses its own timeout, not the stopping token, so a shutdown never interrupts an SMS that the gateway may already have accepted. Retry delays, which have no side effect, do honour the stopping token.
+- Delivery is **at least once**, not exactly once. If the send succeeds but recording `NotifiedAt` fails, the retry (or the sweeper) sends a second SMS. Most SMS and email providers accept a client reference or idempotency key; pass the challan id so the provider can drop the duplicate, and make every consumer of this queue tolerate repeats.
 - Every `catch` is deliberate: per-item failures are logged and retried, a failed sweep waits for the next tick, and only a normal shutdown is swallowed. Anything else escaping `ExecuteAsync` stops the host, which is what you want for a bug that affects every item.
 - The status endpoint exposes queue length and last activity; a health check can turn "no notification sent for 30 minutes while the queue is non-empty" into an alert ([Health checks and graceful shutdown](#/lesson/m03-health-shutdown)).
 
@@ -939,7 +940,7 @@ public sealed class BillGenerator(BillingDbContext db, ILogger<BillGenerator> lo
 ::hint
 What lifetime does `AddDbContext` register? What lifetime does `AddHostedService` register?
 ::hint
-A `DbContext` remembers every entity it has loaded. What happens to that memory over 288 ticks a day?
+A `DbContext` remembers every entity it has loaded. What happens to that memory over 144 ticks a day?
 ::hint
 In Development, `ValidateScopes` is on. What does it do when a singleton depends on a scoped service?
 ::solution
@@ -949,7 +950,7 @@ In Development, `ValidateScopes` is on. What does it do when a singleton depends
 
 **Stale data.** When a query returns a row the context is already tracking, EF Core by default returns the tracked instance and keeps its in-memory values instead of overwriting them with the database values. If a meter reading was corrected in the database by another service, this long-lived context keeps using the old values.
 
-**Why it worked on the laptop.** In Development, the default service provider validates scopes and would throw at startup: "Cannot consume scoped service from singleton". If the teammate ran in another environment, or turned validation off, nothing complained. On servers it is off by default, which is why the bug reached production.
+**Why nobody caught it.** In Development, the default service provider validates scopes and would throw at startup: "Cannot consume scoped service from singleton". The teammate's launch profile ran with `ASPNETCORE_ENVIRONMENT=Production` (a common copy-paste accident), so nothing complained locally either. Outside Development, scope validation is off by default, which is why the bug reached the server.
 
 **Fix.**
 
@@ -1531,14 +1532,18 @@ Background code fails silently, so it needs tests more than request code does.
 
 **Use controllable fakes for shutdown tests.** A handler that waits on a `TaskCompletionSource` lets a test stop the worker at an exact point and check that the in-flight item completes (exercise 5).
 
-**Use fake time for schedules.** `PeriodicTimer` and `CancellationTokenSource` accept a `TimeProvider`. With `FakeTimeProvider` from `Microsoft.Extensions.TimeProvider.Testing`, a test advances 45 virtual minutes and expects 4 sweeps (the immediate one plus 3 ticks):
+**Use fake time for schedules.** `PeriodicTimer` and `CancellationTokenSource` accept a `TimeProvider`. With `FakeTimeProvider` from `Microsoft.Extensions.TimeProvider.Testing`, a test moves the clock forward 15 virtual minutes at a time and expects 4 sweeps (the immediate one plus 3 ticks). Advance in steps and wait for each sweep before the next step: `PeriodicTimer` coalesces ticks that fire while nobody is waiting, so a single 45-minute jump produces fewer sweeps than you expect.
 
 ```csharp
 var clock = new FakeTimeProvider();
 var sweeper = new OverdueChallanSweeper(scopes, queue, heartbeat, clock, Options.Create(new NotificationOptions { SweepInterval = TimeSpan.FromMinutes(15) }), NullLogger<OverdueChallanSweeper>.Instance);
 await sweeper.StartAsync(CancellationToken.None);
-clock.Advance(TimeSpan.FromMinutes(45));
-// assert 4 sweeps: the immediate one plus 3 ticks
+for (var i = 1; i <= 3; i++)
+{
+    clock.Advance(TimeSpan.FromMinutes(15));
+    await WaitUntil(() => SweepCount() == i + 1);   // bounded polling helper, as in exercise 5
+}
+// 4 sweeps: the immediate one plus 3 ticks
 ```
 
 **Validate the container.** A test that builds the real service collection with `ValidateScopes = true` and `ValidateOnBuild = true` catches captive dependencies (exercise 2) before they reach a server.
@@ -1548,10 +1553,10 @@ Edge cases worth testing: an empty queue at shutdown, a stop requested during a 
 ## Real-world application
 
 - **Notifications.** SMS, email and push notifications for e-challans, utility bills, OTP-free receipts and order updates are the classic in-process worker, with the database as the record of what was sent.
-- **Cache refresh and warm-up.** A worker refreshes exchange rates or a tender category list every 10 minutes into `IMemoryCache` or `HybridCache`, so requests never wait on the source ([Caching in ASP.NET Core](#/lesson/m03-caching)).
+- **Cache refresh and warm-up.** A worker refreshes exchange rates or the list of active discount coupons every 10 minutes into `IMemoryCache` or `HybridCache`, so requests never wait on the source ([Caching in ASP.NET Core](#/lesson/m03-caching)).
 - **Outbox relays.** A `BackgroundService` with a `PeriodicTimer` reads unsent rows from an outbox table (`FOR UPDATE SKIP LOCKED`), publishes them to a broker and marks them sent. This is the bridge between a database transaction and a message queue ([Transactional outbox](#/lesson/m12-outbox)).
 - **Queue consumers.** Dedicated worker services (`Host.CreateApplicationBuilder`, no Kestrel) consume RabbitMQ or Kafka topics. The code shape is the same as here; the channel is replaced by the broker client, and scaling is independent of the API.
-- **Batch and clean-up jobs.** Purging expired sessions, archiving old drone survey uploads to cold storage, or recalculating daily progress percentages for a road project dashboard. When these need exact times, cron schedules or a history of runs, teams move them to Hangfire, Quartz.NET or a platform scheduler.
+- **Batch and clean-up jobs.** Purging expired sessions, archiving old chat attachments to cold storage, or recalculating yesterday's average delivery times for a food-delivery operations dashboard. When these need exact times, cron schedules or a history of runs, teams move them to Hangfire, Quartz.NET or a platform scheduler.
 
 ## Interview questions
 
@@ -1659,7 +1664,7 @@ One malformed mobile number makes the handler throw, and the exception escapes `
 ::q single
 Which job is the best fit for an in-process `BackgroundService` with a channel, rather than a durable queue?
 - [ ] Sending bank payment instructions.
-- [x] Refreshing a cached list of tender categories every 10 minutes.
+- [x] Refreshing a cached list of active discount coupons every 10 minutes.
 - [ ] Processing salary credits for 40,000 employees.
 - [ ] Recording GST invoice submissions to the government portal.
 > Losing a cache refresh costs nothing. Money and statutory submissions need durable, transactional handling.

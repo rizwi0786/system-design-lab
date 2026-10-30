@@ -24,7 +24,7 @@ references:
     url: https://www.rfc-editor.org/rfc/rfc9457
 ---
 
-Every API fails. A property is not found, a payment is submitted twice, the bank gateway times out, a developer forgets a null check. What separates a professional API from a fragile one is not whether it fails, but *how*: one consistent error shape, the right status code, a trace id the support team can search for, and no stack traces shown to the public. This lesson shows where that error-handling code belongs and how to write it once.
+Every API fails. A show is not found, two people grab the same seat, the payment gateway times out, a developer forgets a null check. What separates a professional API from a fragile one is not whether it fails, but *how*: one consistent error shape, the right status code, a trace id the support team can search for, and no stack traces shown to the public. This lesson shows where that error-handling code belongs and how to write it once.
 
 ## Learning objectives
 
@@ -46,17 +46,17 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Think of a municipal corporation's citizen service centre where people pay property tax.
+Think of a big multiplex cinema on a Friday evening.
 
-At the **entrance** there is a security desk. Everyone passes it, whether they came to pay tax, ask for a birth certificate, or just use the washroom. The guard checks bags and writes the time in a register. The guard knows nothing about tax. That is **middleware**: code every request passes through, regardless of what it is for.
+At the **entrance** there is a security check. Everyone passes it, whether they came to watch a film, buy popcorn, or just use the washroom. The guard checks bags and counts people in. The guard knows nothing about which film you are seeing. That is **middleware**: code every request passes through, regardless of what it is for.
 
-Inside, the **property-tax counter** has its own routine. Before the clerk takes your payment, an assistant checks that the form is filled in (validation), and after the payment a supervisor stamps the receipt (adding a header). These steps happen only at this counter and know about tax forms. Those are **filters**: code that wraps a specific endpoint and knows about its arguments and results.
+Inside, the **ticket counter** has its own routine. Before the cashier sells you seats, an assistant checks that you picked real seats and not more than the limit (validation), and after the sale a supervisor stamps the ticket (adding a header). These steps happen only at this counter and know about shows and seats. Those are **filters**: code that wraps a specific endpoint and knows about its arguments and results.
 
-Now something goes wrong. Maybe your property id does not exist, or you already paid this half-year, or the bank's server is down. A badly run centre has each clerk improvise: one shouts, one writes on a scrap of paper, one shows you the internal ledger with other citizens' details. A well-run centre has an **enquiry desk** near the exit. Any clerk who hits a problem fills in a standard **problem slip**: a short title, what happened, a reference number, and what to do next ("bank server down, try after 30 minutes"). The citizen always gets the same kind of slip, and the reference number lets staff find the details later.
+Now something goes wrong. Maybe the show you asked for does not exist, or seat F12 was sold a minute ago, or the card machine's bank server is down. A badly run cinema has each cashier improvise: one shouts, one writes on a scrap of paper, one turns the screen round and shows you the full booking list with other customers' phone numbers. A well-run cinema has a **help desk**. Any cashier who hits a problem fills in a standard **problem slip**: a short title, what happened, a reference number, and what to do next ("card payments down, try again in 30 seconds"). The customer always gets the same kind of slip, and the reference number lets staff find the details later.
 
 In ASP.NET Core:
 
-- The enquiry desk is the **exception handler middleware** (`UseExceptionHandler`), placed early so that it sees everything that fails later.
+- The help desk is the **exception handler middleware** (`UseExceptionHandler`), placed early so that it sees everything that fails later.
 - The clerks who know particular problems are **exception handlers** (`IExceptionHandler`), tried in order.
 - The standard slip is a **Problem Details** response (`application/problem+json`), a format defined by an internet standard, RFC 9457.
 - The reference number is the **trace id**.
@@ -84,7 +84,7 @@ The order is fixed:
 | *Model binding* | | | Request body and route values become C# arguments |
 | Action filters | `IActionFilter` / `IAsyncActionFilter` | Around the action method | Validation, auditing, transactions per action |
 | *Action method* | | | Your code |
-| Exception filters | `IExceptionFilter` | Only if the action or action filters threw | Converting exceptions for MVC only |
+| Exception filters | `IExceptionFilter` | Only if controller creation, model binding, an action filter or the action threw | Converting exceptions for MVC only |
 | Result filters | `IResultFilter` | Around writing the result | Adding headers, wrapping responses |
 
 Filters can be applied globally (`AddControllers(o => o.Filters.Add<AuditFilter>())`), per controller, or per action via attributes. Filters that need services are registered with `[ServiceFilter(typeof(AuditFilter))]` or `[TypeFilter]`, or added globally by type so DI constructs them.
@@ -124,7 +124,7 @@ A simple rule: **if it is about HTTP, use middleware; if it is about a feature's
 | Caching whole responses | Output caching middleware | Already built in |
 | Converting exceptions to responses | `IExceptionHandler`, not exception filters | Exception filters do not see errors from middleware, result execution, or minimal APIs |
 
-That last row matters. MVC **exception filters** catch only exceptions thrown by actions and action filters. They miss exceptions from model binding edge cases, result filters, middleware, and anything in a minimal API. Teams that rely on an exception filter as their "global" handler end up with two error formats. Use the exception handler middleware as the single global net, and keep exception filters for rare controller-specific cases.
+That last row matters. MVC **exception filters** catch only exceptions thrown during controller creation, model binding, action filters and the action itself. They miss exceptions from resource filters, result filters, result execution (for example JSON serialisation of the response), middleware, and anything in a minimal API. Teams that rely on an exception filter as their "global" handler end up with two error formats. Use the exception handler middleware as the single global net, and keep exception filters for rare controller-specific cases.
 
 ### The global error pipeline
 
@@ -132,7 +132,7 @@ ASP.NET Core 8 and later give you four cooperating pieces:
 
 1. **`app.UseExceptionHandler()`** middleware. Place it first (or right after forwarded headers), so that everything after it is inside its `try/catch`. When an exception escapes, it clears the response, sets status 500, and invokes the handlers below.
 2. **`IExceptionHandler`** implementations, registered with `builder.Services.AddExceptionHandler<T>()`. They are tried **in registration order**. Each one returns `true` ("I handled it, stop") or `false` ("not mine, try the next"). This lets you write one small handler per category: client aborted, domain errors, everything else.
-3. **`builder.Services.AddProblemDetails()`** registers `IProblemDetailsService`, which writes Problem Details JSON consistently. It also lets the exception handler and status-code pages produce Problem Details automatically. `CustomizeProblemDetails` is the hook for adding a `traceId` to every error.
+3. **`builder.Services.AddProblemDetails()`** registers `IProblemDetailsService`, which writes Problem Details JSON consistently. It also lets the exception handler and status-code pages produce Problem Details automatically. The default writer already adds a `traceId` extension; `CustomizeProblemDetails` is the hook for anything else every error should carry (the request path as `instance`, a support URL, a region name).
 4. **`app.UseStatusCodePages()`** turns empty error responses (a bare 404 from routing, a 401 from authentication) into Problem Details bodies, so clients never get an empty body for an error.
 
 In Development, `WebApplication` shows the developer exception page automatically, with stack traces. In every other environment, the generic handler must hide them.
@@ -145,12 +145,12 @@ RFC 9457 (which replaced RFC 7807) defines a JSON object with five standard memb
 
 ```json
 {
-  "type": "https://errors.ptax.example/duplicate-payment",
-  "title": "Payment already recorded",
+  "type": "https://errors.tickets.example/seat-already-booked",
+  "title": "Seat already booked",
   "status": 409,
-  "detail": "Property PT-0712-4481 already has a payment for 2026-27 H1 (receipt R-998812).",
-  "instance": "/properties/PT-0712-4481/payments",
-  "errorCode": "duplicate-payment",
+  "detail": "Seat F12 for show SH-48213 has just been booked by someone else. Please pick another seat.",
+  "instance": "/shows/SH-48213/bookings",
+  "errorCode": "seat-already-booked",
   "traceId": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 }
 ```
@@ -170,20 +170,22 @@ A **domain exception** is an exception that represents a business rule being bro
 
 | Domain situation | Exception | Status | Why |
 |---|---|---|---|
-| Property id does not exist | `PropertyNotFoundException` | 404 Not Found | The resource is absent |
-| Amount paid does not match the demand | `PaymentAmountMismatchException` | 422 Unprocessable Content | Request is well-formed but violates a business rule |
-| This half-year is already paid | `DuplicatePaymentException` | 409 Conflict | Conflicts with current state |
-| Assessment is locked for revision | `AssessmentLockedException` | 409 Conflict | State prevents the action now |
-| Bank gateway down | `PaymentGatewayUnavailableException` | 503 Service Unavailable + `Retry-After` | Temporary, client should retry later |
+| Show id does not exist | `ShowNotFoundException` | 404 Not Found | The resource is absent |
+| Seat number is not on this screen (row Q on a screen with rows A–L) | `SeatOutOfRangeException` | 422 Unprocessable Content | Request is well-formed but violates a business rule |
+| Seat is already booked | `SeatAlreadyBookedException` | 409 Conflict | Conflicts with current state |
+| Bookings for the show have closed (it started) | `BookingClosedException` | 409 Conflict | State prevents the action now |
+| Payment gateway down | `PaymentGatewayUnavailableException` | 503 Service Unavailable + `Retry-After` | Temporary, client should retry later |
 | Malformed input (bad JSON, missing field) | handled by binding or validation | 400 Bad Request | Client sent garbage |
 | Anything else (`NullReferenceException`, SQL timeout you did not anticipate) | | 500 Internal Server Error, generic message | A bug or an unplanned failure |
 
-Why keep HTTP out of the domain? Because the same `DuplicatePaymentException` might be thrown inside a background reconciliation job where there is no HTTP at all. The domain says *what* went wrong; the API edge decides *how to tell an HTTP client*.
+Why keep HTTP out of the domain? Because the same `SeatAlreadyBookedException` might be thrown inside a background job (for example one that converts held seats into bookings after a UPI payment confirms) where there is no HTTP at all. The domain says *what* went wrong; the API edge decides *how to tell an HTTP client*.
 
 Two safety rules for the mapping:
 
 - **Domain messages are written for users**, so they can go into `detail`. **Unexpected exception messages are not**: a `NpgsqlException` message can contain table names or connection details. For 500s, always send a generic detail and the trace id; log the real exception.
-- **Map by type, most specific first.** If `AssessmentLockedException` derives from `ConflictException`, check the subtype first or walk the type hierarchy.
+- **Map by type, most specific first.** If `BookingClosedException` derives from `ConflictException`, check the subtype first or walk the type hierarchy.
+
+A third rule is about races. Two customers can tap "Pay" for seat F12 within the same millisecond; both pass an "is it free?" check. The real guard is the database: a unique constraint on `(show_id, seat_no)` in PostgreSQL makes the second `INSERT` fail with SQLSTATE `23505` (`unique_violation`). The repository catches that one specific error and throws `SeatAlreadyBookedException`, so the client gets the same 409 whether the conflict was found by the check or by the constraint.
 
 ### Exceptions or results?
 
@@ -192,14 +194,14 @@ Exceptions are for situations the caller cannot reasonably be expected to check 
 A simple rule many teams use:
 
 - **Expected, frequent outcomes** ("search found nothing", "validation failed") are better as return values: `TypedResults.NotFound()`, a `Result<T>`, or `ValidationProblem`. See [Options pattern and Result pattern](#/lesson/m06-options-result).
-- **Broken invariants deep in the domain** ("this half-year is already paid", detected inside an aggregate) are fine as domain exceptions mapped centrally.
+- **Broken invariants deep in the domain** ("this seat is already booked", detected inside an aggregate or by a unique constraint) are fine as domain exceptions mapped centrally.
 - **Bugs and infrastructure failures** are exceptions you do not catch locally; the global handler turns them into 500 or 503.
 
 Both styles can coexist. The global handler is the safety net; it does not oblige you to throw for everything. [Error handling and domain exceptions](#/lesson/m07-domain-exceptions) goes deeper.
 
 ### Awkward cases
 
-**The client went away.** If a mobile user closes the app mid-request, `HttpContext.RequestAborted` is cancelled and your `await` throws `OperationCanceledException`. That is not a server error. Log it at Information or Debug, do not page anyone, and do not bother writing a body; nobody is listening. Many teams record status 499 (a convention from nginx meaning "client closed request") so dashboards can separate it from real 500s. See [Cancellation tokens and request cancellation](#/lesson/m03-cancellation).
+**The client went away.** If a mobile user closes the app mid-request, `HttpContext.RequestAborted` is cancelled and your `await` throws `OperationCanceledException`. That is not a server error. Log it at Information or Debug, do not page anyone, and do not bother writing a body; nobody is listening. Many teams record status 499 (a convention from nginx meaning "client closed request"; ASP.NET Core has the constant `StatusCodes.Status499ClientClosedRequest`) so dashboards can separate it from real 500s. Recent versions of the exception handler middleware already recognise this case on their own (a cancelled `RequestAborted` plus an `OperationCanceledException`) and record a 499 with a low-level log entry; an explicit handler, as in this lesson, makes the rule visible, testable and consistent with any custom middleware you write. See [Cancellation tokens and request cancellation](#/lesson/m03-cancellation).
 
 **The response has already started.** Once headers are sent (for example, while streaming a large CSV export), the status code cannot change. `Response.HasStarted` is true, and an error handler that tries to set 500 will throw. The only options are to log and abort the connection; the client sees a truncated response. Design streaming endpoints so that validation happens before the first byte.
 
@@ -233,13 +235,13 @@ flowchart LR
     F1 --> F2["Resource filters"]
     F2 --> MB["Model binding"]
     MB --> F3["Action filters, then action"]
-    F3 --> F4["Exception filters<br/>(only action errors)"]
+    F3 --> F4["Exception filters<br/>(binding and action errors only)"]
     F4 --> F5["Result filters, then result"]
     MIN -.->|"unhandled exception"| EH
     F5 -.->|"unhandled exception"| EH
 ```
 
-Solid arrows show the normal path. Middleware runs for every request; then the request goes either to a minimal API endpoint (with its endpoint filters) or into the MVC filter pipeline. MVC exception filters see only errors from the action and action filters, which is why the dotted arrows lead back to `UseExceptionHandler`: it is the one place that sees failures from everywhere. Placing it first is what makes it outermost.
+Solid arrows show the normal path. Middleware runs for every request; then the request goes either to a minimal API endpoint (with its endpoint filters) or into the MVC filter pipeline. MVC exception filters see only errors from model binding, action filters and the action, which is why the dotted arrows lead back to `UseExceptionHandler`: it is the one place that sees failures from everywhere. Placing it first is what makes it outermost.
 
 ### An exception's journey to a Problem Details response
 
@@ -252,16 +254,16 @@ sequenceDiagram
     participant H2 as DomainExceptionHandler
     participant H3 as UnhandledExceptionHandler
     participant PD as ProblemDetailsService
-    C->>EH: POST /properties/PT-0712-4481/payments
+    C->>EH: POST /shows/SH-48213/bookings
     EH->>E: next(context)
-    E-->>EH: throws DuplicatePaymentException
+    E-->>EH: throws SeatAlreadyBookedException
     EH->>EH: clear response, status 500
     EH->>H1: TryHandleAsync
     H1-->>EH: false (not a cancellation)
     EH->>H2: TryHandleAsync
-    H2->>H2: map to 409 and code duplicate-payment
-    H2->>PD: WriteAsync with ProblemDetails
-    PD->>PD: add traceId via CustomizeProblemDetails
+    H2->>H2: map to 409 and code seat-already-booked
+    H2->>PD: TryWriteAsync with ProblemDetails
+    PD->>PD: add traceId, run CustomizeProblemDetails
     PD-->>C: 409 application/problem+json
     H2-->>EH: true (handled, stop)
     Note over H3: never called for this exception
@@ -271,7 +273,7 @@ The service throws a domain exception and knows nothing about HTTP. The middlewa
 
 ## Step-by-step example
 
-We build the error handling for a property-tax payment API. Citizens pay the half-yearly tax; the API validates the amount, records the payment and calls a bank gateway.
+We build the error handling for a movie ticket booking API, the kind behind a cinema chain's app or a site like BookMyShow. A customer picks a show and one or more seats; the API checks the seats exist and are free, charges ₹250 per seat through a payment gateway, and records the booking.
 
 ### Step 1 — see the default
 
@@ -279,24 +281,27 @@ With no error handling configured, an unhandled exception in Production returns 
 
 ### Step 2 — one global handler
 
-Add `builder.Services.AddProblemDetails()` and `app.UseExceptionHandler()` as the first middleware. Now every unhandled exception produces a Problem Details 500. Better, but a duplicate payment is not a server error.
+Add `builder.Services.AddProblemDetails()` and `app.UseExceptionHandler()` as the first middleware. Now every unhandled exception produces a Problem Details 500. Better, but "seat already booked" is not a server error.
 
 ### Step 3 — domain exceptions
 
-Create `DomainException` (abstract, with an `ErrorCode`) and five subclasses. The payment service throws them. Add a `DomainExceptionMap` that turns a domain exception into status, title and code, and a `DomainExceptionHandler` that uses it. Register it **before** the generic handler.
+Create `DomainException` (abstract, with an `ErrorCode`) and five subclasses. The booking service throws them. Add a `DomainExceptionMap` that turns a domain exception into status, title and code, and a `DomainExceptionHandler` that uses it. Register it **before** the generic handler.
+
+The screen for show SH-48213 has rows A to L with 20 seats each (240 seats).
 
 | Request | Thrown | Response |
 |---|---|---|
-| Pay ₹4,860 for PT-0712-4481, H1 2026-27 | none | 201 with receipt |
-| Same request again | `DuplicatePaymentException` | 409 `duplicate-payment` |
-| Pay ₹4,000 when demand is ₹4,860 | `PaymentAmountMismatchException` | 422 `amount-mismatch` |
-| Pay for PT-9999-0000 | `PropertyNotFoundException` | 404 `property-not-found` |
+| Book F12 and F13 for SH-48213 | none | 201 with booking, amount ₹500 |
+| Same request again | `SeatAlreadyBookedException` | 409 `seat-already-booked` |
+| Book Q40 for SH-48213 | `SeatOutOfRangeException` | 422 `seat-out-of-range` |
+| Book for SH-99999 | `ShowNotFoundException` | 404 `show-not-found` |
+| Book for SH-48207 (started 20 minutes ago) | `BookingClosedException` | 409 `booking-closed` |
 | Gateway down | `PaymentGatewayUnavailableException` | 503 `gateway-unavailable`, `Retry-After: 30` |
 | A bug | `NullReferenceException` | 500 generic, trace id only |
 
 ### Step 4 — validation before the handler
 
-Add an endpoint filter `ValidationFilter<PayTaxRequest>` that runs the request's own checks (amount positive, half-year format `2026-27/H1`) and returns a 400 `ValidationProblemDetails` before the handler runs. Validation is an expected outcome, so it returns a result rather than throwing.
+Add an endpoint filter `ValidationFilter<BookSeatsRequest>` that runs the request's own checks (one to ten seats, each written like `F12`, no seat listed twice) and returns a 400 `ValidationProblemDetails` before the handler runs. Notice the split: "`12F` is not a valid seat label" is a malformed request (400, caught by the filter without touching data); "Q40 is a valid label but this screen has no row Q" needs the show's layout, so the service decides it (422). Validation is an expected outcome, so it returns a result rather than throwing.
 
 ### Step 5 — cancellation and empty errors
 
@@ -307,18 +312,18 @@ Add `CancelledRequestHandler` first in the chain, so a client disconnect is logg
 Layout:
 
 ```text
-PropertyTax.Api/
+MovieTickets.Api/
   Program.cs
   Domain/DomainExceptions.cs
-  Domain/PropertyTaxService.cs
+  Domain/BookingService.cs
   Errors/DomainExceptionMap.cs
   Errors/ExceptionHandlers.cs
   Filters/ValidationFilter.cs
-  Contracts/PayTaxRequest.cs
+  Contracts/BookSeatsRequest.cs
 ```
 
 ```csharp file=Domain/DomainExceptions.cs
-namespace PropertyTax.Domain;
+namespace MovieTickets.Domain;
 
 /// <summary>A broken business rule. Knows nothing about HTTP. The message is safe to show to users.</summary>
 public abstract class DomainException(string errorCode, string message) : Exception(message)
@@ -326,86 +331,112 @@ public abstract class DomainException(string errorCode, string message) : Except
     public string ErrorCode { get; } = errorCode;
 }
 
-public sealed class PropertyNotFoundException(string propertyId)
-    : DomainException("property-not-found", $"No property with id {propertyId}.");
+public sealed class ShowNotFoundException(string showId)
+    : DomainException("show-not-found", $"No show with id {showId}.");
 
-public sealed class PaymentAmountMismatchException(decimal demanded, decimal paid)
-    : DomainException("amount-mismatch", $"Demand is ₹{demanded:N0} but ₹{paid:N0} was submitted.");
+public sealed class SeatOutOfRangeException(string showId, string seat, char lastRow, int seatsPerRow)
+    : DomainException("seat-out-of-range",
+        $"Seat {seat} does not exist for show {showId}. This screen has rows A to {lastRow} with seats 1 to {seatsPerRow}.");
 
-public sealed class DuplicatePaymentException(string propertyId, string period, string receipt)
-    : DomainException("duplicate-payment", $"Property {propertyId} already has a payment for {period} (receipt {receipt}).");
+public sealed class SeatAlreadyBookedException(string showId, string seat)
+    : DomainException("seat-already-booked", $"Seat {seat} for show {showId} has just been booked by someone else. Please pick another seat.");
 
-public sealed class AssessmentLockedException(string propertyId)
-    : DomainException("assessment-locked", $"The assessment for {propertyId} is under revision. Payments reopen after the revision is published.");
+public sealed class BookingClosedException(string showId)
+    : DomainException("booking-closed", $"Bookings for show {showId} have closed because the show has started.");
 
 public sealed class PaymentGatewayUnavailableException(TimeSpan retryAfter)
-    : DomainException("gateway-unavailable", "The bank gateway is temporarily unavailable. Please try again shortly.")
+    : DomainException("gateway-unavailable", "The payment gateway is temporarily unavailable. You have not been charged; please try again shortly.")
 {
     public TimeSpan RetryAfter { get; } = retryAfter;
 }
 ```
 
-```csharp file=Domain/PropertyTaxService.cs
-using System.Collections.Concurrent;
+```csharp file=Domain/BookingService.cs
+namespace MovieTickets.Domain;
 
-namespace PropertyTax.Domain;
+public sealed record Booking(string BookingId, string ShowId, IReadOnlyList<string> Seats, decimal Amount, DateTimeOffset BookedAt);
 
-public sealed record Receipt(string ReceiptNo, string PropertyId, string Period, decimal Amount, DateTimeOffset PaidAt);
-
-public interface IPropertyTaxService
+public interface IBookingService
 {
-    Task<Receipt> PayAsync(string propertyId, string period, decimal amount, CancellationToken ct);
+    Task<Booking> BookAsync(string showId, IReadOnlyList<string> seats, CancellationToken ct);
 }
 
-/// <summary>In-memory stand-in for the real service (PostgreSQL plus a bank gateway client).</summary>
-public sealed class PropertyTaxService(TimeProvider clock) : IPropertyTaxService
+/// <summary>
+/// In-memory stand-in for the real service (PostgreSQL with a unique constraint on (show_id, seat_no),
+/// plus a payment gateway client).
+/// </summary>
+public sealed class BookingService(TimeProvider clock) : IBookingService
 {
-    private static readonly Dictionary<string, decimal> Demands = new()
+    private sealed record Show(string Id, DateTimeOffset StartsAt, char LastRow, int SeatsPerRow, decimal PricePerSeat)
     {
-        ["PT-0712-4481"] = 4_860m,
-        ["PT-0712-5002"] = 12_400m,
+        public bool HasSeat(string seat) =>
+            seat.Length >= 2
+            && seat[0] >= 'A' && seat[0] <= LastRow
+            && int.TryParse(seat.AsSpan(1), out var n) && n >= 1 && n <= SeatsPerRow;
+    }
+
+    private readonly Dictionary<string, Show> _shows = new()
+    {
+        // Rows A-L, 20 seats per row = 240 seats, ₹250 each. Starts in 3 hours.
+        ["SH-48213"] = new("SH-48213", clock.GetUtcNow().AddHours(3), 'L', 20, 250m),
+        // Started 20 minutes ago: bookings closed.
+        ["SH-48207"] = new("SH-48207", clock.GetUtcNow().AddMinutes(-20), 'L', 20, 250m),
     };
-    private static readonly HashSet<string> Locked = ["PT-0712-5002"];
-    private readonly ConcurrentDictionary<(string, string), Receipt> _paid = new();
-    private int _sequence = 998_800;
+    private readonly HashSet<(string ShowId, string Seat)> _booked = [];
+    private readonly Lock _gate = new();
+    private int _sequence = 700_000;
 
-    public async Task<Receipt> PayAsync(string propertyId, string period, decimal amount, CancellationToken ct)
+    public async Task<Booking> BookAsync(string showId, IReadOnlyList<string> seats, CancellationToken ct)
     {
-        if (!Demands.TryGetValue(propertyId, out var demand)) throw new PropertyNotFoundException(propertyId);
-        if (Locked.Contains(propertyId)) throw new AssessmentLockedException(propertyId);
-        if (amount != demand) throw new PaymentAmountMismatchException(demand, amount);
-        if (_paid.TryGetValue((propertyId, period), out var existing))
-            throw new DuplicatePaymentException(propertyId, period, existing.ReceiptNo);
+        if (!_shows.TryGetValue(showId, out var show)) throw new ShowNotFoundException(showId);
+        if (clock.GetUtcNow() >= show.StartsAt) throw new BookingClosedException(showId);
+        foreach (var seat in seats)
+            if (!show.HasSeat(seat)) throw new SeatOutOfRangeException(showId, seat, show.LastRow, show.SeatsPerRow);
 
-        await Task.Delay(50, ct);   // stands in for the bank gateway call; honours cancellation
+        // Reserve all seats or none. In PostgreSQL the unique constraint does this job,
+        // and the repository turns SQLSTATE 23505 into SeatAlreadyBookedException.
+        lock (_gate)
+        {
+            var taken = seats.FirstOrDefault(s => _booked.Contains((showId, s)));
+            if (taken is not null) throw new SeatAlreadyBookedException(showId, taken);
+            foreach (var s in seats) _booked.Add((showId, s));
+        }
 
-        var receipt = new Receipt($"R-{Interlocked.Increment(ref _sequence)}", propertyId, period, amount, clock.GetUtcNow());
-        if (!_paid.TryAdd((propertyId, period), receipt))
-            throw new DuplicatePaymentException(propertyId, period, _paid[(propertyId, period)].ReceiptNo);
-        return receipt;
+        try
+        {
+            await Task.Delay(50, ct);   // stands in for the payment gateway call; honours cancellation
+        }
+        catch
+        {
+            lock (_gate) { foreach (var s in seats) _booked.Remove((showId, s)); }   // release the seats
+            throw;
+        }
+
+        var id = $"BK-{Interlocked.Increment(ref _sequence)}";
+        return new Booking(id, showId, seats, show.PricePerSeat * seats.Count, clock.GetUtcNow());
     }
 }
 ```
 
 ```csharp file=Errors/DomainExceptionMap.cs
 using Microsoft.AspNetCore.Http;
-using PropertyTax.Domain;
+using MovieTickets.Domain;
 
-namespace PropertyTax.Errors;
+namespace MovieTickets.Errors;
 
 public sealed record ErrorMapping(int Status, string Title);
 
 /// <summary>The ONE place where domain exceptions meet HTTP. Most specific types first.</summary>
 public static class DomainExceptionMap
 {
-    public const string TypeBaseUri = "https://errors.ptax.example/";
+    public const string TypeBaseUri = "https://errors.tickets.example/";
 
     public static ErrorMapping Map(DomainException ex) => ex switch
     {
-        PropertyNotFoundException => new(StatusCodes.Status404NotFound, "Property not found"),
-        PaymentAmountMismatchException => new(StatusCodes.Status422UnprocessableEntity, "Amount does not match demand"),
-        DuplicatePaymentException => new(StatusCodes.Status409Conflict, "Payment already recorded"),
-        AssessmentLockedException => new(StatusCodes.Status409Conflict, "Assessment locked"),
+        ShowNotFoundException => new(StatusCodes.Status404NotFound, "Show not found"),
+        SeatOutOfRangeException => new(StatusCodes.Status422UnprocessableEntity, "Seat does not exist on this screen"),
+        SeatAlreadyBookedException => new(StatusCodes.Status409Conflict, "Seat already booked"),
+        BookingClosedException => new(StatusCodes.Status409Conflict, "Bookings closed"),
         PaymentGatewayUnavailableException => new(StatusCodes.Status503ServiceUnavailable, "Payment gateway unavailable"),
         _ => new(StatusCodes.Status400BadRequest, "Request violates a business rule"),
     };
@@ -418,22 +449,20 @@ using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
-using PropertyTax.Domain;
+using MovieTickets.Domain;
 
-namespace PropertyTax.Errors;
+namespace MovieTickets.Errors;
 
 /// <summary>1st in the chain: the client disconnected. Not a server error, no body needed.</summary>
 public sealed class CancelledRequestHandler(ILogger<CancelledRequestHandler> logger) : IExceptionHandler
 {
-    public const int ClientClosedRequest = 499;
-
     public ValueTask<bool> TryHandleAsync(HttpContext http, Exception exception, CancellationToken ct)
     {
         if (exception is not OperationCanceledException || !http.RequestAborted.IsCancellationRequested)
             return ValueTask.FromResult(false);
 
         logger.LogInformation("Request {Method} {Path} cancelled by client", http.Request.Method, http.Request.Path);
-        http.Response.StatusCode = ClientClosedRequest;
+        http.Response.StatusCode = StatusCodes.Status499ClientClosedRequest;
         return ValueTask.FromResult(true);
     }
 }
@@ -487,30 +516,41 @@ public sealed class UnhandledExceptionHandler(IProblemDetailsService problems, I
 }
 ```
 
-```csharp file=Contracts/PayTaxRequest.cs
+```csharp file=Contracts/BookSeatsRequest.cs
 using System.Text.RegularExpressions;
-using PropertyTax.Filters;
+using MovieTickets.Filters;
 
-namespace PropertyTax.Contracts;
+namespace MovieTickets.Contracts;
 
-public sealed partial record PayTaxRequest(string Period, decimal Amount) : IValidatable
+/// <summary>Body of POST /shows/{showId}/bookings, for example { "seats": ["F12", "F13"] }.</summary>
+public sealed partial record BookSeatsRequest(string[] Seats) : IValidatable
 {
+    public const int MaxSeatsPerBooking = 10;
+
     public IEnumerable<(string Field, string Error)> Validate()
     {
-        if (Amount <= 0) yield return (nameof(Amount), "Amount must be greater than zero.");
-        if (string.IsNullOrWhiteSpace(Period) || !PeriodFormat().IsMatch(Period))
-            yield return (nameof(Period), "Period must look like 2026-27/H1 or 2026-27/H2.");
+        if (Seats is null || Seats.Length == 0)
+        {
+            yield return (nameof(Seats), "Pick at least one seat.");
+            yield break;
+        }
+        if (Seats.Length > MaxSeatsPerBooking)
+            yield return (nameof(Seats), $"A booking may have at most {MaxSeatsPerBooking} seats.");
+        foreach (var seat in Seats.Where(s => s is null || !SeatLabel().IsMatch(s)))
+            yield return (nameof(Seats), $"'{seat}' is not a seat label. Use a row letter and a number, like F12.");
+        if (Seats.Distinct(StringComparer.OrdinalIgnoreCase).Count() != Seats.Length)
+            yield return (nameof(Seats), "Each seat may appear only once.");
     }
 
-    [GeneratedRegex(@"^\d{4}-\d{2}/H[12]$")]
-    private static partial Regex PeriodFormat();
+    [GeneratedRegex(@"^[A-Z][1-9][0-9]?$")]
+    private static partial Regex SeatLabel();
 }
 ```
 
 ```csharp file=Filters/ValidationFilter.cs
 using Microsoft.AspNetCore.Http;
 
-namespace PropertyTax.Filters;
+namespace MovieTickets.Filters;
 
 public interface IValidatable
 {
@@ -536,22 +576,20 @@ public sealed class ValidationFilter<T> : IEndpointFilter where T : IValidatable
 ```
 
 ```csharp file=Program.cs
-using System.Diagnostics;
-using PropertyTax.Contracts;
-using PropertyTax.Domain;
-using PropertyTax.Errors;
-using PropertyTax.Filters;
+using MovieTickets.Contracts;
+using MovieTickets.Domain;
+using MovieTickets.Errors;
+using MovieTickets.Filters;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<IPropertyTaxService, PropertyTaxService>();
+builder.Services.AddSingleton<IBookingService, BookingService>();
 
 builder.Services.AddProblemDetails(o => o.CustomizeProblemDetails = ctx =>
 {
-    // Every error, from any source, carries the trace id and the path.
+    // The default writer already adds "traceId". Every error, from any source, also carries the path.
     ctx.ProblemDetails.Instance ??= ctx.HttpContext.Request.Path;
-    ctx.ProblemDetails.Extensions["traceId"] = Activity.Current?.Id ?? ctx.HttpContext.TraceIdentifier;
 });
 
 // Tried in registration order. The catch-all goes last.
@@ -564,14 +602,14 @@ var app = builder.Build();
 app.UseExceptionHandler();      // outermost: sees every failure after it
 app.UseStatusCodePages();       // bare 404/401/405 get Problem Details bodies
 
-var api = app.MapGroup("/properties");
+var shows = app.MapGroup("/shows");
 
-api.MapPost("/{propertyId}/payments", async (string propertyId, PayTaxRequest req, IPropertyTaxService svc, CancellationToken ct) =>
+shows.MapPost("/{showId}/bookings", async (string showId, BookSeatsRequest req, IBookingService svc, CancellationToken ct) =>
 {
-    var receipt = await svc.PayAsync(propertyId, req.Period, req.Amount, ct);
-    return TypedResults.Created($"/properties/{propertyId}/payments/{receipt.ReceiptNo}", receipt);
+    var booking = await svc.BookAsync(showId, req.Seats, ct);
+    return TypedResults.Created($"/shows/{showId}/bookings/{booking.BookingId}", booking);
 })
-.AddEndpointFilter<ValidationFilter<PayTaxRequest>>();
+.AddEndpointFilter<ValidationFilter<BookSeatsRequest>>();
 
 // Deliberate bug endpoint for trying the 500 path locally. Remove in real code.
 if (app.Environment.IsDevelopment())
@@ -586,17 +624,19 @@ Things to notice:
 - The handler chain is three small classes with one job each, ordered from most specific to least.
 - The `/boom` endpoint's message contains a host name. The generic handler logs it but never sends it to the client. Only the trace id leaves the server.
 - The endpoint has no try/catch at all. It reads like the happy path, because it *is* the happy path.
+- The service reserves seats *before* charging and releases them if the payment call fails or the client disconnects. Throwing an exception must never leave half-done work behind; in a real app the reservation and its release are database transactions, and real cinemas hold seats for a few minutes while the customer pays.
+- A `POST` that timed out on a flaky mobile network may be retried by the app. Pair this error handling with an `Idempotency-Key` header so a retry returns the original booking instead of a 409 for the customer's own seats.
 
 ## Bad design vs good design
 
 **Bad**: every endpoint catches everything and invents its own error shape.
 
 ```csharp
-app.MapPost("/properties/{id}/payments", async (string id, PayTaxRequest req, IPropertyTaxService svc) =>
+app.MapPost("/shows/{id}/bookings", async (string id, BookSeatsRequest req, IBookingService svc) =>
 {
     try
     {
-        return Results.Ok(await svc.PayAsync(id, req.Period, req.Amount, CancellationToken.None));
+        return Results.Ok(await svc.BookAsync(id, req.Seats, CancellationToken.None));
     }
     catch (Exception ex)
     {
@@ -605,7 +645,7 @@ app.MapPost("/properties/{id}/payments", async (string id, PayTaxRequest req, IP
 });
 ```
 
-Problems: a bank outage, a duplicate and a bug all become 400, so clients cannot tell "fix your request" from "try later"; `ex.ToString()` leaks the stack trace, file paths and possibly connection details; the error shape `{ error }` differs from the next endpoint's `{ message }`; cancellation is ignored; and every endpoint repeats the block.
+Problems: a payment-gateway outage, a seat someone else just took and a bug all become 400, so clients cannot tell "fix your request" from "try later"; `ex.ToString()` leaks the stack trace, file paths and possibly connection details; the error shape `{ error }` differs from the next endpoint's `{ message }`; cancellation is ignored; and every endpoint repeats the block.
 
 **Also bad**: an MVC `ExceptionFilterAttribute` as the "global" handler in an app that also has minimal APIs and custom middleware. Exceptions outside controller actions bypass it and produce a different format.
 
@@ -621,7 +661,7 @@ Throwing a `ValidationException` for every bad field in a 50-field form, thousan
 
 ## Practical playground
 
-This console program shows the mapping and the exact JSON a client would receive for several exceptions, without starting a server. Add a new domain exception (for example, `PropertyUnderLitigationException` mapped to 423 Locked) and see how little code it takes.
+This console program shows the mapping and the exact JSON a client would receive for several exceptions, without starting a server. Add a new domain exception (for example, `ShowCancelledException` mapped to 410 Gone) and see how little code it takes.
 
 :::playground type=csharp title="From exception to Problem Details JSON"
 ```csharp file=Program.cs
@@ -634,16 +674,16 @@ public abstract class DomainException(string code, string message) : Exception(m
 {
     public string Code { get; } = code;
 }
-public sealed class PropertyNotFound(string id) : DomainException("property-not-found", $"No property with id {id}.");
-public sealed class DuplicatePayment(string id) : DomainException("duplicate-payment", $"{id} is already paid for 2026-27/H1.");
-public sealed class GatewayDown() : DomainException("gateway-unavailable", "Bank gateway unavailable, retry in 30 seconds.");
+public sealed class ShowNotFound(string id) : DomainException("show-not-found", $"No show with id {id}.");
+public sealed class SeatAlreadyBooked(string seat) : DomainException("seat-already-booked", $"Seat {seat} for show SH-48213 has just been booked by someone else.");
+public sealed class GatewayDown() : DomainException("gateway-unavailable", "Payment gateway unavailable, retry in 30 seconds.");
 
 public static class Program
 {
     static (int Status, string Title) Map(Exception ex) => ex switch
     {
-        PropertyNotFound => (404, "Property not found"),
-        DuplicatePayment => (409, "Payment already recorded"),
+        ShowNotFound => (404, "Show not found"),
+        SeatAlreadyBooked => (409, "Seat already booked"),
         GatewayDown => (503, "Payment gateway unavailable"),
         _ => (500, "An unexpected error occurred"),
     };
@@ -654,7 +694,7 @@ public static class Program
         var code = ex is DomainException d ? d.Code : "internal-error";
         var problem = new ProblemDetails
         {
-            Type = "https://errors.ptax.example/" + code,
+            Type = "https://errors.tickets.example/" + code,
             Title = title,
             Status = status,
             Detail = ex is DomainException ? ex.Message : "Please contact support with the trace id.",
@@ -668,8 +708,8 @@ public static class Program
     {
         var samples = new List<Exception>
         {
-            new PropertyNotFound("PT-9999-0000"),
-            new DuplicatePayment("PT-0712-4481"),
+            new ShowNotFound("SH-99999"),
+            new SeatAlreadyBooked("F12"),
             new GatewayDown(),
             new InvalidOperationException("Host=db-prod-01 password rejected"),   // must NOT leak
         };
@@ -737,28 +777,28 @@ using System;
 using Xunit;
 
 public class ConflictException(string m) : Exception(m);
-public sealed class DuplicatePaymentException(string m) : ConflictException(m);
-public sealed class AssessmentLockedException(string m) : ConflictException(m);
-public sealed class PropertyNotFoundException(string m) : Exception(m);
+public sealed class SeatAlreadyBookedException(string m) : ConflictException(m);
+public sealed class ShowCancelledException(string m) : ConflictException(m);
+public sealed class ShowNotFoundException(string m) : Exception(m);
 
 public class StatusCodeMapperTests
 {
     private static StatusCodeMapper Mapper() => new StatusCodeMapper()
         .Register<ConflictException>(409, "conflict", true)
-        .Register<AssessmentLockedException>(423, "assessment-locked", true)
-        .Register<PropertyNotFoundException>(404, "property-not-found", true);
+        .Register<ShowCancelledException>(410, "show-cancelled", true)
+        .Register<ShowNotFoundException>(404, "show-not-found", true);
 
     [Fact]
     public void Exact_match()
-        => Assert.Equal(new ErrorMapping(404, "property-not-found", true), Mapper().Map(new PropertyNotFoundException("x")));
+        => Assert.Equal(new ErrorMapping(404, "show-not-found", true), Mapper().Map(new ShowNotFoundException("x")));
 
     [Fact]
     public void Subclass_inherits_parent_mapping()
-        => Assert.Equal(409, Mapper().Map(new DuplicatePaymentException("x")).Status);
+        => Assert.Equal(409, Mapper().Map(new SeatAlreadyBookedException("x")).Status);
 
     [Fact]
     public void Subclass_mapping_overrides_parent()
-        => Assert.Equal(new ErrorMapping(423, "assessment-locked", true), Mapper().Map(new AssessmentLockedException("x")));
+        => Assert.Equal(new ErrorMapping(410, "show-cancelled", true), Mapper().Map(new ShowCancelledException("x")));
 
     [Fact]
     public void Unknown_exception_is_generic_500()
@@ -800,7 +840,7 @@ public sealed class StatusCodeMapper
 ::alternatives
 A C# `switch` expression on the exception (as in the implementation section) is simpler and checked by the compiler for unreachable arms. A registry is better when modules register their own exceptions at startup, so the mapper does not need to reference every module.
 ::mistakes
-- Checking `ex is ConflictException` before `ex is AssessmentLockedException` in a switch: the subtype arm becomes unreachable (the compiler warns for `switch` expressions, not for chains of `if`).
+- Checking `ex is ConflictException` before `ex is ShowCancelledException` in a switch: the subtype arm becomes unreachable (the compiler warns for `switch` expressions, not for chains of `if`).
 - Defaulting `ExposeMessage` to true, which leaks infrastructure messages.
 :::
 
@@ -808,9 +848,9 @@ A C# `switch` expression on the exception (as in the implementation section) is 
 For each concern, choose middleware, an MVC action filter, a minimal API endpoint filter, or an `IExceptionHandler`, and give a one-sentence reason.
 
 1. Add an `X-Correlation-Id` header to every response, including 404s.
-2. Validate `CreateWorkOrderRequest` for one minimal API endpoint.
-3. Wrap every `POST`, `PUT` and `DELETE` action in `WorkOrdersController` in a database transaction.
-4. Turn `DuplicatePaymentException` into a 409, wherever it is thrown.
+2. Validate `CreateBookingRequest` for one minimal API endpoint.
+3. Wrap every `POST`, `PUT` and `DELETE` action in `ShowsController` (the admin screens where staff schedule shows) in a database transaction.
+4. Turn `SeatAlreadyBookedException` into a 409, wherever it is thrown.
 5. Add a `Deprecation: true` header to all endpoints under `/api/v1`.
 6. Reject requests whose body is larger than 2 MB.
 ::acceptance
@@ -827,8 +867,8 @@ Ask: does it need the bound C# arguments or the action's identity?
 For exceptions, ask: can the exception come from somewhere other than a controller action?
 ::solution
 1. **Middleware.** It must run for every request, including ones routing rejects with 404, and it is pure HTTP.
-2. **Endpoint filter** (`ValidationFilter<CreateWorkOrderRequest>`). It needs the bound argument and applies to one endpoint.
-3. **Action filter** on `WorkOrdersController` that begins a transaction before `next()` and commits if no exception and the result is a success. It needs to know which actions and wraps exactly the action. (Some teams prefer explicit unit-of-work calls in the service layer instead; that is easier to read and test.)
+2. **Endpoint filter** (`ValidationFilter<CreateBookingRequest>`). It needs the bound argument and applies to one endpoint.
+3. **Action filter** on `ShowsController` that begins a transaction before `next()` and commits if no exception and the result is a success. It needs to know which actions and wraps exactly the action. (Some teams prefer explicit unit-of-work calls in the service layer instead; that is easier to read and test.)
 4. **`IExceptionHandler`**. The exception might come from a minimal API, a controller, or middleware; only the exception handler middleware sees all of them.
 5. **Endpoint filter on the route group** `app.MapGroup("/api/v1").AddEndpointFilter<DeprecationHeaderFilter>()`. For controllers, a result filter or a convention.
 6. **Server or middleware**: Kestrel's `MaxRequestBodySize` (globally or with `[RequestSizeLimit]` per endpoint). It must reject before the body is read and bound.
@@ -843,7 +883,7 @@ Implement `DomainProblemHandler`, an `IExceptionHandler` that turns domain excep
 - Handle only exceptions deriving from `DomainException`; return `false` for anything else.
 - Return `false` without writing if `Response.HasStarted` is true.
 - Status: `NotFoundException` → 404, `ConflictException` → 409, `BusinessRuleException` → 422, `UnavailableException` → 503 plus a `Retry-After` header in whole seconds.
-- Problem Details: `Type = "https://errors.ptax.example/" + ErrorCode`, `Title` = the status's reason phrase, `Status`, `Detail = ex.Message`, and extension `"errorCode"`.
+- Problem Details: `Type = "https://errors.tickets.example/" + ErrorCode`, `Title` = the status's reason phrase, `Status`, `Detail = ex.Message`, and extension `"errorCode"`.
 - Set `HttpContext.Response.StatusCode` before writing.
 ::acceptance
 - A `ConflictException` produces status 409 and a written Problem Details with the error code.
@@ -921,15 +961,15 @@ public class DomainProblemHandlerTests
         var svc = new CapturingProblemService();
         var http = new DefaultHttpContext();
         var handled = await new DomainProblemHandler(svc).TryHandleAsync(http,
-            new ConflictException("duplicate-payment", "Already paid for 2026-27/H1."), CancellationToken.None);
+            new ConflictException("seat-already-booked", "Seat F12 is already booked."), CancellationToken.None);
 
         Assert.True(handled);
         Assert.Equal(409, http.Response.StatusCode);
         Assert.Equal(409, svc.Written!.Status);
-        Assert.Equal("https://errors.ptax.example/duplicate-payment", svc.Written.Type);
+        Assert.Equal("https://errors.tickets.example/seat-already-booked", svc.Written.Type);
         Assert.Equal("Conflict", svc.Written.Title);
-        Assert.Equal("Already paid for 2026-27/H1.", svc.Written.Detail);
-        Assert.Equal("duplicate-payment", svc.Written.Extensions["errorCode"]);
+        Assert.Equal("Seat F12 is already booked.", svc.Written.Detail);
+        Assert.Equal("seat-already-booked", svc.Written.Extensions["errorCode"]);
     }
 
     [Fact]
@@ -937,7 +977,7 @@ public class DomainProblemHandlerTests
     {
         var http = new DefaultHttpContext();
         await new DomainProblemHandler(new CapturingProblemService()).TryHandleAsync(http,
-            new UnavailableException("gateway-unavailable", "Bank down", TimeSpan.FromSeconds(30)), CancellationToken.None);
+            new UnavailableException("gateway-unavailable", "Payment gateway down", TimeSpan.FromSeconds(30)), CancellationToken.None);
         Assert.Equal(503, http.Response.StatusCode);
         Assert.Equal("30", http.Response.Headers.RetryAfter.ToString());
     }
@@ -947,10 +987,10 @@ public class DomainProblemHandlerTests
     {
         var svc = new CapturingProblemService();
         var a = new DefaultHttpContext();
-        await new DomainProblemHandler(svc).TryHandleAsync(a, new BusinessRuleException("amount-mismatch", "x"), CancellationToken.None);
+        await new DomainProblemHandler(svc).TryHandleAsync(a, new BusinessRuleException("seat-out-of-range", "x"), CancellationToken.None);
         Assert.Equal(422, a.Response.StatusCode);
         var b = new DefaultHttpContext();
-        await new DomainProblemHandler(svc).TryHandleAsync(b, new NotFoundException("property-not-found", "x"), CancellationToken.None);
+        await new DomainProblemHandler(svc).TryHandleAsync(b, new NotFoundException("show-not-found", "x"), CancellationToken.None);
         Assert.Equal(404, b.Response.StatusCode);
     }
 
@@ -1020,7 +1060,7 @@ public sealed class DomainProblemHandler : IExceptionHandler
 
         var problem = new ProblemDetails
         {
-            Type = "https://errors.ptax.example/" + d.ErrorCode,
+            Type = "https://errors.tickets.example/" + d.ErrorCode,
             Title = ReasonPhrases.GetReasonPhrase(status),
             Status = status,
             Detail = d.Message,
@@ -1069,14 +1109,15 @@ public interface IValidatable
     IEnumerable<(string Field, string Error)> Validate();
 }
 
-public sealed record WorkOrderRequest(string RoadCode, decimal ChainageFromKm, decimal ChainageToKm) : IValidatable
+/// <summary>Book a block of side-by-side seats in one row, e.g. row F, seats 12 to 15.</summary>
+public sealed record SeatBlockRequest(string Row, int FromSeat, int ToSeat) : IValidatable
 {
     public IEnumerable<(string Field, string Error)> Validate()
     {
-        if (string.IsNullOrWhiteSpace(RoadCode)) yield return (nameof(RoadCode), "Road code is required.");
-        if (ChainageFromKm < 0) yield return (nameof(ChainageFromKm), "Chainage cannot be negative.");
-        if (ChainageToKm <= ChainageFromKm) yield return (nameof(ChainageToKm), "End chainage must be after start chainage.");
-        if (ChainageToKm - ChainageFromKm > 50) yield return (nameof(ChainageToKm), "A work order may cover at most 50 km.");
+        if (string.IsNullOrWhiteSpace(Row)) yield return (nameof(Row), "Row is required.");
+        if (FromSeat < 1) yield return (nameof(FromSeat), "Seat numbers start at 1.");
+        if (ToSeat < FromSeat) yield return (nameof(ToSeat), "End seat must not be before start seat.");
+        if (ToSeat - FromSeat + 1 > 10) yield return (nameof(ToSeat), "A booking may cover at most 10 seats.");
     }
 }
 
@@ -1104,7 +1145,7 @@ public class ValidationFilterTests
     [Fact]
     public async Task Valid_request_calls_handler_once()
     {
-        var result = await new ValidationFilter<WorkOrderRequest>().InvokeAsync(Ctx("NH-48", new WorkOrderRequest("NH-48", 12.5m, 20m)), Next);
+        var result = await new ValidationFilter<SeatBlockRequest>().InvokeAsync(Ctx("SH-48213", new SeatBlockRequest("F", 12, 15)), Next);
         Assert.Equal("handler-ran", result);
         Assert.Equal(1, _calls);
     }
@@ -1112,30 +1153,30 @@ public class ValidationFilterTests
     [Fact]
     public async Task Invalid_request_short_circuits_with_all_errors()
     {
-        var result = await new ValidationFilter<WorkOrderRequest>().InvokeAsync(Ctx(new WorkOrderRequest("", 70m, 10m)), Next);
+        var result = await new ValidationFilter<SeatBlockRequest>().InvokeAsync(Ctx(new SeatBlockRequest("", 30, 10)), Next);
         var problem = Assert.IsType<ValidationProblem>(result);
         Assert.Equal(0, _calls);
         Assert.Equal(400, problem.StatusCode);
-        Assert.True(problem.ProblemDetails.Errors.ContainsKey("RoadCode"));
-        Assert.True(problem.ProblemDetails.Errors.ContainsKey("ChainageToKm"));
+        Assert.True(problem.ProblemDetails.Errors.ContainsKey("Row"));
+        Assert.True(problem.ProblemDetails.Errors.ContainsKey("ToSeat"));
     }
 
     [Fact]
     public async Task Field_with_two_errors_keeps_both()
     {
-        var result = await new ValidationFilter<WorkOrderRequest>().InvokeAsync(Ctx(new WorkOrderRequest("SH-17", -1m, 60m)), Next);
+        var result = await new ValidationFilter<SeatBlockRequest>().InvokeAsync(Ctx(new SeatBlockRequest("F", 0, 12)), Next);
         var problem = Assert.IsType<ValidationProblem>(result);
-        Assert.Equal(new[] { "Chainage cannot be negative." }, problem.ProblemDetails.Errors["ChainageFromKm"]);
-        Assert.Equal(new[] { "A work order may cover at most 50 km." }, problem.ProblemDetails.Errors["ChainageToKm"]);
-        var two = (ValidationProblem)(await new ValidationFilter<WorkOrderRequest>().InvokeAsync(Ctx(new WorkOrderRequest("SH-17", 60m, 5m)), Next))!;
-        Assert.Single(two.ProblemDetails.Errors["ChainageToKm"]);
+        Assert.Equal(new[] { "Seat numbers start at 1." }, problem.ProblemDetails.Errors["FromSeat"]);
+        Assert.Equal(new[] { "A booking may cover at most 10 seats." }, problem.ProblemDetails.Errors["ToSeat"]);
+        var two = (ValidationProblem)(await new ValidationFilter<SeatBlockRequest>().InvokeAsync(Ctx(new SeatBlockRequest("F", 20, 5)), Next))!;
+        Assert.Single(two.ProblemDetails.Errors["ToSeat"]);
     }
 
     [Fact]
     public async Task Missing_argument_is_a_configuration_error()
     {
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await new ValidationFilter<WorkOrderRequest>().InvokeAsync(Ctx("just a string"), Next));
+            await new ValidationFilter<SeatBlockRequest>().InvokeAsync(Ctx("just a string"), Next));
     }
 }
 ```
@@ -1152,14 +1193,15 @@ public interface IValidatable
     IEnumerable<(string Field, string Error)> Validate();
 }
 
-public sealed record WorkOrderRequest(string RoadCode, decimal ChainageFromKm, decimal ChainageToKm) : IValidatable
+/// <summary>Book a block of side-by-side seats in one row, e.g. row F, seats 12 to 15.</summary>
+public sealed record SeatBlockRequest(string Row, int FromSeat, int ToSeat) : IValidatable
 {
     public IEnumerable<(string Field, string Error)> Validate()
     {
-        if (string.IsNullOrWhiteSpace(RoadCode)) yield return (nameof(RoadCode), "Road code is required.");
-        if (ChainageFromKm < 0) yield return (nameof(ChainageFromKm), "Chainage cannot be negative.");
-        if (ChainageToKm <= ChainageFromKm) yield return (nameof(ChainageToKm), "End chainage must be after start chainage.");
-        if (ChainageToKm - ChainageFromKm > 50) yield return (nameof(ChainageToKm), "A work order may cover at most 50 km.");
+        if (string.IsNullOrWhiteSpace(Row)) yield return (nameof(Row), "Row is required.");
+        if (FromSeat < 1) yield return (nameof(FromSeat), "Seat numbers start at 1.");
+        if (ToSeat < FromSeat) yield return (nameof(ToSeat), "End seat must not be before start seat.");
+        if (ToSeat - FromSeat + 1 > 10) yield return (nameof(ToSeat), "A booking may cover at most 10 seats.");
     }
 }
 
@@ -1180,7 +1222,7 @@ public sealed class ValidationFilter<T> : IEndpointFilter where T : IValidatable
 }
 ```
 
-Note in the third test that `(60, 5)` fails only "end after start" (the span is negative, not over 50 km), so `ChainageToKm` has one message there.
+Note in the third test that `(0, 12)` fails twice (seat 0 does not exist, and seats 0 to 12 are 13 seats, more than 10), while `(20, 5)` fails only "end not before start": the block is negative, not over 10 seats, so `ToSeat` has one message there.
 ::alternatives
 .NET 10 adds built-in validation for minimal APIs (`builder.Services.AddValidation()`) driven by data annotations on parameters and records. Use it for attribute-style rules; a filter like this one is still useful for rules that compare fields or call services. For controllers, `[ApiController]` already returns 400 automatically for model-state errors.
 ::mistakes
@@ -1247,7 +1289,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Xunit;
 
-public sealed class DuplicatePaymentException(string m) : Exception(m);
+public sealed class SeatAlreadyBookedException(string m) : Exception(m);
 
 public sealed class AbortableLifetime : IHttpRequestLifetimeFeature
 {
@@ -1260,7 +1302,7 @@ public sealed class StartedFeature : HttpResponseFeature { public override bool 
 
 public class ErrorMiddlewareTests
 {
-    private static (int, string)? Map(Exception ex) => ex is DuplicatePaymentException ? (409, "duplicate-payment") : null;
+    private static (int, string)? Map(Exception ex) => ex is SeatAlreadyBookedException ? (409, "seat-already-booked") : null;
 
     private static async Task<(DefaultHttpContext Ctx, string Body)> Run(RequestDelegate next, Action<DefaultHttpContext>? setup = null)
     {
@@ -1283,12 +1325,12 @@ public class ErrorMiddlewareTests
     [Fact]
     public async Task Domain_exception_is_mapped()
     {
-        var (ctx, body) = await Run(_ => throw new DuplicatePaymentException("Already paid for 2026-27/H1."));
+        var (ctx, body) = await Run(_ => throw new SeatAlreadyBookedException("Seat F12 for show SH-48213 is already booked."));
         Assert.Equal(409, ctx.Response.StatusCode);
         Assert.StartsWith("application/problem+json", ctx.Response.ContentType);
         using var doc = JsonDocument.Parse(body);
-        Assert.Equal("duplicate-payment", doc.RootElement.GetProperty("errorCode").GetString());
-        Assert.Equal("Already paid for 2026-27/H1.", doc.RootElement.GetProperty("detail").GetString());
+        Assert.Equal("seat-already-booked", doc.RootElement.GetProperty("errorCode").GetString());
+        Assert.Equal("Seat F12 for show SH-48213 is already booked.", doc.RootElement.GetProperty("detail").GetString());
         Assert.Equal("trace-42", doc.RootElement.GetProperty("traceId").GetString());
         Assert.Equal(409, doc.RootElement.GetProperty("status").GetInt32());
     }
@@ -1358,7 +1400,7 @@ public sealed class ErrorMiddleware
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
         {
             context.Response.Clear();
-            context.Response.StatusCode = 499;   // client closed request; nobody reads a body
+            context.Response.StatusCode = StatusCodes.Status499ClientClosedRequest;   // nobody reads a body
         }
         catch (Exception ex)
         {
@@ -1378,7 +1420,7 @@ public sealed class ErrorMiddleware
 
         var body = new Dictionary<string, object?>
         {
-            ["type"] = "https://errors.ptax.example/" + code,
+            ["type"] = "https://errors.tickets.example/" + code,
             ["title"] = code,
             ["status"] = status,
             ["detail"] = mapped is null ? "Please contact support with the trace id." : ex.Message,
@@ -1405,12 +1447,13 @@ Error handling is part of your API contract, so test it like one.
 
 **Unit tests for each handler.** Exercises 3 and 5 show the approach: a `DefaultHttpContext`, a fake `IProblemDetailsService` or a `MemoryStream` body, and assertions on status, headers and body. They run in milliseconds.
 
-**A mapping table test.** One parameterised test that throws each domain exception and asserts its status and code. When someone adds `PropertyUnderLitigationException` and forgets the mapping, the default arm (400 or 500) fails the test.
+**A mapping table test.** One parameterised test that throws each domain exception and asserts its status and code. When someone adds `ShowCancelledException` and forgets the mapping, the default arm (400 or 500) fails the test.
 
 ```csharp
 [Theory]
-[InlineData(typeof(PropertyNotFoundException), 404)]
-[InlineData(typeof(DuplicatePaymentException), 409)]
+[InlineData(typeof(ShowNotFoundException), 404)]
+[InlineData(typeof(SeatOutOfRangeException), 422)]
+[InlineData(typeof(SeatAlreadyBookedException), 409)]
 [InlineData(typeof(PaymentGatewayUnavailableException), 503)]
 public void Each_domain_exception_has_a_deliberate_status(Type type, int expected) { /* construct and map */ }
 ```
@@ -1423,10 +1466,10 @@ Edge cases worth testing: an exception thrown after the response started (stream
 
 ## Real-world application
 
-- **Public APIs.** Payment gateways and government data APIs publish a catalogue of error codes with documentation pages, which is exactly what `type` URIs are for. Clients branch on `errorCode`, never on `detail` text.
-- **Support workflows.** A citizen calls the helpline with the trace id shown on the error screen; support pastes it into the log search and sees the full exception, request path and user id. This is why every error body carries `traceId`, and why [Logging and observability](#/lesson/m03-logging) logs with the same id.
-- **Retries.** Mobile apps and other services retry on 503 with `Retry-After`, and never on 409 or 422. Correct status codes are what make automatic retries safe (see [Timeouts, retries and backoff with jitter](#/lesson/m10-timeouts-retries)).
-- **Alerting.** Dashboards alert on the rate of 5xx responses. If duplicates and validation errors are reported as 500, alerts fire constantly and get ignored; if client aborts are 500, every network blip in a moving train pages someone. Correct mapping keeps alerts meaningful.
+- **Public APIs.** Payment gateways such as Stripe and Razorpay, and ticketing and travel APIs, publish a catalogue of error codes with documentation pages, which is exactly what `type` URIs are for. Clients branch on `errorCode`, never on `detail` text.
+- **Support workflows.** A customer whose booking failed calls support with the reference shown on the error screen (the trace id); support pastes it into the log search and sees the full exception, show, seats and user id. This is why every error body carries `traceId`, and why [Logging and observability](#/lesson/m03-logging) logs with the same id.
+- **Retries.** Mobile apps and other services retry on 503 with `Retry-After`, and never on 409 or 422. A booking app that gets 409 `seat-already-booked` refreshes the seat map instead of retrying. Correct status codes are what make automatic retries safe (see [Timeouts, retries and backoff with jitter](#/lesson/m10-timeouts-retries)).
+- **Alerting.** Dashboards alert on the rate of 5xx responses. If "seat already booked" and validation errors are reported as 500 (on a blockbuster's opening morning there are thousands of them), alerts fire constantly and get ignored; if client aborts are 500, every network blip in a moving train pages someone. Correct mapping keeps alerts meaningful.
 - **Compliance.** Security reviews and audits commonly check that error responses do not disclose stack traces, framework versions or internal host names.
 
 ## Interview questions
@@ -1482,8 +1525,8 @@ Q: In what order are IExceptionHandler implementations called?
 A: Registration order, until one returns true.
 Q: Five standard Problem Details members?
 A: type, title, status, detail, instance.
-Q: Which status for "already paid this half-year" and which for "amount does not match demand"?
-A: 409 Conflict for the duplicate (state conflict), 422 Unprocessable Content for the business-rule violation.
+Q: Which status for "seat already booked" and which for "seat Q40 does not exist on this screen"?
+A: 409 Conflict for the already-booked seat (state conflict), 422 Unprocessable Content for the business-rule violation.
 Q: What must a 500 response never contain?
 A: The exception message or stack trace. Send a generic detail and the trace id; log the real exception.
 Q: Why can't you set a 500 status after streaming has begun?
@@ -1501,7 +1544,7 @@ An app has controllers and minimal APIs. Errors from minimal APIs come back as e
 - [ ] Minimal APIs need `[ApiController]`.
 > Exception filters belong to the MVC filter pipeline. Use `UseExceptionHandler` with `IExceptionHandler` for one global net.
 ::q single
-Handlers are registered as `AddExceptionHandler<UnhandledExceptionHandler>()` then `AddExceptionHandler<DomainExceptionHandler>()`. The generic one always returns `true`. A `DuplicatePaymentException` is thrown. What does the client get?
+Handlers are registered as `AddExceptionHandler<UnhandledExceptionHandler>()` then `AddExceptionHandler<DomainExceptionHandler>()`. The generic one always returns `true`. A `SeatAlreadyBookedException` is thrown. What does the client get?
 - [ ] 409, because the domain handler is more specific.
 - [x] 500, because the generic handler runs first and stops the chain.
 - [ ] Both responses concatenated.
@@ -1523,14 +1566,14 @@ Which belong in a Problem Details body for an unexpected `NpgsqlException` in Pr
 - [ ] The SQL statement that failed
 > Unexpected exception messages may include table names, hosts or SQL. Log them; send only the generic message and trace id.
 ::q single
-You need to validate `CreateWorkOrderRequest` on one minimal API endpoint and return field errors before the handler runs. Where does this code belong?
+You need to validate `CreateBookingRequest` on one minimal API endpoint and return field errors before the handler runs. Where does this code belong?
 - [ ] A middleware that reads and parses the body.
 - [x] An endpoint filter that inspects the bound argument and returns a validation problem.
 - [ ] An `IExceptionHandler` that catches `ArgumentException`.
 - [ ] An MVC result filter.
 > Endpoint filters see bound arguments and can short-circuit. Middleware would have to parse the body itself.
 ::q single
-The domain layer throws `DuplicatePaymentException`. Where should the decision "this is HTTP 409" live?
+The domain layer throws `SeatAlreadyBookedException`. Where should the decision "this is HTTP 409" live?
 - [ ] In the exception's constructor, as a `StatusCode` property.
 - [x] In a mapping at the API edge, used by an exception handler.
 - [ ] In every endpoint, with try/catch.

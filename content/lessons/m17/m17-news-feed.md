@@ -7,7 +7,7 @@ status: reviewed
 template: hld-case
 minutes: 110
 prerequisites: [m11-capacity-estimation, m12-redis, m12-message-queues, m09-pagination, m13-sharding]
-related: [m17-chat, m17-notification-platform, m16-cqrs, m12-cache-failures, m16-multi-level-caching, m17-video-streaming]
+related: [m17-chat, m17-notification-platform, m17-unique-id-generator, m16-cqrs, m12-cache-failures, m16-multi-level-caching, m17-video-streaming]
 tags: [hld, case-study, news-feed, fan-out, timeline, ranking, redis]
 patterns: []
 summary: Design a social news feed — fan-out on write versus fan-out on read, the hybrid that solves the celebrity problem, time-sortable ids, k-way feed merging and a simple ranking pipeline — with capacity maths, PostgreSQL and Redis data models, and C# for the merge and ranking core.
@@ -100,15 +100,20 @@ All figures are **estimates** for the arithmetic.
 ### Fan-out on write, naive
 
 - Average followers per poster: 200 (estimate). Feed inserts = 60 M × 200 = **12 billion/day** ≈ 139,000 inserts/s average.
-- Now the celebrity: one account with 50 M followers posts. At 139,000 inserts/s of spare capacity, that single post takes 50 M ÷ 139,000 ≈ **6 minutes** to land in every feed, and it delays everyone else's fan-out queued behind it. Ten celebrity posts in a big cricket moment and the fan-out backlog is an hour.
+- Now the celebrity: one account with 50 M followers posts. Even if the fan-out tier could spare all of that ~139,000 inserts/s, that single post takes 50 M ÷ 139,000 ≈ **6 minutes** to land in every feed, and it delays everyone else's fan-out queued behind it. Ten celebrity posts in a big cricket moment and the fan-out backlog is an hour.
 
 **The average hides the problem.** Follower counts follow a heavy-tailed (power-law-like) distribution: most accounts have dozens of followers, a few have tens of millions. Capacity planning must look at the tail.
 
 ### Timeline cache size
 
-- Keep the latest 500 entries per user. Each entry is a post id (8 bytes) plus author id (8 bytes) ≈ 16 bytes, plus Redis overhead; call it **~40 bytes** per entry with overhead (estimate).
-- 500 × 40 B = 20 KB per user. For all 300 M DAU: 300 M × 20 KB = **6 TB** of RAM.
-- Only keep timelines for users active in the last 30 days, and rebuild on demand for others. With 400 M monthly actives the hot set is roughly the DAU, so plan for **6 TB across a Redis cluster** (for example 60 shards of ~100 GB usable each, plus replicas).
+- Keep the latest 500 entries per user. The payload is small (a post id and an author id, 16 bytes), but a Redis sorted set with more than 128 members switches from the compact listpack encoding to a skiplist plus hash table, and the per-entry overhead then dominates. Budget **~80 bytes per entry** (estimate; measure with `MEMORY USAGE` on real data).
+- 500 × 80 B = 40 KB per user. For all 300 M DAU: 300 M × 40 KB = **12 TB** of RAM.
+- Keep timelines only for users active in the last 30 days and rebuild on demand for the rest. Most monthly actives also open the app on a typical day, so the hot set is close to the DAU: plan for **about 12 TB across a Redis cluster** (for example 120 shards of ~100 GB usable each, each with a replica, so about 24 TB of provisioned RAM).
+- The levers if that is too expensive: cap timelines at 300 entries, store compact binary members (the author id can come from hydration), or keep only the newest 128 entries in Redis (listpack encoding, roughly a quarter of the memory) and fall back to pull for deeper scrolls.
+
+### Follow graph
+
+- Suppose 500 M registered users follow 200 accounts each on average: 100 B follow edges. Stored in both directions (whom I follow, who follows me) at ~20 bytes per row plus index overhead, that is roughly 100 B × 2 × 20 B ≈ **4 TB** before indexes and replicas, which is why the graph is sharded.
 
 ### Post storage
 
@@ -124,7 +129,7 @@ GET /v1/feed?cursor=eyJiIjo3MjM0…&limit=20&mode=ranked
 {
   "items": [
     { "postId": "7234918877123584001", "author": { "id": 99, "name": "Kavya R" },
-      "text": "Site visit at Palashbari bypass today", "media": [...],
+      "text": "Finally tried the new dosa place in Indiranagar", "media": [...],
       "likeCount": 132, "commentCount": 8, "createdAt": "2026-10-19T09:12:44Z" }
   ],
   "nextCursor": "eyJiIjo3MjM0OTE4ODc3MTIzNTg0MDAxfQ"
@@ -216,7 +221,7 @@ Every arrow:
 2. **Post service → post store.** The post is durably saved with a Snowflake id. The author sees it immediately in their own profile (read-your-writes) because the client inserts it locally too.
 3. **Post service → fan-out queue.** A `PostCreated` event (via a transactional outbox) is queued. Posting returns without waiting for fan-out.
 4. **Fan-out workers → follow graph → timeline cache.** For ordinary authors, workers page through the author's followers (1,000 at a time) and push `postId:authorId` into each follower's `tl:{userId}`, trimming to 500. Celebrities are **skipped**; their posts go only into `ut:{authorId}`.
-5. **Feed service → timeline cache.** Reads the user's pushed timeline: one `ZREVRANGEBYSCORE` call.
+5. **Feed service → timeline cache.** Reads the user's pushed timeline: one `ZRANGE tl:{user} (cursor -inf BYSCORE REV LIMIT 0 300` call, with `+inf` instead of `(cursor` for the first page (the modern form of `ZREVRANGEBYSCORE`).
 6. **Feed service → follow graph → author timeline cache.** Finds which celebrities the user follows (a small, cacheable list) and reads each one's recent posts.
 7. **Feed service → post cache.** Merges the candidate ids, then hydrates the page from `post:{id}` (multi-get), falling back to the post store on a miss.
 8. **Feed service → ranking service → feature store.** In ranked mode, a few hundred candidates are scored using features such as author affinity and engagement, then the top 20 are returned.
@@ -273,7 +278,7 @@ Refinements that matter in practice:
 
 ### 2. Time-sortable ids
 
-If post ids grow with time, then "newest first" is "largest id first", timelines can be sorted sets scored by id, and cursors are just "id < X". A Snowflake-style id packs 41 bits of milliseconds since a custom epoch, 10 bits of worker id and 12 bits of per-millisecond sequence into a 64-bit integer. Each worker generates ids without coordination; ids from different workers are ordered to within clock skew, which is fine for a feed.
+If post ids grow with time, then "newest first" is "largest id first", timelines can be sorted sets scored by id, and cursors are just "id < X". A Snowflake-style id (see [unique ID generation](#/lesson/m17-unique-id-generator) for the full trade-offs) packs 41 bits of milliseconds since a custom epoch, 10 bits of worker id and 12 bits of per-millisecond sequence into a 64-bit integer. Each worker generates ids without coordination; ids from different workers are ordered to within clock skew, which is fine for a feed.
 
 ```csharp file=Feed/SnowflakeIdGenerator.cs
 namespace FeedApp.Feed;
@@ -461,6 +466,8 @@ public sealed class FanoutWorker(
     {
         await foreach (var post in queue.Reader.ReadAllAsync(stoppingToken))
         {
+            // A real queue would retry the message and move it to a dead-letter queue after N failures;
+            // this in-process channel only logs. Pushes are idempotent, so a retry is safe.
             try { FanOut(post); }
             catch (Exception ex) { logger.LogError(ex, "Fan-out failed for post {PostId}", post.PostId); }
         }
@@ -627,7 +634,7 @@ public sealed class FeedService(
 
 | Cache | Protects | Size estimate | Invalidation |
 |---|---|---|---|
-| Timelines `tl:{user}` | Follow-graph joins | ~6 TB | Trimmed to 500; rebuilt by pull on miss |
+| Timelines `tl:{user}` | Follow-graph joins | ~12 TB | Trimmed to 500; rebuilt by pull on miss |
 | Author timelines `ut:{author}` | Post store for celebrity pulls | Small (only celebrities + active authors) | Updated on post and delete |
 | Post objects `post:{id}` | Post store at 2 M lookups/s | Hot posts of the last few days | Deleted or edited post → delete key |
 | Counters `cnt:{id}` | Like/comment tables | Small | Incremented in place; periodically reconciled |
@@ -682,14 +689,14 @@ If a user makes their account private or blocks someone, waiting for an async jo
 
 **Cost drivers** (relative):
 
-1. **RAM for timelines** (~6 TB plus replicas). Biggest lever: skip inactive users and cap timeline length.
+1. **RAM for timelines** (~12 TB plus replicas). Biggest levers: skip inactive users, cap timeline length, compact members.
 2. **Fan-out compute and Redis writes**, proportional to Σ followers of active posters.
 3. **Ranking compute** if you use ML models per candidate: 105,000 RPS × 400 candidates = 42 M scores/s at peak. Cheap formulas or smaller candidate sets save a lot.
 4. **Media egress** through the CDN, usually the largest bill overall, shared with the media platform.
 
 ### When a simpler design is enough
 
-A company intranet or a project-site update feed for 20,000 staff doesn't need fan-out at all. One query does it:
+A company intranet or a college announcements feed for 20,000 people doesn't need fan-out at all. One query does it:
 
 ```sql
 SELECT p.* FROM post p
@@ -1236,7 +1243,7 @@ Reference architecture:
     { "id": "gdb", "type": "database", "label": "Follow graph (both directions, sharded)", "props": { "replicas": 2, "multiAz": true } },
     { "id": "q", "type": "queue", "label": "Fan-out tasks (1,000 followers per task)" },
     { "id": "fw", "type": "worker", "label": "Fan-out workers", "props": { "instances": 60 } },
-    { "id": "tl", "type": "cache", "label": "Timelines tl:{user} (Redis, ~6 TB)" },
+    { "id": "tl", "type": "cache", "label": "Timelines tl:{user} (Redis, ~12 TB)" },
     { "id": "ut", "type": "cache", "label": "Author timelines ut:{author}" },
     { "id": "pc", "type": "cache", "label": "Post cache post:{id}", "props": { "ttlSeconds": 86400 } },
     { "id": "rk", "type": "app-server", "label": "Ranking (50 ms timeout)", "props": { "instances": 40 } },
@@ -1394,7 +1401,7 @@ Paging the pull-model query with `ORDER BY created_at DESC LIMIT 20 OFFSET 40` g
 - [ ] The index on created_at is wrong.
 > Use a keyset cursor `(created_at, post_id) < (x, y)` so inserts above the cursor don't affect later pages.
 ::q single
-A construction company wants an internal project-update feed for 8,000 staff. What should you build?
+A hospital chain wants an internal announcements feed for 8,000 staff. What should you build?
 - [ ] Hybrid fan-out with a Redis cluster and Kafka.
 - [ ] Pure push with a wide-column store.
 - [x] A keyset-paginated SQL join on PostgreSQL with good indexes and a short output cache.

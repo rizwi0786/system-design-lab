@@ -22,7 +22,7 @@ references:
     url: https://learn.microsoft.com/aspnet/core/signalr/introduction
 ---
 
-Two engineers are editing the same project report. Priya types "approved" at the start of line 4 while Rahul, 1,400 km away, deletes the word before it. Both screens must end up showing the same text, nobody's work may vanish, and it must feel instant even on a 4G connection with 300 ms of delay. That is the whole problem of a real-time collaborative editor, and it is surprisingly deep.
+Two classmates are editing the same group-project report the night before it is due. Priya, in Pune, types "approved" at the start of line 4 while Rahul, 1,400 km away in Delhi, deletes the word before it. Both screens must end up showing the same text, nobody's work may vanish, and it must feel instant even on a 4G connection with 300 ms of delay. That is the whole problem of a real-time collaborative editor, and it is surprisingly deep.
 
 This case study designs such a system from requirements to deployment. We reason from public papers and open-source designs (operational transformation research, CRDT papers, libraries such as Yjs and Automerge). Nothing here claims to describe how Google Docs, Microsoft 365 or any other product is built internally. "A system like Google Docs" means "an editor with those features".
 
@@ -48,10 +48,10 @@ By the end of this case study you will be able to:
 
 ## Explain it like I'm a beginner
 
-Imagine a shared notebook on a table in a site office, with three engineers writing in it at the same time.
+Imagine a shared notebook on a table in a college library, with three classmates writing their group assignment in it at the same time.
 
 - If they **take turns** with the pen (a lock), nobody clashes, but two of them are always waiting. Over the internet, "waiting for the pen" means every keystroke pauses for a network round trip. That feels broken.
-- If each engineer has **their own photocopy** and writes freely, typing is instant. But now the copies drift apart. Someone has to merge them, and simply keeping "whoever saved last" (last write wins) throws away the other two people's work.
+- If each classmate has **their own photocopy** and writes freely, typing is instant. But now the copies drift apart. Someone has to merge them, and simply keeping "whoever saved last" (last write wins) throws away the other two people's work.
 - The trick is to write in a way that **merges automatically**. Instead of sending "the whole page now looks like this", each person sends small instructions: "insert 'a' after the character with sticker #17". Every character carries a **unique sticker** (an id). Because instructions point at stickers, not at "position 5", they still make sense after other people's edits move things around.
 - If two people insert after the same sticker at once, a fixed rule (bigger sticker goes first) decides, so **everyone ends with the same page** whatever order instructions arrive in. That is convergence, and data types built for it are **conflict-free replicated data types (CRDTs)**.
 - The older alternative keeps plain positions but has a referee who **adjusts** each instruction: "Rahul deleted a character before position 5, so your 'insert at 5' is now 'insert at 4'". That adjustment is **operational transformation (OT)**.
@@ -79,7 +79,7 @@ Imagine a shared notebook on a table in a site office, with three engineers writ
 | Durability | An edit acknowledged by the server is never lost | Users close the tab the moment they finish |
 | Availability | 99.95 % for editing | A short outage is tolerable if no edits are lost |
 | Collaborators | Up to 100 simultaneous editors, 1,000 viewers per document | Large review meetings |
-| Document size | Up to about 1.5 million characters (roughly a 500-page report) | Tender documents and DPRs are long |
+| Document size | Up to about 1.5 million characters (roughly a 500-page report) | Theses, policy handbooks and product specs get long |
 
 ### Out of scope
 
@@ -297,7 +297,7 @@ sequenceDiagram
   participant S as Session server (owner)
   participant L as Op log
   participant R as Rahul browser
-  Note over P,R: Both see "Road" and both type after the letter d
+  Note over P,R: Both see "Plan" and both type after the letter n
   P->>P: apply insert "s" id 7@P after 4@X locally
   R->>R: apply insert "!" id 7@R after 4@X locally
   P->>S: Submit clientSeq 31 [insert 7@P]
@@ -312,10 +312,10 @@ sequenceDiagram
   S->>P: ops 102 [insert 7@R]
   R->>R: merge 7@P - ids tie on counter, replica P sorts below R
   P->>P: merge 7@R - same rule, same result
-  Note over P,R: Both now show "Road!s"
+  Note over P,R: Both now show "Plan!s"
 ```
 
-Both people see their own character instantly (local echo). Each later applies the other's insert with the **same deterministic rule**: among concurrent inserts after one character, the larger id goes first. Counters tie at 7, and "R" sorts after "P", so `7@R` goes first and both screens show "Road!s" despite opposite arrival orders. The server only ordered, stored and relayed.
+Both people see their own character instantly (local echo). Each later applies the other's insert with the **same deterministic rule**: among concurrent inserts after one character, the larger id goes first. Counters tie at 7, and "R" sorts after "P", so `7@R` goes first and both screens show "Plan!s" despite opposite arrival orders. The server only ordered, stored and relayed.
 
 ## Deep dives
 
@@ -405,6 +405,17 @@ public sealed class RgaDocument(string replicaId)
     public int TombstoneCount => _nodes.Count(n => n.Deleted);
     public int PendingCount => _pending.Count;
     public string Text => new(_nodes.Where(n => !n.Deleted).Select(n => n.Value).ToArray());
+
+    /// <summary>
+    /// True when the op's anchor (insert) or target (delete) is already known. The server uses this to reject
+    /// ops before making them durable: a client can only reference characters the server has already seen.
+    /// </summary>
+    public bool CanApply(CrdtOp op) => op switch
+    {
+        InsertOp insert => insert.After is null || _byId.ContainsKey(insert.After.Value),
+        DeleteOp delete => _byId.ContainsKey(delete.Target),
+        _ => false
+    };
 
     /// <summary>Local edit at a visible index. Returns the op to send to other replicas.</summary>
     public InsertOp LocalInsert(int index, char value)
@@ -530,11 +541,13 @@ Why insist that every participant of a document hits the same server?
 ```sql
 INSERT INTO doc_op (doc_id, server_seq, epoch, client_id, client_seq, actor_id, payload)
 SELECT $1, $2, $3, $4, $5, $6, $7
-WHERE EXISTS (SELECT 1 FROM doc_session_lease WHERE doc_id = $1 AND epoch = $3)
+WHERE EXISTS (SELECT 1 FROM doc_session_lease WHERE doc_id = $1 AND epoch = $3 FOR SHARE)
 ON CONFLICT (doc_id, client_id, client_seq) DO NOTHING;
 ```
 
 3. A, still holding epoch 8, gets zero rows inserted, knows it has lost ownership, and disconnects its clients, which reconnect via the router to B.
+
+The `FOR SHARE` matters. Without it, under PostgreSQL's default READ COMMITTED isolation, A's insert can read the lease row just before B's epoch bump commits and still succeed; if B had already loaded the log, A's op is silently missing from B's replica. With the row locked in share mode, B's `UPDATE doc_session_lease SET epoch = epoch + 1` waits until A's in-flight insert commits (so B sees it when it loads the log), and an insert that starts after B's update re-checks the new epoch and inserts nothing. A retried batch that hits `ON CONFLICT` returns no row either, so the session then reads the existing row to return its original `server_seq`.
 
 The C# model below keeps this logic behind interfaces; the in-memory classes stand in for the SQL above.
 
@@ -676,11 +689,17 @@ public sealed class DocumentSession
     public long LastSnapshotSeq { get; set; }
     public string Text { get { lock (_gate) return _replica.Text; } }
 
-    /// <summary>Durably appends, then applies. Returns the envelope to ack and broadcast.</summary>
+    /// <summary>The sequence number and text taken together, so a snapshot never mixes two states.</summary>
+    public (long Seq, string Text) Capture() { lock (_gate) return (LastSeq, _replica.Text); }
+
+    /// <summary>Validates, durably appends, then applies. Returns the envelope to ack and broadcast.</summary>
     public OpEnvelope Submit(string clientId, long clientSeq, string actorId, CrdtOp op)
     {
         lock (_gate)
         {
+            // Validate against the server's replica BEFORE the op becomes durable: a bad op in the log
+            // would be replayed into every replica forever.
+            if (!_replica.CanApply(op)) throw new InvalidOpException($"Op {op} references an unknown character");
             var envelope = _log.Append(DocId, Epoch, clientId, clientSeq, actorId, op);   // may throw StaleEpochException
             if (envelope.ServerSeq <= LastSeq) return envelope;                          // retry of an old batch
             _replica.Apply(op);
@@ -691,6 +710,8 @@ public sealed class DocumentSession
 
     public IReadOnlyList<OpEnvelope> CatchUp(long afterSeq) => _log.ReadAfter(DocId, afterSeq);
 }
+
+public sealed class InvalidOpException(string message) : Exception(message);
 
 public sealed class DocumentSessionManager(IOpLog log, ILeaseStore leases, ServerIdentity me)
 {
@@ -801,11 +822,11 @@ public sealed class SnapshotWorker(DocumentSessionManager sessions, ISnapshotSto
         {
             foreach (var session in sessions.Live)
             {
-                var seq = session.LastSeq;
+                var (seq, text) = session.Capture();
                 if (seq - session.LastSnapshotSeq < OpsBetweenSnapshots) continue;
                 try
                 {
-                    await store.SaveAsync(session.DocId, seq, session.Text, stoppingToken);
+                    await store.SaveAsync(session.DocId, seq, text, stoppingToken);
                     session.LastSnapshotSeq = seq;
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -870,7 +891,7 @@ A pure relay that trusts clients lets one buggy or malicious tab broadcast an op
 
 - **Authentication**: OIDC sign-in; the real-time connection uses a short-lived access token (5–15 minutes) refreshed over HTTPS.
 - **Authorisation on every op**: viewers cannot submit ops; commenters can only submit comment ops. Check on the server, per batch, using the cached role.
-- **Revocation**: when sharing is removed, publish a "permission changed" event; the session server re-checks and disconnects the user within seconds. Without this, a fired contractor could keep editing for the life of the socket.
+- **Revocation**: when sharing is removed, publish a "permission changed" event; the session server re-checks and disconnects the user within seconds. Without this, an employee who has just left the company could keep editing for the life of the socket.
 - **Replica identity**: the server binds `replica` ids to the connection (`tab-41f0` belongs to this user's session). Ops with someone else's replica id are rejected, so ids can't be forged.
 - **Tenant isolation**: `org_id` on every document and query; consider row-level security (see [Multi-tenant security](#/lesson/m14-multi-tenant-security)).
 - **Content, encryption, audit**: render content as structured data and sanitise pasted HTML (stored XSS); TLS 1.3 plus encryption at rest; the immutable op log doubles as an audit trail of who changed what.
@@ -903,7 +924,7 @@ Trace ops with OpenTelemetry, heavily sampled. Never log document content.
 
 ### When a simpler design is enough
 
-A dozen engineers editing project notes, rarely at once, need none of this: use **optimistic concurrency** per section (a stale `version` returns 409 and shows a merge dialog) plus a SignalR "Meera is editing" hint. For a few hundred users, an open-source CRDT library such as Yjs with one relay server and PostgreSQL is enough. Build your own merge algorithm only if it is your product.
+A dozen teammates editing meeting notes, rarely at once, need none of this: use **optimistic concurrency** per section (a stale `version` returns 409 and shows a merge dialog) plus a SignalR "Meera is editing" hint. For a few hundred users, an open-source CRDT library such as Yjs with one relay server and PostgreSQL is enough. Build your own merge algorithm only if it is your product.
 
 ## Alternatives and trade-offs
 
@@ -914,7 +935,7 @@ A dozen engineers editing project notes, rarely at once, need none of this: use 
 | Ordering | Per-document `server_seq` | Pure peer-to-peer causal delivery | Local-first apps without a central service |
 | Persistence | Op log + snapshots | Snapshots only (save every N seconds) | No need for history or audit; tiny scale |
 | Presence | Lossy, in memory | Stored in Redis | Presence must survive server restarts (rarely worth it) |
-| Conflict model | Automatic merge | Locks or check-out/check-in | Legal or engineering drawings that need formal sign-off per section |
+| Conflict model | Automatic merge | Locks or check-out/check-in | Contracts or regulated documents (for example clinical-trial protocols) that need formal sign-off per section |
 | Transport | SignalR (WebSockets) | WebRTC data channels | Peer-to-peer collaboration with no server path |
 
 The core trade-off in one sentence: **we pay for per-character metadata and a stateful owner per document in exchange for instant local typing, automatic convergence and a simple, durable, auditable history.**
@@ -962,6 +983,10 @@ public sealed class DocumentHub(DocumentSessionManager sessions, PresenceTracker
         {
             sessions.Drop(docId);
             throw new HubException("Ownership moved; reconnect.");
+        }
+        catch (InvalidOpException)
+        {
+            throw new HubException("Rejected an invalid operation; reload the document.");
         }
         await Clients.OthersInGroup(docId.ToString()).SendAsync("ops", envelope.ServerSeq, clientId, op);
         return envelope.ServerSeq;   // the ack: durable at this point
@@ -1025,8 +1050,8 @@ The starting graph is a naive design: the browser sends the whole document to a 
 
 ## Exercises
 
-:::exercise id=m17-collaborative-editor-ex1 difficulty=beginner kind=written title="Size a collaborative DPR editor for a state PWD"
-A state Public Works Department wants a collaborative editor for detailed project reports (DPRs). There are 40,000 engineers and consultants; 25 % are active on a working day. Each active user edits for 45 minutes a day. Clients batch keystrokes into one op message per 200 ms while typing, and users type about 40 % of their editing time. 70 % of the day's edits happen between 10:00 and 18:00. An op message is about 150 bytes. Ops are kept for 90 days. The average DPR has 2.5 people in it at the busiest moment, and 10 % of active users have a document open at that moment.
+:::exercise id=m17-collaborative-editor-ex1 difficulty=beginner kind=written title="Size a collaborative editor for a university"
+A state university wants a collaborative editor for group assignments, lab reports and theses. There are 40,000 students and faculty; 25 % are active on a teaching day. Each active user edits for 45 minutes a day. Clients batch keystrokes into one op message per 200 ms while typing, and users type about 40 % of their editing time. 70 % of the day's edits happen between 10:00 and 18:00. An op message is about 150 bytes. Ops are kept for 90 days. The average open assignment has 2.5 people in it at the busiest moment, and 10 % of active users have a document open at that moment.
 
 Estimate: op messages per day, average and peak (working-hours) op rate, peak concurrent connections and live documents, op log storage for 90 days with 3 replicas, and decide whether this needs the full design in the lesson or something simpler.
 ::acceptance
@@ -1051,7 +1076,7 @@ Storage = messages/day × 150 B × 90 × 3. Divide by 10⁹ for GB.
 - Concurrent connections = 10,000 × 0.10 = **1,000**; live documents ≈ 1,000 ÷ 2.5 = **400**.
 - Storage = 54 M × 150 B = 8.1 GB/day → × 90 = 729 GB → × 3 ≈ **2.2 TB**.
 
-Recommendation: the merge problem is real (people do co-edit DPRs), so use a proven CRDT library, but the scale is small. 1,000 sockets and 400 live documents fit on **two session servers** (owner plus failover), and 1,310 ops/s with group commit fits one PostgreSQL primary. Skip the hash ring, viewer relays and event stream; focus on data residency, audit and permissions.
+Recommendation: the merge problem is real (students really do co-edit group assignments at midnight), so use a proven CRDT library, but the scale is small. 1,000 sockets and 400 live documents fit on **two session servers** (owner plus failover), and 1,310 ops/s with group commit fits one PostgreSQL primary. Skip the hash ring, viewer relays and event stream; focus on permissions (who may see a classmate's draft), an audit trail for academic-integrity questions, and data residency.
 ::mistakes
 - Using all 40,000 users instead of the active 10,000.
 - Forgetting the 40 % typing share, which overstates load by 2.5×.
@@ -1079,7 +1104,7 @@ CREATE TABLE doc_op (
   PRIMARY KEY (doc_id, server_seq)
 );
 INSERT INTO document VALUES
-  (1, 'NH-48 widening DPR'), (2, 'Bridge inspection notes'), (3, 'Tender clarifications'), (4, 'Empty draft');
+  (1, 'Physics lab report'), (2, 'Goa trip itinerary'), (3, 'Hostel fest budget'), (4, 'Empty draft');
 INSERT INTO doc_snapshot VALUES (1, 4), (1, 8), (2, 2);
 INSERT INTO doc_op VALUES
   (1, 1, 1), (1, 2, 1), (1, 3, 1), (1, 4, 1), (1, 5, 1), (1, 6, 1), (1, 7, 2), (1, 8, 2), (1, 9, 2),
@@ -1136,9 +1161,9 @@ ORDER BY d.doc_id;
 
 | doc_id | title | snapshot_version | ops_to_replay | needs_snapshot |
 |---|---|---|---|---|
-| 1 | NH-48 widening DPR | 8 | 1 | false |
-| 2 | Bridge inspection notes | 2 | 4 | true |
-| 3 | Tender clarifications | 0 | 3 | false |
+| 1 | Physics lab report | 8 | 1 | false |
+| 2 | Goa trip itinerary | 2 | 4 | true |
+| 3 | Hostel fest budget | 0 | 3 | false |
 | 4 | Empty draft | 0 | 0 | false |
 
 `LEFT JOIN LATERAL` runs the subquery once per document; an aggregate without `GROUP BY` always returns exactly one row, so documents without snapshots get `NULL`, which `COALESCE` turns into 0. A snapshot worker would run a query like this (limited to recently active documents) to pick its next jobs.
@@ -1413,20 +1438,20 @@ public class LwwMapTests
     {
         var a = new LwwMap();
         var b = new LwwMap();
-        a.Set("title", "NH-48 DPR", new Stamp(2, "a"));
+        a.Set("title", "Lab report", new Stamp(2, "a"));
         a.Set("owner", "Priya", new Stamp(1, "a"));
-        b.Set("title", "NH-48 DPR v2", new Stamp(3, "b"));
+        b.Set("title", "Lab report v2", new Stamp(3, "b"));
         b.Remove("owner", new Stamp(5, "b"));
         b.Set("page", "A4", new Stamp(1, "b"));
 
         var ab = new LwwMap(); ab.Merge(a); ab.Merge(b);
         var ba = new LwwMap(); ba.Merge(b); ba.Merge(a);
         Assert.Equal(Dump(ab), Dump(ba));
-        Assert.Equal("page=A4;title=NH-48 DPR v2", Dump(ab));
+        Assert.Equal("page=A4;title=Lab report v2", Dump(ab));
 
         ab.Merge(b);
         ab.Merge(a);
-        Assert.Equal("page=A4;title=NH-48 DPR v2", Dump(ab));
+        Assert.Equal("page=A4;title=Lab report v2", Dump(ab));
     }
 }
 ```
@@ -1598,7 +1623,7 @@ How do you make sure all editors of one document reach the same server, and why 
 ::a
 Route by `doc_id`: a router uses consistent hashing over healthy session servers, and the chosen server takes a lease in a lease store. It matters because that server holds the live replica, assigns `server_seq` with a simple counter, validates ops and broadcasts locally. Without a single owner you need distributed coordination on every keystroke. Consistent hashing means adding or removing a server moves only about 1/N of documents.
 ::q advanced
-A session server has a 40-second GC pause. Its lease expires and another server takes over the document. Then the first server wakes up. What happens?
+A session server stalls for 40 seconds (a VM freeze, a long GC pause or a network partition). Its lease expires and another server takes over the document. Then the first server wakes up. What happens?
 ::a
 Without fencing, both servers accept ops and append to the log with clashing `server_seq` values, so clients diverge and the history is corrupt. With fencing, the new owner incremented the epoch when it took the lease (say 8 to 9), and every op insert is conditioned on the current epoch. The old server's next append, tagged epoch 8, inserts zero rows (or throws `StaleEpochException` in our model). It then drops the session and disconnects its clients, which reconnect via the router to the new owner and resubmit unacknowledged batches; idempotency keys stop duplicates. The ack-after-commit rule means no acknowledged edit was lost.
 ::q advanced
@@ -1686,7 +1711,7 @@ An all-hands notes document has 15 editors and 1,000 viewers, and its owner serv
 - [ ] Disable presence for editors
 > Writers need one owner for ordering; viewers only need a copy of the stream. Relays remove the fan-out from the owner. Splitting one document across owners breaks the single-writer model.
 ::q single
-A 12-person team wants to co-edit weekly site reports, rarely at the same moment. The proposed design has a hash ring, 6 session servers, Kafka and custom CRDT code. Best review comment?
+A 12-person clinic team wants to co-edit weekly staff rotas and notes, rarely at the same moment. The proposed design has a hash ring, 6 session servers, Kafka and custom CRDT code. Best review comment?
 - [ ] Add OT as a fallback
 - [x] Over-engineered: section-level optimistic concurrency with a "someone is editing" indicator, or an off-the-shelf CRDT library with one relay server, is enough
 - [ ] Use a wide-column database for the op log

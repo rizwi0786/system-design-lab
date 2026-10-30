@@ -22,7 +22,7 @@ references:
     url: https://martinfowler.com/bliki/BeckDesignRules.html
 ---
 
-DRY, KISS and YAGNI are three short rules that every code reviewer quotes. They are also the three rules most often quoted *wrongly*. "DRY" gets used to merge two pieces of code that happen to look alike. "KISS" gets used to reject any design with more than one class. "YAGNI" gets used to skip tests. This lesson explains what each rule really protects, shows each one on a realistic procurement system, and shows the point where following it starts to hurt.
+DRY, KISS and YAGNI are three short rules that every code reviewer quotes. They are also the three rules most often quoted *wrongly*. "DRY" gets used to merge two pieces of code that happen to look alike. "KISS" gets used to reject any design with more than one class. "YAGNI" gets used to skip tests. This lesson explains what each rule really protects, shows each one on a realistic fee and invoicing portal for a coaching institute, and shows the point where following it starts to hurt.
 
 ## Learning objectives
 
@@ -42,9 +42,9 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-**DRY — Don't Repeat Yourself.** A construction company writes the GST rate for cement on the site-office whiteboard, in accounts' Excel sheet and in the purchase manager's notebook. The rate changes; accounts updates Excel; nobody updates the whiteboard; site orders are priced wrong for two months. **One fact had three homes.** DRY says every fact gets one home that everyone else refers to.
+**DRY — Don't Repeat Yourself.** A coaching institute writes the fee for its JEE course on the reception noticeboard, in accounts' Excel sheet and in the counsellor's notebook. The fee changes; accounts updates Excel; nobody updates the noticeboard; new students are quoted the old fee for two months. **One fact had three homes.** DRY says every fact gets one home that everyone else refers to.
 
-**KISS — Keep It Simple.** A ladder and a crane can both lift a bag of cement to the first floor. For one bag, the ladder wins; the crane pays off at 500 bags a day. In code, the "crane" is a configurable rules engine, a plugin system or five layers of interfaces.
+**KISS — Keep It Simple (the original adds "Stupid").** A bicycle and a delivery van can both carry a parcel to the next street. For one parcel, the bicycle wins; the van pays off at 500 parcels a day. In code, the "van" is a configurable rules engine, a plugin system or five layers of interfaces.
 
 **YAGNI — You Aren't Gonna Need It.** A family in Lucknow builds a two-bedroom house with a rooftop water tank sized for six floors, "in case we add floors later". They sell after ten years; the floors never came. YAGNI says: don't build for a future you're guessing at; build for today and keep the design easy to change.
 
@@ -57,7 +57,7 @@ The catch: some parts of a house, like its **foundations**, can't be changed lat
 The original definition from *The Pragmatic Programmer* is: **"Every piece of knowledge must have a single, unambiguous, authoritative representation within a system."** Notice the word *knowledge*, not *code*.
 
 - **Knowledge duplication** — the same business rule, fact or decision appears in two places. "GST is rounded per line, half away from zero" in the PDF generator and in the CSV export. If the rule changes, both must change. If they drift, users see two totals for one invoice. This is what DRY forbids.
-- **Coincidental similarity** — two pieces of code look the same but represent different knowledge. "Maximum 10 items per page" and "minimum order of 10 cement bags" are both `10`. They will change for different reasons, at different times, by different people. Merging them into one `const int Ten = 10` creates coupling between unrelated decisions.
+- **Coincidental similarity** — two pieces of code look the same but represent different knowledge. "Maximum 10 items per page" and "minimum batch size of 10 students" are both `10`. They will change for different reasons, at different times, by different people. Merging them into one `const int Ten = 10` creates coupling between unrelated decisions.
 
 The test is simple: **"If one of these changes, must the other change too?"** If yes, it's duplicated knowledge — merge it. If no, it's coincidence — leave it alone.
 
@@ -71,7 +71,7 @@ Extracting too early means guessing an abstraction's shape from one or two examp
 
 Fred Brooks separated two kinds of complexity:
 
-- **Essential complexity** comes from the problem: GST has CGST, SGST and IGST, and inter-state supplies are taxed differently. Code must express that.
+- **Essential complexity** comes from the problem: GST has CGST, SGST and IGST, inter-state supplies are taxed differently, and printed books are exempt while coaching fees carry 18 %. Code must express that.
 - **Accidental complexity** is what *we* add: a rules engine for three rules, a factory for a class created in one place, reflection where a `switch` would do.
 
 KISS targets only the accidental kind. Kent Beck's design rules define "simple" in priority order: **passes the tests**, **reveals intention**, **no duplication**, **fewest elements**. "Fewest elements" comes last, so a slightly longer method that reads clearly beats a one-line LINQ puzzle.
@@ -133,7 +133,7 @@ flowchart LR
     end
 ```
 
-On the left, three features each carry their own copy of "how to compute GST". They were written by different people in different months, and they now disagree by a paisa or two on some invoices. A buyer reconciling the PDF against the Excel export finds a ₹0.01 mismatch, and the finance team spends a day on it. On the right, all three ask one function. A change to the rounding rule is now one edit and one set of tests.
+On the left, three features each carry their own copy of "how to compute GST". They were written by different people in different months, and they now disagree by a paisa or two on some invoices. An auditor reconciling the PDF against the Excel export finds a ₹0.01 mismatch, and the finance team spends a day on it. On the right, all three ask one function. A change to the rounding rule is now one edit and one set of tests.
 
 ### Should I remove this duplication?
 
@@ -168,11 +168,11 @@ The middle branch is the important one. YAGNI doesn't mean "never think ahead". 
 
 ## Step-by-step example
 
-The system: a procurement portal where site engineers order materials (cement, steel, aggregates) from approved vendors for highway projects. Invoices are shown as PDFs, served through an API to the accounts system, and exported to Excel for audits.
+The system: the fee portal of a coaching institute with branches in Pune, Nagpur and Nashik. It invoices students, and companies that sponsor their employees' courses, for coaching fees, mock-test series and printed study material. Invoices are shown as PDFs, served through an API to the accounting system, and exported to Excel for auditors.
 
 ### Step 1 — find the duplicated knowledge
 
-A buyer reports that invoice INV-2026-0311 shows ₹295.27 on the PDF but ₹295.28 in the API. Searching for `GstRatePercent` finds three calculations:
+A parent reports that invoice INV-2026-0311 shows ₹295.27 on the PDF but ₹295.28 in the API. Searching for `GstRatePercent` finds three calculations:
 
 | Place | Rounding | Handles mixed rates? |
 |---|---|---|
@@ -196,25 +196,25 @@ The CSV exporter's `MaxRowsPerSheet = 10000` and the API's `MaxPageSize = 10000`
 
 ### Step 5 — simplify the penalty "engine" (KISS)
 
-The late-delivery penalty is a configurable rules engine that parses string expressions at runtime, for one rule changed once in three years. Six classes become one 10-line method with tests.
+The late fee on overdue instalments is a configurable rules engine that parses string expressions at runtime, for one rule changed once in three years. Six classes become one 10-line method with tests.
 
 ### Step 6 — say no to the speculative feature (YAGNI)
 
-A ticket asks for multi-currency "because we might buy from overseas". No vendor, no date, an estimated 3 weeks to build, and a cost of carry on every money change. Decision: don't build. The one-way door — how money is *stored* — is already safe: `numeric(18,2)` in INR, so a `currency char(3) default 'INR'` column can be added later as a cheap migration.
+A ticket asks for multi-currency "because we might enrol students from Dubai". No such student, no date, an estimated 3 weeks to build, and a cost of carry on every money change. Decision: don't build. The one-way door — how money is *stored* — is already safe: `numeric(18,2)` in INR, so a `currency char(3) default 'INR'` column can be added later as a cheap migration.
 
 ## Production-style C# implementation
 
 ```text
-Procurement.Api/
+Academy.Api/
   Program.cs
   Tax/GstMath.cs
   Contacts/IndianMobileNumber.cs
   Invoices/InvoiceViews.cs
-  Penalties/LateDeliveryPenalty.cs
+  Fees/LateFee.cs
 ```
 
 ```csharp file=Tax/GstMath.cs
-namespace Procurement.Tax;
+namespace Academy.Tax;
 
 public sealed record InvoiceLine(string Item, decimal TaxableValue, decimal GstRatePercent);
 
@@ -253,9 +253,9 @@ public static class GstMath
 ```csharp file=Contacts/IndianMobileNumber.cs
 using System.Diagnostics.CodeAnalysis;
 
-namespace Procurement.Contacts;
+namespace Academy.Contacts;
 
-/// <summary>One home for "what a valid Indian mobile number is". Vendor registration, site-engineer profiles
+/// <summary>One home for "what a valid Indian mobile number is". Student registration, parent contacts
 /// and SMS alerts all use this type, so the rule can't drift between them.</summary>
 public readonly record struct IndianMobileNumber
 {
@@ -283,13 +283,15 @@ public readonly record struct IndianMobileNumber
 
 ```csharp file=Invoices/InvoiceViews.cs
 using System.Globalization;
-using Procurement.Tax;
+using Academy.Tax;
 
-namespace Procurement.Invoices;
+namespace Academy.Invoices;
 
-public sealed record Invoice(string InvoiceNo, string VendorGstin, string BuyerGstin, IReadOnlyList<InvoiceLine> Lines)
+/// <summary>Students rarely have a GSTIN, so inter-state is decided by the place of supply (the buyer's state code),
+/// not by comparing two GSTINs.</summary>
+public sealed record Invoice(string InvoiceNo, string SupplierGstin, string PlaceOfSupplyStateCode, IReadOnlyList<InvoiceLine> Lines)
 {
-    public bool IsInterState => VendorGstin[..2] != BuyerGstin[..2];
+    public bool IsInterState => SupplierGstin[..2] != PlaceOfSupplyStateCode;
     public GstTotals Totals() => GstMath.Totals(Lines, IsInterState);
 }
 
@@ -327,34 +329,34 @@ public static class InvoiceCsv
 }
 ```
 
-```csharp file=Penalties/LateDeliveryPenalty.cs
-namespace Procurement.Penalties;
+```csharp file=Fees/LateFee.cs
+namespace Academy.Fees;
 
 /// <summary>KISS: the whole rule, readable in one screen. It replaced a six-class "configurable rules engine"
 /// that parsed string expressions at runtime to evaluate this one rule.</summary>
-public static class LateDeliveryPenalty
+public static class LateFee
 {
     public const int GraceDays = 2;
     public const decimal PercentPerDay = 0.5m;
     public const decimal MaxPercent = 10m;
 
-    public static decimal Calculate(decimal orderValue, int daysLate)
+    public static decimal Calculate(decimal instalmentAmount, int daysLate)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(orderValue);
+        ArgumentOutOfRangeException.ThrowIfNegative(instalmentAmount);
         ArgumentOutOfRangeException.ThrowIfNegative(daysLate);
 
         var chargeableDays = Math.Max(0, daysLate - GraceDays);
         var percent = Math.Min(chargeableDays * PercentPerDay, MaxPercent);
-        return Math.Round(orderValue * percent / 100m, 2, MidpointRounding.AwayFromZero);
+        return Math.Round(instalmentAmount * percent / 100m, 2, MidpointRounding.AwayFromZero);
     }
 }
 ```
 
 ```csharp file=Program.cs
-using Procurement.Contacts;
-using Procurement.Invoices;
-using Procurement.Penalties;
-using Procurement.Tax;
+using Academy.Contacts;
+using Academy.Fees;
+using Academy.Invoices;
+using Academy.Tax;
 
 var builder = WebApplication.CreateBuilder(args);
 var app = builder.Build();
@@ -364,10 +366,12 @@ app.MapPost("/invoices/preview", (Invoice invoice) => Results.Ok(InvoiceApiRespo
 app.MapPost("/invoices/export", (Invoice[] invoices) =>
     Results.Text(string.Join('\n', invoices.Take(InvoiceCsv.MaxRowsPerSheet).Select(InvoiceCsv.Row).Prepend(InvoiceCsv.Header)), "text/csv"));
 
-app.MapGet("/penalties/late-delivery", (decimal orderValue, int daysLate) =>
-    Results.Ok(new { orderValue, daysLate, penalty = LateDeliveryPenalty.Calculate(orderValue, daysLate) }));
+app.MapGet("/fees/late-fee", (decimal instalmentAmount, int daysLate) =>
+    instalmentAmount < 0 || daysLate < 0
+        ? Results.BadRequest("Amount and days late cannot be negative.")
+        : Results.Ok(new { instalmentAmount, daysLate, lateFee = LateFee.Calculate(instalmentAmount, daysLate) }));
 
-app.MapPost("/vendors/validate-mobile", (string mobile) =>
+app.MapPost("/students/validate-mobile", (string mobile) =>
     IndianMobileNumber.TryParse(mobile, out var number)
         ? Results.Ok(new { normalised = number.Value.ToE164() })
         : Results.ValidationProblem(new Dictionary<string, string[]> { ["mobile"] = ["Enter a 10-digit Indian mobile number."] }));
@@ -379,7 +383,7 @@ What to notice:
 
 - **DRY on knowledge, not on presentation.** The PDF, API and CSV types look a bit alike, but they are three *contracts* with different owners. Only the calculation is shared.
 - **A value object is DRY for validation.** `IndianMobileNumber` makes "valid mobile" impossible to re-implement slightly differently in another form, because every API takes the type, not a `string`.
-- **KISS in the penalty.** Three constants and four lines. If the rule ever needs to vary per vendor contract, *then* turn it into data or a strategy ([Strategy](#/lesson/m06-strategy)).
+- **KISS in the late fee.** Three constants and four lines. If the rule ever needs to vary per branch or per course, *then* turn it into data or a strategy ([Strategy](#/lesson/m06-strategy)).
 - **No speculative flexibility.** No currency field, no plugin loader, no interface for `GstMath` (it's pure; see [DIP](#/lesson/m04-dip) for when to invert).
 
 ## Bad design vs good design
@@ -400,7 +404,7 @@ Three people, three months, three rules, each passing its own tests. Together: �
 ### DRY overdone — the wrong abstraction
 
 ```csharp
-public static string BuildMessage(Vendor v, decimal amount, bool isSms, bool includeGstin, bool html,
+public static string BuildMessage(Student s, decimal amount, bool isSms, bool includeGstin, bool html,
                                   bool shortForm, bool hindi, bool includePortalLink)
 {
     var s = html ? "<p>" : "";
@@ -420,11 +424,11 @@ public sealed class PenaltyRuleEngine(IEnumerable<IPenaltyRule> rules, IPenaltyA
 // rules table: "max(0, days - 2) * 0.005 * value" stored as a string, parsed at runtime
 ```
 
-Six types, a parser and a table for one formula that changed once in three years. Parser bugs become production incidents, and the rule can't be found by searching the code. Compare `LateDeliveryPenalty` above.
+Six types, a parser and a table for one formula that changed once in three years. Parser bugs become production incidents, and the rule can't be found by searching the code. Compare `LateFee` above.
 
 ### YAGNI violated — presumptive features
 
-A portal for 40 internal users built with multi-tenancy, multi-currency, export plugins and GraphQL "for flexibility". Six months on: one tenant, one currency, one format, one client using three REST endpoints — and every change still touches tenant filters and currency conversion.
+A fee portal for 40 staff users built with multi-tenancy, multi-currency, export plugins and GraphQL "for flexibility". Six months on: one tenant, one currency, one format, one client using three REST endpoints — and every change still touches tenant filters and currency conversion.
 
 ### When applying these rules blindly is harmful
 
@@ -442,14 +446,14 @@ Each rule is a default that saves you from a common mistake. When two of them di
 
 ## Practical playground
 
-Vendor registration and the SMS module both validate mobile numbers — differently. One accepts `+91`, the other doesn't. Run the program and see the disagreement. Then move the knowledge into one `IndianMobileNumber.TryParse` and make both modules call it. Both lines should then print `True`.
+Student registration and the SMS module both validate mobile numbers — differently. One accepts `+91`, the other doesn't. Run the program and see the disagreement. Then move the knowledge into one `IndianMobileNumber.TryParse` and make both modules call it. Both lines should then print `True`.
 
 :::playground type=csharp title="One home for mobile-number validation"
 ```csharp file=Program.cs
 using System;
 using System.Linq;
 
-public static class VendorRegistration
+public static class StudentRegistration
 {
     public static bool IsValidMobile(string input) =>
         input.Length == 10 && input.All(char.IsDigit) && input[0] >= '6';
@@ -472,8 +476,8 @@ public static class Program
     public static void Main()
     {
         const string input = "+91 98100 12345";
-        Console.WriteLine($"Vendor registration accepts it: {VendorRegistration.IsValidMobile(input)}");
-        Console.WriteLine($"SMS alerts accept it:          {SmsAlerts.IsValidMobile(input)}");
+        Console.WriteLine($"Student registration accepts it: {StudentRegistration.IsValidMobile(input)}");
+        Console.WriteLine($"SMS alerts accept it:            {SmsAlerts.IsValidMobile(input)}");
     }
 }
 ```
@@ -490,7 +494,7 @@ The PDF model and the CSV export each compute GST their own way, and they disagr
 - CSV numbers use `.` as the decimal separator and 2 decimals.
 ::acceptance
 - Lines ₹99.99, ₹149.99 and ₹0.25, all at 18 %: tax ₹45.05, total ₹295.28 in both outputs.
-- A mixed 5 % / 18 % invoice gives the same tax in both outputs.
+- A mixed invoice (printed question bank at 0 % — printed books are GST-exempt — plus a crash course at 18 %) gives the same tax in both outputs.
 - The CSV row for the first case is `INV-1,250.23,45.05,295.28`.
 ::hint
 Run the tests first and compare the two wrong answers. Why are they different from each other?
@@ -544,15 +548,15 @@ public class GstMathTests
 {
     private static readonly InvoiceLine[] Tricky =
     {
-        new InvoiceLine("Cement 53 grade", 99.99m, 18m),
-        new InvoiceLine("Binding wire", 149.99m, 18m),
-        new InvoiceLine("Cover blocks", 0.25m, 18m),
+        new InvoiceLine("Doubt-clearing session", 99.99m, 18m),
+        new InvoiceLine("Mock-test series", 149.99m, 18m),
+        new InvoiceLine("Payment gateway fee", 0.25m, 18m),
     };
 
     private static readonly InvoiceLine[] Mixed =
     {
-        new InvoiceLine("Aggregate 20mm", 1_000.10m, 5m),
-        new InvoiceLine("TMT bar", 2_345.55m, 18m),
+        new InvoiceLine("Printed question bank", 1_000.10m, 0m),
+        new InvoiceLine("Crash course", 2_345.55m, 18m),
     };
 
     [Fact] public void Line_tax_rounds_half_away_from_zero() => Assert.Equal(0.05m, GstMath.LineTax(Tricky[2]));
@@ -611,7 +615,7 @@ public sealed record CsvInvoiceRow(string Line)
 }
 ```
 
-The two output types stay separate presentations; only the rule moved. The CSV's second bug (using the first line's rate for everything) disappeared as a side effect.
+The two output types stay separate presentations; only the rule moved. The CSV's second bug (using the first line's rate for everything) disappeared as a side effect: on the mixed invoice it charged 0 % on the whole amount because the exempt book came first.
 ::mistakes
 - Merging `PdfInvoiceModel` and `CsvInvoiceRow` into one class. They change for different reasons.
 - Leaving default `Math.Round`, which is banker's rounding: ₹0.045 becomes ₹0.04.
@@ -621,12 +625,12 @@ The two output types stay separate presentations; only the rule moved. The CSV's
 :::exercise id=m04-dry-kiss-yagni-ex2 difficulty=beginner kind=written title="Knowledge or coincidence?"
 For each pair, say whether it's duplicated **knowledge** (merge it) or **coincidence** (leave it), and give a one-line reason.
 
-1. `if (gstin.Length != 15)` in vendor onboarding and in invoice import.
-2. `MaxPhotosPerSiteVisit = 20` and `MaxLineItemsPerInvoice = 20`.
-3. The SQL `CHECK (quantity > 0)` on `order_lines` and the C# validator `RuleFor(x => x.Quantity).GreaterThan(0)`.
-4. Two test methods that each build an order with three lines.
-5. A `CustomerDto` in the Orders service and an almost identical `CustomerDto` in the Invoicing service.
-6. Retention 5 % in RA bills and the 5 % GST rate on aggregates.
+1. `if (gstin.Length != 15)` in corporate-client onboarding and in invoice import.
+2. `MaxStudentsPerBatch = 20` and `MaxLineItemsPerInvoice = 20`.
+3. The SQL `CHECK (quantity > 0)` on `invoice_lines` and the C# validator `RuleFor(x => x.Quantity).GreaterThan(0)`.
+4. Two test methods that each build an invoice with three lines.
+5. A `StudentDto` in the Enrolment service and an almost identical `StudentDto` in the Invoicing service.
+6. The 18 % GST rate on coaching fees and the 18 % yearly interest on the institute's fee-EMI plan.
 ::acceptance
 - Each item classified with a reason based on "would they change together?".
 - At least one item where you keep both copies on purpose, and say what links them.
@@ -638,28 +642,28 @@ Some duplication is deliberate: defence in depth, or independent service contrac
 Test code has different goals from production code. Readability can beat DRY there.
 ::solution
 1. **Knowledge.** The GSTIN format is one fact. Use a `Gstin` value object everywhere.
-2. **Coincidence.** A UX limit and an invoicing limit; they'll change for different reasons.
+2. **Coincidence.** A classroom limit and an invoicing limit; they'll change for different reasons.
 3. **Same knowledge, kept twice on purpose.** The database constraint protects data from any writer; the validator gives friendly messages. Keep both, and add an integration test that inserts `quantity = 0` and expects a constraint violation, so the link is visible.
-4. **Coincidence, mostly.** Tests should be readable on their own. A small builder (`AnOrder().WithLines(3)`) is fine if it keeps the important values visible.
+4. **Coincidence, mostly.** Tests should be readable on their own. A small builder (`AnInvoice().WithLines(3)`) is fine if it keeps the important values visible.
 5. **Coincidence (by design).** Each service owns its contract. Sharing one DTO package would couple their releases.
-6. **Coincidence.** Contract terms and tax rates are unrelated, even though both are 5 today.
+6. **Coincidence.** A finance product's interest rate and a tax rate are unrelated, even though both are 18 today.
 ::mistakes
 - Treating every repeated literal as a DRY violation.
 - Sharing DTOs between services to "stay DRY".
 :::
 
 :::exercise id=m04-dry-kiss-yagni-ex3 difficulty=intermediate kind=code title="Replace the penalty engine with a simple method"
-A previous developer built a "configurable penalty rules engine": six classes, a string-expression parser and a database table. There is one rule, and it hasn't changed in three years:
+A previous developer built a "configurable late-fee rules engine": six classes, a string-expression parser and a database table. There is one rule, and it hasn't changed in three years:
 
-> Deliveries get **2 grace days**. After that, the penalty is **0.5 % of the order value per day**, capped at **10 %** of the order value. Round to 2 decimals, half away from zero. Negative inputs are invalid.
+> A fee instalment gets **2 grace days** after its due date. After that, the late fee is **0.5 % of the instalment per day**, capped at **10 %** of the instalment. Round to 2 decimals, half away from zero. Negative inputs are invalid.
 
-Implement `LateDeliveryPenalty.Calculate` as plain C#.
+Implement `LateFee.Calculate` as plain C#.
 ::acceptance
-- ₹2,00,000 order, 2 days late → ₹0.
+- ₹2,00,000 instalment (a year's JEE coaching fee paid at once), 2 days late → ₹0.
 - 3 days late → ₹1,000.
 - 12 days late → ₹10,000.
 - 40 days late → capped at ₹20,000.
-- Negative `daysLate` or `orderValue` throws `ArgumentOutOfRangeException`.
+- Negative `daysLate` or `instalmentAmount` throws `ArgumentOutOfRangeException`.
 ::hint
 Write the rule as three steps in English first: chargeable days, percent, amount.
 ::hint
@@ -669,24 +673,24 @@ Write the rule as three steps in English first: chargeable days, percent, amount
 ::hint
 `ArgumentOutOfRangeException.ThrowIfNegative(daysLate);` (.NET 8+) is a one-line guard.
 ::starter
-```csharp file=LateDeliveryPenalty.cs
+```csharp file=LateFee.cs
 using System;
 
-public static class LateDeliveryPenalty
+public static class LateFee
 {
     public const int GraceDays = 2;
     public const decimal PercentPerDay = 0.5m;
     public const decimal MaxPercent = 10m;
 
-    public static decimal Calculate(decimal orderValue, int daysLate) => throw new NotImplementedException();
+    public static decimal Calculate(decimal instalmentAmount, int daysLate) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=LateDeliveryPenaltyTests.cs
+```csharp file=LateFeeTests.cs
 using System;
 using Xunit;
 
-public class LateDeliveryPenaltyTests
+public class LateFeeTests
 {
     [Theory]
     [InlineData(0, 0)]
@@ -695,58 +699,58 @@ public class LateDeliveryPenaltyTests
     [InlineData(12, 10000)]
     [InlineData(22, 20000)]
     [InlineData(40, 20000)]
-    public void Calculates_penalty_on_two_lakh_order(int daysLate, int expected) =>
-        Assert.Equal((decimal)expected, LateDeliveryPenalty.Calculate(200_000m, daysLate));
+    public void Calculates_late_fee_on_two_lakh_instalment(int daysLate, int expected) =>
+        Assert.Equal((decimal)expected, LateFee.Calculate(200_000m, daysLate));
 
     [Fact]
-    public void Rounds_half_away_from_zero() => Assert.Equal(0.01m, LateDeliveryPenalty.Calculate(1m, 3));
+    public void Rounds_half_away_from_zero() => Assert.Equal(0.01m, LateFee.Calculate(1m, 3));
 
     [Fact]
     public void Negative_days_are_invalid() =>
-        Assert.Throws<ArgumentOutOfRangeException>(() => LateDeliveryPenalty.Calculate(1000m, -1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => LateFee.Calculate(1000m, -1));
 
     [Fact]
-    public void Negative_value_is_invalid() =>
-        Assert.Throws<ArgumentOutOfRangeException>(() => LateDeliveryPenalty.Calculate(-1m, 5));
+    public void Negative_amount_is_invalid() =>
+        Assert.Throws<ArgumentOutOfRangeException>(() => LateFee.Calculate(-1m, 5));
 }
 ```
 ::solution
-```csharp file=LateDeliveryPenalty.cs
+```csharp file=LateFee.cs
 using System;
 
-public static class LateDeliveryPenalty
+public static class LateFee
 {
     public const int GraceDays = 2;
     public const decimal PercentPerDay = 0.5m;
     public const decimal MaxPercent = 10m;
 
-    public static decimal Calculate(decimal orderValue, int daysLate)
+    public static decimal Calculate(decimal instalmentAmount, int daysLate)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(orderValue);
+        ArgumentOutOfRangeException.ThrowIfNegative(instalmentAmount);
         ArgumentOutOfRangeException.ThrowIfNegative(daysLate);
 
         var chargeableDays = Math.Max(0, daysLate - GraceDays);
         var percent = Math.Min(chargeableDays * PercentPerDay, MaxPercent);
-        return Math.Round(orderValue * percent / 100m, 2, MidpointRounding.AwayFromZero);
+        return Math.Round(instalmentAmount * percent / 100m, 2, MidpointRounding.AwayFromZero);
     }
 }
 ```
 
-Nine lines replace six classes, a parser and a table. If vendor contracts ever need different rules, turn the three constants into a `PenaltyTerms` record loaded per contract — a small, safe step from here.
+Nine lines replace six classes, a parser and a table. If branches ever need different late-fee rules, turn the three constants into a `LateFeeTerms` record loaded per branch — a small, safe step from here. Keep the arithmetic in `decimal` and the dates out of it: the caller computes `daysLate` from the due date in the institute's time zone (IST), so a payment at 11:30 pm is not a day late on a UTC server.
 ::mistakes
-- Using `double` for money, so 0.5 % × ₹2,00,000 becomes 999.9999.
+- Using `double` for money, so sums such as 0.1 + 0.2 give 0.30000000000000004 and late fees drift by a paisa once they are added up across thousands of instalments.
 - Applying the grace days after the cap, or capping chargeable days instead of percent.
 - "Keeping the engine just in case": you pay its cost of carry on every change.
 :::
 
 :::exercise id=m04-dry-kiss-yagni-ex4 difficulty=intermediate kind=written title="A YAGNI review"
-The roadmap for the procurement portal (40 internal users, one company, INR only) has these proposals for next sprint. For each, decide **build now**, **defer**, or **decide now but build minimally**, using the four costs (build, delay, carry, repair) and the one-way-door test.
+The roadmap for the fee portal (40 staff users, one institute, three branches, INR only) has these proposals for next sprint. For each, decide **build now**, **defer**, or **decide now but build minimally**, using the four costs (build, delay, carry, repair) and the one-way-door test.
 
-1. Multi-currency pricing "in case we import steel".
-2. Audit log of who approved each purchase order (internal audit asked for it last month).
+1. Multi-currency pricing "in case we enrol students from the Gulf".
+2. Audit log of who approved each fee waiver (the auditors asked for it last month).
 3. A plugin system for export formats (currently only Excel).
 4. Primary keys: switch new tables from `int` to `bigint` or UUID before launch.
-5. Role-based authorisation (engineer, purchase manager, accounts).
+5. Role-based authorisation (counsellor, branch manager, accounts).
 6. A GraphQL API alongside REST "for flexibility".
 ::acceptance
 - Each item has a decision and a reason that names at least one of the four costs.
@@ -759,10 +763,10 @@ Which ones would be expensive to change after there's production data and extern
 ::hint
 For the deferred items, what small thing today keeps the door open cheaply?
 ::solution
-1. **Defer.** No vendor, no date, high cost of carry. Amounts in `numeric(18,2)` INR keep the door open.
+1. **Defer.** No overseas student, no date, high cost of carry. Amounts in `numeric(18,2)` INR keep the door open.
 2. **Build now.** A confirmed audit requirement, and missing history can't be recreated later.
 3. **Defer.** One format; extract an interface when the second arrives.
-4. **Decide now (one-way door).** Changing key types after go-live migrates every foreign key. `bigint` identity is a safe PostgreSQL default; UUIDs if the mobile app creates records offline.
+4. **Decide now (one-way door).** Changing key types after go-live migrates every foreign key. `bigint` identity is a safe PostgreSQL default; UUIDs if the mobile app creates records offline — preferably time-ordered UUIDv7 generated in the app (`Guid.CreateVersion7()` in .NET 9+), because random v4 keys (`gen_random_uuid()`) scatter inserts across the B-tree index.
 5. **Build now.** Three real roles exist today; security basics aren't speculative.
 6. **Defer.** A second API style doubles the surface to secure, test and version.
 ::mistakes
@@ -774,12 +778,12 @@ For the deferred items, what small thing today keeps the door open cheaply?
 `NotificationBuilder.Build` started as shared code for SMS and email "payment received" messages. It now has five boolean flags. Inline it back into two small, separate functions and delete the builder.
 
 **SMS** (`PaymentReceivedSms.Create`): plain text, at most 160 characters:
-`Payment of Rs 125000.00 received against RA-07. - SiteBuild Accounts`
+`Payment of Rs 125000.00 received against INST-07. - BrightPath Academy`
 If the reference is longer than 20 characters, use its first 20.
 
 **Email** (`PaymentReceivedEmail.Subject` / `Body`):
-- Subject: `Payment received: RA-07`
-- Body: `<p>Dear Shah &amp; Sons,</p><p>We have received your payment of Rs 125000.00 against RA-07.</p>` — the customer name and reference are HTML-encoded.
+- Subject: `Payment received: INST-07`
+- Body: `<p>Dear Shah &amp; Sons,</p><p>We have received your payment of Rs 125000.00 against INST-07.</p>` — the customer name and reference are HTML-encoded.
 ::acceptance
 - Exact SMS and email texts as above for the sample input.
 - SMS for a 60-character reference is ≤ 160 characters and contains only the first 20 reference characters.
@@ -812,7 +816,7 @@ public static class NotificationBuilder
         if (html) s += "<p>";
         s += isSms ? $"Payment of Rs {amt} received against {r}." : $"We have received your payment of Rs {amt} against {(html ? WebUtility.HtmlEncode(r) : r)}.";
         if (html) s += "</p>";
-        if (signature && isSms) s += " - SiteBuild Accounts";
+        if (signature && isSms) s += " - BrightPath Academy";
         return s;
     }
 }
@@ -837,8 +841,8 @@ public class NotificationTests
 {
     [Fact]
     public void Sms_text() =>
-        Assert.Equal("Payment of Rs 125000.00 received against RA-07. - SiteBuild Accounts",
-            PaymentReceivedSms.Create("Shah & Sons", 125_000m, "RA-07"));
+        Assert.Equal("Payment of Rs 125000.00 received against INST-07. - BrightPath Academy",
+            PaymentReceivedSms.Create("Shah & Sons", 125_000m, "INST-07"));
 
     [Fact]
     public void Sms_truncates_long_reference_and_fits_160()
@@ -851,16 +855,16 @@ public class NotificationTests
     }
 
     [Fact]
-    public void Email_subject() => Assert.Equal("Payment received: RA-07", PaymentReceivedEmail.Subject("RA-07"));
+    public void Email_subject() => Assert.Equal("Payment received: INST-07", PaymentReceivedEmail.Subject("INST-07"));
 
     [Fact]
     public void Email_body_encodes_html() =>
-        Assert.Equal("<p>Dear Shah &amp; Sons,</p><p>We have received your payment of Rs 125000.00 against RA-07.</p>",
-            PaymentReceivedEmail.Body("Shah & Sons", 125_000m, "RA-07"));
+        Assert.Equal("<p>Dear Shah &amp; Sons,</p><p>We have received your payment of Rs 125000.00 against INST-07.</p>",
+            PaymentReceivedEmail.Body("Shah & Sons", 125_000m, "INST-07"));
 
     [Fact]
     public void Email_body_encodes_reference() =>
-        Assert.Contains("against &lt;RA-08&gt;.", PaymentReceivedEmail.Body("A", 1m, "<RA-08>"));
+        Assert.Contains("against &lt;INST-08&gt;.", PaymentReceivedEmail.Body("A", 1m, "<INST-08>"));
 
     [Fact]
     public void Builder_is_gone() => Assert.Null(Type.GetType("NotificationBuilder"));
@@ -881,7 +885,7 @@ public static class PaymentReceivedSms
     public static string Create(string customer, decimal amount, string reference)
     {
         var shortRef = reference.Length > MaxReferenceLength ? reference[..MaxReferenceLength] : reference;
-        return $"Payment of Rs {amount.ToString("0.00", CultureInfo.InvariantCulture)} received against {shortRef}. - SiteBuild Accounts";
+        return $"Payment of Rs {amount.ToString("0.00", CultureInfo.InvariantCulture)} received against {shortRef}. - BrightPath Academy";
     }
 }
 
@@ -915,7 +919,7 @@ public class GstMathTests
     [Theory]   // InlineData can't hold decimals, so pass strings and parse
     [InlineData("0.25", "18", "0.05")]       // 0.045 rounds away from zero
     [InlineData("99.99", "18", "18.00")]
-    [InlineData("1000.10", "5", "50.01")]    // 50.005
+    [InlineData("12.25", "18", "2.21")]      // 2.205: banker's rounding would give 2.20
     public void Line_tax_rule(string taxable, string rate, string expected) =>
         Assert.Equal(decimal.Parse(expected, CultureInfo.InvariantCulture),
             GstMath.LineTax(new InvoiceLine("x", decimal.Parse(taxable, CultureInfo.InvariantCulture), decimal.Parse(rate, CultureInfo.InvariantCulture))));
@@ -931,8 +935,8 @@ public class GstMathTests
     [Fact]
     public void Api_and_csv_agree_with_the_rule()
     {
-        var invoice = new Invoice("INV-9", "06AAACR1234A1Z5", "06AAACM9876B1Z2",
-            new[] { new InvoiceLine("Cement", 99.99m, 18m), new InvoiceLine("Wire", 0.25m, 18m) });
+        var invoice = new Invoice("INV-9", "27AAACB1234A1Z5", "27",
+            new[] { new InvoiceLine("Crash course", 99.99m, 18m), new InvoiceLine("Gateway fee", 0.25m, 18m) });
         var api = InvoiceApiResponse.From(invoice);
         Assert.Equal(GstMath.Totals(invoice.Lines, false).Total, api.Total);
         Assert.EndsWith(api.Total.ToString(",0.00", CultureInfo.InvariantCulture), InvoiceCsv.Row(invoice));
@@ -940,7 +944,7 @@ public class GstMathTests
 }
 ```
 
-**KISS: let tests describe the rule.** The penalty tests are a table of business examples (`[InlineData(3, 1000)]`). If the tests for a "simple" piece of code need ten mocks, the code isn't simple.
+**KISS: let tests describe the rule.** The late-fee tests are a table of business examples (`[InlineData(3, 1000)]`). If the tests for a "simple" piece of code need ten mocks, the code isn't simple.
 
 **YAGNI: tests are what make waiting safe.** The argument "we can add multi-currency later" is only true if a refactor can be done confidently. A fast unit suite plus a few integration tests are what make that true. That's why tests are never YAGNI.
 
@@ -960,11 +964,11 @@ public class GstMathTests
 ::q beginner
 What does DRY mean, and is it about code or about knowledge?
 ::a
-"Every piece of knowledge must have a single, unambiguous, authoritative representation." It's about knowledge: business rules, facts and decisions. Two identical-looking blocks of code that represent different decisions (a page size and a minimum order quantity both being 10) aren't a DRY violation. Two different-looking blocks that encode the same rule (GST rounding in the PDF and in the export) are.
+"Every piece of knowledge must have a single, unambiguous, authoritative representation." It's about knowledge: business rules, facts and decisions. Two identical-looking blocks of code that represent different decisions (a page size and a minimum batch size both being 10) aren't a DRY violation. Two different-looking blocks that encode the same rule (GST rounding in the PDF and in the export) are.
 ::q beginner
 Give an example of YAGNI.
 ::a
-Building multi-currency support into an internal procurement tool that only ever buys in INR, "in case we import later". It costs build time, delays useful features, and every future change to money logic must handle currencies nobody uses. YAGNI says build it when there's a real requirement, keeping the code tested and easy to change so adding it later is cheap.
+Building multi-currency support into a coaching institute's fee portal that only ever bills in INR, "in case we enrol overseas students later". It costs build time, delays useful features, and every future change to money logic must handle currencies nobody uses. YAGNI says build it when there's a real requirement, keeping the code tested and easy to change so adding it later is cheap.
 ::q intermediate
 What is "the wrong abstraction", and how do you fix it?
 ::a
@@ -974,11 +978,11 @@ What does YAGNI *not* apply to?
 ::a
 Practices that make change cheap: tests, refactoring, clean code. Security and compliance basics: input validation, authorisation, password hashing, audit trails when required. Observability. And hard-to-reverse decisions: primary key types, public API shape and versioning, how money and time zones are stored, tenant isolation. Those are "one-way doors" worth deciding carefully up front, even if you build the minimum.
 ::q advanced
-Two microservices have nearly identical `CustomerDto` classes. A teammate wants a shared NuGet package. What do you say?
+Two microservices have nearly identical `StudentDto` classes. A teammate wants a shared NuGet package. What do you say?
 ::a
-Usually no. Each DTO is its own service's *contract* and changes when that service's consumers need it to. A shared package couples their releases: a field added for Orders forces Invoicing to upgrade and redeploy. Share only genuinely organisation-wide, slow-changing knowledge (a versioned `Gstin` value-object library, or clients generated from the producer's OpenAPI spec), and let consumers upgrade on their own schedule.
+Usually no. Each DTO is its own service's *contract* and changes when that service's consumers need it to. A shared package couples their releases: a field added for Enrolment forces Invoicing to upgrade and redeploy. Share only genuinely organisation-wide, slow-changing knowledge (a versioned `Gstin` value-object library, or clients generated from the producer's OpenAPI spec), and let consumers upgrade on their own schedule.
 ::q advanced
-How do you argue KISS against a senior engineer who wants a rules engine for discount and penalty rules?
+How do you argue KISS against a senior engineer who wants a rules engine for discount and late-fee rules?
 ::a
 Make the costs concrete: count the rules and their change rate (say, 3 rules changed twice in two years). Estimate the engine's carry cost: parser bugs, a second "language" to test, rules no longer searchable, security review if non-developers author expressions. Compare with plain code plus tests deployed in minutes. Agree a trigger to revisit ("non-developers must change rules weekly"), and offer a middle step: only the *numbers* live in configuration, the *logic* stays in code.
 :::
@@ -1020,18 +1024,18 @@ A: Each service owns its contract; sharing a DTO package couples their releases.
 
 :::quiz pass=70
 ::q single
-`MaxPageSize = 50` in the API and `MaxAttachmentsPerRfi = 50` in site inspections. A reviewer asks you to merge them into one constant. What's the best answer?
+`MaxPageSize = 50` in the API and `MaxAttachmentsPerAssignment = 50` in homework submissions. A reviewer asks you to merge them into one constant. What's the best answer?
 - [ ] Merge them — DRY forbids repeated values.
 - [x] Keep them separate — they're different decisions that will change for different reasons.
 - [ ] Move both into the database.
 - [ ] Replace both with the literal 50.
 > Same value, different knowledge. Merging couples unrelated decisions.
 ::q single
-The PDF and the Excel export compute GST with different rounding, and a buyer finds a ₹0.01 mismatch. What's the right fix?
+The PDF and the Excel export compute GST with different rounding, and a parent finds a ₹0.01 mismatch. What's the right fix?
 - [ ] Round the Excel export the same way by copying the PDF code into it.
 - [x] Move the rounding rule into one function that both call, and test its edge cases.
 - [ ] Merge the PDF and Excel classes into one.
-- [ ] Ask the buyer to ignore paise.
+- [ ] Ask the parent to ignore paise.
 > The rule is one piece of knowledge, so it needs one home. The presentations stay separate.
 ::q single
 A shared `BuildMessage` method has six boolean parameters, and every caller passes a different combination. What's the usual fix?
@@ -1050,9 +1054,9 @@ Which of these are reasonable to decide carefully up front, even under YAGNI? (S
 ::q single
 Which is an example of accidental complexity?
 - [ ] Inter-state invoices use IGST while intra-state use CGST and SGST.
-- [x] A string-expression parser and rules table used to evaluate a single penalty formula.
-- [ ] Retention money is released after the defect liability period.
-- [ ] Some vendors are exempt from TDS.
+- [x] A string-expression parser and rules table used to evaluate a single late-fee formula.
+- [ ] Printed books are GST-exempt while coaching fees carry 18 %.
+- [ ] A second child from the same family gets a 10 % sibling discount.
 > The others are real business rules — essential complexity. The parser was added by developers.
 ::q single
 "We don't need unit tests yet — YAGNI." What's wrong with this argument?

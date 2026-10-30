@@ -52,7 +52,7 @@ Software is full of odd-looking sinks. "Why do we use PostgreSQL full-text searc
 - **blindly accept** the decision, even when the reason no longer applies, or
 - **blindly change** it, and rediscover the original problem the hard way.
 
-An ADR is the note taped inside the cabinet: *"Sink is here because the main drain runs here. Moving it means re-routing the drain. Decided 2026-03-14 by the site team."* It is short. It is dated. And it is never edited later. If the decision changes, you write a **new** note that says "this replaces the old one".
+An ADR is the note taped inside the cabinet: *"Sink is here because the main drain runs here. Moving it means re-routing the drain. Decided 2026-03-14 by the builder."* It is short. It is dated. And it is never edited later. If the decision changes, you write a **new** note that says "this replaces the old one".
 
 Analogy two: a court judgement. It states the facts (context), the ruling (decision) and its effects (consequences). Later judgements can overrule it, but nobody rewrites the old judgement. They cite it.
 
@@ -202,7 +202,7 @@ This is the everyday workflow. The ADR is a pull request like any other change. 
 
 ## Step-by-step example
 
-Scenario: a document-management module for an engineering consultancy. Users upload drawings, contracts and inspection reports as PDFs. They want to search inside them.
+Scenario: the medical-records module of a hospital chain with 14 hospitals. Staff upload lab reports, discharge summaries and prescriptions as PDFs. Doctors and the records desk want to search inside them.
 
 ### Step 1 — notice that a decision is needed
 
@@ -221,12 +221,12 @@ Proposed
 
 ## Context
 
-The Document Library holds 1.8 M PDFs (drawings, contracts, inspection reports) with
-text extracted at upload. Search currently uses ILIKE with leading wildcards, which
-cannot use an index. Measured p95 latency on staging is 2-6 s. About 4,000 searches
-run per working day (application logs, Feb 2026). Target: p95 under 500 ms.
+The Records Library holds 1.8 M PDFs (lab reports, discharge summaries,
+prescriptions) with text extracted at upload. Search currently uses ILIKE with
+leading wildcards, which cannot use an index. Measured p95 latency on staging is
+2-6 s. About 4,000 searches run per working day (application logs, Feb 2026). Target: p95 under 500 ms.
 
-Most searches are exact terms: drawing numbers, contract clause numbers, chainages.
+Most searches are exact terms: drug names, lab test names, doctor names.
 Fuzzy matching was requested by 2 of 31 surveyed users.
 
 The platform team is four engineers. Nobody has run a search cluster in production.
@@ -251,12 +251,15 @@ ordering. We will not introduce Elasticsearch or OpenSearch at this time.
 
 Positive
 - No new infrastructure. Backups, failover and access control stay as they are.
+- Patient data stays in one store, so the existing row-level access rules and audit
+  logging also cover search. A second store would need its own copy of both.
 - Search results are transactionally consistent with document metadata.
 - Prototype on a staging copy: p95 of 40-120 ms for single-term queries.
 
 Negative
 - Relevance ranking is basic. No synonyms, no typo tolerance, no per-field boosting
-  beyond setweight.
+  beyond setweight. (The pg_trgm extension could add simple typo-tolerant matching
+  on drug names later, at the cost of a second index.)
 - Index build adds write cost on upload. Acceptable at ~1,600 uploads a day.
 - Heavy search load shares CPU with transactional queries on the primary.
 
@@ -267,7 +270,7 @@ Follow-up
 Revisit when
 - the corpus passes 10 M documents, or
 - p95 search latency exceeds 500 ms for a week, or
-- fuzzy or multilingual search becomes a contractual requirement.
+- fuzzy or multilingual search becomes a hard requirement.
 ```
 
 ### Step 4 — review and accept
@@ -276,7 +279,7 @@ The ADR goes up as a PR. A reviewer asks: "What about Hindi-language documents?"
 
 ### Step 5 — eighteen months later, supersede it
 
-The firm wins a large state contract. The contract requires multilingual, typo-tolerant search over 14 M documents. Two revisit triggers have fired. A new ADR-0015, "Move document search to OpenSearch", cites ADR-0007 and explains what changed. ADR-0007's status line becomes "Superseded by ADR-0015". Nobody needs to argue about whether ADR-0007 was a mistake. It records that it was the right call for its time.
+The chain merges with a larger group. The combined archive is 14 M documents, many in Hindi and Marathi, and doctors now need typo-tolerant search on drug and test names. Two revisit triggers have fired. A new ADR-0015, "Move document search to OpenSearch", cites ADR-0007 and explains what changed. ADR-0007's status line becomes "Superseded by ADR-0015". Nobody needs to argue about whether ADR-0007 was a mistake. It records that it was the right call for its time.
 
 ## Production-style C# implementation
 
@@ -590,21 +593,21 @@ Problems:
 **Good version (abridged):**
 
 ```text
-# 12. Use a shared Redis cache for tender search results
+# 12. Use a shared Redis cache for medicine search results
 
 ## Status
 Accepted
 
 ## Context
-The tender portal runs 3 API instances behind a load balancer. Tender search
+The online pharmacy runs 3 API instances behind a load balancer. Medicine search
 (p95 1.4 s, measured) is called about 90 k times a day, and 70 % of calls repeat
 one of ~2,000 popular filter combinations (log sample, 7 days). Results may be up
-to 5 minutes stale per product owner. Each instance caching separately would give
+to 5 minutes stale per product owner, because checkout re-checks stock and price. Each instance caching separately would give
 a lower hit ratio and inconsistent results between instances. The ops team
 already runs a managed Redis for sessions.
 
 ## Decision
-We will cache tender search results in the existing managed Redis via HybridCache
+We will cache medicine search results in the existing managed Redis via HybridCache
 (in-process L1 plus Redis L2), keyed by normalised filter, with a 5 minute TTL.
 
 ## Consequences
@@ -612,7 +615,7 @@ Positive: estimated p95 under 50 ms for cache hits, less load on PostgreSQL.
 Negative: results can be up to 5 minutes stale; a Redis outage falls back to the
 database at full load, so the DB must still handle peak without cache.
 Follow-up: add hit-ratio and fallback-rate metrics.
-Revisit when: product requires real-time tender status in search results.
+Revisit when: product requires real-time stock levels in search results.
 ```
 
 :::callout type=mistake title="ADR theatre"
@@ -688,7 +691,7 @@ public static class Program
 ## Exercises
 
 :::exercise id=m02-adr-ex1 difficulty=beginner kind=written title="Write your first ADR"
-A small team builds an internal attendance app for 300 site staff across 12 project offices. It runs as **one** ASP.NET Core instance on a single VM. The employee master list (about 300 rows) is read on almost every request and changes maybe twice a week. A developer proposes adding Redis. Another says `IMemoryCache` is enough.
+A small team builds an internal attendance app for 300 trainers and front-desk staff across 12 gym branches. It runs as **one** ASP.NET Core instance on a single VM. The employee master list (about 300 rows) is read on almost every request and changes maybe twice a week. A developer proposes adding Redis. Another says `IMemoryCache` is enough.
 
 Write a full ADR (Nygard format) that records the decision you would make. Use realistic numbers and include at least two negative consequences and one revisit trigger.
 ::acceptance
@@ -717,7 +720,7 @@ Accepted
 
 ## Context
 
-The attendance app serves 300 site staff in 12 project offices from a single
+The attendance app serves 300 gym staff in 12 branches from a single
 ASP.NET Core instance on one VM. Nearly every request reads the employee master
 (about 300 rows, roughly 150 KB serialised, estimated). The list changes about
 twice a week through the HR admin screen. Reading it from PostgreSQL adds an

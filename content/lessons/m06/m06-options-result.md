@@ -24,7 +24,7 @@ references:
     url: https://learn.microsoft.com/dotnet/standard/exceptions/best-practices-for-exceptions
 ---
 
-This lesson pairs two patterns that fix two kinds of dishonesty in code. **Options** fixes configuration that lies: settings read as loose strings, mistyped, and discovered to be wrong at 2 a.m. **Result** fixes method signatures that lie: `Task<PayoutReceipt> ReleaseAsync(...)` promises a receipt, but sometimes throws because the bill wasn't approved. That's not a bug. It's an everyday business outcome.
+This lesson pairs two patterns that fix two kinds of dishonesty in code. **Options** fixes configuration that lies: settings read as loose strings, mistyped, and discovered to be wrong at 2 a.m. **Result** fixes method signatures that lie: `Task<PayoutReceipt> ReleaseAsync(...)` promises a receipt, but sometimes throws because the seller's settlement wasn't approved yet. That's not a bug. It's an everyday business outcome.
 
 ## Learning objectives
 
@@ -45,17 +45,17 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-**Options: the site's standing instructions.** Before a road project starts, the project office pins a **signed instruction sheet** in the site office: maximum single payment ₹50 lakh, daily payment limit ₹2 crore, payment gateway address. Engineers don't phone head office each time to ask "what's the limit again?" They read the sheet. And the sheet is **checked before work starts**. If someone wrote "daily limit ₹10" or left the gateway address blank, the project doesn't begin until it's fixed.
+**Options: the finance desk's standing instructions.** An online marketplace pays its sellers every week. Before the payout run starts, the finance team pins a **signed instruction sheet** on the desk: maximum single payout ₹50 lakh, daily payout limit ₹2 crore, payment gateway address. Clerks don't phone the finance head each time to ask "what's the limit again?" They read the sheet. And the sheet is **checked before the run starts**. If someone wrote "daily limit ₹10" or left the gateway address blank, no payouts go out until it's fixed.
 
 - The sheet is an **options class**: typed settings in one object.
 - Checking it before work starts is **validation on start** (`ValidateOnStart`).
-- Some sheets are fixed for the whole project (`IOptions`), some are re-read each morning (`IOptionsSnapshot`), and some are on a live notice board that updates the moment head office changes it (`IOptionsMonitor`).
+- Some sheets are fixed for the whole year (`IOptions`), some are re-read each morning (`IOptionsSnapshot`), and some are on a live notice board that updates the moment head office changes it (`IOptionsMonitor`).
 
-**Result: an honest reply slip.** When a contractor asks the accounts clerk to release payment for a running bill, the clerk returns a slip that says *either* "Paid, UTR 4511…" *or* "Not paid, reason: bill not approved by the engineer-in-charge". Both are normal answers. The clerk doesn't faint (throw an exception) because a bill isn't approved yet. They write the reason on the slip.
+**Result: an honest reply slip.** When a seller asks the finance desk to release this week's settlement, the clerk returns a slip that says *either* "Paid, UTR 4511…" *or* "Not paid, reason: settlement not approved yet (a customer return is still open)". Both are normal answers. The clerk doesn't faint (throw an exception) because a settlement isn't approved yet. They write the reason on the slip.
 
 - The slip is a **Result**: it holds either a value or an error.
 - The reason is an **error value**, with a code and a message.
-- If the building is on fire (the database is down), the clerk does stop and raise the alarm. That's a real **exception**.
+- If the office is on fire (the database is down), the clerk does stop and raise the alarm. That's a real **exception**.
 
 ## First-principles explanation
 
@@ -69,7 +69,7 @@ By the end of this lesson you will be able to:
 
 **The problem it solves.** `config["Payouts:DailyLimit"]` scattered through code is stringly typed: typos give `null`, and parsing happens everywhere. There's also no single place to say what's valid. A typo in `appsettings.Production.json` stays hidden until the first payout request fails.
 
-**How it works.** `services.AddOptions<PayoutOptions>().BindConfiguration("Payouts")` registers a configuration step. When someone first asks for the options, the framework creates an instance, runs every `Configure`/`Bind` step, then runs every validator (`IValidateOptions<T>`). If any validator fails, it throws `OptionsValidationException` listing all failures. `ValidateOnStart()` forces that first creation during host start-up, so the app refuses to start with bad configuration.
+**How it works.** `services.AddOptions<PayoutOptions>().BindConfiguration("Payouts")` registers a configuration step. When someone first asks for the options, the framework creates an instance, runs every `Configure`/`Bind` step, then runs every validator (`IValidateOptions<T>`). If any validator fails, it throws `OptionsValidationException` listing all failures. `ValidateOnStart()` forces that first creation during host start-up, so the app refuses to start with bad configuration. In .NET 8 and later you can also mark a partial class with `[OptionsValidator]` to have the validator generated at compile time, which avoids reflection and works with Native AOT.
 
 **The three interfaces:**
 
@@ -81,13 +81,13 @@ By the end of this lesson you will be able to:
 
 All three also support **named options** (`Get("primary")`, `Get("backup")`) for several configurations of the same type, such as two payment gateways.
 
-**When not to use it.** For values that change per request or per tenant and live in a database (tenant-specific payment limits), options are the wrong tool. Load them through a service, perhaps cached. For secrets, bind options from a secret store (Azure Key Vault, environment variables). Never commit them to `appsettings.json`.
+**When not to use it.** For values that change per request or per tenant and live in a database (seller-specific payout limits), options are the wrong tool. Load them through a service, perhaps cached. For secrets, bind options from a secret store (Azure Key Vault, environment variables). Never commit them to `appsettings.json`.
 
 ### Result pattern
 
 **What it is.** A return type that holds **either** a success value **or** an error, never both: `Result<PayoutReceipt>`. Callers must look at which one they got. Errors are **values**: a code, a message and a category.
 
-**The problem it solves.** Exceptions are invisible in signatures. A caller of `ReleaseAsync` can't tell from the type that "bill not approved" is a normal outcome, so they forget to handle it, and it surfaces as a 500 error. Teams then write `try/catch` around business calls to turn exceptions into HTTP codes, a hidden `goto` that's easy to get wrong. Exceptions also cost more than return values: capturing a stack trace is expensive compared to returning an object. That doesn't matter for rare failures, but it's noticeable when "invalid input" happens on thousands of requests a minute (an estimate that depends on the workload; measure before optimising).
+**The problem it solves.** Exceptions are invisible in signatures. A caller of `ReleaseAsync` can't tell from the type that "settlement not approved" is a normal outcome, so they forget to handle it, and it surfaces as a 500 error. Teams then write `try/catch` around business calls to turn exceptions into HTTP codes, a hidden `goto` that's easy to get wrong. Exceptions also cost more than return values: capturing a stack trace is expensive compared to returning an object. That doesn't matter for rare failures, but it's noticeable when "invalid input" happens on thousands of requests a minute (an estimate that depends on the workload; measure before optimising).
 
 **How it works.** `Result<T>` exposes `IsSuccess`, `Value` and `Error`, plus combinators:
 
@@ -100,7 +100,7 @@ All three also support **named options** (`Get("primary")`, `Get("backup")`) for
 
 | Return a Result (expected) | Throw an exception (exceptional) |
 |---|---|
-| Bill not found, not approved, or over the limit | Database or network down, timeout |
+| Settlement not found, not approved, or over the limit | Database or network down, timeout |
 | Validation failures on user input | Bugs: null where impossible, broken invariants |
 | Business rule rejections ("slot already booked") | Misconfiguration discovered at runtime |
 | Anything the caller can reasonably act on | Anything the caller can't fix, which goes to a global handler (500/503) |
@@ -135,8 +135,8 @@ classDiagram
         +CurrentValue
         +OnChange(listener)
     }
-    class BillPayoutService {
-        +ReleaseAsync(Guid billId) Result
+    class SettlementPayoutService {
+        +ReleaseAsync(Guid settlementId) Result
     }
     class Result {
         +bool IsSuccess
@@ -163,14 +163,14 @@ classDiagram
     }
     PayoutOptionsValidator ..> PayoutOptions : validates
     IOptionsMonitor ..> PayoutOptions : supplies
-    BillPayoutService --> IOptionsMonitor : reads CurrentValue
-    BillPayoutService ..> Result : returns
+    SettlementPayoutService --> IOptionsMonitor : reads CurrentValue
+    SettlementPayoutService ..> Result : returns
     Result o-- Error
     Error --> ErrorType
     ResultHttpExtensions ..> Error : maps to ProblemDetails
 ```
 
-How to read it: the top half is **Options**. `PayoutOptions` is a plain class, `PayoutOptionsValidator` checks rules that span several fields, and `IOptionsMonitor` (the generic `IOptionsMonitor<PayoutOptions>`) hands the current value to the singleton `BillPayoutService`. The bottom half is **Result**: the service returns `Result<PayoutReceipt>`, which carries either a receipt or an `Error`. `ResultHttpExtensions`, at the web boundary, is the only class that knows how an `ErrorType` becomes an HTTP status. The domain never mentions HTTP.
+How to read it: the top half is **Options**. `PayoutOptions` is a plain class, `PayoutOptionsValidator` checks rules that span several fields, and `IOptionsMonitor` (the generic `IOptionsMonitor<PayoutOptions>`) hands the current value to the singleton `SettlementPayoutService`. The bottom half is **Result**: the service returns `Result<PayoutReceipt>`, which carries either a receipt or an `Error`. `ResultHttpExtensions`, at the web boundary, is the only class that knows how an `ErrorType` becomes an HTTP status. The domain never mentions HTTP.
 
 ### Sequence diagram
 
@@ -179,7 +179,7 @@ sequenceDiagram
     participant Host
     participant V as Options validators
     participant API as POST payouts endpoint
-    participant S as BillPayoutService
+    participant S as SettlementPayoutService
     participant M as IOptionsMonitor
     participant X as ResultHttpExtensions
     Host->>V: ValidateOnStart - build PayoutOptions
@@ -188,10 +188,10 @@ sequenceDiagram
     else valid
         V-->>Host: ok, start listening
     end
-    API->>S: ReleaseAsync(billId)
+    API->>S: ReleaseAsync(settlementId)
     S->>M: CurrentValue
     M-->>S: limits (latest reload)
-    S->>S: load bill, Ensure approved, Ensure under limits
+    S->>S: load settlement, Ensure approved, Ensure under limits
     alt rule fails
         S-->>API: Result failure - Error payout.daily_limit, Conflict
         API->>X: ToProblem(error)
@@ -210,13 +210,13 @@ Two moments matter. At **start-up**, `ValidateOnStart` builds and validates the 
 ### Step 1 — the naive version
 
 ```csharp
-public async Task<PayoutReceipt> ReleaseAsync(Guid billId)
+public async Task<PayoutReceipt> ReleaseAsync(Guid settlementId)
 {
     var max = decimal.Parse(_config["Payouts:MaxSingle"]!);              // typo-prone, parsed every call
-    var bill = await _bills.GetAsync(billId) ?? throw new KeyNotFoundException();
-    if (bill.Status != BillStatus.Approved) throw new InvalidOperationException("Not approved");
-    if (bill.NetPayableInr > max) throw new ArgumentException("Too large");
-    return await _gateway.PayAsync(bill);
+    var settlement = await _settlements.GetAsync(settlementId) ?? throw new KeyNotFoundException();
+    if (settlement.Status != SettlementStatus.Approved) throw new InvalidOperationException("Not approved");
+    if (settlement.NetPayableInr > max) throw new ArgumentException("Too large");
+    return await _gateway.PayAsync(settlement);
 }
 // Controller: try { ... } catch (KeyNotFoundException) { 404 } catch (InvalidOperationException) { 409 } ...
 ```
@@ -227,7 +227,7 @@ Create `PayoutOptions`, bind it, validate it with attributes plus a cross-field 
 
 ### Step 3 — errors as values
 
-Return `Result<PayoutReceipt>`. Each business rejection becomes an `Error` with a stable code (`bill.not_approved`), which clients and logs can rely on.
+Return `Result<PayoutReceipt>`. Each business rejection becomes an `Error` with a stable code (`settlement.not_approved`), which clients and logs can rely on.
 
 ### Step 4 — one mapping to HTTP
 
@@ -240,7 +240,7 @@ Payouts.Api/
   Program.cs
   Options/PayoutOptions.cs
   Results/Error.cs, Result.cs, ResultHttpExtensions.cs
-  Payouts/Bills.cs, BillPayoutService.cs
+  Payouts/Settlements.cs, SettlementPayoutService.cs
 ```
 
 ### Options
@@ -372,27 +372,27 @@ public static class ResultHttpExtensions
 
 ### The service
 
-```csharp file=Payouts/Bills.cs
-namespace Payouts.Billing;
+```csharp file=Payouts/Settlements.cs
+namespace Payouts.Settlements;
 
-public enum BillStatus { Submitted, Approved, Paid, Rejected }
+public enum SettlementStatus { Submitted, Approved, Paid, Rejected }
 
-public sealed class RunningBill
+public sealed class SellerSettlement
 {
     public required Guid Id { get; init; }
-    public required string ContractorName { get; init; }
+    public required string SellerName { get; init; }
     public required string BankAccountRef { get; init; }
     public decimal NetPayableInr { get; init; }
-    public BillStatus Status { get; set; }
+    public SettlementStatus Status { get; set; }
 }
 
-public sealed record PayoutReceipt(Guid BillId, string Utr, decimal AmountInr, DateTimeOffset PaidAt);
+public sealed record PayoutReceipt(Guid SettlementId, string Utr, decimal AmountInr, DateTimeOffset PaidAt);
 
-public interface IBillStore
+public interface ISettlementStore
 {
-    Task<RunningBill?> GetAsync(Guid id, CancellationToken ct);
+    Task<SellerSettlement?> GetAsync(Guid id, CancellationToken ct);
     Task<decimal> PaidTodayAsync(DateOnly day, CancellationToken ct);
-    Task MarkPaidAsync(RunningBill bill, PayoutReceipt receipt, CancellationToken ct);
+    Task MarkPaidAsync(SellerSettlement settlement, PayoutReceipt receipt, CancellationToken ct);
 }
 
 public sealed record GatewayResponse(bool Accepted, string? Utr, string? DeclineReason);
@@ -404,19 +404,19 @@ public interface IPaymentGateway
     Task<GatewayResponse> TransferAsync(string accountRef, decimal amountInr, string idempotencyKey, CancellationToken ct);
 }
 
-public sealed class InMemoryBillStore : IBillStore
+public sealed class InMemorySettlementStore : ISettlementStore
 {
-    private readonly Dictionary<Guid, RunningBill> _bills = new();
+    private readonly Dictionary<Guid, SellerSettlement> _settlements = new();
     private readonly List<PayoutReceipt> _paid = new();
     private readonly object _gate = new();
 
-    public InMemoryBillStore(IEnumerable<RunningBill> seed) { foreach (var b in seed) _bills[b.Id] = b; }
+    public InMemorySettlementStore(IEnumerable<SellerSettlement> seed) { foreach (var b in seed) _settlements[b.Id] = b; }
 
-    public Task<RunningBill?> GetAsync(Guid id, CancellationToken ct) { lock (_gate) return Task.FromResult(_bills.GetValueOrDefault(id)); }
+    public Task<SellerSettlement?> GetAsync(Guid id, CancellationToken ct) { lock (_gate) return Task.FromResult(_settlements.GetValueOrDefault(id)); }
     public Task<decimal> PaidTodayAsync(DateOnly day, CancellationToken ct)
     { lock (_gate) return Task.FromResult(_paid.Where(p => DateOnly.FromDateTime(p.PaidAt.UtcDateTime) == day).Sum(p => p.AmountInr)); }
-    public Task MarkPaidAsync(RunningBill bill, PayoutReceipt receipt, CancellationToken ct)
-    { lock (_gate) { bill.Status = BillStatus.Paid; _paid.Add(receipt); } return Task.CompletedTask; }
+    public Task MarkPaidAsync(SellerSettlement settlement, PayoutReceipt receipt, CancellationToken ct)
+    { lock (_gate) { settlement.Status = SettlementStatus.Paid; _paid.Add(receipt); } return Task.CompletedTask; }
 }
 
 public sealed class FakePaymentGateway : IPaymentGateway
@@ -427,41 +427,41 @@ public sealed class FakePaymentGateway : IPaymentGateway
 }
 ```
 
-```csharp file=Payouts/BillPayoutService.cs
+```csharp file=Payouts/SettlementPayoutService.cs
 using Microsoft.Extensions.Options;
 using Payouts.Options;
 using Payouts.Results;
 
-namespace Payouts.Billing;
+namespace Payouts.Settlements;
 
 /// <summary>Singleton. Uses IOptionsMonitor so limit changes in configuration apply without a restart.</summary>
-public sealed class BillPayoutService(IBillStore bills, IPaymentGateway gateway, IOptionsMonitor<PayoutOptions> options, TimeProvider clock)
+public sealed class SettlementPayoutService(ISettlementStore settlements, IPaymentGateway gateway, IOptionsMonitor<PayoutOptions> options, TimeProvider clock)
 {
-    public async Task<Result<PayoutReceipt>> ReleaseAsync(Guid billId, CancellationToken ct)
+    public async Task<Result<PayoutReceipt>> ReleaseAsync(Guid settlementId, CancellationToken ct)
     {
         var limits = options.CurrentValue;              // read once per operation: consistent within this call
-        var bill = await bills.GetAsync(billId, ct);
-        if (bill is null) return Error.NotFound("bill.not_found", $"Running bill {billId} does not exist.");
+        var settlement = await settlements.GetAsync(settlementId, ct);
+        if (settlement is null) return Error.NotFound("settlement.not_found", $"Settlement {settlementId} does not exist.");
 
-        var checkedBill = Result<RunningBill>.Success(bill)
-            .Ensure(b => b.Status != BillStatus.Paid, b => Error.Conflict("bill.already_paid", "This bill has already been paid."))
-            .Ensure(b => b.Status == BillStatus.Approved, b => Error.Conflict("bill.not_approved", $"Bill is {b.Status}; only approved bills can be paid."))
+        var checkedSettlement = Result<SellerSettlement>.Success(settlement)
+            .Ensure(b => b.Status != SettlementStatus.Paid, b => Error.Conflict("settlement.already_paid", "This settlement has already been paid."))
+            .Ensure(b => b.Status == SettlementStatus.Approved, b => Error.Conflict("settlement.not_approved", $"Settlement is {b.Status}; only approved settlements can be paid."))
             .Ensure(b => b.NetPayableInr <= limits.MaxSingleTransferInr, b => Error.Validation("payout.over_single_limit",
                 $"₹{b.NetPayableInr:N0} exceeds the single-transfer limit of ₹{limits.MaxSingleTransferInr:N0}; split the payment."));
-        if (checkedBill.IsFailure) return checkedBill.Error;
+        if (checkedSettlement.IsFailure) return checkedSettlement.Error;
 
         var now = clock.GetUtcNow();
-        var paidToday = await bills.PaidTodayAsync(DateOnly.FromDateTime(now.UtcDateTime), ct);
-        if (paidToday + bill.NetPayableInr > limits.DailyLimitInr)
+        var paidToday = await settlements.PaidTodayAsync(DateOnly.FromDateTime(now.UtcDateTime), ct);
+        if (paidToday + settlement.NetPayableInr > limits.DailyLimitInr)
             return Error.Conflict("payout.daily_limit", $"Today's limit of ₹{limits.DailyLimitInr:N0} would be exceeded; retry tomorrow.");
 
         // Infrastructure failures (network, timeout) are exceptions: let them propagate to the global handler.
-        var response = await gateway.TransferAsync(bill.BankAccountRef, bill.NetPayableInr, idempotencyKey: $"bill-{bill.Id}", ct);
+        var response = await gateway.TransferAsync(settlement.BankAccountRef, settlement.NetPayableInr, idempotencyKey: $"settlement-{settlement.Id}", ct);
         if (!response.Accepted)
             return Error.Conflict("payout.declined", response.DeclineReason ?? "The bank declined the transfer.");
 
-        var receipt = new PayoutReceipt(bill.Id, response.Utr!, bill.NetPayableInr, now);
-        await bills.MarkPaidAsync(bill, receipt, ct);
+        var receipt = new PayoutReceipt(settlement.Id, response.Utr!, settlement.NetPayableInr, now);
+        await settlements.MarkPaidAsync(settlement, receipt, ct);
         return receipt;                                  // implicit conversion to Result<PayoutReceipt>
     }
 }
@@ -471,7 +471,7 @@ public sealed class BillPayoutService(IBillStore bills, IPaymentGateway gateway,
 
 ```csharp file=Program.cs
 using Microsoft.Extensions.Options;
-using Payouts.Billing;
+using Payouts.Settlements;
 using Payouts.Options;
 using Payouts.Results;
 
@@ -484,13 +484,13 @@ builder.Services.AddOptions<PayoutOptions>()
 builder.Services.AddSingleton<IValidateOptions<PayoutOptions>, PayoutOptionsValidator>();   // cross-field rules
 
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<IBillStore>(new InMemoryBillStore(new[]
+builder.Services.AddSingleton<ISettlementStore>(new InMemorySettlementStore(new[]
 {
-    new RunningBill { Id = Guid.Parse("11111111-1111-1111-1111-111111111111"), ContractorName = "Sahyadri Infra",
-                      BankAccountRef = "acct-ref-001", NetPayableInr = 1_850_000m, Status = BillStatus.Approved },
+    new SellerSettlement { Id = Guid.Parse("11111111-1111-1111-1111-111111111111"), SellerName = "Sahyadri Handlooms",
+                      BankAccountRef = "acct-ref-001", NetPayableInr = 1_850_000m, Status = SettlementStatus.Approved },
 }));
 builder.Services.AddSingleton<IPaymentGateway, FakePaymentGateway>();
-builder.Services.AddSingleton<BillPayoutService>();
+builder.Services.AddSingleton<SettlementPayoutService>();
 
 builder.Services.AddProblemDetails();    // uniform ProblemDetails for unhandled exceptions and status codes
 
@@ -498,7 +498,7 @@ var app = builder.Build();
 app.UseExceptionHandler();               // exceptions -> 500 ProblemDetails (no stack trace leaked)
 app.UseStatusCodePages();
 
-app.MapPost("/bills/{id:guid}/payout", async (Guid id, BillPayoutService payouts, CancellationToken ct) =>
+app.MapPost("/settlements/{id:guid}/payout", async (Guid id, SettlementPayoutService payouts, CancellationToken ct) =>
     (await payouts.ReleaseAsync(id, ct)).ToHttpResult(receipt => TypedResults.Ok(receipt)));
 
 // IOptionsSnapshot: scoped, recomputed per request. Fine here, because endpoints are per request.
@@ -508,21 +508,21 @@ app.MapGet("/payout-limits", (IOptionsSnapshot<PayoutOptions> snapshot) =>
 app.Run();
 ```
 
-A response for an unapproved bill looks like this:
+A response for an unapproved settlement looks like this:
 
 ```json
 {
-  "type": "https://errors.payouts.example.in/bill.not_approved",
+  "type": "https://errors.payouts.example.in/settlement.not_approved",
   "title": "Request conflicts with current state",
   "status": 409,
-  "detail": "Bill is Submitted; only approved bills can be paid.",
-  "code": "bill.not_approved"
+  "detail": "Settlement is Submitted; only approved settlements can be paid.",
+  "code": "settlement.not_approved"
 }
 ```
 
 ## Bad design vs good design
 
-**Bad: `IOptionsSnapshot<T>` in a singleton.** `AddSingleton<BillPayoutService>()` with a constructor taking `IOptionsSnapshot<PayoutOptions>`. The snapshot is scoped, so this is a captive dependency. With scope validation on, start-up fails; without it, the singleton freezes the first request's values. Use `IOptionsMonitor<T>` in singletons.
+**Bad: `IOptionsSnapshot<T>` in a singleton.** `AddSingleton<SettlementPayoutService>()` with a constructor taking `IOptionsSnapshot<PayoutOptions>`. The snapshot is scoped, so this is a captive dependency. With scope validation on, start-up fails; without it, the singleton freezes the first request's values. Use `IOptionsMonitor<T>` in singletons.
 
 **Bad: reading `.Value` in the constructor and caching it in a singleton,** then wondering why reloads don't apply. That's fine if you *want* fixed values, so use `IOptions<T>` and say so. If you want live values, read `monitor.CurrentValue` per operation.
 
@@ -530,7 +530,7 @@ A response for an unapproved bill looks like this:
 
 **Bad: Results that swallow real failures.** `catch (Exception ex) { return Error.Unexpected(ex.Message); }` around everything hides outages from your exception handler, metrics and alerting, and can leak internal messages to clients. Let infrastructure exceptions propagate.
 
-**Bad: stringly-typed errors.** `Result.Fail("Bill not approved!!")`. Clients can't branch on text, and translations break it. Use stable `Code`s.
+**Bad: stringly-typed errors.** `Result.Fail("Settlement not approved!!")`. Clients can't branch on text, and translations break it. Use stable `Code`s.
 
 **Good:** validated options with `ValidateOnStart`, the right options interface per lifetime, `Result<T>` for expected business outcomes with stable codes, exceptions for the exceptional, and one mapping to ProblemDetails.
 
@@ -658,7 +658,7 @@ using Xunit;
 
 public class ResultTests
 {
-    private static readonly Error NotApproved = new("bill.not_approved", "Bill is not approved.");
+    private static readonly Error NotApproved = new("settlement.not_approved", "Settlement is not approved.");
 
     [Fact]
     public void Success_exposes_value()
@@ -675,7 +675,7 @@ public class ResultTests
     {
         var r = Result<int>.Failure(NotApproved);
         Assert.True(r.IsFailure);
-        Assert.Equal("bill.not_approved", r.Error.Code);
+        Assert.Equal("settlement.not_approved", r.Error.Code);
         Assert.Throws<InvalidOperationException>(() => r.Value);
     }
 
@@ -688,7 +688,7 @@ public class ResultTests
     {
         int okCalls = 0, failCalls = 0;
         var text = Result<int>.Failure(NotApproved).Match(v => { okCalls++; return $"ok {v}"; }, e => { failCalls++; return e.Code; });
-        Assert.Equal("bill.not_approved", text);
+        Assert.Equal("settlement.not_approved", text);
         Assert.Equal(0, okCalls);
         Assert.Equal(1, failCalls);
     }
@@ -750,7 +750,7 @@ Indian commercial SMS needs a registered 6-character sender ID (header). Write `
 - `SmsSetup.Register(services, configure)` adds the options with the delegate and registers the validator.
 ::acceptance
 - Valid options produce `ValidateOptionsResult.Success`.
-- `SenderId = "Rodic1"`, `BaseUrl = "http://x"` and `MaxPerMinute = 0` give three failures.
+- `SenderId = "Qkcar1"`, `BaseUrl = "http://x"` and `MaxPerMinute = 0` give three failures.
 - Resolving `IOptions<SmsGatewayOptions>.Value` with invalid values throws `OptionsValidationException`.
 ::hint
 Collect messages in a `List<string>`, and return `ValidateOptionsResult.Fail(list)` if it's not empty.
@@ -798,7 +798,7 @@ using Xunit;
 
 public class SmsOptionsTests
 {
-    private static SmsGatewayOptions Valid() => new() { SenderId = "RODICH", BaseUrl = "https://sms.example.in/api", MaxPerMinute = 120 };
+    private static SmsGatewayOptions Valid() => new() { SenderId = "QKCART", BaseUrl = "https://sms.example.in/api", MaxPerMinute = 120 };
 
     [Fact]
     public void Valid_options_pass() =>
@@ -807,16 +807,16 @@ public class SmsOptionsTests
     [Fact]
     public void All_failures_reported()
     {
-        var r = new SmsGatewayOptionsValidator().Validate(null, new SmsGatewayOptions { SenderId = "Rodic1", BaseUrl = "http://x", MaxPerMinute = 0 });
+        var r = new SmsGatewayOptionsValidator().Validate(null, new SmsGatewayOptions { SenderId = "Qkcar1", BaseUrl = "http://x", MaxPerMinute = 0 });
         Assert.True(r.Failed);
         Assert.Equal(3, r.Failures!.Count());
     }
 
     [Theory]
-    [InlineData("RODIC", false)]
-    [InlineData("RODICHB", false)]
-    [InlineData("rodich", false)]
-    [InlineData("RODICH", true)]
+    [InlineData("QKCAR", false)]
+    [InlineData("QKCARTS", false)]
+    [InlineData("qkcart", false)]
+    [InlineData("QKCART", true)]
     public void Sender_id_rules(string senderId, bool ok)
     {
         var o = Valid(); o.SenderId = senderId;
@@ -835,9 +835,9 @@ public class SmsOptionsTests
     [Fact]
     public void Resolving_valid_options_works()
     {
-        using var sp = SmsSetup.Register(new ServiceCollection(), o => { o.SenderId = "RODICH"; o.BaseUrl = "https://ok.in"; o.MaxPerMinute = 600; })
+        using var sp = SmsSetup.Register(new ServiceCollection(), o => { o.SenderId = "QKCART"; o.BaseUrl = "https://ok.in"; o.MaxPerMinute = 600; })
             .BuildServiceProvider();
-        Assert.Equal("RODICH", sp.GetRequiredService<IOptions<SmsGatewayOptions>>().Value.SenderId);
+        Assert.Equal("QKCART", sp.GetRequiredService<IOptions<SmsGatewayOptions>>().Value.SenderId);
     }
 }
 ```
@@ -1075,26 +1075,26 @@ public class ProblemMapperTests
     [InlineData(ErrorType.Validation, 400, "Invalid request")]
     public void Maps_category(ErrorType type, int status, string title)
     {
-        var p = ProblemMapper.ToProblemDetails(new Error("x.y", "msg", type), "/bills/1/payout");
+        var p = ProblemMapper.ToProblemDetails(new Error("x.y", "msg", type), "/settlements/1/payout");
         Assert.Equal(status, p.Status);
         Assert.Equal(title, p.Title);
         Assert.Equal("msg", p.Detail);
-        Assert.Equal("/bills/1/payout", p.Instance);
+        Assert.Equal("/settlements/1/payout", p.Instance);
     }
 
     [Fact]
     public void Type_and_code_extension()
     {
-        var p = ProblemMapper.ToProblemDetails(new Error("bill.not_approved", "Not approved", ErrorType.Conflict), "/b");
-        Assert.Equal("https://errors.example.in/bill.not_approved", p.Type);
-        Assert.Equal("bill.not_approved", p.Extensions["code"]);
+        var p = ProblemMapper.ToProblemDetails(new Error("settlement.not_approved", "Not approved", ErrorType.Conflict), "/b");
+        Assert.Equal("https://errors.example.in/settlement.not_approved", p.Type);
+        Assert.Equal("settlement.not_approved", p.Extensions["code"]);
     }
 
     [Fact]
     public void Field_errors_become_validation_problem()
     {
         var fields = new Dictionary<string, string[]> { ["NetPayableInr"] = new[] { "Must be positive." } };
-        var p = ProblemMapper.ToProblemDetails(new Error("bill.invalid", "Invalid bill", ErrorType.Validation, fields), "/b");
+        var p = ProblemMapper.ToProblemDetails(new Error("settlement.invalid", "Invalid settlement", ErrorType.Validation, fields), "/b");
         var v = Assert.IsType<HttpValidationProblemDetails>(p);
         Assert.Equal(400, v.Status);
         Assert.Equal("Must be positive.", v.Errors["NetPayableInr"][0]);
@@ -1146,12 +1146,12 @@ Should validation be 400 or 422? Both are used. 400 is ASP.NET Core's default fo
 :::
 
 :::exercise id=m06-options-result-ex5 difficulty=advanced kind=code title="Refactor an exception-driven booking service to Results"
-A site-inspection booking service throws for every business outcome:
+A clinic's doctor-appointment booking service throws for every business outcome:
 
 ```csharp
 public Booking Book(BookingRequest r)
 {
-    if (string.IsNullOrWhiteSpace(r.InspectorId)) throw new ArgumentException("Inspector required");
+    if (string.IsNullOrWhiteSpace(r.DoctorId)) throw new ArgumentException("Doctor required");
     if (r.Date < _today) throw new ArgumentException("Date in the past");
     var slot = _slots.Find(r.SlotId) ?? throw new KeyNotFoundException("Slot");
     if (slot.IsBooked) throw new InvalidOperationException("Slot taken");
@@ -1162,13 +1162,13 @@ public Booking Book(BookingRequest r)
 
 Refactor it to return `Result<Booking>`. Implement `Bind` and `Ensure` on the given `Result<T>`, and use them in `BookingService.Book`.
 ::requirements
-- Input validation collects **all** field problems into one `Validation` error, code `booking.invalid`, with `Fields`: `InspectorId` when blank, `Date` when before today.
+- Input validation collects **all** field problems into one `Validation` error, code `booking.invalid`, with `Fields`: `DoctorId` when blank, `Date` when before today.
 - Unknown slot: `NotFound`, code `slot.not_found`.
 - Already booked: `Conflict`, code `slot.taken`.
 - **On any failure, the slot must not be marked booked.**
-- Success returns a `Booking` with the slot ID, inspector and date.
+- Success returns a `Booking` with the slot ID, doctor and date.
 ::acceptance
-- A blank inspector **and** a past date give one error with two field entries.
+- A blank doctor **and** a past date give one error with two field entries.
 - Booking the same slot twice: first success, then `slot.taken`.
 - Failure paths leave `slot.IsBooked` unchanged.
 ::hint
@@ -1184,7 +1184,7 @@ Do the only side effect (`slot.IsBooked = true`) in the **last** step, after eve
 return Validate(request)
     .Bind(FindSlot)
     .Ensure(s => !s.IsBooked, s => new Error("slot.taken", ..., ErrorType.Conflict))
-    .Map(s => { s.IsBooked = true; return new Booking(s.Id, request.InspectorId, request.Date); });
+    .Map(s => { s.IsBooked = true; return new Booking(s.Id, request.DoctorId, request.Date); });
 ```
 ::starter
 ```csharp file=BookingService.cs
@@ -1213,8 +1213,8 @@ public sealed class Result<T>
 }
 
 public sealed class Slot(string id) { public string Id { get; } = id; public bool IsBooked { get; set; } }
-public sealed record BookingRequest(string SlotId, string InspectorId, DateOnly Date);
-public sealed record Booking(string SlotId, string InspectorId, DateOnly Date);
+public sealed record BookingRequest(string SlotId, string DoctorId, DateOnly Date);
+public sealed record Booking(string SlotId, string DoctorId, DateOnly Date);
 
 public sealed class BookingService(IReadOnlyDictionary<string, Slot> slots, DateOnly today)
 {
@@ -1242,7 +1242,7 @@ public class BookingServiceTests
         var (svc, slot) = Make();
         var r = svc.Book(new BookingRequest(slot.Id, "INS-42", Today.AddDays(2)));
         Assert.True(r.IsSuccess);
-        Assert.Equal("INS-42", r.Value.InspectorId);
+        Assert.Equal("INS-42", r.Value.DoctorId);
         Assert.True(slot.IsBooked);
     }
 
@@ -1255,7 +1255,7 @@ public class BookingServiceTests
         Assert.Equal("booking.invalid", r.Error.Code);
         Assert.Equal(ErrorType.Validation, r.Error.Type);
         Assert.Equal(2, r.Error.Fields!.Count);
-        Assert.True(r.Error.Fields.ContainsKey("InspectorId"));
+        Assert.True(r.Error.Fields.ContainsKey("DoctorId"));
         Assert.True(r.Error.Fields.ContainsKey("Date"));
         Assert.False(slot.IsBooked);
     }
@@ -1321,8 +1321,8 @@ public sealed class Result<T>
 }
 
 public sealed class Slot(string id) { public string Id { get; } = id; public bool IsBooked { get; set; } }
-public sealed record BookingRequest(string SlotId, string InspectorId, DateOnly Date);
-public sealed record Booking(string SlotId, string InspectorId, DateOnly Date);
+public sealed record BookingRequest(string SlotId, string DoctorId, DateOnly Date);
+public sealed record Booking(string SlotId, string DoctorId, DateOnly Date);
 
 public sealed class BookingService(IReadOnlyDictionary<string, Slot> slots, DateOnly today)
 {
@@ -1333,13 +1333,13 @@ public sealed class BookingService(IReadOnlyDictionary<string, Slot> slots, Date
             .Map(s =>
             {
                 s.IsBooked = true;                       // the only side effect, after every check
-                return new Booking(s.Id, request.InspectorId.Trim(), request.Date);
+                return new Booking(s.Id, request.DoctorId.Trim(), request.Date);
             });
 
     private Result<BookingRequest> Validate(BookingRequest r)
     {
         var fields = new Dictionary<string, string[]>();
-        if (string.IsNullOrWhiteSpace(r.InspectorId)) fields["InspectorId"] = new[] { "Inspector is required." };
+        if (string.IsNullOrWhiteSpace(r.DoctorId)) fields["DoctorId"] = new[] { "Doctor is required." };
         if (r.Date < today) fields["Date"] = new[] { $"Date {r.Date:yyyy-MM-dd} is in the past." };
         return fields.Count == 0
             ? r
@@ -1361,13 +1361,13 @@ The happy path now reads top to bottom as the business process. Each failure is 
 :::
 
 :::exercise id=m06-options-result-ex6 difficulty=intermediate kind=written title="Exception or Result?"
-For each situation in a contractor-payment API, decide whether the code should **return an Error** (and which `ErrorType`) or **throw an exception** (and what HTTP status the global handler should produce). Give a one-line reason for each.
+For each situation in a seller-payout API, decide whether the code should **return an Error** (and which `ErrorType`) or **throw an exception** (and what HTTP status the global handler should produce). Give a one-line reason for each.
 
-1. The bill ID in the URL doesn't exist.
+1. The settlement ID in the URL doesn't exist.
 2. PostgreSQL connection pool exhausted.
 3. The bank API returns "beneficiary account frozen".
 4. The bank API times out after 10 s.
-5. `NetPayableInr` is negative on a bill loaded from the database.
+5. `NetPayableInr` is negative on a settlement loaded from the database.
 6. A user without the "Accounts Officer" role tries to release payment.
 ::acceptance
 - All six classified, each with a reason.
@@ -1411,7 +1411,7 @@ public async Task Missing_api_key_fails_start()
 
 **Results.** Assert on `IsSuccess`, `Error.Code` and `Error.Type`, not on message text, which changes with wording and translation. For the HTTP mapping, test `ToProblem` directly, or use `WebApplicationFactory` and assert on the response's `status` and `code` fields.
 
-**Services.** `BillPayoutService` takes `IOptionsMonitor<PayoutOptions>`. In tests, build a real one from a `ServiceCollection` with `Configure<PayoutOptions>(o => ...)`, or write a tiny fake monitor that returns a fixed value. Use a fake `IPaymentGateway` that can return declines or throw, to cover both failure kinds.
+**Services.** `SettlementPayoutService` takes `IOptionsMonitor<PayoutOptions>`. In tests, build a real one from a `ServiceCollection` with `Configure<PayoutOptions>(o => ...)`, or write a tiny fake monitor that returns a fixed value. Use a fake `IPaymentGateway` that can return declines or throw, to cover both failure kinds.
 
 **Extensibility.** A new failure is a new `Error` code (and maybe a new `ErrorType` with its status in one switch). New settings are new properties with attributes. Neither touches existing callers.
 
@@ -1448,7 +1448,7 @@ If validators are registered, the monitor rebuilds the value when the change tok
 ::q advanced
 How would you design error codes and ProblemDetails for a public API consumed by mobile apps and partners?
 ::a
-Use stable, namespaced, machine-readable codes (`bill.not_approved`) in an extension field, with `type` URIs pointing at documentation. Map categories to status codes consistently in one place (404/409/403/400 or 422). Return `HttpValidationProblemDetails` with an `errors` dictionary for field validation. Never include stack traces or internal messages for 500s; use `AddProblemDetails()` with `UseExceptionHandler()`, and add a trace ID extension for support. Treat codes as part of the API contract: version them and never repurpose one.
+Use stable, namespaced, machine-readable codes (`settlement.not_approved`) in an extension field, with `type` URIs pointing at documentation. Map categories to status codes consistently in one place (404/409/403/400 or 422). Return `HttpValidationProblemDetails` with an `errors` dictionary for field validation. Never include stack traces or internal messages for 500s; use `AddProblemDetails()` with `UseExceptionHandler()`, and add a trace ID extension for support. Treat codes as part of the API contract: version them and never repurpose one.
 :::
 
 ## Summary and revision
@@ -1499,7 +1499,7 @@ A team deploys with `"ApiKey": ""` in `appsettings.Production.json`. Options use
 > `IOptions` never reloads. `IOptionsSnapshot` is scoped (a captive dependency in a singleton). `IOptionsMonitor` is designed for singletons with live values.
 ::q multi
 Which failures should a `ReleasePayment` method return as `Result` errors rather than throw? (Select all that apply.)
-- [x] Bill not approved yet.
+- [x] Settlement not approved yet.
 - [x] Amount exceeds the single-transfer limit.
 - [ ] Database connection refused.
 - [x] Bank declined: beneficiary account frozen.

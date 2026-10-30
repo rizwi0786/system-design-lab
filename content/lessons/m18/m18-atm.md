@@ -128,7 +128,7 @@ classDiagram
         +WithdrawAsync(int amount) Task
         +BalanceAsync() Task
         +CancelAsync() Task
-        +TimeoutAsync() Task
+        +TimeoutAsync(long session) Task
     }
     class AtmState {
         <<abstract>>
@@ -240,7 +240,15 @@ When the debit call times out, we don't know whether the bank applied it. Two wr
 ### Concurrency: two problems, two tools
 
 1. **Inside one ATM**, input events come from the card reader driver, the PIN pad, the screen and the inactivity timer, possibly on different threads. Without care, the timeout could eject the card while a debit is in flight. `AtmMachine` funnels every input through a `SemaphoreSlim(1, 1)`, an async-friendly lock. (A C# `lock` can't be held across `await`.) So a timeout that fires during a withdrawal waits, then runs against whatever state the withdrawal left, usually `Idle`, where it does nothing.
+
+   The gate alone leaves one check-then-act race. A timer armed for the previous customer can fire late, queue behind the gate, and run *after* the next customer has inserted a card, ending a session it was never meant for. So each card insertion increments `SessionNumber`, the timer captures that number when it is armed, and `TimeoutAsync(sessionNumber)` compares it *inside* the gate. A stale timeout finds a different number and does nothing. The same trick (tag every asynchronous event with the generation it belongs to) fixes late hardware callbacks too.
 2. **Across ATMs**, two people with cards on one joint account withdraw ₹8,000 each from a ₹10,000 balance at the same instant. If the bank checks the balance and then debits in two steps, both pass the check. The bank must make "check and debit" one atomic step: a row lock, or a conditional update such as `UPDATE account SET balance = balance - 8000 WHERE id = $1 AND balance >= 8000`, where zero rows updated means insufficient funds. Our `InMemoryBankHost` uses a lock to simulate this.
+
+The idempotency check has the same shape. "Have I seen this transaction id? If not, debit" is check-then-act, so the lookup, the balance change and the record of the result sit under one lock (in PostgreSQL: a unique `txn_id` in the same transaction as the update). And the order of checks matters: a reversed id must be refused *before* the stored result is replayed, otherwise a retried debit for a reversed transaction would come back "Approved" and the ATM would dispense money that was already credited back.
+
+:::callout type=warning title="Real dispensers fail in messier ways than true or false"
+Our `Dispense` returns a simple yes or no. Real cash dispensers report how many notes were picked, how many were presented at the slot, and whether the customer took them. Notes left in the slot are usually pulled back in after about 30 seconds (retracted) and counted into a separate bin. A partial dispense (₹1,500 of ₹2,000 presented) needs a *partial* reversal, and an exception from the driver means "outcome unknown", not "nothing came out". Our code reverses in full on any failure, which favours the customer; the nightly reconciliation (exercise 5) compares the device counters and the physical cash, and recovers any money that was in fact taken. Ask the interviewer which behaviour the bank wants.
+:::
 
 ## State transitions
 
@@ -412,6 +420,9 @@ public sealed class AtmMachine
     internal Card? CurrentCard { get; set; }
     internal int PinAttempts { get; set; }
 
+    /// <summary>Incremented for every new card. The inactivity timer captures it when it is armed.</summary>
+    public long SessionNumber { get; internal set; }
+
     public string StateName => _state.Name;
     internal bool HasCash => Dispenser.Cassettes.Any(kv => kv.Value > 0);
 
@@ -420,8 +431,14 @@ public sealed class AtmMachine
     public Task WithdrawAsync(int amount) => Handle(s => s.WithdrawAsync(this, amount));
     public Task BalanceAsync() => Handle(s => s.BalanceAsync(this));
     public Task CancelAsync() => Handle(s => s.CancelAsync(this));
-    public Task TimeoutAsync() => Handle(s => s.TimeoutAsync(this));
     public Task RefilledAsync() => Handle(s => s.RefilledAsync(this));
+
+    /// <summary>
+    /// A timer armed for session 7 may fire late, after session 7 ended and session 8 began.
+    /// The session check runs inside the gate, so "is this still my session?" and "end it" are one atomic step.
+    /// </summary>
+    public Task TimeoutAsync(long sessionNumber) =>
+        Handle(s => sessionNumber == SessionNumber ? s.TimeoutAsync(this) : Task.FromResult(s));
 
     private async Task Handle(Func<AtmState, Task<AtmState>> input)
     {
@@ -482,6 +499,7 @@ public sealed class IdleState : AtmState
     {
         atm.CurrentCard = card;
         atm.PinAttempts = 0;
+        atm.SessionNumber++;
         atm.Display.Show("Please enter your PIN.");
         return Task.FromResult<AtmState>(CardInsertedState.Instance);
     }
@@ -694,10 +712,13 @@ public sealed class InMemoryBankHost : IBankHost
     {
         lock (_sync)
         {
+            // Reversed ids are dead, whether the reversal came before the debit (tombstone) or after it.
+            // Checking this first matters: replaying "Approved" for a reversed debit would make the ATM dispense
+            // cash that has already been credited back.
+            if (_reversed.Contains(transactionId)) return Task.FromResult(new DebitResult(DebitStatus.Declined));
             if (_debits.TryGetValue(transactionId, out var earlier)) return Task.FromResult(earlier.Result); // retry
             DebitResult result;
-            if (_reversed.Contains(transactionId)) result = new(DebitStatus.Declined);      // reversal arrived first
-            else if (!_accounts.TryGetValue(card.Number, out var acct)) result = new(DebitStatus.Declined);
+            if (!_accounts.TryGetValue(card.Number, out var acct)) result = new(DebitStatus.Declined);
             else if (acct.Balance < amount) result = new(DebitStatus.InsufficientFunds);
             else if (acct.WithdrawnToday + amount > acct.DailyLimit) result = new(DebitStatus.DailyLimitExceeded);
             else
@@ -984,6 +1005,19 @@ public class AtmMachineTests
         Assert.Equal("Insufficient funds.", _screen.Last);
         Assert.Equal("Authenticated", _atm.StateName);
     }
+
+    [Fact]
+    public async Task Stale_timeout_from_previous_session_is_ignored()
+    {
+        await _atm.InsertCardAsync(Card);
+        var firstSession = _atm.SessionNumber;
+        await _atm.CancelAsync();                         // customer 1 leaves
+        await LoggedIn();                                 // customer 2 arrives
+        await _atm.TimeoutAsync(firstSession);            // customer 1's timer fires late
+        Assert.Equal("Authenticated", _atm.StateName);
+        await _atm.TimeoutAsync(_atm.SessionNumber);      // customer 2's own timer does end the session
+        Assert.Equal("Idle", _atm.StateName);
+    }
 }
 
 public class NotePlannerTests
@@ -1041,6 +1075,20 @@ public class BankHostConcurrencyTests
         Assert.Equal(DebitStatus.Declined, late.Status);
         Assert.Equal(5_000m, bank.BalanceOf("C"));
     }
+
+    [Fact]
+    public async Task Retried_debit_after_reversal_is_not_replayed_as_approved()
+    {
+        var bank = new InMemoryBankHost();
+        bank.OpenAccount("C", "x", 5_000m);
+        var id = Guid.NewGuid();
+        var card = new Card("C", "A");
+        Assert.Equal(DebitStatus.Approved, (await bank.DebitAsync(id, card, 1_000m, CancellationToken.None)).Status);
+        await bank.ReverseAsync(id, CancellationToken.None);
+        var retry = await bank.DebitAsync(id, card, 1_000m, CancellationToken.None);
+        Assert.Equal(DebitStatus.Declined, retry.Status);  // "Approved" here would mean free cash
+        Assert.Equal(5_000m, bank.BalanceOf("C"));
+    }
 }
 ```
 
@@ -1049,7 +1097,8 @@ What to notice:
 - **Failure paths are first-class tests.** The jam and the timeout tests check the money (balance back to ₹10,000), not just the message. In payment code, assert on money.
 - **`FlakyBankHost` applies the debit and *then* throws**, which is the nasty real-world case: the bank did the work but the reply was lost. A fake that only throws before applying would miss the bug where the ATM forgets to reverse.
 - **The concurrency test** fires 100 debits of ₹500 at a ₹10,000 joint account from two cards. Exactly 20 succeed and the balance ends at zero. Remove the lock from `DebitAsync` and the test can show approvals above 20 and a negative balance. The lock-free version would be a classic check-then-act race.
-- **The "reversal before debit" test** covers a race that happens on real networks: the reversal message overtakes a delayed debit. Without a tombstone, the late debit would succeed and nobody would ever reverse it.
+- **The "reversal before debit" test** covers a race that happens on real networks: the reversal message overtakes a delayed debit. Without a tombstone, the late debit would succeed and nobody would ever reverse it. Its sibling, "retry after reversal", pins the order of checks inside `DebitAsync`.
+- **The stale-timeout test** replays the cross-session race from the concurrency section: an old timer must not end the next customer's session.
 
 ## Bad design vs good design
 
@@ -1107,7 +1156,7 @@ Open the reference class model. Try adding a `DepositState` and a `ChangePinStat
   "classes": [
     { "id": "Atm", "name": "AtmMachine", "kind": "class",
       "fields": ["-AtmState _state", "-SemaphoreSlim _gate", "~Card? CurrentCard", "~int PinAttempts"],
-      "methods": ["+Task InsertCardAsync(Card card)", "+Task EnterPinAsync(PinBlock pin)", "+Task WithdrawAsync(int amount)", "+Task BalanceAsync()", "+Task CancelAsync()", "+Task TimeoutAsync()", "~AtmState EndSession(string message, bool retainCard)"],
+      "methods": ["+Task InsertCardAsync(Card card)", "+Task EnterPinAsync(PinBlock pin)", "+Task WithdrawAsync(int amount)", "+Task BalanceAsync()", "+Task CancelAsync()", "+Task TimeoutAsync(long sessionNumber)", "~AtmState EndSession(string message, bool retainCard)"],
       "responsibility": "State pattern context; serialises all input" },
     { "id": "State", "name": "AtmState", "kind": "abstract",
       "fields": ["+string Name"],
@@ -1529,24 +1578,27 @@ Implement `AccountLedger`, the bank side for one account that many ATMs hit at o
 ::requirements
 - Thread-safe; any locking approach is fine.
 - A repeated debit with the same id returns the same result and doesn't change the balance again.
+- Once an id has been reversed, any debit with that id is refused, including a retry of a debit that was approved before the reversal.
 - `Reverse` on an unknown id records a tombstone so a later debit with that id is refused.
 - `Reverse` twice credits once.
 ::acceptance
 - 200 parallel debits of ₹500 against ₹10,000 approve exactly 20 and leave a balance of ₹0.
 - Same id twice: one debit.
 - Reverse before debit: the late debit is refused.
+- Debit, reverse, then retry the same debit: refused, balance unchanged.
 ::hint
 What is the check-then-act sequence here, and what must be atomic?
 ::hint
 Keep a dictionary of results by transaction id and a set of reversed ids, and protect them *and* the balance with the same lock.
 ::hint
-In `TryDebit`, check in this order: seen before? reversed already? enough balance? Record the result before returning.
+In `TryDebit`, check in this order: reversed already? seen before? enough balance? Record the result before returning. Why must "reversed" come first? Think about a retry that arrives after the reversal.
 ::hint
 ```csharp
 lock (_sync)
 {
+    if (_reversed.Contains(txnId)) return false;
     if (_results.TryGetValue(txnId, out var r)) return r;
-    var ok = !_reversed.Contains(txnId) && _balance >= amount;
+    var ok = _balance >= amount;
     if (ok) _balance -= amount;
     _results[txnId] = ok; _amounts[txnId] = amount;
     return ok;
@@ -1636,6 +1688,17 @@ public class AccountLedgerTests
     }
 
     [Fact]
+    public void Retry_after_reversal_is_refused()
+    {
+        var ledger = new AccountLedger(5_000m);
+        var id = Guid.NewGuid();
+        Assert.True(ledger.TryDebit(id, 2_000m));
+        ledger.Reverse(id);
+        Assert.False(ledger.TryDebit(id, 2_000m));   // replaying "approved" would pay out reversed money
+        Assert.Equal(5_000m, ledger.Balance);
+    }
+
+    [Fact]
     public void Parallel_duplicate_retries_debit_once()
     {
         var ledger = new AccountLedger(5_000m);
@@ -1664,8 +1727,9 @@ public sealed class AccountLedger(decimal openingBalance)
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(amount);
         lock (_sync)
         {
+            if (_reversed.Contains(txnId)) return false;              // reversed ids are dead, even on retry
             if (_debits.TryGetValue(txnId, out var earlier)) return earlier.Approved;
-            var approved = !_reversed.Contains(txnId) && _balance >= amount;
+            var approved = _balance >= amount;
             if (approved) _balance -= amount;
             _debits[txnId] = (approved, amount);
             return approved;
@@ -1683,7 +1747,7 @@ public sealed class AccountLedger(decimal openingBalance)
 }
 ```
 
-One lock protects three things that must agree: the balance, the results by id and the tombstones. Separate locks (or separate concurrent collections) would let a reversal and a debit for the same id interleave between checks.
+One lock protects three things that must agree: the balance, the results by id and the tombstones. Separate locks (or separate concurrent collections) would let a reversal and a debit for the same id interleave between checks. The reversed check comes first because a reversal ends the life of a transaction id: a late retry of an approved debit must not be told "approved" again, or the ATM would dispense money that was already credited back.
 
 In PostgreSQL the same rules become constraints and conditional statements: a `ledger_entry` table with a unique `txn_id`, `INSERT ... ON CONFLICT (txn_id) DO NOTHING` for idempotency, and `UPDATE account SET balance = balance - $2 WHERE id = $1 AND balance >= $2` inside the same transaction, where zero rows updated means insufficient funds.
 ::alternatives
@@ -1692,6 +1756,7 @@ An append-only ledger (entries, not a mutable balance) where the balance is the 
 - Using `ConcurrentDictionary` for results but a plain `decimal` for the balance without a lock: the check and the subtraction race.
 - Forgetting to remember *declined* results, so a retry after a top-up gets a different answer for the same id.
 - Treating `Reverse` on an unknown id as a no-op, which lets a delayed debit slip through.
+- Replaying the stored result before checking for a reversal, so a retry after a reversal is "approved" a second time.
 :::
 
 :::exercise id=m18-atm-ex5 difficulty=advanced kind=written title="End-of-day reconciliation"

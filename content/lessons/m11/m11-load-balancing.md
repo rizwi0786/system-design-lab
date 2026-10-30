@@ -93,7 +93,7 @@ Fixes: balance at L7 (a proxy that understands HTTP/2 and spreads individual req
 
 ### The algorithms
 
-We use one running example. A state revenue department's document-scanning service converts uploaded land-record scans into searchable text (OCR). It has 4 backends. Three are normal (10 documents per second each) and one is an older VM that manages only 4 per second (a speed factor of 0.4). Total capacity is `3 × 10 + 4 = 34` documents per second. Offered load is 80 % of that: **27.2 per second**.
+We use one running example. A state university network's digital library (about 300,000 students across 40 colleges) lets students and librarians upload scanned theses, old question papers and book chapters; a document-scanning service converts each upload into searchable text (OCR). It has 4 backends. Three are normal (10 documents per second each) and one is an older VM that manages only 4 per second (a speed factor of 0.4). Total capacity is `3 × 10 + 4 = 34` documents per second. Offered load is 80 % of that: **27.2 per second**.
 
 #### 1. Round robin
 
@@ -226,9 +226,9 @@ A single NGINX VM in front of 20 backends makes the whole system as available as
 
 ```mermaid
 flowchart LR
-    U["Citizens and tehsil offices"] --> FD["L7 entry (TLS termination, WAF)"]
-    FD -->|"/api/*  least requests"| API1["Records API 1"]
-    FD -->|"/api/*"| API2["Records API 2"]
+    U["Students and librarians"] --> FD["L7 entry (TLS termination, WAF)"]
+    FD -->|"/api/*  least requests"| API1["Archive API 1"]
+    FD -->|"/api/*"| API2["Archive API 2"]
     FD -->|"/ocr/*  weighted 10:10:10:4"| O1["OCR A (10/s)"]
     FD -->|"/ocr/*"| O2["OCR B (10/s)"]
     FD -->|"/ocr/*"| O3["OCR C (10/s)"]
@@ -241,7 +241,7 @@ flowchart LR
     API2 --> DB
 ```
 
-Requests from citizens and tehsil offices arrive at one **L7 entry point**, which terminates TLS and applies a web application firewall. Because it understands HTTP, it routes by path: `/api/*` goes to the **records API** pool, balanced by least outstanding requests, and `/ocr/*` goes to the **OCR pool**, where weights 10:10:10:4 reflect the old VM's lower capacity. The records API instances talk to a **cache tier** whose nodes are chosen with a **consistent hash ring**, so each document id always maps to the same cache node and adding a node moves only a fraction of keys. The dotted arrows are **active health probes**; failing backends are taken out of the pools. The database is not load balanced at all here: it is a single primary, which is typical.
+Requests from students and librarians arrive at one **L7 entry point**, which terminates TLS and applies a web application firewall. Because it understands HTTP, it routes by path: `/api/*` goes to the **archive API** pool, balanced by least outstanding requests, and `/ocr/*` goes to the **OCR pool**, where weights 10:10:10:4 reflect the old VM's lower capacity. The archive API instances talk to a **cache tier** whose nodes are chosen with a **consistent hash ring**, so each document id always maps to the same cache node and adding a node moves only a fraction of keys. The dotted arrows are **active health probes**; failing backends are taken out of the pools. The database is not load balanced at all here: it is a single primary, which is typical.
 
 ### Sequence: least requests with passive ejection
 
@@ -282,7 +282,7 @@ Set weights 10, 10, 10, 4. D now receives `27.2 × 4 ÷ 34 = 3.2` per second, 80
 
 ### Step 3 — Better fix: least outstanding requests
 
-Scans vary from 1 page to 300 pages, so even with weights a backend can be unlucky and receive three huge scans in a row. Switch the OCR pool to least outstanding requests (or P2C). Backends busy with big scans automatically receive fewer new ones. Keep the weights as a hint if the balancer supports weighted least-request.
+Uploads vary from a 1-page question paper to a 300-page thesis, so even with weights a backend can be unlucky and receive three huge scans in a row. Switch the OCR pool to least outstanding requests (or P2C). Backends busy with big scans automatically receive fewer new ones. Keep the weights as a hint if the balancer supports weighted least-request.
 
 ### Step 4 — Add passive health checks
 
@@ -294,14 +294,14 @@ The upload API (fast, small requests) and the OCR endpoint (slow, heavy) shared 
 
 ### Step 6 — Cache OCR results by document id
 
-Scans are often re-requested (an officer opens the same land record several times a day). Cache OCR output in a small cache tier, choosing the cache node with consistent hashing on the document id, so adding a cache node moves only about a quarter (with 4 nodes) of the cached entries instead of almost all of them.
+Scans are often re-requested (in exam season, hundreds of students open the same popular question papers and theses every day). Cache OCR output in a small cache tier, choosing the cache node with consistent hashing on the document id, so adding a fifth cache node moves only about one fifth of the cached entries (the keys the new node takes over) instead of about 80 % with `hash mod N`.
 
 ## Production-style C# implementation
 
 Most teams use a managed load balancer or a proxy such as YARP, NGINX or Envoy rather than writing their own. But **client-side load balancing** inside an ASP.NET Core service is common (calling a pool of internal backends from `HttpClient`), and writing the algorithms is the best way to understand them. The code below is a small library: backend state, several policies behind one interface, passive outlier detection, a consistent hash ring, active health probing, and a `DelegatingHandler` that plugs it all into `HttpClient`.
 
 ```text
-Revenue.Scanning.Gateway/
+Library.Scanning.Gateway/
   Program.cs
   LoadBalancing/Backend.cs
   LoadBalancing/Policies.cs
@@ -312,7 +312,7 @@ Revenue.Scanning.Gateway/
 ```
 
 ```csharp file=LoadBalancing/Backend.cs
-namespace Revenue.Scanning.LoadBalancing;
+namespace Library.Scanning.LoadBalancing;
 
 /// <summary>Live state of one backend. Counters are updated from many threads at once.</summary>
 public sealed class Backend(string id, Uri address, int weight = 1)
@@ -349,7 +349,7 @@ public sealed class Backend(string id, Uri address, int weight = 1)
 `Backend` holds exactly the information the algorithms need: weight (static), in-flight count (for least requests and P2C), and an EWMA of latency (for least response time). The in-flight count uses `Interlocked` because hundreds of requests start and finish concurrently.
 
 ```csharp file=LoadBalancing/Policies.cs
-namespace Revenue.Scanning.LoadBalancing;
+namespace Library.Scanning.LoadBalancing;
 
 /// <summary>Chooses one backend from the currently available ones.
 /// <paramref name="affinityKey"/> is used only by hash-based policies.</summary>
@@ -488,7 +488,7 @@ public sealed class ConsistentHashPolicy(int virtualNodes = 150) : IBalancingPol
 All policies share one interface, so the pool can switch algorithms by configuration and tests can compare them on the same scenario. The weighted variants divide by `Weight`, so a backend with weight 10 can carry ten times the in-flight requests of a weight-1 backend before it looks equally busy. The consistent-hash policy rebuilds its ring only when the set of available backends changes, which is rare; a production version would rebuild outside the lock and swap the reference.
 
 ```csharp file=LoadBalancing/ConsistentHashRing.cs
-namespace Revenue.Scanning.LoadBalancing;
+namespace Library.Scanning.LoadBalancing;
 
 /// <summary>A hash ring with virtual nodes. Immutable: build a new one when membership changes.</summary>
 public sealed class ConsistentHashRing
@@ -544,7 +544,7 @@ public static class StableHash
 Two details catch people out. First, `string.GetHashCode()` is randomised per process in .NET, so two gateway instances would map the same key to different backends; routing needs a stable hash. Second, a plain FNV hash of similar strings (`node-a#1`, `node-a#2`) clusters on the ring; the finaliser mixes the bits so virtual nodes spread evenly.
 
 ```csharp file=LoadBalancing/BackendPool.cs
-namespace Revenue.Scanning.LoadBalancing;
+namespace Library.Scanning.LoadBalancing;
 
 public sealed class OutlierOptions
 {
@@ -609,7 +609,7 @@ The pool combines two health signals: `ProbeHealthy` from active probes, and eje
 ```csharp file=LoadBalancing/LoadBalancingHandler.cs
 using System.Diagnostics;
 
-namespace Revenue.Scanning.LoadBalancing;
+namespace Library.Scanning.LoadBalancing;
 
 /// <summary>Client-side load balancing for HttpClient: picks a backend per request,
 /// rewrites the URI, and feeds latency and failures back into the pool.</summary>
@@ -646,7 +646,7 @@ public sealed class LoadBalancingHandler(BackendPool pool, IBalancingPolicy poli
 ```
 
 ```csharp file=LoadBalancing/ActiveHealthProber.cs
-namespace Revenue.Scanning.LoadBalancing;
+namespace Library.Scanning.LoadBalancing;
 
 /// <summary>Active health checks: probe /health/ready on every backend every 5 s.
 /// Unhealthy after 3 consecutive failures, healthy again after 2 consecutive passes.</summary>
@@ -701,7 +701,7 @@ public sealed class ActiveHealthProber(BackendPool pool, IHttpClientFactory http
 The prober probes backends one after another for clarity; with dozens of backends, probe them in parallel (`Task.WhenAll`) so one slow backend does not delay the others' checks.
 
 ```csharp file=Program.cs
-using Revenue.Scanning.LoadBalancing;
+using Library.Scanning.LoadBalancing;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -796,9 +796,9 @@ In most real systems you would get the same features from YARP with configuratio
 
 - The NGINX VM is a single point of failure for the entire service.
 - Round robin sends the old OCR VM as much as the new ones; its queue grows all afternoon.
-- `ip_hash` was added "for sessions" although the app is stateless; a tehsil office of 200 clerks behind one NAT IP lands on one backend.
+- `ip_hash` was added "for sessions" although the app is stateless; a hostel network with 2,000 students behind one NAT IP lands on one backend.
 - With no health checks, a crashed backend receives a quarter of all traffic until someone notices.
-- Retries are enabled for all methods, so a timed-out `POST /payments/fee` is retried on another backend and charges twice.
+- Retries are enabled for all methods, so a timed-out `POST /fines/payments` (a student paying a late-return fine) is retried on another backend and charges twice.
 
 **Good:**
 
@@ -1285,8 +1285,8 @@ Weighted least connections divides in-flight by weight. Least response time mult
 Run a small simulation: 8 servers, 10,000 requests with random durations, and compare the maximum in-flight count for random choice versus P2C versus least connections.
 :::
 
-:::exercise id=m11-load-balancing-ex4 difficulty=intermediate kind=hld title="Load balancing tier for the land-records service"
-The starter graph is today's design: one self-managed NGINX VM in front of a single pool that serves both the records API and OCR. Redesign the load-balancing tier. Peak traffic is 2,000 API RPS and 27 OCR documents per second.
+:::exercise id=m11-load-balancing-ex4 difficulty=intermediate kind=hld title="Load balancing tier for the library archive"
+The starter graph is today's design: one self-managed NGINX VM in front of a single pool that serves both the archive API and OCR. Redesign the load-balancing tier. Peak traffic in exam season is 2,000 API RPS (an estimate: about 100,000 students active in the peak hour × 70 requests each ÷ 3,600 s ≈ 1,900 RPS) and 27 OCR documents per second.
 ::acceptance
 - No single load balancer instance is a single point of failure.
 - The API and OCR traffic are routed separately (L7 path routing), each with an algorithm suited to its request pattern and a stated reason.
@@ -1305,9 +1305,9 @@ Use separate `app-server` nodes for API and OCR, a `load-balancer` with `multiAz
 ```json
 {
   "nodes": [
-    { "id": "users", "type": "client", "label": "Citizens and tehsil offices", "props": { "rps": 2000 } },
+    { "id": "users", "type": "client", "label": "Students and librarians", "props": { "rps": 2000 } },
     { "id": "nginx", "type": "load-balancer", "label": "NGINX VM (round robin, no health checks)" },
-    { "id": "app", "type": "app-server", "label": "Records API + OCR (mixed pool)", "props": { "instances": 4 } },
+    { "id": "app", "type": "app-server", "label": "Archive API + OCR (mixed pool)", "props": { "instances": 4 } },
     { "id": "db", "type": "database", "label": "PostgreSQL" }
   ],
   "edges": [
@@ -1321,10 +1321,10 @@ Use separate `app-server` nodes for API and OCR, a `load-balancer` with `multiAz
 ```json
 {
   "nodes": [
-    { "id": "users", "type": "client", "label": "Citizens and tehsil offices", "props": { "rps": 2000 } },
+    { "id": "users", "type": "client", "label": "Students and librarians", "props": { "rps": 2000 } },
     { "id": "dns", "type": "dns", "label": "DNS" },
     { "id": "l7", "type": "load-balancer", "label": "Managed L7 LB (zone-redundant, TLS, path routing)", "props": { "multiAz": true } },
-    { "id": "api", "type": "app-server", "label": "Records API (P2C, slow start 30 s)", "props": { "instances": 6, "multiAz": true } },
+    { "id": "api", "type": "app-server", "label": "Archive API (P2C, slow start 30 s)", "props": { "instances": 6, "multiAz": true } },
     { "id": "ocr", "type": "app-server", "label": "OCR pool (weighted least requests 10:10:10:4)", "props": { "instances": 4, "multiAz": true } },
     { "id": "cache", "type": "cache", "label": "OCR result cache: 4 nodes, consistent hash, 150 vnodes", "props": { "instances": 4 } },
     { "id": "db", "type": "database", "label": "PostgreSQL primary + standby", "props": { "replicas": 1, "multiAz": true } },

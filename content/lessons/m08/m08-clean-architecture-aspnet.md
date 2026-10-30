@@ -1092,7 +1092,7 @@ The controller shrinks to request mapping and status-code mapping. The slot rule
 :::
 
 :::exercise id=m08-clean-architecture-aspnet-ex5 difficulty=advanced kind=written title="Write the ADR: full Clean Architecture or not?"
-You are the tech lead for an internal tool at an infrastructure consultancy: it records site-visit reports (title, date, project, text, up to 5 photos) and lets managers search them. Four endpoints, two roles, one developer, expected to live two to three years, maybe 200 users. A colleague proposes the standard four-project Clean Architecture template with MediatR, AutoMapper, FluentValidation and a generic repository. Write an Architecture Decision Record (context, options, decision, consequences) that decides how much structure to use.
+You are the tech lead for an internal tool at a chain of 40 restaurants: area managers record store-visit hygiene reports (title, date, outlet, text, up to 5 photos) and head office searches them. Four endpoints, two roles, one developer, expected to live two to three years, maybe 200 users. A colleague proposes the standard four-project Clean Architecture template with MediatR, AutoMapper, FluentValidation and a generic repository. Write an Architecture Decision Record (context, options, decision, consequences) that decides how much structure to use.
 ::acceptance
 - At least two options compared, each with concrete costs (files per feature, concepts to learn) and benefits.
 - The decision names which Clean Architecture ideas are kept (if any) and which are dropped, and why.
@@ -1106,9 +1106,9 @@ Triggers to revisit: a second developer, real business rules appearing (approval
 ::solution
 **Context.** Four CRUD-ish endpoints, trivial rules (required fields, max 5 photos, only the author or a manager may edit), one developer, small user base, low change pressure.
 
-**Option A — full template**: Domain/Application/Infrastructure/Web, MediatR, AutoMapper, FluentValidation, `IRepository<T>`, `IUnitOfWork`. Create-report feature: command, handler, validator, mapping profile, entity, repository interface, repository implementation, DTO, request model, endpoint — about 10 files across 4 projects, 4 packages, and a newcomer must learn the mediator, mapping conventions and the decorator pipeline. Benefit: ready for growth; rules testable without the database.
+**Option A — full template**: Domain/Application/Infrastructure/Web, MediatR, AutoMapper, FluentValidation, `IRepository<T>`, `IUnitOfWork` (and note that MediatR and AutoMapper moved to commercial licences for new versions in 2025, a real cost for a company tool). Create-report feature: command, handler, validator, mapping profile, entity, repository interface, repository implementation, DTO, request model, endpoint — about 10 files across 4 projects, 4 packages, and a newcomer must learn the mediator, mapping conventions and the decorator pipeline. Benefit: ready for growth; rules testable without the database.
 
-**Option B — one web project with feature folders**: `Features/Reports/CreateReport.cs` (request, validation, endpoint handler in one file), `Features/Reports/SearchReports.cs`, a `Domain/` folder for `SiteVisitReport` with its three rules as methods, one `AppDbContext`, one architecture test asserting that the `Domain` namespace references nothing in `Features` or `Data`. Create-report: 1–2 files, 0 extra packages. Rules are still in a domain class and unit-testable. Benefit: a new developer reads one folder per feature.
+**Option B — one web project with feature folders**: `Features/Reports/CreateReport.cs` (request, validation, endpoint handler in one file), `Features/Reports/SearchReports.cs`, a `Domain/` folder for `StoreVisitReport` with its three rules as methods, one `AppDbContext`, one architecture test asserting that the `Domain` namespace references nothing in `Features` or `Data`. Create-report: 1–2 files, 0 extra packages. Rules are still in a domain class and unit-testable. Benefit: a new developer reads one folder per feature.
 
 **Option C — two projects**: `App` and `App.Tests`, otherwise as B. Same as B with a test project, which B needs anyway.
 
@@ -1179,7 +1179,7 @@ public async Task Conflict_does_not_commit()
 
 - **ASP.NET Core reference applications** from Microsoft (eShop and its predecessors) use this layering per service, with `Domain`, `Application`/`UseCases`, `Infrastructure` and an API host, which is why so many teams know the shape.
 - **Payment and booking systems** benefit most: rules such as "no double booking", "refund window", "settlement cut-off" are real, change by regulation, and must hold for web, mobile, partner API and back-office batch alike. One domain, many entry points is the sweet spot.
-- **Infrastructure project monitoring platforms**: rules such as "a progress claim cannot exceed the BOQ quantity" or "an RFI must be answered within the contractual window" belong in a domain project so that the web portal, the mobile site app and the monthly import job all enforce them identically.
+- **Food-delivery and quick-commerce platforms**: rules such as "a coupon cannot be applied twice to one order" or "a refund cannot exceed the amount paid" belong in a domain project so that the customer app, the support agents' console and the nightly reconciliation job all enforce them identically.
 - **Long-lived products** (10+ years) see two or three framework migrations. Teams that kept ASP.NET-specific types out of their rules migrated the outer ring in weeks; teams that did not rewrote.
 
 ## Interview questions

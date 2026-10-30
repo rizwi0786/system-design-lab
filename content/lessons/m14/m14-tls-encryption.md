@@ -120,7 +120,7 @@ In normal TLS only the server has a certificate. In **mutual TLS (mTLS)** the se
 
 - Service-to-service traffic inside a platform (a service mesh such as Istio or Linkerd issues short-lived certificates to every pod automatically).
 - Partner and bank integrations, where a payment gateway only accepts calls from your registered certificate.
-- Devices in the field, such as site cameras or weighbridge controllers that upload data.
+- Devices in the field, such as delivery-bike telematics units or smart parcel lockers that upload data.
 
 mTLS answers "which machine or service is calling", not "which user". The cost is operational: issuing, rotating and revoking client certificates. For a handful of internal services, a managed-identity token is often simpler.
 
@@ -148,7 +148,7 @@ For application-level encryption in .NET, use **AES-GCM** (`System.Security.Cryp
 
 - **Key**: 256 bits (32 bytes) from a secure random generator or a key service. Never derived from a password without a proper KDF.
 - **Nonce**: 12 bytes, and **never reused with the same key**. Reusing a nonce with GCM is catastrophic: it leaks the XOR of two plaintexts and lets an attacker forge tags. With random nonces, NIST SP 800-38D limits one key to about 2³² (≈ 4.3 billion) encryptions. That sounds like a lot, until a busy service encrypts 2,000 values a second: 2³² ÷ 2,000 ≈ 2.1 million seconds, about 25 days. Rotate data keys well before that.
-- **Associated data (AAD)**: extra bytes that are authenticated but not encrypted. Put the record's identity in it (`contractor:42:pan`). Then an attacker with database write access cannot copy the encrypted PAN of contractor 7 into contractor 42's row: decryption fails because the AAD differs.
+- **Associated data (AAD)**: extra bytes that are authenticated but not encrypted. Put the record's identity in it (`restaurant:42:pan`). Then an attacker with database write access cannot copy the encrypted PAN of restaurant 7 into restaurant 42's row: decryption fails because the AAD differs.
 - **Never** use AES-ECB, or AES-CBC without a MAC, for new work.
 
 ### Envelope encryption and key management
@@ -212,7 +212,7 @@ sequenceDiagram
     participant Enc as EnvelopeEncryptor
     participant KV as Key Vault
     participant DB as PostgreSQL
-    App->>Enc: Encrypt(PAN, aad contractor 42)
+    App->>Enc: Encrypt(PAN, aad restaurant 42)
     alt no active data key or key is too old
         Enc->>Enc: Generate 32-byte DEK
         Enc->>KV: wrapKey(DEK) with KEK kek-2026-10
@@ -228,7 +228,7 @@ The encryptor calls Key Vault only when it needs a fresh data key, not on every 
 
 ## Step-by-step example
 
-**Scenario.** An infrastructure consultancy onboards 18,000 sub-contractors a year through a portal. Each submits a PAN, a GST number and a bank account for payments. An audit finding says: "PAN and bank details are visible to anyone with read access to the database, including the reporting replica used by the MIS team." We fix it in steps.
+**Scenario.** A food-delivery platform onboards 18,000 restaurants a year through its partner app. Each restaurant owner submits a PAN, a GST number and a bank account for weekly payouts. An audit finding says: "PAN and bank details are visible to anyone with read access to the database, including the reporting replica used by the analytics team." We fix it in steps.
 
 ### Step 1 — HTTPS everywhere, verified
 
@@ -257,7 +257,7 @@ Problems: the key sits in the same config as the database connection string, so 
 Design choices, with numbers:
 
 - **DEK reuse**: one DEK per instance for up to 1 hour or 1,000,000 encryptions, whichever comes first. With 18,000 onboardings a year that is a few DEKs a day. With a busy service it still stays far below the 2³² GCM limit.
-- **AAD**: `contractor:{id}:pan`, so a ciphertext copied to another row fails to decrypt.
+- **AAD**: `restaurant:{id}:pan`, so a ciphertext copied to another row fails to decrypt.
 - **Blind index** with a *separate* HMAC key, so "PAN already registered?" is one indexed lookup.
 - **Blob format** that carries the KEK id, so we can rotate KEKs yearly.
 
@@ -514,28 +514,28 @@ using Kyc.Api.Crypto;
 
 namespace Kyc.Api.Kyc;
 
-public sealed record ContractorPanRow(Guid ContractorId, byte[] PanCipher, string PanIndex);
+public sealed record RestaurantPanRow(Guid RestaurantId, byte[] PanCipher, string PanIndex);
 
 public interface IPanStore
 {
-    Task SaveAsync(ContractorPanRow row, CancellationToken ct);
-    Task<ContractorPanRow?> GetAsync(Guid contractorId, CancellationToken ct);
+    Task SaveAsync(RestaurantPanRow row, CancellationToken ct);
+    Task<RestaurantPanRow?> GetAsync(Guid restaurantId, CancellationToken ct);
     Task<Guid?> FindByIndexAsync(string panIndex, CancellationToken ct);
 }
 
 /// <summary>Stand-in for a PostgreSQL table with a UNIQUE index on pan_index.</summary>
 public sealed class InMemoryPanStore : IPanStore
 {
-    private readonly ConcurrentDictionary<Guid, ContractorPanRow> _rows = new();
-    public Task SaveAsync(ContractorPanRow row, CancellationToken ct) { _rows[row.ContractorId] = row; return Task.CompletedTask; }
-    public Task<ContractorPanRow?> GetAsync(Guid id, CancellationToken ct) => Task.FromResult(_rows.TryGetValue(id, out var r) ? r : null);
+    private readonly ConcurrentDictionary<Guid, RestaurantPanRow> _rows = new();
+    public Task SaveAsync(RestaurantPanRow row, CancellationToken ct) { _rows[row.RestaurantId] = row; return Task.CompletedTask; }
+    public Task<RestaurantPanRow?> GetAsync(Guid id, CancellationToken ct) => Task.FromResult(_rows.TryGetValue(id, out var r) ? r : null);
     public Task<Guid?> FindByIndexAsync(string idx, CancellationToken ct) =>
-        Task.FromResult(_rows.Values.Where(r => r.PanIndex == idx).Select(r => (Guid?)r.ContractorId).FirstOrDefault());
+        Task.FromResult(_rows.Values.Where(r => r.PanIndex == idx).Select(r => (Guid?)r.RestaurantId).FirstOrDefault());
 }
 
-public sealed class DuplicatePanException(Guid existing) : Exception($"PAN already registered to contractor {existing}.")
+public sealed class DuplicatePanException(Guid existing) : Exception($"PAN already registered to restaurant {existing}.")
 {
-    public Guid ExistingContractorId { get; } = existing;
+    public Guid ExistingRestaurantId { get; } = existing;
 }
 
 public sealed partial class KycService(IFieldEncryptor encryptor, BlindIndexer indexer, IPanStore store)
@@ -543,34 +543,34 @@ public sealed partial class KycService(IFieldEncryptor encryptor, BlindIndexer i
     [GeneratedRegex("^[A-Z]{5}[0-9]{4}[A-Z]$")]
     private static partial Regex PanFormat();
 
-    private static byte[] Aad(Guid contractorId) => Encoding.UTF8.GetBytes($"contractor:{contractorId:N}:pan");
+    private static byte[] Aad(Guid restaurantId) => Encoding.UTF8.GetBytes($"restaurant:{restaurantId:N}:pan");
 
     public static string Normalise(string pan) => pan.Trim().Replace(" ", "").ToUpperInvariant();
 
-    public async Task RegisterPanAsync(Guid contractorId, string pan, CancellationToken ct = default)
+    public async Task RegisterPanAsync(Guid restaurantId, string pan, CancellationToken ct = default)
     {
         var p = Normalise(pan);
         if (!PanFormat().IsMatch(p)) throw new ArgumentException("PAN must look like ABCDE1234F.", nameof(pan));
         var index = indexer.Compute("pan", p);
         var existing = await store.FindByIndexAsync(index, ct);
-        if (existing is { } other && other != contractorId) throw new DuplicatePanException(other);
-        var cipher = await encryptor.EncryptAsync(Encoding.UTF8.GetBytes(p), Aad(contractorId), ct);
-        await store.SaveAsync(new ContractorPanRow(contractorId, cipher, index), ct);
+        if (existing is { } other && other != restaurantId) throw new DuplicatePanException(other);
+        var cipher = await encryptor.EncryptAsync(Encoding.UTF8.GetBytes(p), Aad(restaurantId), ct);
+        await store.SaveAsync(new RestaurantPanRow(restaurantId, cipher, index), ct);
     }
 
     /// <summary>Most screens only need the masked value: ABCDE****F.</summary>
-    public async Task<string?> GetMaskedPanAsync(Guid contractorId, CancellationToken ct = default)
+    public async Task<string?> GetMaskedPanAsync(Guid restaurantId, CancellationToken ct = default)
     {
-        var pan = await GetPanAsync(contractorId, ct);
+        var pan = await GetPanAsync(restaurantId, ct);
         return pan is null ? null : $"{pan[..5]}****{pan[^1]}";
     }
 
-    /// <summary>Full value: call only from flows that need it (payment file generation), and audit the call.</summary>
-    public async Task<string?> GetPanAsync(Guid contractorId, CancellationToken ct = default)
+    /// <summary>Full value: call only from flows that need it (weekly payout file generation), and audit the call.</summary>
+    public async Task<string?> GetPanAsync(Guid restaurantId, CancellationToken ct = default)
     {
-        var row = await store.GetAsync(contractorId, ct);
+        var row = await store.GetAsync(restaurantId, ct);
         if (row is null) return null;
-        var plain = await encryptor.DecryptAsync(row.PanCipher, Aad(contractorId), ct);
+        var plain = await encryptor.DecryptAsync(row.PanCipher, Aad(restaurantId), ct);
         return Encoding.UTF8.GetString(plain);
     }
 }
@@ -615,14 +615,14 @@ var app = builder.Build();
 if (!app.Environment.IsDevelopment()) app.UseHsts();
 app.UseHttpsRedirection();
 
-app.MapPut("/contractors/{id:guid}/pan", async (Guid id, PanRequest body, KycService kyc, CancellationToken ct) =>
+app.MapPut("/restaurants/{id:guid}/pan", async (Guid id, PanRequest body, KycService kyc, CancellationToken ct) =>
 {
     try { await kyc.RegisterPanAsync(id, body.Pan, ct); return Results.NoContent(); }
     catch (ArgumentException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status400BadRequest); }
     catch (DuplicatePanException) { return Results.Problem("This PAN is already registered.", statusCode: StatusCodes.Status409Conflict); }
 });
 
-app.MapGet("/contractors/{id:guid}/pan", async (Guid id, KycService kyc, CancellationToken ct) =>
+app.MapGet("/restaurants/{id:guid}/pan", async (Guid id, KycService kyc, CancellationToken ct) =>
     await kyc.GetMaskedPanAsync(id, ct) is { } masked ? Results.Ok(new { pan = masked }) : Results.NotFound());
 
 app.Run();
@@ -635,7 +635,7 @@ Notes on the code:
 - **The wrapper is an interface.** In production you implement `IKeyWrapper` with the Azure Key Vault `CryptographyClient` (`WrapKeyAsync` / `UnwrapKeyAsync` with `RSA-OAEP-256` or AES key wrap on Managed HSM), authenticated with a managed identity so no secret is stored at all. That code needs the `Azure.Security.KeyVault.Keys` package, so it is not compiled here.
 - **The KEK id is authenticated.** `LocalKeyWrapper` passes the key id as AAD, so a wrapped key cannot be relabelled as another KEK's.
 - **The double-checked rotation** in `GetActiveKeyAsync` means 200 concurrent requests at rotation time cause one wrap call, not 200.
-- **The API never returns the full PAN.** Only the payment-file job calls `GetPanAsync`, and that call should be written to the audit log.
+- **The API never returns the full PAN.** Only the weekly payout-file job calls `GetPanAsync`, and that call should be written to the audit log.
 
 ### Mutual TLS for the partner endpoint
 
@@ -683,7 +683,7 @@ SSL Mode=VerifyFull;Root Certificate=/etc/ssl/certs/pg-ca.pem
 | Certificates renewed by a calendar reminder | Outage on the day someone is on leave | ACME or managed certificates, plus expiry alerts |
 
 :::callout type=mistake title="Encryption is not access control"
-If your API endpoint `GET /contractors/{id}/pan` returns the decrypted PAN to any logged-in user, column-level encryption protected nothing: the attacker simply calls the API. Encryption at rest narrows *who can read data through other paths* (DBA, dump, backup, replica). Authorization still decides who reads it through the application. See [RBAC and PBAC](#/lesson/m14-rbac-pbac).
+If your API endpoint `GET /restaurants/{id}/pan` returns the decrypted PAN to any logged-in user, column-level encryption protected nothing: the attacker simply calls the API. Encryption at rest narrows *who can read data through other paths* (DBA, dump, backup, replica). Authorization still decides who reads it through the application. See [RBAC and PBAC](#/lesson/m14-rbac-pbac).
 :::
 
 :::callout type=tradeoff title="Platform encryption is often enough"
@@ -692,7 +692,7 @@ Managed disks, managed PostgreSQL, Blob Storage and Service Bus are all encrypte
 
 ## Practical playground
 
-Run the program. It encrypts a PAN with AES-GCM, then shows three tampering attempts: flipping one ciphertext byte, changing the associated data (moving the value to another contractor's row), and reusing the same nonce for two messages to show what leaks. Change the code and watch which attempts the tag detects.
+Run the program. It encrypts a PAN with AES-GCM, then shows three tampering attempts: flipping one ciphertext byte, changing the associated data (moving the value to another restaurant's row), and reusing the same nonce for two messages to show what leaks. Change the code and watch which attempts the tag detects.
 
 :::playground type=csharp title="AES-GCM tamper lab"
 ```csharp file=Program.cs
@@ -729,16 +729,16 @@ public static class Program
     {
         var key = RandomNumberGenerator.GetBytes(32);
         var nonce = RandomNumberGenerator.GetBytes(12);
-        var cipher = Encrypt(key, nonce, "ABCDE1234F", "contractor:42:pan", out var tag);
+        var cipher = Encrypt(key, nonce, "ABCDE1234F", "restaurant:42:pan", out var tag);
         Console.WriteLine("ciphertext: " + Convert.ToHexString(cipher));
-        Console.WriteLine("1. untouched     -> " + TryDecrypt(key, nonce, cipher, tag, "contractor:42:pan"));
+        Console.WriteLine("1. untouched     -> " + TryDecrypt(key, nonce, cipher, tag, "restaurant:42:pan"));
 
         var flipped = cipher.ToArray(); flipped[3] ^= 0x01;
-        Console.WriteLine("2. one bit flip  -> " + TryDecrypt(key, nonce, flipped, tag, "contractor:42:pan"));
-        Console.WriteLine("3. moved to #7   -> " + TryDecrypt(key, nonce, cipher, tag, "contractor:7:pan"));
+        Console.WriteLine("2. one bit flip  -> " + TryDecrypt(key, nonce, flipped, tag, "restaurant:42:pan"));
+        Console.WriteLine("3. moved to #7   -> " + TryDecrypt(key, nonce, cipher, tag, "restaurant:7:pan"));
 
         // Nonce reuse: XOR of two ciphertexts equals XOR of the two plaintexts. Never do this.
-        var c2 = Encrypt(key, nonce, "PQRST9876Z", "contractor:43:pan", out _);
+        var c2 = Encrypt(key, nonce, "PQRST9876Z", "restaurant:43:pan", out _);
         var xorC = cipher.Zip(c2, (a, b) => (byte)(a ^ b)).ToArray();
         var xorP = Encoding.UTF8.GetBytes("ABCDE1234F").Zip(Encoding.UTF8.GetBytes("PQRST9876Z"), (a, b) => (byte)(a ^ b)).ToArray();
         Console.WriteLine("4. nonce reuse   -> c1^c2 == p1^p2 ? " + xorC.SequenceEqual(xorP));
@@ -909,7 +909,7 @@ Your ASP.NET Core service calls four partner APIs with `HttpClient`. Each fails 
 
 1. Partner A: `RemoteCertificateChainErrors`. `openssl` shows only one certificate (depth 0). It works in Chrome.
 2. Partner B: `RemoteCertificateNameMismatch`. You call `https://10.20.4.17/api`.
-3. Partner C: `RemoteCertificateChainErrors`, status `NotTimeValid`. The certificate is valid from 1 Oct 2026 to 30 Mar 2027. It fails only on the site office PC, whose clock shows 14 Jan 2025.
+3. Partner C: `RemoteCertificateChainErrors`, status `NotTimeValid`. The certificate is valid from 1 Oct 2026 to 30 Mar 2027. It fails only on the payouts team's office PC, whose clock shows 14 Jan 2025.
 4. Partner D: `RemoteCertificateChainErrors`, status `UntrustedRoot`. It is an internal service with a certificate from the company's private CA.
 
 For each, explain the root cause, the correct fix, and the tempting wrong fix.
@@ -1159,34 +1159,34 @@ In production this runs as a background job over the database in batches of, say
 Make it resumable: process records ordered by id in batches, persist the last id, and emit a metric `kek_rewrap_remaining`.
 :::
 
-:::exercise id=m14-tls-encryption-ex4 difficulty=intermediate kind=hld title="Sealed bids for an e-tendering portal"
-A state e-procurement portal receives sealed technical and financial bids for road and bridge tenders. Rules: nobody, including portal administrators and DBAs, may read a bid before the published opening time. At opening, the committee (three officers, at least two must approve) opens the bids. Peak load is the last hour before a deadline: about 4,000 bids of 20–200 MB each for a large tender. Bids are kept for 10 years. Extend the starter graph and explain: where TLS terminates, how bid documents are encrypted, where keys live, how "not before opening time" and "two of three officers" are enforced, and how you would prove nobody opened a bid early.
+:::exercise id=m14-tls-encryption-ex4 difficulty=intermediate kind=hld title="Sealed submissions for an online exam portal"
+A university's online exam portal collects final-project submissions (a report plus code and a demo video) for take-home exams. Rules: nobody, including portal administrators and DBAs, may read a submission before the published unsealing time, because some students have approved deadline extensions and must not be able to obtain other students' work through a friendly insider. At unsealing, the exam board (three exam controllers, at least two must approve) releases the submissions to evaluators. Peak load is the last hour before a deadline: about 4,000 submissions of 20–200 MB each for a large course. Submissions are kept for 10 years for re-evaluation requests and accreditation audits. Extend the starter graph and explain: where TLS terminates, how submission files are encrypted, where keys live, how "not before unsealing time" and "two of three controllers" are enforced, and how you would prove nobody opened a submission early.
 ::acceptance
 - TLS on every hop, with HSTS on the portal and verified TLS to the database and storage.
-- Bid files encrypted with per-bid or per-tender data keys before they are stored. Keys wrapped by a KEK in an HSM-backed key service.
-- The unwrap permission is not available to the app's normal identity before opening time. A separate opening service and an approval step (two of three) enable it.
+- Submission files encrypted with per-submission or per-exam data keys before they are stored. Keys wrapped by a KEK in an HSM-backed key service.
+- The unwrap permission is not available to the app's normal identity before unsealing time. A separate unsealing service and an approval step (two of three) enable it.
 - Every unwrap is audited (key-service logs plus the app's own tamper-evident audit log).
 - Capacity reasoning for the upload peak and storage size, with arithmetic.
 ::hint
 Ask who could read the data in each place: the browser, the load balancer, the app server, blob storage, a backup, a DBA.
 ::hint
-Peak: 4,000 bids × 100 MB average ÷ 3,600 s ≈ 111 MB/s ≈ 0.9 Gbit/s inbound. Upload directly to object storage with short-lived upload URLs instead of streaming through the API.
+Peak: 4,000 submissions × 100 MB average ÷ 3,600 s ≈ 111 MB/s ≈ 0.9 Gbit/s inbound. Upload directly to object storage with short-lived upload URLs instead of streaming through the API.
 ::hint
-Encrypting in the browser (client-side, with a public key per tender) means even the portal servers never see plaintext. What does that cost?
+Encrypting in the browser (client-side, with a public key per exam) means even the portal servers never see plaintext. What does that cost?
 ::hint
-Use a key per tender: generate it when the tender is published, and wrap it with an HSM key whose release policy requires an approval workflow at or after opening time.
+Use a key per exam: generate it when the exam is published, and wrap it with an HSM key whose release policy requires an approval workflow at or after unsealing time.
 ::starter
 ```json
 {
   "nodes": [
-    { "id": "bidder", "type": "client", "label": "Bidder browser", "props": { "rps": 2 } },
+    { "id": "student", "type": "client", "label": "Student browser", "props": { "rps": 2 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer (TLS)" },
-    { "id": "api", "type": "app-server", "label": "Tender API", "props": { "instances": 3 } },
+    { "id": "api", "type": "app-server", "label": "Exam API", "props": { "instances": 3 } },
     { "id": "db", "type": "database", "label": "PostgreSQL" },
-    { "id": "blob", "type": "object-storage", "label": "Bid documents" }
+    { "id": "blob", "type": "object-storage", "label": "Submission files" }
   ],
   "edges": [
-    { "from": "bidder", "to": "lb", "kind": "sync" },
+    { "from": "student", "to": "lb", "kind": "sync" },
     { "from": "lb", "to": "api", "kind": "sync" },
     { "from": "api", "to": "db", "kind": "sync" },
     { "from": "api", "to": "blob", "kind": "sync" }
@@ -1194,32 +1194,32 @@ Use a key per tender: generate it when the tender is published, and wrap it with
 }
 ```
 ::solution
-**Capacity.** 4,000 bids × 100 MB = 400 GB in the last hour ÷ 3,600 s ≈ 111 MB/s ≈ 0.9 Gbit/s, more in the last 10 minutes. The API issues 15-minute single-object upload URLs, and browsers upload straight to object storage in blocks. Storage (estimate): 30 large tenders a month × 400 GB ≈ 12 TB a month ≈ 1.4 PB over 10 years, so tier to cold storage after evaluation.
+**Capacity.** 4,000 submissions × 100 MB = 400 GB in the last hour ÷ 3,600 s ≈ 111 MB/s ≈ 0.9 Gbit/s, more in the last 10 minutes (students submit late). The API issues 15-minute single-object upload URLs, and browsers upload straight to object storage in blocks. Storage (estimate): 30 large exams a month × 400 GB ≈ 12 TB a month ≈ 1.4 PB over 10 years, so tier to cold storage after results are published.
 
-**Encryption (client-side envelope).** At publication, the key service creates a key pair for the tender inside the HSM and publishes only the public key. The browser encrypts each bid with a random AES-256-GCM data key, in 4 MB chunks with the chunk index in the AAD (so chunks can't be reordered), and wraps the data key with the tender's public key. The portal stores ciphertext, the wrapped key and a signed hash of each chunk. Servers, DBAs and storage never see plaintext.
+**Encryption (client-side envelope).** At publication, the key service creates a key pair for the exam inside the HSM and publishes only the public key. The browser encrypts each submission with a random AES-256-GCM data key, in 4 MB chunks with the chunk index in the AAD (so chunks can't be reordered), and wraps the data key with the exam's public key. The portal stores ciphertext, the wrapped key and a signed hash of each chunk, and gives the student a receipt with that hash. Servers, DBAs and storage never see plaintext.
 
-**Opening.** Only the *opening service* identity can be granted `decrypt` on the tender key, and only through a workflow: at or after opening time, two of three officers approve with MFA, and the grant lasts a short window.
+**Unsealing.** Only the *unsealing service* identity can be granted `decrypt` on the exam key, and only through a workflow: at or after unsealing time, two of three exam controllers approve with MFA, and the grant lasts a short window.
 
-**Proof nobody opened early.** The key service logs every decrypt with caller and time, exported to a write-once store, and the app writes hash-chained audit entries (see [audit trails](#/lesson/m14-least-privilege-audit)). No decrypt before opening time means no bid could have been read.
+**Proof nobody opened early.** The key service logs every decrypt with caller and time, exported to a write-once store, and the app writes hash-chained audit entries (see [audit trails](#/lesson/m14-least-privilege-audit)). No decrypt before unsealing time means no submission could have been read.
 
 ```json
 {
   "nodes": [
-    { "id": "bidder", "type": "client", "label": "Bidder browser (encrypts with tender public key)", "props": { "rps": 2 } },
+    { "id": "student", "type": "client", "label": "Student browser (encrypts with exam public key)", "props": { "rps": 2 } },
     { "id": "cdn", "type": "cdn", "label": "CDN / WAF (TLS 1.3, HSTS)" },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer (re-encrypts)" },
-    { "id": "api", "type": "app-server", "label": "Tender API (issues upload URLs)", "props": { "instances": 3 } },
-    { "id": "db", "type": "database", "label": "PostgreSQL (bid metadata, wrapped keys, hashes)", "props": { "replicas": 1, "multiAz": true } },
-    { "id": "blob", "type": "object-storage", "label": "Bid ciphertext (immutable, 10-year retention)" },
-    { "id": "kms", "type": "external", "label": "HSM-backed key service (tender keys)" },
-    { "id": "open", "type": "worker", "label": "Opening service (2-of-3 approval)" },
+    { "id": "api", "type": "app-server", "label": "Exam API (issues upload URLs)", "props": { "instances": 3 } },
+    { "id": "db", "type": "database", "label": "PostgreSQL (submission metadata, wrapped keys, hashes)", "props": { "replicas": 1, "multiAz": true } },
+    { "id": "blob", "type": "object-storage", "label": "Submission ciphertext (immutable, 10-year retention)" },
+    { "id": "kms", "type": "external", "label": "HSM-backed key service (exam keys)" },
+    { "id": "open", "type": "worker", "label": "Unsealing service (2-of-3 approval)" },
     { "id": "audit", "type": "monitoring", "label": "Write-once audit log store" }
   ],
   "edges": [
-    { "from": "bidder", "to": "cdn", "kind": "sync", "label": "HTTPS" },
+    { "from": "student", "to": "cdn", "kind": "sync", "label": "HTTPS" },
     { "from": "cdn", "to": "lb", "kind": "sync", "label": "HTTPS" },
     { "from": "lb", "to": "api", "kind": "sync", "label": "HTTPS" },
-    { "from": "bidder", "to": "blob", "kind": "sync", "label": "direct upload of ciphertext" },
+    { "from": "student", "to": "blob", "kind": "sync", "label": "direct upload of ciphertext" },
     { "from": "api", "to": "db", "kind": "sync", "label": "TLS verify-full" },
     { "from": "open", "to": "kms", "kind": "sync", "label": "decrypt after approval" },
     { "from": "open", "to": "blob", "kind": "sync" },
@@ -1229,11 +1229,11 @@ Use a key per tender: generate it when the tender is published, and wrap it with
 }
 ```
 
-**What breaks first.** The upload peak. Mitigate with direct-to-storage, resumable uploads and an "upload early" advisory. The worst risk is losing the tender's private key, which makes every bid unreadable, so back it up within the HSM domain.
+**What breaks first.** The upload peak. Mitigate with direct-to-storage, resumable uploads and a "submit early" reminder. The worst risk is losing the exam's private key, which makes every submission unreadable, so back it up within the HSM domain.
 ::alternatives
-Server-side encryption with a per-tender key is simpler for bidders, but the API sees plaintext during upload. That can be acceptable if the API is tightly controlled and audited.
+Server-side encryption with a per-exam key is simpler for students (no browser cryptography), but the API sees plaintext during upload. That can be acceptable if the API is tightly controlled and audited.
 ::mistakes
-- Relying on storage encryption only. Every admin with storage access can read bids.
+- Relying on storage encryption only. Every admin with storage access can read submissions.
 - Letting the regular API identity hold decrypt permission "for convenience".
 - Streaming 400 GB an hour through API servers.
 :::
@@ -1463,8 +1463,8 @@ public class EnvelopeEncryptorTests
     public async Task Ciphertext_moved_to_another_row_fails()
     {
         var enc = /* as above */;
-        var blob = await enc.EncryptAsync("ABCDE1234F"u8.ToArray(), "contractor:1:pan"u8.ToArray());
-        await Assert.ThrowsAnyAsync<CryptographicException>(() => enc.DecryptAsync(blob, "contractor:2:pan"u8.ToArray()));
+        var blob = await enc.EncryptAsync("ABCDE1234F"u8.ToArray(), "restaurant:1:pan"u8.ToArray());
+        await Assert.ThrowsAnyAsync<CryptographicException>(() => enc.DecryptAsync(blob, "restaurant:2:pan"u8.ToArray()));
     }
 }
 ```
@@ -1478,7 +1478,7 @@ public class EnvelopeEncryptorTests
 - **Banks and payment gateways** commonly require mutual TLS or signed payloads for server-to-server APIs. Integration teams keep two certificates valid at once during each rotation.
 - **Cloud key services** (Azure Key Vault and Managed HSM, AWS KMS, Google Cloud KMS) expose wrap/unwrap of data keys. Their own "customer-managed key" storage encryption is envelope encryption.
 - **SQL Server Always Encrypted** keeps column keys on the client side, so the engine never sees plaintext. PostgreSQL has no equivalent, so the application encrypts (as here), or uses `pgcrypto`, where the database sees the key in the SQL, a weaker model.
-- **Infrastructure project platforms** hold bank guarantees, contractor KYC and land records: good candidates for column-level encryption. Drawings and progress photos usually need only storage encryption and access control.
+- **Food-delivery and ride-hailing platforms** hold restaurant and driver KYC (PAN, bank accounts, licence numbers): good candidates for column-level encryption. Menu photos and proof-of-delivery images usually need only storage encryption and access control.
 
 ## Interview questions
 
@@ -1565,7 +1565,7 @@ A partner's API works in Chrome but your `HttpClient` on Linux fails with `Remot
 - [ ] Switch to TLS 1.2.
 > The server is not sending its intermediate. Browsers compensate, many clients don't. Disabling validation or trusting the leaf directly are both unsafe workarounds.
 ::q single
-An attacker with read access to a PostgreSQL read replica runs `SELECT * FROM contractors`. Which layer stops them from reading the PAN numbers?
+An attacker with read access to a PostgreSQL read replica runs `SELECT * FROM restaurants`. Which layer stops them from reading the PAN numbers?
 - [ ] Disk encryption on the replica's volumes.
 - [ ] TLS between the replica and the primary.
 - [x] Column-level encryption done by the application, with keys the replica's users can't reach.
@@ -1587,10 +1587,10 @@ Which are real benefits of envelope encryption with a cloud key service? (Select
 - [ ] It makes encrypted columns searchable with LIKE.
 > Envelope encryption narrows who can decrypt and makes rotation cheap. It doesn't replace authorization, and it doesn't make ciphertext searchable.
 ::q single
-Why include `contractor:{id}:pan` as associated data when encrypting a PAN?
+Why include `restaurant:{id}:pan` as associated data when encrypting a PAN?
 - [ ] It makes the ciphertext shorter.
-- [ ] It hides the contractor id.
-- [x] Ciphertext copied into another contractor's row fails to decrypt, because the authenticated context differs.
+- [ ] It hides the restaurant id.
+- [x] Ciphertext copied into another restaurant's row fails to decrypt, because the authenticated context differs.
 - [ ] It replaces the need for a nonce.
 > AAD is authenticated, not encrypted. It binds the value to its place without being stored inside the ciphertext.
 ::q single

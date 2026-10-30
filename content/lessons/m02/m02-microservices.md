@@ -341,7 +341,7 @@ public sealed class EmployeeApiClient(HttpClient http, ILogger<EmployeeApiClient
 }
 ```
 
-`HttpClient.Timeout` turns a hung call into a `TaskCanceledException` after 2 seconds, so a slow Employee service can't hold Leave's threads and connections forever. The `when` filter distinguishes "our caller cancelled" from "the dependency timed out". In production you would add a resilience pipeline (retry with jitter for this idempotent GET, plus a circuit breaker) with `Microsoft.Extensions.Http.Resilience`.
+`HttpClient.Timeout` turns a hung call into a `TaskCanceledException` after 2 seconds, so a slow Employee service can't hold Leave's requests and outbound connections open forever. The `when` filter distinguishes "our caller cancelled" from "the dependency timed out". In production you would add a resilience pipeline (retry with jitter for this idempotent GET, plus a circuit breaker) with `Microsoft.Extensions.Http.Resilience`, usually one line on the client registration: `.AddStandardResilienceHandler()`. That handler has its own total and per-attempt timeouts, so when you use it, raise or disable `HttpClient.Timeout` so it does not cut retries short. (This replaces the older Polly v7 `AddPolicyHandler` style.)
 
 ### The use case
 
@@ -444,6 +444,7 @@ using Leave.Service.Application;
 using Leave.Service.Clients;
 using Leave.Service.Messaging;
 using Leave.Service.Replica;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -463,6 +464,8 @@ builder.Services.AddHealthChecks();
 
 var app = builder.Build();
 
+// The gateway authenticates the user; in production the employee id comes from the token's claims,
+// not from the body, so nobody can apply for leave on someone else's behalf.
 app.MapPost("/leave", async (ApplyLeave command, ApplyLeaveHandler handler, CancellationToken ct) =>
 {
     var result = await handler.HandleAsync(command, ct);
@@ -474,9 +477,10 @@ app.MapPost("/leave", async (ApplyLeave command, ApplyLeaveHandler handler, Canc
     };
 });
 
-// Liveness: the process is up. Readiness should also check the leave database and broker connection.
-app.MapHealthChecks("/health/live");
-app.MapHealthChecks("/health/ready");
+// Liveness: the process is up, so run no dependency checks (a database outage must not get every pod restarted).
+// Readiness: checks tagged "ready", such as the leave database and broker connection, decide whether to send traffic.
+app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
+app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = c => c.Tags.Contains("ready") });
 
 app.Run();
 ```
@@ -1197,7 +1201,7 @@ public async Task Not_found_maps_to_null()
 
 - **Large online platforms** such as Amazon and Netflix have described publicly how they moved from monoliths to services so that many teams could deploy independently. They also invested heavily in internal platforms (deployment, monitoring, resilience tooling) to make that sustainable. The tooling investment is part of the pattern, not an extra.
 - **Indian fintech and e-commerce companies** at high scale commonly separate payments, orders, catalogue and notifications into services, because each has different load patterns (a sale day hits orders and payments hardest) and different compliance needs.
-- **Infrastructure and project-management platforms** often benefit from a hybrid: a modular monolith for core project data, plus separate services for heavy, bursty or specialised work such as drone imagery processing, document OCR or BIM model conversion. These have very different compute needs and failure modes from the core app.
+- **Healthcare and insurance platforms** often benefit from a hybrid: a modular monolith for core patient or policy data, plus separate services for heavy, bursty or specialised work such as medical-image processing, OCR of scanned claim forms or video consultations. These have very different compute needs and failure modes from the core app.
 - **Teams moving back.** Some teams have publicly described merging services back into fewer deployables after the operational cost outweighed the benefit. This is a valid correction, not a failure. See [Architecture evolution](#/lesson/m16-architecture-evolution).
 
 ## Interview questions

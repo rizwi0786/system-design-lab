@@ -230,7 +230,7 @@ The diagram shows a fallback in action. The push token is dead (the user uninsta
 
 ### 2. Chain of Responsibility: filters
 
-Each filter answers one question and returns `Allow`, `Suppress(reason)` or `Defer(until, reason)`. The dispatcher runs them in order and stops at the first non-Allow. New rules ("no marketing on national mourning days", "no SMS to numbers on the do-not-disturb registry") are new links, not edits to existing ones. Order matters: put the **cheap, decisive** rules first (opt-out) and **stateful** rules last (frequency cap records a send, so it should only count messages that passed every other rule).
+Each filter answers one question and returns `Allow`, `Suppress(reason)` or `Defer(until, reason)`. The dispatcher runs them in order and stops at the first `Suppress`. A `Defer` doesn't stop the chain: the later rules still run, and the latest deferral wins. That detail matters. If quiet hours stopped the chain, the frequency cap would never see a message submitted at 22:00, so ten "sale" messages submitted overnight would all go out at 09:00, cap or no cap. New rules ("no marketing on national mourning days", "no SMS to numbers on the do-not-disturb registry") are new links, not edits to existing ones. Order matters: put the **cheap, decisive** rules first (opt-out) and **stateful** rules last (frequency cap records a send, so it should only count messages that passed every other rule).
 
 ### 3. Channel plan instead of "if push fails then SMS" code
 
@@ -652,9 +652,7 @@ public sealed class NotificationDispatcher(
 
         var now = clock.GetUtcNow();
         var delivery = new Delivery(Guid.NewGuid(), request, plan, now);
-        var decision = plan.Count == 0
-            ? FilterDecision.SuppressBecause("no-reachable-channel")
-            : _filters.Select(f => f.Evaluate(request, user, now)).FirstOrDefault(d => d.Kind != DecisionKind.Allow) ?? FilterDecision.Allowed;
+        var decision = plan.Count == 0 ? FilterDecision.SuppressBecause("no-reachable-channel") : RunFilters(request, user, now);
 
         switch (decision.Kind)
         {
@@ -669,10 +667,26 @@ public sealed class NotificationDispatcher(
             delivery.Id, request.UserId, request.Category, delivery.Status, delivery.Reason);
         return delivery;
     }
+
+    /// <summary>Suppress ends the chain at once. Defer is remembered but the chain continues, so later rules
+    /// (the frequency cap) still see deferred messages. The latest deferral wins.</summary>
+    private FilterDecision RunFilters(NotificationRequest request, UserProfile user, DateTimeOffset now)
+    {
+        FilterDecision? deferral = null;
+        foreach (var filter in _filters)
+        {
+            var decision = filter.Evaluate(request, user, now);
+            if (decision.Kind == DecisionKind.Suppress) return decision;
+            if (decision.Kind == DecisionKind.Defer && (deferral is null || decision.Until > deferral.Until)) deferral = decision;
+        }
+        return deferral ?? FilterDecision.Allowed;
+    }
 }
 ```
 
-`Select(...).FirstOrDefault(...)` is lazy, so the chain stops at the first filter that doesn't allow. Filters after it never run, which is why the stateful frequency cap goes last.
+A `Suppress` stops the chain, so filters after it never run. That is why the stateful frequency cap goes last: it records every message it allows, and it should only count messages no other rule has thrown away. A deferred message *is* counted, at submit time, because it will be sent.
+
+Check the idempotency path for check-then-act races. `FindByKey` followed later by `AddOnce` is a check-then-act, but `AddOnce` re-checks under the store's lock, so two identical requests racing each other still produce one delivery: the loser gets the winner's delivery back. The one side effect of losing is that the loser already ran the filters, so it may have used up one frequency-cap slot. That errs on the side of sending *less* marketing, which is acceptable. In the database version you'd insert the idempotency key first, in the same transaction as the cap counter, and the problem disappears.
 
 ### Processor (send side) and worker
 
@@ -703,10 +717,9 @@ public sealed class DeliveryProcessor(
             var delivery = store.Get(id);
             if (delivery is null || delivery.IsFinal) continue;
 
-            var now = clock.GetUtcNow();
-            delivery.StartSending(now);
+            delivery.StartSending(clock.GetUtcNow());
             var result = await SendOnceAsync(delivery, ct);
-            delivery.RecordResult(result, now, retry);
+            delivery.RecordResult(result, clock.GetUtcNow(), retry);            // backoff counts from when the call ended
             attempts++;
 
             if (delivery.Status == DeliveryStatus.RetryScheduled) queue.Enqueue(delivery.Id, delivery.NextAttemptAt, delivery.Lane);
@@ -1073,6 +1086,19 @@ public class DispatchFlowTests
         var sale = d.Submit(new NotificationRequest("k4", "u2", Category.Marketing, "sale", new Dictionary<string, string>()));
         Assert.Equal(DeliveryStatus.Suppressed, sale.Status);
         Assert.Equal("marketing-not-consented", sale.Reason);
+    }
+
+    [Fact]
+    public void Deferred_marketing_still_counts_towards_the_cap()
+    {
+        var (d, _, clock) = Build();
+        clock.Now = new DateTimeOffset(2026, 10, 20, 22, 30, 0, Ist);              // inside quiet hours
+        var results = Enumerable.Range(0, 4)
+            .Select(i => d.Submit(new NotificationRequest($"n{i}", "u1", Category.Marketing, "sale", new Dictionary<string, string>())))
+            .ToList();
+        Assert.All(results.Take(3), r => Assert.Equal(DeliveryStatus.Deferred, r.Status));
+        Assert.Equal(DeliveryStatus.Suppressed, results[3].Status);               // the cap still applies overnight
+        Assert.Equal("frequency-cap", results[3].Reason);
     }
 
     [Fact]
@@ -1702,7 +1728,7 @@ Duplicate *requests* are handled by the idempotency key on `Submit`. Duplicate *
 ::q advanced
 How would you scale this dispatcher to 50 million notifications a day?
 ::a
-50 million per day averages about 580 per second, with peaks several times higher during campaigns (an estimate; measure your own). Move the queue to a broker with one queue per lane (and per channel for independent rate limits), keep delivery state in a database partitioned by delivery id, and run stateless processor instances that compete for messages. Use the outbox pattern so `Submit` writes the delivery and its queue message atomically. Enforce per-provider rate limits with a token bucket shared across instances. Deferred marketing should be released gradually (for example, spread over 30 minutes after 09:00), not all at once. Keep the same `Delivery.RecordResult` logic; only the infrastructure changes.
+50 million per day averages about 580 per second, with peaks several times higher during campaigns (an estimate; measure your own). Move the queue to a broker with one queue per lane (and per channel for independent rate limits), keep delivery state in a database partitioned by delivery id, and run stateless processor instances that compete for messages. Use the outbox pattern so `Submit` writes the delivery and its queue message atomically. Enforce per-provider rate limits with a token bucket shared across instances. Deferred marketing should be released gradually (for example, spread over 30 minutes after 09:00), not all at once. The in-memory frequency cap must move to shared storage too (an atomic counter in Redis, or a PostgreSQL row updated in the submit transaction); otherwise each of ten instances enforces its own "3 per day" and a user can get 30. Keep the same `Delivery.RecordResult` logic; only the infrastructure changes.
 :::
 
 ## Summary and revision
@@ -1725,7 +1751,7 @@ A: Sent, TransientFailure (retry later) and PermanentFailure (move to the next c
 Q: What does the quiet-hours filter do with a marketing message at 22:30 user time?
 A: Defers it to 09:00 user time the next day; OTP and transactional messages are not affected.
 Q: Why is the frequency cap filter placed last in the chain?
-A: It records each message it allows, so it should only count messages that passed every other rule.
+A: It records each message it allows, so it should only count messages no other rule suppressed. Deferrals don't stop the chain, so deferred messages are still counted.
 Q: What is priority inversion in a notification queue?
 A: An urgent message (OTP) waiting behind a backlog of less urgent ones (marketing). Separate lanes prevent it.
 Q: What is "equal jitter"?

@@ -1,5 +1,5 @@
 {
- "generatedAt": "2026-10-26T11:08:30.138Z",
+ "generatedAt": "2026-10-29T19:07:31.865Z",
  "modules": [
   {
    "id": "m01",
@@ -22,7 +22,7 @@
      "order": 0,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7468,
+     "words": 7502,
      "exercises": 5,
      "minutes": 60,
      "prerequisites": [],
@@ -51,7 +51,7 @@
      "order": 1,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6882,
+     "words": 6942,
      "exercises": 5,
      "minutes": 60,
      "prerequisites": [
@@ -83,7 +83,7 @@
      "order": 2,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8191,
+     "words": 8203,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -117,7 +117,7 @@
      "order": 3,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7981,
+     "words": 8002,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -148,7 +148,7 @@
      "order": 4,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6766,
+     "words": 6765,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -179,7 +179,7 @@
      "order": 5,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6382,
+     "words": 6390,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -209,7 +209,7 @@
      "order": 6,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6626,
+     "words": 6802,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -224,7 +224,7 @@
       "access-modifiers"
      ],
      "patterns": [],
-     "summary": "The four ideas behind object-oriented design, explained with a highway toll plaza. Hide data behind rules, hide complexity behind simple contracts, share behaviour through inheritance, and let one call do the right thing for many types.",
+     "summary": "The four ideas behind object-oriented design, explained with an expressway toll plaza where cars pay by FASTag or cash. Hide data behind rules, hide complexity behind simple contracts, share behaviour through inheritance, and let one call do the right thing for many types.",
      "problems": []
     },
     {
@@ -241,7 +241,7 @@
      "order": 7,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6826,
+     "words": 6917,
      "exercises": 5,
      "minutes": 60,
      "prerequisites": [
@@ -274,7 +274,7 @@
      "order": 8,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7991,
+     "words": 8192,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -304,7 +304,7 @@
      "order": 9,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7730,
+     "words": 7755,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -338,7 +338,7 @@
      "order": 10,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7972,
+     "words": 7977,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -371,7 +371,7 @@
      "order": 11,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7484,
+     "words": 7578,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -403,7 +403,7 @@
      "order": 12,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8668,
+     "words": 9025,
      "exercises": 6,
      "minutes": 80,
      "prerequisites": [
@@ -436,7 +436,7 @@
      "order": 13,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8675,
+     "words": 8951,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -468,7 +468,7 @@
      "order": 14,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8347,
+     "words": 8393,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -506,7 +506,7 @@
      "order": 15,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7051,
+     "words": 7057,
      "exercises": 5,
      "minutes": 60,
      "prerequisites": [
@@ -537,7 +537,7 @@
      "order": 16,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7169,
+     "words": 7287,
      "exercises": 5,
      "minutes": 60,
      "prerequisites": [
@@ -569,7 +569,7 @@
      "order": 17,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6856,
+     "words": 6993,
      "exercises": 5,
      "minutes": 60,
      "prerequisites": [
@@ -587,7 +587,7 @@
       "foundations"
      ],
      "patterns": [],
-     "summary": "What high-level design (HLD) and low-level design (LLD) each decide, the artefacts each produces, and how they connect — shown by designing one feature, a construction site-inspection request, at both levels and in C#.",
+     "summary": "What high-level design (HLD) and low-level design (LLD) each decide, the artefacts each produces, and how they connect — shown by designing one feature, a used-car inspection booking, at both levels and in C#.",
      "problems": []
     },
     {
@@ -604,7 +604,7 @@
      "order": 18,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7882,
+     "words": 8013,
      "exercises": 5,
      "minutes": 60,
      "prerequisites": [
@@ -639,7 +639,7 @@
      "order": 19,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6556,
+     "words": 6573,
      "exercises": 5,
      "minutes": 60,
      "prerequisites": [
@@ -672,7 +672,7 @@
      "order": 20,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6208,
+     "words": 6228,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -707,7 +707,7 @@
      "order": 21,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5556,
+     "words": 5611,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -739,7 +739,7 @@
      "order": 22,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6261,
+     "words": 6277,
      "exercises": 5,
      "minutes": 65,
      "prerequisites": [
@@ -771,7 +771,7 @@
      "order": 23,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6516,
+     "words": 6537,
      "exercises": 5,
      "minutes": 65,
      "prerequisites": [
@@ -806,7 +806,7 @@
      "order": 24,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6531,
+     "words": 6529,
      "exercises": 6,
      "minutes": 75,
      "prerequisites": [
@@ -839,7 +839,7 @@
      "order": 25,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6418,
+     "words": 6524,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -877,7 +877,7 @@
      "order": 26,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6311,
+     "words": 6359,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -913,7 +913,7 @@
      "order": 27,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6501,
+     "words": 6509,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -950,7 +950,7 @@
      "order": 28,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5867,
+     "words": 5890,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -1020,7 +1020,7 @@
      "order": 30,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5974,
+     "words": 6457,
      "exercises": 5,
      "minutes": 65,
      "prerequisites": [
@@ -1053,7 +1053,7 @@
      "order": 31,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5668,
+     "words": 5690,
      "exercises": 5,
      "minutes": 60,
      "prerequisites": [
@@ -1085,7 +1085,7 @@
      "order": 32,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6879,
+     "words": 6897,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -1125,7 +1125,7 @@
      "order": 33,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6004,
+     "words": 6360,
      "exercises": 5,
      "minutes": 60,
      "prerequisites": [
@@ -1155,7 +1155,7 @@
      "order": 34,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6431,
+     "words": 6677,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -1188,7 +1188,7 @@
      "order": 35,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7914,
+     "words": 8079,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -1255,7 +1255,7 @@
      "order": 37,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7185,
+     "words": 7333,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -1285,7 +1285,7 @@
      "order": 38,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6458,
+     "words": 6968,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -1319,7 +1319,7 @@
      "order": 39,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6314,
+     "words": 7293,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -1391,7 +1391,7 @@
      "order": 41,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7868,
+     "words": 8001,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -1426,7 +1426,7 @@
      "order": 42,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6829,
+     "words": 7327,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -1459,7 +1459,7 @@
      "order": 43,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5794,
+     "words": 6227,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -1492,7 +1492,7 @@
      "order": 44,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6674,
+     "words": 6798,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -1526,7 +1526,7 @@
      "order": 45,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6819,
+     "words": 6856,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -1558,7 +1558,7 @@
      "order": 46,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7317,
+     "words": 7421,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -1592,7 +1592,7 @@
      "order": 47,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8180,
+     "words": 8220,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -1626,7 +1626,7 @@
      "order": 48,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7397,
+     "words": 7508,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -1658,7 +1658,7 @@
      "order": 49,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6559,
+     "words": 6812,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -1690,7 +1690,7 @@
      "order": 50,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7857,
+     "words": 7955,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -1728,7 +1728,7 @@
      "order": 51,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8552,
+     "words": 8729,
      "exercises": 5,
      "minutes": 120,
      "prerequisites": [
@@ -1772,7 +1772,7 @@
      "order": 52,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5592,
+     "words": 5910,
      "exercises": 5,
      "minutes": 65,
      "prerequisites": [
@@ -1787,7 +1787,7 @@
       "refactoring"
      ],
      "patterns": [],
-     "summary": "Group code by who asks for changes to it. A class should have one reason to change, which in practice means it serves one group of people (one actor), so a change for finance never breaks a report for the client.",
+     "summary": "Group code by who asks for changes to it. A class should have one reason to change, which in practice means it serves one group of people (one actor), so a change for finance never breaks the invoice a customer sees.",
      "problems": []
     },
     {
@@ -1802,7 +1802,7 @@
      "order": 53,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5526,
+     "words": 6756,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -1833,7 +1833,7 @@
      "order": 54,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5713,
+     "words": 6144,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -1863,7 +1863,7 @@
      "order": 55,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5544,
+     "words": 5817,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -1893,7 +1893,7 @@
      "order": 56,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5373,
+     "words": 6444,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -1915,6 +1915,46 @@
      "problems": []
     },
     {
+     "id": "m04-solid-in-practice",
+     "title": "SOLID in practice: one real feature, all five principles",
+     "level": "intermediate",
+     "topics": [
+      "refactoring",
+      "SRP",
+      "OCP",
+      "LSP",
+      "ISP",
+      "DIP",
+      "when to stop"
+     ],
+     "module": "m04",
+     "order": 57,
+     "status": "reviewed",
+     "hasContent": true,
+     "words": 6929,
+     "exercises": 5,
+     "minutes": 90,
+     "prerequisites": [
+      "m04-srp",
+      "m04-ocp",
+      "m04-lsp",
+      "m04-isp",
+      "m04-dip"
+     ],
+     "tags": [
+      "solid",
+      "refactoring",
+      "clean-code",
+      "aspnet-core",
+      "design-review"
+     ],
+     "patterns": [
+      "Strategy"
+     ],
+     "summary": "Refactor one messy food-delivery checkout service step by step — SRP, then OCP, an LSP check, ISP and DIP — naming the change request each step makes cheap, and then learn when to stop, what each step costs and how to spot over-engineering in review.",
+     "problems": []
+    },
+    {
      "id": "m04-dry-kiss-yagni",
      "title": "DRY, KISS and YAGNI",
      "level": "beginner",
@@ -1923,10 +1963,10 @@
       "simplicity"
      ],
      "module": "m04",
-     "order": 57,
+     "order": 58,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5540,
+     "words": 5739,
      "exercises": 5,
      "minutes": 60,
      "prerequisites": [
@@ -1953,10 +1993,10 @@
       "shotgun surgery"
      ],
      "module": "m04",
-     "order": 58,
+     "order": 59,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5982,
+     "words": 6509,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -1983,10 +2023,10 @@
       "delegation"
      ],
      "module": "m04",
-     "order": 59,
+     "order": 60,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5522,
+     "words": 5764,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -2017,10 +2057,10 @@
       "hidden dependencies"
      ],
      "module": "m04",
-     "order": 60,
+     "order": 61,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6965,
+     "words": 7351,
      "exercises": 5,
      "minutes": 65,
      "prerequisites": [
@@ -2052,10 +2092,10 @@
       "strangler"
      ],
      "module": "m04",
-     "order": 61,
+     "order": 62,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7452,
+     "words": 7875,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -2090,10 +2130,10 @@
       "clocks"
      ],
      "module": "m04",
-     "order": 62,
+     "order": 63,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6685,
+     "words": 7003,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -2126,10 +2166,10 @@
       "cost of change"
      ],
      "module": "m04",
-     "order": 63,
+     "order": 64,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7213,
+     "words": 7511,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -2167,10 +2207,10 @@
       "when diagrams help"
      ],
      "module": "m05",
-     "order": 64,
+     "order": 65,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8772,
+     "words": 8788,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -2200,10 +2240,10 @@
       "multiplicity"
      ],
      "module": "m05",
-     "order": 65,
+     "order": 66,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7853,
+     "words": 7858,
      "exercises": 6,
      "minutes": 90,
      "prerequisites": [
@@ -2230,10 +2270,10 @@
       "runtime snapshots"
      ],
      "module": "m05",
-     "order": 66,
+     "order": 67,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7312,
+     "words": 7349,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -2263,10 +2303,10 @@
       "alt/loop"
      ],
      "module": "m05",
-     "order": 67,
+     "order": 68,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6874,
+     "words": 6956,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -2294,10 +2334,10 @@
       "swimlanes"
      ],
      "module": "m05",
-     "order": 68,
+     "order": 69,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8631,
+     "words": 9096,
      "exercises": 6,
      "minutes": 80,
      "prerequisites": [
@@ -2326,10 +2366,10 @@
       "guards"
      ],
      "module": "m05",
-     "order": 69,
+     "order": 70,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8729,
+     "words": 8940,
      "exercises": 6,
      "minutes": 90,
      "prerequisites": [
@@ -2357,10 +2397,10 @@
       "provided/required interfaces"
      ],
      "module": "m05",
-     "order": 70,
+     "order": 71,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7946,
+     "words": 8076,
      "exercises": 6,
      "minutes": 85,
      "prerequisites": [
@@ -2389,10 +2429,10 @@
       "artifacts"
      ],
      "module": "m05",
-     "order": 71,
+     "order": 72,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8818,
+     "words": 8851,
      "exercises": 6,
      "minutes": 85,
      "prerequisites": [
@@ -2421,10 +2461,10 @@
       "cardinality"
      ],
      "module": "m05",
-     "order": 72,
+     "order": 73,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8983,
+     "words": 9155,
      "exercises": 6,
      "minutes": 90,
      "prerequisites": [
@@ -2453,10 +2493,10 @@
       "code"
      ],
      "module": "m05",
-     "order": 73,
+     "order": 74,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8713,
+     "words": 8723,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -2483,10 +2523,10 @@
       "worked C4 example"
      ],
      "module": "m05",
-     "order": 74,
+     "order": 75,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8695,
+     "words": 8956,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -2503,7 +2543,7 @@
       "lld"
      ],
      "patterns": [],
-     "summary": "A complete worked C4 example for a realistic construction progress-reporting system. Build the system context, container, component and code views one zoom at a time as Mermaid flowcharts, explain every box and arrow, and see how the lowest view becomes real ASP.NET Core code.",
+     "summary": "A complete worked C4 example for a realistic field-sales reporting system (shop visits, orders and shelf photos). Build the system context, container, component and code views one zoom at a time as Mermaid flowcharts, explain every box and arrow, and see how the lowest view becomes real ASP.NET Core code.",
      "problems": []
     },
     {
@@ -2515,10 +2555,10 @@
       "levels of detail"
      ],
      "module": "m05",
-     "order": 75,
+     "order": 76,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8401,
+     "words": 8409,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -2547,10 +2587,10 @@
       "ER to SQL"
      ],
      "module": "m05",
-     "order": 76,
+     "order": 77,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8394,
+     "words": 8423,
      "exercises": 5,
      "minutes": 95,
      "prerequisites": [
@@ -2576,9 +2616,9 @@
   {
    "id": "m06",
    "number": 6,
-   "title": "Design Patterns — The Complete Catalogue",
+   "title": "Design Patterns for .NET Backends",
    "track": "lld",
-   "description": "Every GoF pattern plus the enterprise patterns used in modern .NET.",
+   "description": "The GoF patterns you meet in .NET backends, plus the enterprise patterns used in modern ASP.NET Core.",
    "lessons": [
     {
      "id": "m06-intro-patterns",
@@ -2590,10 +2630,10 @@
       "pattern language"
      ],
      "module": "m06",
-     "order": 77,
+     "order": 78,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6943,
+     "words": 7157,
      "exercises": 5,
      "minutes": 60,
      "prerequisites": [
@@ -2629,10 +2669,10 @@
       "DI singleton"
      ],
      "module": "m06",
-     "order": 78,
+     "order": 79,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6608,
+     "words": 6613,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -2663,10 +2703,10 @@
       "creational"
      ],
      "module": "m06",
-     "order": 79,
+     "order": 80,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5385,
+     "words": 5429,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -2697,10 +2737,10 @@
       "families"
      ],
      "module": "m06",
-     "order": 80,
+     "order": 81,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5441,
+     "words": 5879,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -2731,10 +2771,10 @@
       "fluent"
      ],
      "module": "m06",
-     "order": 81,
+     "order": 82,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5891,
+     "words": 6372,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -2749,81 +2789,12 @@
       "fluent",
       "approvals",
       "notifications",
-      "reports"
+      "travel"
      ],
      "patterns": [
       "Builder"
      ],
      "summary": "Build a complicated object step by step, check it once at the end, and hand back a finished, valid result. Learn the GoF Builder with a Director, the fluent builder you meet in ASP.NET Core, and when C# records and `required` make a builder unnecessary.",
-     "problems": []
-    },
-    {
-     "id": "m06-prototype",
-     "title": "Prototype",
-     "level": "intermediate",
-     "topics": [
-      "creational",
-      "cloning"
-     ],
-     "module": "m06",
-     "order": 82,
-     "status": "reviewed",
-     "hasContent": true,
-     "words": 7106,
-     "exercises": 5,
-     "minutes": 70,
-     "prerequisites": [
-      "m01-value-reference-memory",
-      "m01-constructors",
-      "m06-intro-patterns"
-     ],
-     "tags": [
-      "creational",
-      "gof",
-      "cloning",
-      "records",
-      "immutability"
-     ],
-     "patterns": [
-      "Prototype"
-     ],
-     "summary": "Make new objects by copying a ready-made, fully configured example instead of building each one from scratch, and learn exactly what \"copy\" means for references, lists and records in C#.",
-     "problems": []
-    },
-    {
-     "id": "m06-object-pool",
-     "title": "Object Pool",
-     "level": "intermediate",
-     "topics": [
-      "creational",
-      "ArrayPool",
-      "ObjectPool"
-     ],
-     "module": "m06",
-     "order": 83,
-     "status": "reviewed",
-     "hasContent": true,
-     "words": 6932,
-     "exercises": 5,
-     "minutes": 75,
-     "prerequisites": [
-      "m01-value-reference-memory",
-      "m03-service-lifetimes",
-      "m03-async-await"
-     ],
-     "tags": [
-      "creational",
-      "performance",
-      "memory",
-      "gc",
-      "arraypool",
-      "objectpool",
-      "httpclient"
-     ],
-     "patterns": [
-      "Object Pool"
-     ],
-     "summary": "Reuse expensive objects (large buffers, connections, handlers) instead of creating and destroying them on every request, using ArrayPool, Microsoft.Extensions.ObjectPool, DbContext pooling and IHttpClientFactory, and learn when pooling makes things worse.",
      "problems": []
     },
     {
@@ -2834,10 +2805,10 @@
       "structural"
      ],
      "module": "m06",
-     "order": 84,
+     "order": 83,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6324,
+     "words": 7034,
      "exercises": 5,
      "minutes": 65,
      "prerequisites": [
@@ -2867,10 +2838,10 @@
       "structural"
      ],
      "module": "m06",
-     "order": 85,
+     "order": 84,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6841,
+     "words": 7881,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -2892,7 +2863,7 @@
      "patterns": [
       "Decorator"
      ],
-     "summary": "Add behaviour such as caching, logging and retries around an object by wrapping it in another object with the same interface, without changing the original class or exploding into subclasses, and wire the wrappers up in ASP.NET Core DI without extra libraries.",
+     "summary": "Add behaviour such as caching, logging and retries around an object by wrapping it in another object with the same interface, without changing the original class or exploding into subclasses. See where .NET already does it (Stream, DelegatingHandler, HybridCache) and wire your own wrappers in ASP.NET Core DI without extra libraries.",
      "problems": []
     },
     {
@@ -2903,10 +2874,10 @@
       "structural"
      ],
      "module": "m06",
-     "order": 86,
+     "order": 85,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6838,
+     "words": 7272,
      "exercises": 5,
      "minutes": 65,
      "prerequisites": [
@@ -2938,10 +2909,10 @@
       "protection"
      ],
      "module": "m06",
-     "order": 87,
+     "order": 86,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6884,
+     "words": 6977,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -2972,10 +2943,10 @@
       "trees"
      ],
      "module": "m06",
-     "order": 88,
+     "order": 87,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5920,
+     "words": 6910,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -2988,80 +2959,13 @@
       "gof",
       "trees",
       "recursion",
-      "boq",
+      "catalog",
       "hierarchy"
      ],
      "patterns": [
       "Composite"
      ],
-     "summary": "Treat a single item and a group of items through the same interface, so code can total, render or search a whole tree (folders, org charts, BOQ cost breakdowns, menus) without asking \"is this a leaf or a group?\".",
-     "problems": []
-    },
-    {
-     "id": "m06-bridge",
-     "title": "Bridge",
-     "level": "advanced",
-     "topics": [
-      "structural"
-     ],
-     "module": "m06",
-     "order": 89,
-     "status": "reviewed",
-     "hasContent": true,
-     "words": 5955,
-     "exercises": 5,
-     "minutes": 80,
-     "prerequisites": [
-      "m04-composition-inheritance",
-      "m06-strategy",
-      "m06-adapter"
-     ],
-     "tags": [
-      "structural",
-      "gof",
-      "composition",
-      "reporting",
-      "notifications",
-      "class-explosion"
-     ],
-     "patterns": [
-      "Bridge"
-     ],
-     "summary": "When a concept varies in two independent ways (report type and export format, notification type and channel), split it into two hierarchies joined by a reference, so you write M + N classes instead of M × N.",
-     "problems": []
-    },
-    {
-     "id": "m06-flyweight",
-     "title": "Flyweight",
-     "level": "advanced",
-     "topics": [
-      "structural",
-      "interning"
-     ],
-     "module": "m06",
-     "order": 90,
-     "status": "reviewed",
-     "hasContent": true,
-     "words": 6916,
-     "exercises": 5,
-     "minutes": 80,
-     "prerequisites": [
-      "m01-value-reference-memory",
-      "m01-collections-generics",
-      "m07-immutability"
-     ],
-     "tags": [
-      "structural",
-      "gof",
-      "memory",
-      "interning",
-      "performance",
-      "maps"
-     ],
-     "patterns": [
-      "Flyweight"
-     ],
-     "summary": "When you have huge numbers of similar objects, share the heavy, unchanging part (icon, style, glyph shape) between all of them and keep only the small, varying part (position, status) per object, cutting memory by orders of magnitude.",
+     "summary": "Treat a single item and a group of items through the same interface, so code can total, render or search a whole tree (folders, org charts, course curricula, menus) without asking \"is this a leaf or a group?\".",
      "problems": []
     },
     {
@@ -3072,10 +2976,10 @@
       "behavioral"
      ],
      "module": "m06",
-     "order": 91,
+     "order": 88,
      "status": "reviewed",
      "hasContent": true,
-     "words": 4036,
+     "words": 4091,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -3105,10 +3009,10 @@
       "IObservable"
      ],
      "module": "m06",
-     "order": 92,
+     "order": 89,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6561,
+     "words": 6563,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -3140,10 +3044,10 @@
       "queues"
      ],
      "module": "m06",
-     "order": 93,
+     "order": 90,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5327,
+     "words": 6585,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -3162,7 +3066,7 @@
      "patterns": [
       "Command"
      ],
-     "summary": "Turn a request (\"change this quantity\", \"approve this bill\") into an object you can store, queue, retry, log and undo. Covers undo/redo, command queues, background jobs, CQRS commands and command handlers in ASP.NET Core.",
+     "summary": "Turn a request (\"move this card to Done\", \"complete this sprint\") into an object you can store, queue, retry, log and undo. Covers undo/redo on a task board, macro commands, CQRS command handlers in ASP.NET Core, Channel-based background jobs, and when a plain method is the better choice.",
      "problems": []
     },
     {
@@ -3174,10 +3078,10 @@
       "state machines"
      ],
      "module": "m06",
-     "order": 94,
+     "order": 91,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5665,
+     "words": 5817,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -3206,10 +3110,10 @@
       "behavioral"
      ],
      "module": "m06",
-     "order": 95,
+     "order": 92,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5259,
+     "words": 5366,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -3239,10 +3143,10 @@
       "middleware"
      ],
      "module": "m06",
-     "order": 96,
+     "order": 93,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5432,
+     "words": 5981,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -3273,10 +3177,10 @@
       "MediatR-style"
      ],
      "module": "m06",
-     "order": 97,
+     "order": 94,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6506,
+     "words": 6545,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -3298,144 +3202,6 @@
      "problems": []
     },
     {
-     "id": "m06-iterator",
-     "title": "Iterator",
-     "level": "beginner",
-     "topics": [
-      "behavioral",
-      "IEnumerable",
-      "yield"
-     ],
-     "module": "m06",
-     "order": 98,
-     "status": "reviewed",
-     "hasContent": true,
-     "words": 6407,
-     "exercises": 5,
-     "minutes": 80,
-     "prerequisites": [
-      "m01-collections-generics",
-      "m03-async-await",
-      "m03-cancellation"
-     ],
-     "tags": [
-      "behavioral",
-      "gof",
-      "ienumerable",
-      "yield",
-      "iasyncenumerable",
-      "streaming",
-      "linq"
-     ],
-     "patterns": [
-      "Iterator"
-     ],
-     "summary": "Walk through the items of any collection, tree, file or database result one at a time, without knowing how it's stored, using IEnumerable, yield return and IAsyncEnumerable to stream data lazily instead of loading it all.",
-     "problems": []
-    },
-    {
-     "id": "m06-memento",
-     "title": "Memento",
-     "level": "intermediate",
-     "topics": [
-      "behavioral",
-      "snapshots",
-      "undo"
-     ],
-     "module": "m06",
-     "order": 99,
-     "status": "reviewed",
-     "hasContent": true,
-     "words": 6361,
-     "exercises": 5,
-     "minutes": 75,
-     "prerequisites": [
-      "m01-classes-objects",
-      "m07-immutability",
-      "m06-command"
-     ],
-     "tags": [
-      "behavioral",
-      "gof",
-      "undo",
-      "snapshots",
-      "serialization"
-     ],
-     "patterns": [
-      "Memento"
-     ],
-     "summary": "Capture an object's state in a sealed snapshot so you can restore it later (undo, rollback, saved drafts) without exposing the object's internals to the code that stores the snapshot.",
-     "problems": []
-    },
-    {
-     "id": "m06-visitor",
-     "title": "Visitor",
-     "level": "advanced",
-     "topics": [
-      "behavioral",
-      "double dispatch"
-     ],
-     "module": "m06",
-     "order": 100,
-     "status": "reviewed",
-     "hasContent": true,
-     "words": 6102,
-     "exercises": 5,
-     "minutes": 90,
-     "prerequisites": [
-      "m01-oop-pillars",
-      "m06-composite",
-      "m04-ocp"
-     ],
-     "tags": [
-      "behavioral",
-      "gof",
-      "double-dispatch",
-      "expression-trees",
-      "pattern-matching"
-     ],
-     "patterns": [
-      "Visitor"
-     ],
-     "summary": "Add new operations (totals, exports, validation, rewriting) to a fixed family of node types without editing those types, using double dispatch, and know when a C# pattern-matching switch is the simpler choice.",
-     "problems": []
-    },
-    {
-     "id": "m06-interpreter",
-     "title": "Interpreter",
-     "level": "advanced",
-     "topics": [
-      "behavioral",
-      "grammars",
-      "expression trees"
-     ],
-     "module": "m06",
-     "order": 101,
-     "status": "reviewed",
-     "hasContent": true,
-     "words": 6514,
-     "exercises": 5,
-     "minutes": 95,
-     "prerequisites": [
-      "m06-composite",
-      "m06-visitor",
-      "m06-specification"
-     ],
-     "tags": [
-      "behavioral",
-      "gof",
-      "dsl",
-      "parsing",
-      "expression-trees",
-      "rules"
-     ],
-     "patterns": [
-      "Interpreter"
-     ],
-     "summary": "Represent a small language (such as eligibility rules like amount > 5000 AND region = 'NORTH') as a grammar and a tree of node objects, parse text into that tree, then evaluate it directly or compile it with System.Linq.Expressions. Also learn when to use a parser library or an existing engine instead.",
-     "problems": []
-    },
-    {
      "id": "m06-specification",
      "title": "Specification",
      "level": "intermediate",
@@ -3444,15 +3210,14 @@
       "expressions"
      ],
      "module": "m06",
-     "order": 102,
+     "order": 95,
      "status": "reviewed",
      "hasContent": true,
-     "words": 4993,
+     "words": 6069,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
       "m06-composite",
-      "m06-interpreter",
       "m04-ocp"
      ],
      "tags": [
@@ -3465,7 +3230,7 @@
      "patterns": [
       "Specification"
      ],
-     "summary": "Turn each business rule (\"turnover at least ₹50 crore\", \"not debarred\") into a small named object that can be combined with And, Or and Not, checked against one object in memory, or translated into a database query.",
+     "summary": "Turn each business rule (\"guest rating at least 4.2\", \"not suspended\") into a small named object that can be combined with And, Or and Not, checked against one object in memory, or translated into a database query.",
      "problems": []
     },
     {
@@ -3477,10 +3242,10 @@
       "DbContext"
      ],
      "module": "m06",
-     "order": 103,
+     "order": 96,
      "status": "reviewed",
      "hasContent": true,
-     "words": 4999,
+     "words": 5053,
      "exercises": 6,
      "minutes": 80,
      "prerequisites": [
@@ -3513,10 +3278,10 @@
       "defaults"
      ],
      "module": "m06",
-     "order": 104,
+     "order": 97,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5888,
+     "words": 5934,
      "exercises": 5,
      "minutes": 60,
      "prerequisites": [
@@ -3546,10 +3311,10 @@
       "lifetimes"
      ],
      "module": "m06",
-     "order": 105,
+     "order": 98,
      "status": "reviewed",
      "hasContent": true,
-     "words": 4674,
+     "words": 4723,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -3582,10 +3347,10 @@
       "errors as values"
      ],
      "module": "m06",
-     "order": 106,
+     "order": 99,
      "status": "reviewed",
      "hasContent": true,
-     "words": 4918,
+     "words": 4962,
      "exercises": 6,
      "minutes": 80,
      "prerequisites": [
@@ -3616,10 +3381,10 @@
       "delegates"
      ],
      "module": "m06",
-     "order": 107,
+     "order": 100,
      "status": "reviewed",
      "hasContent": true,
-     "words": 4995,
+     "words": 5165,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -3653,10 +3418,10 @@
       "adapter vs facade"
      ],
      "module": "m06",
-     "order": 108,
+     "order": 101,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6972,
+     "words": 7210,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -3689,10 +3454,10 @@
       "lava flow"
      ],
      "module": "m06",
-     "order": 109,
+     "order": 102,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6922,
+     "words": 7278,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -3729,10 +3494,10 @@
       "CRC cards"
      ],
      "module": "m07",
-     "order": 110,
+     "order": 103,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7461,
+     "words": 7513,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -3766,10 +3531,10 @@
       "equality"
      ],
      "module": "m07",
-     "order": 111,
+     "order": 104,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5869,
+     "words": 5969,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -3802,10 +3567,10 @@
       "navigability"
      ],
      "module": "m07",
-     "order": 112,
+     "order": 105,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6312,
+     "words": 6357,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -3838,10 +3603,10 @@
       "ownership"
      ],
      "module": "m07",
-     "order": 113,
+     "order": 106,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5883,
+     "words": 6018,
      "exercises": 5,
      "minutes": 65,
      "prerequisites": [
@@ -3874,10 +3639,10 @@
       "leaky abstractions"
      ],
      "module": "m07",
-     "order": 114,
+     "order": 107,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6573,
+     "words": 6577,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -3911,10 +3676,10 @@
       "private setters"
      ],
      "module": "m07",
-     "order": 115,
+     "order": 108,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6828,
+     "words": 6967,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -3949,10 +3714,10 @@
       "disposal"
      ],
      "module": "m07",
-     "order": 116,
+     "order": 109,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6056,
+     "words": 6070,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -3984,10 +3749,10 @@
       "models"
      ],
      "module": "m07",
-     "order": 117,
+     "order": 110,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6244,
+     "words": 6255,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -4019,10 +3784,10 @@
       "input vs domain validation"
      ],
      "module": "m07",
-     "order": 118,
+     "order": 111,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6183,
+     "words": 6186,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -4053,10 +3818,10 @@
       "exceptions vs results"
      ],
      "module": "m07",
-     "order": 119,
+     "order": 112,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6032,
+     "words": 6095,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -4091,10 +3856,10 @@
       "with-expressions"
      ],
      "module": "m07",
-     "order": 120,
+     "order": 113,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6130,
+     "words": 6128,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -4127,10 +3892,10 @@
       "records"
      ],
      "module": "m07",
-     "order": 121,
+     "order": 114,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6080,
+     "words": 6124,
      "exercises": 5,
      "minutes": 65,
      "prerequisites": [
@@ -4163,10 +3928,10 @@
       "clocks"
      ],
      "module": "m07",
-     "order": 122,
+     "order": 115,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5778,
+     "words": 5793,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -4199,10 +3964,10 @@
       "layering"
      ],
      "module": "m07",
-     "order": 123,
+     "order": 116,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6398,
+     "words": 6512,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -4235,10 +4000,10 @@
       "move method"
      ],
      "module": "m07",
-     "order": 124,
+     "order": 117,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6619,
+     "words": 6896,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -4274,10 +4039,10 @@
       "state machines"
      ],
      "module": "m07",
-     "order": 125,
+     "order": 118,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7146,
+     "words": 7183,
      "exercises": 6,
      "minutes": 85,
      "prerequisites": [
@@ -4323,10 +4088,10 @@
       "immutability"
      ],
      "module": "m08",
-     "order": 126,
+     "order": 119,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7713,
+     "words": 7907,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -4341,13 +4106,13 @@
       "value-objects",
       "entities",
       "records",
-      "procurement"
+      "food-delivery"
      ],
      "patterns": [
       "Entity",
       "Value Object"
      ],
-     "summary": "Build the two smallest DDD building blocks properly in C# 14 — entities that keep their identity while they change, and immutable, self-validating value objects such as Money, Quantity, Address and GSTIN — using a procurement domain.",
+     "summary": "Build the two smallest DDD building blocks properly in C# 14 — entities that keep their identity while they change, and immutable, self-validating value objects such as Money, Quantity, Address and GSTIN — using the ingredient purchasing of a cloud-kitchen chain.",
      "problems": []
     },
     {
@@ -4359,10 +4124,10 @@
       "consistency boundary"
      ],
      "module": "m08",
-     "order": 127,
+     "order": 120,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8188,
+     "words": 8269,
      "exercises": 6,
      "minutes": 90,
      "prerequisites": [
@@ -4396,10 +4161,10 @@
       "persistence ignorance"
      ],
      "module": "m08",
-     "order": 128,
+     "order": 121,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7199,
+     "words": 7263,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -4414,7 +4179,7 @@
       "repository",
       "domain-service",
       "persistence-ignorance",
-      "procurement",
+      "healthcare",
       "three-way-match"
      ],
      "patterns": [
@@ -4434,10 +4199,10 @@
       "dispatching"
      ],
      "module": "m08",
-     "order": 129,
+     "order": 122,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6024,
+     "words": 6051,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -4472,10 +4237,10 @@
       "transactions"
      ],
      "module": "m08",
-     "order": 130,
+     "order": 123,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6215,
+     "words": 6369,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -4511,10 +4276,10 @@
       "context maps"
      ],
      "module": "m08",
-     "order": 131,
+     "order": 124,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7507,
+     "words": 7540,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -4547,10 +4312,10 @@
       "core/supporting/generic"
      ],
      "module": "m08",
-     "order": 132,
+     "order": 125,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7920,
+     "words": 7941,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -4581,10 +4346,10 @@
       "one aggregate per transaction"
      ],
      "module": "m08",
-     "order": 133,
+     "order": 126,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7198,
+     "words": 7247,
      "exercises": 5,
      "minutes": 95,
      "prerequisites": [
@@ -4601,7 +4366,7 @@
       "eventual-consistency",
       "process-manager",
       "optimistic-concurrency",
-      "procurement",
+      "college",
       "budget"
      ],
      "patterns": [
@@ -4623,10 +4388,10 @@
       "read models"
      ],
      "module": "m08",
-     "order": 134,
+     "order": 127,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7067,
+     "words": 7218,
      "exercises": 6,
      "minutes": 90,
      "prerequisites": [
@@ -4661,10 +4426,10 @@
       "dependency rule"
      ],
      "module": "m08",
-     "order": 135,
+     "order": 128,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6541,
+     "words": 6638,
      "exercises": 6,
      "minutes": 80,
      "prerequisites": [
@@ -4699,10 +4464,10 @@
       "modules per context"
      ],
      "module": "m08",
-     "order": 136,
+     "order": 129,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6630,
+     "words": 6636,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -4735,10 +4500,10 @@
       "references"
      ],
      "module": "m08",
-     "order": 137,
+     "order": 130,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6463,
+     "words": 6490,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -4772,10 +4537,10 @@
       "handlers"
      ],
      "module": "m08",
-     "order": 138,
+     "order": 131,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6701,
+     "words": 6760,
      "exercises": 6,
      "minutes": 90,
      "prerequisites": [
@@ -4811,10 +4576,10 @@
       "projections"
      ],
      "module": "m08",
-     "order": 139,
+     "order": 132,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7404,
+     "words": 7576,
      "exercises": 6,
      "minutes": 100,
      "prerequisites": [
@@ -4854,10 +4619,10 @@
       "inventory"
      ],
      "module": "m08",
-     "order": 140,
+     "order": 133,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6806,
+     "words": 6897,
      "exercises": 6,
      "minutes": 240,
      "prerequisites": [
@@ -4908,10 +4673,10 @@
       "keys"
      ],
      "module": "m09",
-     "order": 141,
+     "order": 134,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7837,
+     "words": 7959,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -4939,10 +4704,10 @@
       "junction tables"
      ],
      "module": "m09",
-     "order": 142,
+     "order": 135,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7457,
+     "words": 7480,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -4971,10 +4736,10 @@
       "when to denormalize"
      ],
      "module": "m09",
-     "order": 143,
+     "order": 136,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7712,
+     "words": 7751,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -5003,10 +4768,10 @@
       "partial"
      ],
      "module": "m09",
-     "order": 144,
+     "order": 137,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8084,
+     "words": 8136,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -5036,10 +4801,10 @@
       "costs"
      ],
      "module": "m09",
-     "order": 145,
+     "order": 138,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8024,
+     "words": 8124,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -5067,10 +4832,10 @@
       "durability"
      ],
      "module": "m09",
-     "order": 146,
+     "order": 139,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7040,
+     "words": 7156,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -5101,10 +4866,10 @@
       "serializable"
      ],
      "module": "m09",
-     "order": 147,
+     "order": 140,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6927,
+     "words": 6940,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -5135,10 +4900,10 @@
       "retries"
      ],
      "module": "m09",
-     "order": 148,
+     "order": 141,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8042,
+     "words": 8049,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -5170,10 +4935,10 @@
       "PgBouncer"
      ],
      "module": "m09",
-     "order": 149,
+     "order": 142,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7519,
+     "words": 7586,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -5189,7 +4954,7 @@
       "performance"
      ],
      "patterns": [
-      "Object Pool"
+      "Connection Pool"
      ],
      "summary": "Opening a PostgreSQL connection is expensive and each one costs the server a process. Learn how Npgsql's pool works, size pools with Little's Law, fit many app instances under max_connections, choose PgBouncer session or transaction mode, and recognise and fix pool exhaustion.",
      "problems": []
@@ -5202,10 +4967,10 @@
       "expand/contract"
      ],
      "module": "m09",
-     "order": 150,
+     "order": 143,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7877,
+     "words": 7959,
      "exercises": 6,
      "minutes": 80,
      "prerequisites": [
@@ -5238,10 +5003,10 @@
       "split queries"
      ],
      "module": "m09",
-     "order": 151,
+     "order": 144,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6426,
+     "words": 6480,
      "exercises": 6,
      "minutes": 80,
      "prerequisites": [
@@ -5271,10 +5036,10 @@
       "stability"
      ],
      "module": "m09",
-     "order": 152,
+     "order": 145,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6471,
+     "words": 6569,
      "exercises": 6,
      "minutes": 75,
      "prerequisites": [
@@ -5303,10 +5068,10 @@
       "when to use"
      ],
      "module": "m09",
-     "order": 153,
+     "order": 146,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6585,
+     "words": 6641,
      "exercises": 6,
      "minutes": 75,
      "prerequisites": [
@@ -5335,10 +5100,10 @@
       "read-your-writes"
      ],
      "module": "m09",
-     "order": 154,
+     "order": 147,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7397,
+     "words": 7411,
      "exercises": 6,
      "minutes": 85,
      "prerequisites": [
@@ -5370,10 +5135,10 @@
       "shard keys"
      ],
      "module": "m09",
-     "order": 155,
+     "order": 148,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7808,
+     "words": 7953,
      "exercises": 6,
      "minutes": 90,
      "prerequisites": [
@@ -5408,10 +5173,10 @@
       "time-series"
      ],
      "module": "m09",
-     "order": 156,
+     "order": 149,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7644,
+     "words": 7899,
      "exercises": 6,
      "minutes": 80,
      "prerequisites": [
@@ -5456,10 +5221,10 @@
       "HTTP/2 and 3"
      ],
      "module": "m10",
-     "order": 157,
+     "order": 150,
      "status": "reviewed",
      "hasContent": true,
-     "words": 9394,
+     "words": 9516,
      "exercises": 6,
      "minutes": 80,
      "prerequisites": [
@@ -5494,10 +5259,10 @@
       "errors"
      ],
      "module": "m10",
-     "order": 158,
+     "order": 151,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7165,
+     "words": 7659,
      "exercises": 6,
      "minutes": 80,
      "prerequisites": [
@@ -5531,10 +5296,10 @@
       "N+1"
      ],
      "module": "m10",
-     "order": 159,
+     "order": 152,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7743,
+     "words": 7943,
      "exercises": 6,
      "minutes": 80,
      "prerequisites": [
@@ -5567,7 +5332,7 @@
       "streaming"
      ],
      "module": "m10",
-     "order": 160,
+     "order": 153,
      "status": "reviewed",
      "hasContent": true,
      "words": 8134,
@@ -5602,10 +5367,10 @@
       "push vs pull"
      ],
      "module": "m10",
-     "order": 161,
+     "order": 154,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7624,
+     "words": 8424,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -5641,10 +5406,10 @@
       "retries"
      ],
      "module": "m10",
-     "order": 162,
+     "order": 155,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8160,
+     "words": 8574,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -5678,10 +5443,10 @@
       "temporal coupling"
      ],
      "module": "m10",
-     "order": 163,
+     "order": 156,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7513,
+     "words": 7593,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -5714,10 +5479,10 @@
       "L4 vs L7"
      ],
      "module": "m10",
-     "order": 164,
+     "order": 157,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8045,
+     "words": 8071,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -5751,10 +5516,10 @@
       "client vs server side"
      ],
      "module": "m10",
-     "order": 165,
+     "order": 158,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7866,
+     "words": 8064,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -5789,10 +5554,10 @@
       "safe retries"
      ],
      "module": "m10",
-     "order": 166,
+     "order": 159,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7356,
+     "words": 7472,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -5826,10 +5591,10 @@
       "sliding window"
      ],
      "module": "m10",
-     "order": 167,
+     "order": 160,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8585,
+     "words": 8927,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -5861,10 +5626,10 @@
       "breaking changes"
      ],
      "module": "m10",
-     "order": 168,
+     "order": 161,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7877,
+     "words": 8206,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -5899,10 +5664,10 @@
       "retry budgets"
      ],
      "module": "m10",
-     "order": 169,
+     "order": 162,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7194,
+     "words": 7434,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -5939,10 +5704,10 @@
       "half-open"
      ],
      "module": "m10",
-     "order": 170,
+     "order": 163,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7031,
+     "words": 7124,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -5973,10 +5738,10 @@
       "Polly"
      ],
      "module": "m10",
-     "order": 171,
+     "order": 164,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7522,
+     "words": 7651,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -6010,10 +5775,10 @@
       "correlation ids"
      ],
      "module": "m10",
-     "order": 172,
+     "order": 165,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7082,
+     "words": 7369,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -6057,10 +5822,10 @@
       "refine"
      ],
      "module": "m11",
-     "order": 173,
+     "order": 166,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8870,
+     "words": 9119,
      "exercises": 6,
      "minutes": 75,
      "prerequisites": [
@@ -6087,10 +5852,10 @@
       "actors"
      ],
      "module": "m11",
-     "order": 174,
+     "order": 167,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6824,
+     "words": 6906,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -6121,10 +5886,10 @@
       "durability"
      ],
      "module": "m11",
-     "order": 175,
+     "order": 168,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7361,
+     "words": 7545,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -6154,10 +5919,10 @@
       "back-of-envelope math"
      ],
      "module": "m11",
-     "order": 176,
+     "order": 169,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6866,
+     "words": 7065,
      "exercises": 6,
      "minutes": 80,
      "prerequisites": [
@@ -6185,10 +5950,10 @@
       "memory vs disk vs network"
      ],
      "module": "m11",
-     "order": 177,
+     "order": 170,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7746,
+     "words": 7840,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -6218,10 +5983,10 @@
       "serial vs parallel availability"
      ],
      "module": "m11",
-     "order": 178,
+     "order": 171,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7140,
+     "words": 7242,
      "exercises": 6,
      "minutes": 80,
      "prerequisites": [
@@ -6252,10 +6017,10 @@
       "scale out"
      ],
      "module": "m11",
-     "order": 179,
+     "order": 172,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7722,
+     "words": 7863,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -6288,10 +6053,10 @@
       "sticky sessions"
      ],
      "module": "m11",
-     "order": 180,
+     "order": 173,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7857,
+     "words": 7885,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -6324,10 +6089,10 @@
       "consistent hash"
      ],
      "module": "m11",
-     "order": 181,
+     "order": 174,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8745,
+     "words": 8812,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -6364,10 +6129,10 @@
       "DB"
      ],
      "module": "m11",
-     "order": 182,
+     "order": 175,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7817,
+     "words": 7949,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -6403,10 +6168,10 @@
       "invalidation"
      ],
      "module": "m11",
-     "order": 183,
+     "order": 176,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8916,
+     "words": 9033,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -6436,10 +6201,10 @@
       "anycast"
      ],
      "module": "m11",
-     "order": 184,
+     "order": 177,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8985,
+     "words": 9124,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -6470,10 +6235,10 @@
       "shards"
      ],
      "module": "m11",
-     "order": 185,
+     "order": 178,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8097,
+     "words": 8309,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -6503,10 +6268,10 @@
       "presigned URLs"
      ],
      "module": "m11",
-     "order": 186,
+     "order": 179,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8221,
+     "words": 8261,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -6535,10 +6300,10 @@
       "schedules"
      ],
      "module": "m11",
-     "order": 187,
+     "order": 180,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8992,
+     "words": 9084,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -6570,10 +6335,10 @@
       "egress"
      ],
      "module": "m11",
-     "order": 188,
+     "order": 181,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8678,
+     "words": 8752,
      "exercises": 6,
      "minutes": 80,
      "prerequisites": [
@@ -6602,10 +6367,10 @@
       "how to argue a design"
      ],
      "module": "m11",
-     "order": 189,
+     "order": 182,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8948,
+     "words": 9044,
      "exercises": 6,
      "minutes": 90,
      "prerequisites": [
@@ -6646,10 +6411,10 @@
       "hit ratio"
      ],
      "module": "m12",
-     "order": 190,
+     "order": 183,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7489,
+     "words": 7578,
      "exercises": 5,
      "minutes": 60,
      "prerequisites": [
@@ -6676,10 +6441,10 @@
       "patterns compared"
      ],
      "module": "m12",
-     "order": 191,
+     "order": 184,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8645,
+     "words": 8730,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -6716,10 +6481,10 @@
       "versioned keys"
      ],
      "module": "m12",
-     "order": 192,
+     "order": 185,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7435,
+     "words": 7548,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -6755,10 +6520,10 @@
       "streams"
      ],
      "module": "m12",
-     "order": 193,
+     "order": 186,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8455,
+     "words": 8537,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -6790,10 +6555,10 @@
       "jitter"
      ],
      "module": "m12",
-     "order": 194,
+     "order": 187,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8823,
+     "words": 8878,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -6831,10 +6596,10 @@
       "acks"
      ],
      "module": "m12",
-     "order": 195,
+     "order": 188,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8669,
+     "words": 8756,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -6868,10 +6633,10 @@
       "fanout"
      ],
      "module": "m12",
-     "order": 196,
+     "order": 189,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8131,
+     "words": 8395,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -6904,10 +6669,10 @@
       "ordering"
      ],
      "module": "m12",
-     "order": 197,
+     "order": 190,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8243,
+     "words": 8377,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -6942,10 +6707,10 @@
       "effectively-once"
      ],
      "module": "m12",
-     "order": 198,
+     "order": 191,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7651,
+     "words": 7714,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -6978,10 +6743,10 @@
       "dedupe tables"
      ],
      "module": "m12",
-     "order": 199,
+     "order": 192,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7557,
+     "words": 7727,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -7013,10 +6778,10 @@
       "poison messages"
      ],
      "module": "m12",
-     "order": 200,
+     "order": 193,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7836,
+     "words": 7930,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -7049,10 +6814,10 @@
       "relay"
      ],
      "module": "m12",
-     "order": 201,
+     "order": 194,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7945,
+     "words": 8161,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -7087,10 +6852,10 @@
       "request-reply"
      ],
      "module": "m12",
-     "order": 202,
+     "order": 195,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8728,
+     "words": 8759,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -7131,10 +6896,10 @@
       "user experience"
      ],
      "module": "m12",
-     "order": 203,
+     "order": 196,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7679,
+     "words": 7777,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -7168,10 +6933,10 @@
       "choreography"
      ],
      "module": "m12",
-     "order": 204,
+     "order": 197,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8076,
+     "words": 8285,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -7214,10 +6979,10 @@
       "partial failure"
      ],
      "module": "m13",
-     "order": 205,
+     "order": 198,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8032,
+     "words": 8081,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -7248,10 +7013,10 @@
       "vector clocks"
      ],
      "module": "m13",
-     "order": 206,
+     "order": 199,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6980,
+     "words": 7181,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -7283,10 +7048,10 @@
       "latency trade-off"
      ],
      "module": "m13",
-     "order": 207,
+     "order": 200,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7425,
+     "words": 7517,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -7319,10 +7084,10 @@
       "read-your-writes"
      ],
      "module": "m13",
-     "order": 208,
+     "order": 201,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6854,
+     "words": 6929,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -7354,10 +7119,10 @@
       "failover"
      ],
      "module": "m13",
-     "order": 209,
+     "order": 202,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7794,
+     "words": 8107,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -7389,10 +7154,10 @@
       "R + W > N"
      ],
      "module": "m13",
-     "order": 210,
+     "order": 203,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8179,
+     "words": 8236,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -7426,10 +7191,10 @@
       "logs"
      ],
      "module": "m13",
-     "order": 211,
+     "order": 204,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7263,
+     "words": 7326,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -7462,10 +7227,10 @@
       "Redlock debate"
      ],
      "module": "m13",
-     "order": 212,
+     "order": 205,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7095,
+     "words": 7120,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -7500,10 +7265,10 @@
       "STONITH"
      ],
      "module": "m13",
-     "order": 213,
+     "order": 206,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7045,
+     "words": 7121,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -7539,10 +7304,10 @@
       "virtual nodes"
      ],
      "module": "m13",
-     "order": 214,
+     "order": 207,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7132,
+     "words": 7270,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -7578,10 +7343,10 @@
       "coordinators"
      ],
      "module": "m13",
-     "order": 215,
+     "order": 208,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8506,
+     "words": 8568,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -7613,10 +7378,10 @@
       "admission control"
      ],
      "module": "m13",
-     "order": 216,
+     "order": 209,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7149,
+     "words": 7181,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -7649,10 +7414,10 @@
       "budgets"
      ],
      "module": "m13",
-     "order": 217,
+     "order": 210,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7380,
+     "words": 7505,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -7689,10 +7454,10 @@
       "channels"
      ],
      "module": "m13",
-     "order": 218,
+     "order": 211,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7853,
+     "words": 7863,
      "exercises": 6,
      "minutes": 100,
      "prerequisites": [
@@ -7743,10 +7508,10 @@
       "permissions"
      ],
      "module": "m14",
-     "order": 219,
+     "order": 212,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6626,
+     "words": 6763,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -7778,10 +7543,10 @@
       "tokens"
      ],
      "module": "m14",
-     "order": 220,
+     "order": 213,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6971,
+     "words": 7090,
      "exercises": 5,
      "minutes": 95,
      "prerequisites": [
@@ -7816,10 +7581,10 @@
       "revocation"
      ],
      "module": "m14",
-     "order": 221,
+     "order": 214,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6711,
+     "words": 6808,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -7855,10 +7620,10 @@
       "policies"
      ],
      "module": "m14",
-     "order": 222,
+     "order": 215,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6304,
+     "words": 6534,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -7895,10 +7660,10 @@
       "vaults"
      ],
      "module": "m14",
-     "order": 223,
+     "order": 216,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7377,
+     "words": 7423,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -7936,10 +7701,10 @@
       "keys"
      ],
      "module": "m14",
-     "order": 224,
+     "order": 217,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8301,
+     "words": 8372,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -7975,10 +7740,10 @@
       "OWASP top 10"
      ],
      "module": "m14",
-     "order": 225,
+     "order": 218,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7735,
+     "words": 7880,
      "exercises": 6,
      "minutes": 95,
      "prerequisites": [
@@ -8014,10 +7779,10 @@
       "audit logs"
      ],
      "module": "m14",
-     "order": 226,
+     "order": 219,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7899,
+     "words": 8134,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -8054,10 +7819,10 @@
       "row-level security"
      ],
      "module": "m14",
-     "order": 227,
+     "order": 220,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8054,
+     "words": 8212,
      "exercises": 5,
      "minutes": 100,
      "prerequisites": [
@@ -8093,10 +7858,10 @@
       "availability math"
      ],
      "module": "m14",
-     "order": 228,
+     "order": 221,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8263,
+     "words": 8328,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -8131,10 +7896,10 @@
       "three pillars"
      ],
      "module": "m14",
-     "order": 229,
+     "order": 222,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7384,
+     "words": 7519,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -8169,7 +7934,7 @@
       "postmortems"
      ],
      "module": "m14",
-     "order": 230,
+     "order": 223,
      "status": "reviewed",
      "hasContent": true,
      "words": 8056,
@@ -8205,10 +7970,10 @@
       "restore drills"
      ],
      "module": "m14",
-     "order": 231,
+     "order": 224,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7816,
+     "words": 7990,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -8245,7 +8010,7 @@
       "blast radius"
      ],
      "module": "m14",
-     "order": 232,
+     "order": 225,
      "status": "reviewed",
      "hasContent": true,
      "words": 7575,
@@ -8292,10 +8057,10 @@
       "parity"
      ],
      "module": "m15",
-     "order": 233,
+     "order": 226,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8059,
+     "words": 8221,
      "exercises": 5,
      "minutes": 75,
      "prerequisites": [
@@ -8330,10 +8095,10 @@
       "compose"
      ],
      "module": "m15",
-     "order": 234,
+     "order": 227,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8354,
+     "words": 8391,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -8368,10 +8133,10 @@
       "pipelines"
      ],
      "module": "m15",
-     "order": 235,
+     "order": 228,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8129,
+     "words": 8296,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -8409,10 +8174,10 @@
       "YARP"
      ],
      "module": "m15",
-     "order": 236,
+     "order": 229,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8473,
+     "words": 8586,
      "exercises": 6,
      "minutes": 90,
      "prerequisites": [
@@ -8448,10 +8213,10 @@
       "choosing compute"
      ],
      "module": "m15",
-     "order": 237,
+     "order": 230,
      "status": "reviewed",
      "hasContent": true,
-     "words": 9019,
+     "words": 9188,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -8487,10 +8252,10 @@
       "managed services"
      ],
      "module": "m15",
-     "order": 238,
+     "order": 231,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7584,
+     "words": 7796,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -8529,10 +8294,10 @@
       "gateway policies"
      ],
      "module": "m15",
-     "order": 239,
+     "order": 232,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8083,
+     "words": 8293,
      "exercises": 6,
      "minutes": 90,
      "prerequisites": [
@@ -8570,10 +8335,10 @@
       "Terraform"
      ],
      "module": "m15",
-     "order": 240,
+     "order": 233,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8040,
+     "words": 8268,
      "exercises": 6,
      "minutes": 90,
      "prerequisites": [
@@ -8611,10 +8376,10 @@
       "HPA"
      ],
      "module": "m15",
-     "order": 241,
+     "order": 234,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8982,
+     "words": 9420,
      "exercises": 5,
      "minutes": 120,
      "prerequisites": [
@@ -8652,10 +8417,10 @@
       "risk control"
      ],
      "module": "m15",
-     "order": 242,
+     "order": 235,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8410,
+     "words": 8418,
      "exercises": 5,
      "minutes": 100,
      "prerequisites": [
@@ -8691,10 +8456,10 @@
       "expand/contract"
      ],
      "module": "m15",
-     "order": 243,
+     "order": 236,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8290,
+     "words": 8361,
      "exercises": 6,
      "minutes": 100,
      "prerequisites": [
@@ -8731,10 +8496,10 @@
       "tagging"
      ],
      "module": "m15",
-     "order": 244,
+     "order": 237,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8911,
+     "words": 8956,
      "exercises": 6,
      "minutes": 90,
      "prerequisites": [
@@ -8781,10 +8546,10 @@
       "decision criteria"
      ],
      "module": "m16",
-     "order": 245,
+     "order": 238,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7700,
+     "words": 7778,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -8818,10 +8583,10 @@
       "data ownership"
      ],
      "module": "m16",
-     "order": 246,
+     "order": 239,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6330,
+     "words": 6351,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -8855,10 +8620,10 @@
       "BFF"
      ],
      "module": "m16",
-     "order": 247,
+     "order": 240,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6397,
+     "words": 6808,
      "exercises": 5,
      "minutes": 80,
      "prerequisites": [
@@ -8894,10 +8659,10 @@
       "lag"
      ],
      "module": "m16",
-     "order": 248,
+     "order": 241,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6743,
+     "words": 6817,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -8933,10 +8698,10 @@
       "versioning"
      ],
      "module": "m16",
-     "order": 249,
+     "order": 242,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7293,
+     "words": 7448,
      "exercises": 5,
      "minutes": 100,
      "prerequisites": [
@@ -8973,10 +8738,10 @@
       "workflows"
      ],
      "module": "m16",
-     "order": 250,
+     "order": 243,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8436,
+     "words": 8698,
      "exercises": 5,
      "minutes": 100,
      "prerequisites": [
@@ -9012,10 +8777,10 @@
       "legacy migration"
      ],
      "module": "m16",
-     "order": 251,
+     "order": 244,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7795,
+     "words": 8009,
      "exercises": 5,
      "minutes": 95,
      "prerequisites": [
@@ -9051,10 +8816,10 @@
       "logical replication"
      ],
      "module": "m16",
-     "order": 252,
+     "order": 245,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7776,
+     "words": 7979,
      "exercises": 5,
      "minutes": 95,
      "prerequisites": [
@@ -9091,10 +8856,10 @@
       "bridge"
      ],
      "module": "m16",
-     "order": 253,
+     "order": 246,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7954,
+     "words": 8240,
      "exercises": 5,
      "minutes": 100,
      "prerequisites": [
@@ -9114,7 +8879,7 @@
      "patterns": [
       "Silo",
       "Pool",
-      "Bridge",
+      "Bridge (tenancy model)",
       "Tenant Context",
       "Deployment Stamps",
       "Row-Level Security"
@@ -9130,10 +8895,10 @@
       "data sovereignty"
      ],
      "module": "m16",
-     "order": 254,
+     "order": 247,
      "status": "reviewed",
      "hasContent": true,
-     "words": 9524,
+     "words": 9973,
      "exercises": 5,
      "minutes": 100,
      "prerequisites": [
@@ -9171,10 +8936,10 @@
       "OpenSearch"
      ],
      "module": "m16",
-     "order": 255,
+     "order": 248,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8314,
+     "words": 8635,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -9198,7 +8963,7 @@
       "Search Index Projection",
       "Index Alias Swap"
      ],
-     "summary": "How a search engine finds \"bridge tenders in Patna\" among millions of documents in milliseconds. Build a tiny inverted index with BM25 ranking in C#, learn how OpenSearch/Elasticsearch clusters split and copy that index, keep it in sync with PostgreSQL through an outbox or CDC, and know when PostgreSQL full-text search is all you need.",
+     "summary": "How a search engine finds \"Java developer jobs in Kochi\" among millions of documents in milliseconds. Build a tiny inverted index with BM25 ranking in C#, learn how OpenSearch/Elasticsearch clusters split and copy that index, keep it in sync with PostgreSQL through an outbox or CDC, and know when PostgreSQL full-text search is all you need.",
      "problems": []
     },
     {
@@ -9210,10 +8975,10 @@
       "flags"
      ],
      "module": "m16",
-     "order": 256,
+     "order": 249,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7564,
+     "words": 7743,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -9238,7 +9003,7 @@
       "Kill Switch",
       "Percentage Rollout"
      ],
-     "summary": "Long-running business processes must survive crashes, deploys and week-long waits. Learn how durable execution engines (Temporal, Azure Durable Functions, Elsa) persist and replay workflow state, when a hand-rolled state table is enough, and how feature flags with deterministic percentage rollouts and kill switches let you release that code safely.",
+     "summary": "Long-running business processes must survive crashes, deploys and week-long waits. Learn how durable execution engines (Temporal, Azure Durable Functions, Dapr Workflow, Elsa) persist and replay workflow state, when a hand-rolled state table is enough, and how feature flags with deterministic percentage rollouts and kill switches let you release that code safely.",
      "problems": []
     },
     {
@@ -9257,10 +9022,10 @@
       "compensating transaction"
      ],
      "module": "m16",
-     "order": 257,
+     "order": 250,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8655,
+     "words": 8909,
      "exercises": 6,
      "minutes": 100,
      "prerequisites": [
@@ -9310,10 +9075,10 @@
       "distributed limits"
      ],
      "module": "m16",
-     "order": 258,
+     "order": 251,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7308,
+     "words": 7546,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -9351,10 +9116,10 @@
       "fitness functions"
      ],
      "module": "m16",
-     "order": 259,
+     "order": 252,
      "status": "reviewed",
      "hasContent": true,
-     "words": 9361,
+     "words": 9581,
      "exercises": 5,
      "minutes": 95,
      "prerequisites": [
@@ -9389,8 +9154,54 @@
    "number": 17,
    "title": "Real-World HLD Case Studies",
    "track": "hld",
-   "description": "Twenty complete system design walkthroughs.",
+   "description": "Twenty-six complete system design walkthroughs, starting with one system scaled end to end.",
    "lessons": [
+    {
+     "id": "m17-scaling-journey",
+     "title": "Scaling a real system from 100 to 10 million users: HLD to LLD end to end",
+     "level": "intermediate",
+     "topics": [
+      "growth stages",
+      "bottlenecks",
+      "HLD",
+      "LLD",
+      "C# core service"
+     ],
+     "module": "m17",
+     "order": 253,
+     "status": "reviewed",
+     "hasContent": true,
+     "words": 15281,
+     "exercises": 6,
+     "minutes": 150,
+     "prerequisites": [
+      "m02-hld-vs-lld",
+      "m11-capacity-estimation",
+      "m11-scaling",
+      "m02-modular-monolith"
+     ],
+     "tags": [
+      "hld",
+      "lld",
+      "case-study",
+      "scaling",
+      "quick-commerce",
+      "growth-stages",
+      "checkout",
+      "idempotency",
+      "outbox",
+      "partitioning"
+     ],
+     "patterns": [
+      "Strategy",
+      "State",
+      "Repository",
+      "Result",
+      "Transactional Outbox"
+     ],
+     "summary": "Follow one quick-commerce grocery app from a 100-user pilot on a single VM to 10 million users across 40 cities, scaling only when a measured bottleneck forces it, then zoom from the HLD box \"checkout and orders\" down to classes, a state machine, a PostgreSQL schema and compilable C#.",
+     "problems": []
+    },
     {
      "id": "m17-url-shortener",
      "title": "URL shortener",
@@ -9401,10 +9212,10 @@
       "caching"
      ],
      "module": "m17",
-     "order": 260,
+     "order": 254,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8960,
+     "words": 9143,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -9426,6 +9237,42 @@
      "problems": []
     },
     {
+     "id": "m17-unique-id-generator",
+     "title": "Distributed unique ID generator (Snowflake-style)",
+     "level": "intermediate",
+     "topics": [
+      "ordering",
+      "clock skew",
+      "Snowflake",
+      "ULID"
+     ],
+     "module": "m17",
+     "order": 255,
+     "status": "reviewed",
+     "hasContent": true,
+     "words": 8926,
+     "exercises": 5,
+     "minutes": 90,
+     "prerequisites": [
+      "m11-capacity-estimation",
+      "m09-indexes",
+      "m13-time-ordering"
+     ],
+     "tags": [
+      "hld",
+      "case-study",
+      "ids",
+      "snowflake",
+      "ulid",
+      "uuidv7",
+      "clock-skew",
+      "ordering"
+     ],
+     "patterns": [],
+     "summary": "Design a service that hands out unique, roughly time-ordered 64-bit ids to thousands of servers without a central bottleneck, covering auto-increment and UUID limits, UUIDv7 and ULID, the Snowflake bit layout, worker-id leases, clock skew, range allocation and PostgreSQL index effects.",
+     "problems": []
+    },
+    {
      "id": "m17-pastebin",
      "title": "Pastebin",
      "level": "beginner",
@@ -9434,10 +9281,10 @@
       "expiry"
      ],
      "module": "m17",
-     "order": 261,
+     "order": 256,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8149,
+     "words": 8319,
      "exercises": 5,
      "minutes": 85,
      "prerequisites": [
@@ -9468,10 +9315,10 @@
       "dedupe"
      ],
      "module": "m17",
-     "order": 262,
+     "order": 257,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8986,
+     "words": 9195,
      "exercises": 5,
      "minutes": 120,
      "prerequisites": [
@@ -9505,10 +9352,10 @@
       "preferences"
      ],
      "module": "m17",
-     "order": 263,
+     "order": 258,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8709,
+     "words": 8959,
      "exercises": 5,
      "minutes": 105,
      "prerequisites": [
@@ -9542,10 +9389,10 @@
       "delivery receipts"
      ],
      "module": "m17",
-     "order": 264,
+     "order": 259,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8999,
+     "words": 9118,
      "exercises": 5,
      "minutes": 120,
      "prerequisites": [
@@ -9576,10 +9423,10 @@
       "fan-out on write vs read"
      ],
      "module": "m17",
-     "order": 265,
+     "order": 260,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7533,
+     "words": 7730,
      "exercises": 5,
      "minutes": 110,
      "prerequisites": [
@@ -9612,10 +9459,10 @@
       "CDN"
      ],
      "module": "m17",
-     "order": 266,
+     "order": 261,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8021,
+     "words": 8039,
      "exercises": 5,
      "minutes": 115,
      "prerequisites": [
@@ -9649,10 +9496,10 @@
       "matching"
      ],
      "module": "m17",
-     "order": 267,
+     "order": 262,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8410,
+     "words": 8550,
      "exercises": 5,
      "minutes": 120,
      "prerequisites": [
@@ -9680,6 +9527,42 @@
      "problems": []
     },
     {
+     "id": "m17-proximity-service",
+     "title": "Nearby search and proximity service (Maps-style)",
+     "level": "advanced",
+     "topics": [
+      "geohash",
+      "quadtree",
+      "read-heavy scaling"
+     ],
+     "module": "m17",
+     "order": 263,
+     "status": "reviewed",
+     "hasContent": true,
+     "words": 8989,
+     "exercises": 5,
+     "minutes": 120,
+     "prerequisites": [
+      "m11-hld-framework",
+      "m11-capacity-estimation",
+      "m09-indexes",
+      "m12-cache-patterns"
+     ],
+     "tags": [
+      "hld",
+      "case-study",
+      "geohash",
+      "quadtree",
+      "postgis",
+      "geospatial",
+      "read-heavy",
+      "caching"
+     ],
+     "patterns": [],
+     "summary": "Design a \"near me\" search for 200 million places at 100,000 queries per second, covering why latitude/longitude range scans fail, geohash cells and neighbours, quadtrees, S2/H3, PostGIS, Redis GEO, separating static places from fast-moving drivers, regional sharding, caching hot cells and ranking.",
+     "problems": []
+    },
+    {
      "id": "m17-food-delivery",
      "title": "Food delivery platform",
      "level": "advanced",
@@ -9689,10 +9572,10 @@
       "tracking"
      ],
      "module": "m17",
-     "order": 268,
+     "order": 264,
      "status": "reviewed",
      "hasContent": true,
-     "words": 9090,
+     "words": 9420,
      "exercises": 5,
      "minutes": 120,
      "prerequisites": [
@@ -9728,10 +9611,10 @@
       "inventory"
      ],
      "module": "m17",
-     "order": 269,
+     "order": 265,
      "status": "reviewed",
      "hasContent": true,
-     "words": 9053,
+     "words": 9224,
      "exercises": 5,
      "minutes": 120,
      "prerequisites": [
@@ -9759,6 +9642,46 @@
      "problems": []
     },
     {
+     "id": "m17-flash-sale",
+     "title": "Flash sale system (high-contention inventory)",
+     "level": "advanced",
+     "topics": [
+      "hot rows",
+      "queues",
+      "Redis counters",
+      "fairness"
+     ],
+     "module": "m17",
+     "order": 266,
+     "status": "reviewed",
+     "hasContent": true,
+     "words": 6975,
+     "exercises": 5,
+     "minutes": 120,
+     "prerequisites": [
+      "m11-capacity-estimation",
+      "m12-redis",
+      "m09-locking",
+      "m12-outbox",
+      "m10-rate-limiting"
+     ],
+     "tags": [
+      "hld",
+      "case-study",
+      "flash-sale",
+      "inventory",
+      "hot-rows",
+      "redis",
+      "lua",
+      "waiting-room",
+      "fairness",
+      "outbox"
+     ],
+     "patterns": [],
+     "summary": "Sell 10,000 discounted phones to two million people at 12:00 sharp without overselling, crashing or rewarding bots — static pages on a CDN, a virtual waiting room with signed tokens, an atomic Redis gate backed by PostgreSQL constraints, expiring reservations, an outbox to orders and reconciliation.",
+     "problems": []
+    },
+    {
      "id": "m17-movie-booking",
      "title": "Movie ticket booking system",
      "level": "intermediate",
@@ -9766,10 +9689,10 @@
       "seat locking"
      ],
      "module": "m17",
-     "order": 270,
+     "order": 267,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8189,
+     "words": 8330,
      "exercises": 5,
      "minutes": 100,
      "prerequisites": [
@@ -9789,7 +9712,7 @@
       "payments"
      ],
      "patterns": [],
-     "summary": "Design a BookMyShow-style movie ticket system — seat maps, all-or-nothing seat holds with a TTL, payment timeouts and late payments, and a waiting room for blockbuster releases — with capacity maths, a PostgreSQL data model that makes double booking impossible, and C# for seat holds and the booking flow.",
+     "summary": "Design a movie ticket system like BookMyShow or Fandango — seat maps, all-or-nothing seat holds with a TTL, payment timeouts and late payments, and a waiting room for blockbuster releases — with capacity maths, a PostgreSQL data model that makes double booking impossible, and C# for seat holds and the booking flow.",
      "problems": []
     },
     {
@@ -9801,10 +9724,10 @@
       "overbooking"
      ],
      "module": "m17",
-     "order": 271,
+     "order": 268,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8898,
+     "words": 9111,
      "exercises": 5,
      "minutes": 100,
      "prerequisites": [
@@ -9838,10 +9761,10 @@
       "reconciliation"
      ],
      "module": "m17",
-     "order": 272,
+     "order": 269,
      "status": "reviewed",
      "hasContent": true,
-     "words": 11613,
+     "words": 11783,
      "exercises": 5,
      "minutes": 120,
      "prerequisites": [
@@ -9875,10 +9798,10 @@
       "top-k"
      ],
      "module": "m17",
-     "order": 273,
+     "order": 270,
      "status": "reviewed",
      "hasContent": true,
-     "words": 9275,
+     "words": 9416,
      "exercises": 5,
      "minutes": 100,
      "prerequisites": [
@@ -9910,10 +9833,10 @@
       "algorithms"
      ],
      "module": "m17",
-     "order": 274,
+     "order": 271,
      "status": "reviewed",
      "hasContent": true,
-     "words": 9559,
+     "words": 9673,
      "exercises": 5,
      "minutes": 100,
      "prerequisites": [
@@ -9938,6 +9861,42 @@
      "problems": []
     },
     {
+     "id": "m17-job-scheduler",
+     "title": "Distributed job scheduler",
+     "level": "advanced",
+     "topics": [
+      "leases",
+      "exactly-once-ish",
+      "cron at scale"
+     ],
+     "module": "m17",
+     "order": 272,
+     "status": "reviewed",
+     "hasContent": true,
+     "words": 8921,
+     "exercises": 5,
+     "minutes": 120,
+     "prerequisites": [
+      "m11-background-processing",
+      "m09-locking",
+      "m13-distributed-locks",
+      "m12-idempotent-consumers"
+     ],
+     "tags": [
+      "hld",
+      "case-study",
+      "scheduler",
+      "leases",
+      "skip-locked",
+      "cron",
+      "misfire",
+      "at-least-once"
+     ],
+     "patterns": [],
+     "summary": "Design a multi-tenant scheduler that runs millions of delayed and recurring jobs (EMI reminders, nightly reports, subscription renewals, webhook retries) on PostgreSQL, covering SKIP LOCKED claiming, leases and heartbeats, at-least-once execution with idempotent handlers, cron with time zones and DST, misfire policies, fairness and partitioning.",
+     "problems": []
+    },
+    {
      "id": "m17-logging-analytics",
      "title": "Logging and analytics platform",
      "level": "advanced",
@@ -9946,10 +9905,10 @@
       "OLAP"
      ],
      "module": "m17",
-     "order": 275,
+     "order": 273,
      "status": "reviewed",
      "hasContent": true,
-     "words": 10393,
+     "words": 10589,
      "exercises": 5,
      "minutes": 120,
      "prerequisites": [
@@ -9976,6 +9935,44 @@
      "problems": []
     },
     {
+     "id": "m17-web-crawler",
+     "title": "Web crawler",
+     "level": "advanced",
+     "topics": [
+      "frontier",
+      "politeness",
+      "dedupe",
+      "distributed workers"
+     ],
+     "module": "m17",
+     "order": 274,
+     "status": "reviewed",
+     "hasContent": true,
+     "words": 8991,
+     "exercises": 5,
+     "minutes": 120,
+     "prerequisites": [
+      "m11-hld-framework",
+      "m11-capacity-estimation",
+      "m12-message-queues",
+      "m13-sharding"
+     ],
+     "tags": [
+      "hld",
+      "case-study",
+      "crawler",
+      "frontier",
+      "politeness",
+      "robots-txt",
+      "bloom-filter",
+      "simhash",
+      "distributed-workers"
+     ],
+     "patterns": [],
+     "summary": "Design a polite, distributed crawler that fetches a billion pages a month for a product-search and price-comparison engine, covering the URL frontier, per-host politeness, robots.txt, DNS caching, URL normalisation, Bloom-filter and SimHash dedupe, crawler traps, recrawl scheduling, host-partitioned workers, object storage, checkpointing and ethics.",
+     "problems": []
+    },
+    {
      "id": "m17-collaborative-editor",
      "title": "Real-time collaborative editor",
      "level": "advanced",
@@ -9984,10 +9981,10 @@
       "CRDT"
      ],
      "module": "m17",
-     "order": 276,
+     "order": 275,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8990,
+     "words": 9164,
      "exercises": 5,
      "minutes": 120,
      "prerequisites": [
@@ -10019,10 +10016,10 @@
       "integrity"
      ],
      "module": "m17",
-     "order": 277,
+     "order": 276,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8987,
+     "words": 9141,
      "exercises": 5,
      "minutes": 100,
      "prerequisites": [
@@ -10054,10 +10051,10 @@
       "progress"
      ],
      "module": "m17",
-     "order": 278,
+     "order": 277,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8453,
+     "words": 8634,
      "exercises": 5,
      "minutes": 100,
      "prerequisites": [
@@ -10082,17 +10079,17 @@
     },
     {
      "id": "m17-multi-tenant-pm",
-     "title": "Multi-tenant enterprise project management system",
+     "title": "Multi-tenant SaaS project management (Jira-style)",
      "level": "advanced",
      "topics": [
       "tenancy",
       "permissions"
      ],
      "module": "m17",
-     "order": 279,
+     "order": 278,
      "status": "reviewed",
      "hasContent": true,
-     "words": 10235,
+     "words": 13465,
      "exercises": 5,
      "minutes": 120,
      "prerequisites": [
@@ -10104,27 +10101,29 @@
      ],
      "tags": [
       "multi-tenancy",
+      "saas",
       "rbac",
       "abac",
-      "documents",
-      "approvals",
-      "workflow",
+      "row-level-security",
+      "noisy-neighbour",
+      "sso",
+      "scim",
       "audit",
-      "reporting",
-      "data-residency",
-      "infrastructure-projects"
+      "data-residency"
      ],
      "patterns": [
       "Pool with Row-Level Security",
+      "Cell-Based Architecture",
       "Tenant Context",
       "Policy-Based Authorization",
+      "Per-Tenant Rate Limiting",
       "Approval Workflow State Machine",
       "Append-Only Audit Log",
       "Valet Key",
       "Transactional Outbox",
       "Read Model"
      ],
-     "summary": "Design a SaaS platform where hundreds of organisations manage infrastructure projects — roads, metro lines, water schemes — with strict isolation, role-and-attribute permissions, versioned documents, multi-step approvals, cross-project reporting, a tamper-evident audit trail and per-tenant data residency.",
+     "summary": "Design a Jira/Asana-style SaaS where thousands of companies run projects, boards, sprints and issues on shared infrastructure, with tenant isolation through PostgreSQL row-level security, role-and-attribute permissions, per-tenant limits that tame noisy neighbours, enterprise SSO and SCIM, a tamper-evident audit trail and per-tenant data residency.",
      "problems": []
     }
    ]
@@ -10134,7 +10133,7 @@
    "number": 18,
    "title": "Real-World LLD Case Studies",
    "track": "lld",
-   "description": "Twenty object-oriented design problems, fully implemented.",
+   "description": "Twenty-two object-oriented design problems, fully implemented.",
    "lessons": [
     {
      "id": "m18-parking-lot",
@@ -10146,10 +10145,10 @@
       "pricing"
      ],
      "module": "m18",
-     "order": 280,
+     "order": 279,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7027,
+     "words": 7252,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -10181,10 +10180,10 @@
       "state"
      ],
      "module": "m18",
-     "order": 281,
+     "order": 280,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7134,
+     "words": 7369,
      "exercises": 5,
      "minutes": 120,
      "prerequisites": [
@@ -10219,10 +10218,10 @@
       "transactions"
      ],
      "module": "m18",
-     "order": 282,
+     "order": 281,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6840,
+     "words": 7300,
      "exercises": 5,
      "minutes": 100,
      "prerequisites": [
@@ -10255,10 +10254,10 @@
       "state pattern"
      ],
      "module": "m18",
-     "order": 283,
+     "order": 282,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6640,
+     "words": 6773,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -10290,10 +10289,10 @@
       "fines"
      ],
      "module": "m18",
-     "order": 284,
+     "order": 283,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6864,
+     "words": 7006,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -10326,10 +10325,10 @@
       "concurrency"
      ],
      "module": "m18",
-     "order": 285,
+     "order": 284,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6482,
+     "words": 6760,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -10364,10 +10363,10 @@
       "validation"
      ],
      "module": "m18",
-     "order": 286,
+     "order": 285,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6229,
+     "words": 6506,
      "exercises": 5,
      "minutes": 100,
      "prerequisites": [
@@ -10385,9 +10384,7 @@
      ],
      "patterns": [
       "Template Method",
-      "Flyweight",
       "Factory Method",
-      "Memento",
       "Strategy"
      ],
      "summary": "Model a chess game whose move validation covers every piece and correctly refuses any move that leaves your own king in check, with checkmate and stalemate detection built on top.",
@@ -10402,10 +10399,10 @@
       "dice"
      ],
      "module": "m18",
-     "order": 287,
+     "order": 286,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5836,
+     "words": 5972,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -10438,10 +10435,10 @@
       "win check"
      ],
      "module": "m18",
-     "order": 288,
+     "order": 287,
      "status": "reviewed",
      "hasContent": true,
-     "words": 5475,
+     "words": 5571,
      "exercises": 5,
      "minutes": 70,
      "prerequisites": [
@@ -10474,10 +10471,10 @@
       "rules engine"
      ],
      "module": "m18",
-     "order": 289,
+     "order": 288,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6326,
+     "words": 6766,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -10511,10 +10508,10 @@
       "order states"
      ],
      "module": "m18",
-     "order": 290,
+     "order": 289,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6761,
+     "words": 7002,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -10548,10 +10545,10 @@
       "availability"
      ],
      "module": "m18",
-     "order": 291,
+     "order": 290,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6188,
+     "words": 6346,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -10587,10 +10584,10 @@
       "adapters"
      ],
      "module": "m18",
-     "order": 292,
+     "order": 291,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6058,
+     "words": 6423,
      "exercises": 5,
      "minutes": 100,
      "prerequisites": [
@@ -10618,6 +10615,46 @@
      "problems": []
     },
     {
+     "id": "m18-splitwise",
+     "title": "Expense sharing (Splitwise-style)",
+     "level": "intermediate",
+     "topics": [
+      "balances",
+      "split strategies",
+      "debt simplification"
+     ],
+     "module": "m18",
+     "order": 292,
+     "status": "reviewed",
+     "hasContent": true,
+     "words": 6943,
+     "exercises": 5,
+     "minutes": 90,
+     "prerequisites": [
+      "m06-strategy",
+      "m08-entities-value-objects",
+      "m07-immutability",
+      "m08-aggregates",
+      "m09-locking"
+     ],
+     "tags": [
+      "lld",
+      "case-study",
+      "money",
+      "strategy",
+      "value-objects",
+      "ledger",
+      "concurrency"
+     ],
+     "patterns": [
+      "Strategy",
+      "Template Method",
+      "Value Object"
+     ],
+     "summary": "Design a Splitwise-style expense sharing app in C# with a Money value object in paise, split strategies that never lose a paisa, an append-only ledger where edits are reversals, net balances, greedy debt simplification, and safe concurrent updates per group.",
+     "problems": []
+    },
+    {
      "id": "m18-notification-dispatcher",
      "title": "Notification dispatcher",
      "level": "intermediate",
@@ -10629,7 +10666,7 @@
      "order": 293,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6211,
+     "words": 6437,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -10668,7 +10705,7 @@
      "order": 294,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6545,
+     "words": 6829,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -10690,7 +10727,6 @@
       "Decorator",
       "Strategy",
       "Adapter",
-      "Flyweight",
       "Composite"
      ],
      "summary": "Design a small structured-logging library — severity levels with per-category overrides, message templates that keep properties, enrichers and scopes, pluggable sinks and formatters, a bounded asynchronous sink with explicit drop policies, and an adapter so ASP.NET Core's ILogger writes through it.",
@@ -10707,7 +10743,7 @@
      "order": 295,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6971,
+     "words": 7141,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -10735,6 +10771,45 @@
      "problems": []
     },
     {
+     "id": "m18-lru-cache",
+     "title": "LRU cache",
+     "level": "intermediate",
+     "topics": [
+      "hash map + linked list",
+      "O(1)",
+      "thread safety",
+      "TTL"
+     ],
+     "module": "m18",
+     "order": 296,
+     "status": "reviewed",
+     "hasContent": true,
+     "words": 6997,
+     "exercises": 5,
+     "minutes": 90,
+     "prerequisites": [
+      "m01-collections-generics",
+      "m01-big-o",
+      "m12-why-caching",
+      "m13-concurrency-patterns",
+      "m04-testability"
+     ],
+     "tags": [
+      "lld",
+      "case-study",
+      "caching",
+      "data-structures",
+      "concurrency",
+      "timeprovider"
+     ],
+     "patterns": [
+      "Cache-Aside",
+      "Observer"
+     ],
+     "summary": "Build a least-recently-used cache in C# with O(1) get and put using a dictionary plus a doubly linked list, then make it production-ready with eviction callbacks, size accounting, TTL on an injectable TimeProvider, lock striping and hit-ratio metrics.",
+     "problems": []
+    },
+    {
      "id": "m18-file-system",
      "title": "File system abstraction",
      "level": "intermediate",
@@ -10742,10 +10817,10 @@
       "composite"
      ],
      "module": "m18",
-     "order": 296,
+     "order": 297,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6820,
+     "words": 7283,
      "exercises": 5,
      "minutes": 90,
      "prerequisites": [
@@ -10765,10 +10840,9 @@
      "patterns": [
       "Composite",
       "Facade",
-      "Strategy",
-      "Iterator"
+      "Strategy"
      ],
-     "summary": "Design an in-memory virtual file system for a project document vault — a Composite tree of files and folders, a safe path value object, inherited ACL permissions with deny-wins, check-out locks, and content stored in a blob store without holding locks across I/O.",
+     "summary": "Design an in-memory virtual file system for a hospital document vault — a Composite tree of files and folders, a safe path value object, inherited ACL permissions with deny-wins, check-out locks, and content stored in a blob store without holding locks across I/O.",
      "problems": []
     },
     {
@@ -10780,10 +10854,10 @@
       "expiry"
      ],
      "module": "m18",
-     "order": 297,
+     "order": 298,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6787,
+     "words": 6888,
      "exercises": 5,
      "minutes": 100,
      "prerequisites": [
@@ -10819,10 +10893,10 @@
       "events"
      ],
      "module": "m18",
-     "order": 298,
+     "order": 299,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6840,
+     "words": 7309,
      "exercises": 5,
      "minutes": 110,
      "prerequisites": [
@@ -10859,10 +10933,10 @@
       "chain"
      ],
      "module": "m18",
-     "order": 299,
+     "order": 300,
      "status": "reviewed",
      "hasContent": true,
-     "words": 6943,
+     "words": 7143,
      "exercises": 5,
      "minutes": 95,
      "prerequisites": [
@@ -10882,7 +10956,6 @@
      "patterns": [
       "Chain of Responsibility",
       "State",
-      "Flyweight",
       "Facade"
      ],
      "summary": "Design a leave management module with working-day counting per office calendar (including the sandwich rule), reserved and used balances, a Chain of Responsibility that routes requests to the right approvers by authority, and State classes that make illegal moves impossible.",
@@ -10906,10 +10979,10 @@
       "scoring"
      ],
      "module": "m19",
-     "order": 300,
+     "order": 301,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7451,
+     "words": 7551,
      "exercises": 5,
      "minutes": 60,
      "prerequisites": [
@@ -10935,10 +11008,10 @@
       "question bank"
      ],
      "module": "m19",
-     "order": 301,
+     "order": 302,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7517,
+     "words": 7824,
      "exercises": 5,
      "minutes": 60,
      "prerequisites": [
@@ -10964,10 +11037,10 @@
       "timed drills"
      ],
      "module": "m19",
-     "order": 302,
+     "order": 303,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8316,
+     "words": 8411,
      "exercises": 6,
      "minutes": 90,
      "prerequisites": [
@@ -10994,10 +11067,10 @@
       "trade-off language"
      ],
      "module": "m19",
-     "order": 303,
+     "order": 304,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8243,
+     "words": 8345,
      "exercises": 6,
      "minutes": 85,
      "prerequisites": [
@@ -11028,10 +11101,10 @@
       "right-sizing"
      ],
      "module": "m19",
-     "order": 304,
+     "order": 305,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7690,
+     "words": 7800,
      "exercises": 6,
      "minutes": 80,
      "prerequisites": [
@@ -11063,10 +11136,10 @@
       "security"
      ],
      "module": "m19",
-     "order": 305,
+     "order": 306,
      "status": "reviewed",
      "hasContent": true,
-     "words": 7644,
+     "words": 7759,
      "exercises": 6,
      "minutes": 95,
      "prerequisites": [
@@ -11087,7 +11160,7 @@
       "Checklist",
       "Architecture Decision Record"
      ],
-     "summary": "A repeatable way to review a design: read requirements first, walk the critical flows, kill a box, then run seven checklists (requirements, scale, failure, security, data, operations, cost). Learn to write feedback that is specific, ranked and kind, follow a complete worked review of a contractor-billing system, and build a C# review tool that ranks comments and lints feedback tone.",
+     "summary": "A repeatable way to review a design: read requirements first, walk the critical flows, kill a box, then run seven checklists (requirements, scale, failure, security, data, operations, cost). Learn to write feedback that is specific, ranked and kind, follow a complete worked review of a health-insurance claims system, and build a C# review tool that ranks comments and lints feedback tone.",
      "problems": []
     },
     {
@@ -11098,10 +11171,10 @@
       "evolving designs"
      ],
      "module": "m19",
-     "order": 306,
+     "order": 307,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8070,
+     "words": 8220,
      "exercises": 6,
      "minutes": 95,
      "prerequisites": [
@@ -11137,10 +11210,10 @@
       "timed sessions"
      ],
      "module": "m19",
-     "order": 307,
+     "order": 308,
      "status": "reviewed",
      "hasContent": true,
-     "words": 10546,
+     "words": 10478,
      "exercises": 6,
      "minutes": 150,
      "prerequisites": [
@@ -11158,7 +11231,7 @@
       "calibration"
      ],
      "patterns": [],
-     "summary": "Four complete, timed mock system design sessions (bus ticket booking, a live fantasy-cricket leaderboard, a site-photo and drone-imagery platform, and a marketplace payout system), each with the prompt card, hidden details for the interviewer, a minute-by-minute follow-up script, a model answer outline and a 1-4 rubric per dimension. Plus how to run mocks well and a C# scorecard and calibration tool.",
+     "summary": "Four complete, timed mock system design sessions (bus ticket booking, a live fantasy-cricket leaderboard, a crop-insurance photo and drone-imagery platform, and a marketplace payout system), each with the prompt card, hidden details for the interviewer, a minute-by-minute follow-up script, a model answer outline and a 1-4 rubric per dimension. Plus how to run mocks well and a C# scorecard and calibration tool.",
      "problems": []
     }
    ]
@@ -11175,13 +11248,13 @@
      "title": "Capstone A — Enterprise modular monolith",
      "level": "advanced",
      "topics": [
-      "project and contract management"
+      "hospital appointments, billing and pharmacy"
      ],
      "module": "m20",
-     "order": 308,
+     "order": 309,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8275,
+     "words": 11435,
      "exercises": 6,
      "minutes": 2400,
      "prerequisites": [
@@ -11199,10 +11272,11 @@
       "aspnet-core",
       "postgresql",
       "authorization",
+      "privacy",
+      "healthcare",
       "background-jobs",
       "outbox",
-      "testing",
-      "contracts"
+      "testing"
      ],
      "patterns": [
       "Modular Monolith",
@@ -11211,7 +11285,7 @@
       "Unit of Work",
       "Architecture Decision Record"
      ],
-     "summary": "Build and document a production-grade project and contract management system as a modular monolith on ASP.NET Core and PostgreSQL, with real authentication, resource-based authorization, validation, background processing and a full test suite, then defend it like a design review.",
+     "summary": "Build and document a production-grade hospital and clinic system (patients, appointments, billing and insurance claims, pharmacy stock) as a modular monolith on ASP.NET Core and PostgreSQL, with facility-scoped authorization, health-data privacy under India's DPDP Act, audit, background processing and a full test suite, then defend it like a design review.",
      "problems": []
     },
     {
@@ -11224,10 +11298,10 @@
       "saga"
      ],
      "module": "m20",
-     "order": 309,
+     "order": 310,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8339,
+     "words": 8674,
      "exercises": 6,
      "minutes": 2700,
      "prerequisites": [
@@ -11273,10 +11347,10 @@
       "observability"
      ],
      "module": "m20",
-     "order": 310,
+     "order": 311,
      "status": "reviewed",
      "hasContent": true,
-     "words": 8927,
+     "words": 9314,
      "exercises": 6,
      "minutes": 3000,
      "prerequisites": [

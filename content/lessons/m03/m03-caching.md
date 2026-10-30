@@ -24,7 +24,7 @@ references:
     url: https://learn.microsoft.com/aspnet/core/performance/caching/distributed
 ---
 
-The employee API now pages and filters properly ([API versioning, pagination, filtering and sorting](#/lesson/m03-api-shape)). On Monday mornings, when 3,000 site engineers open the attendance app at 9:00, the same 500 employee profiles and the same 25 department directories are read thousands of times a minute, and PostgreSQL does identical work for every request. A cache keeps a copy of an answer close to where it is needed, so the expensive work happens once. The hard part is not storing the copy. It is knowing when the copy is wrong. This lesson covers both halves, using the caching tools built into ASP.NET Core 10.
+The employee API now pages and filters properly ([API versioning, pagination, filtering and sorting](#/lesson/m03-api-shape)). On Monday mornings, when 3,000 doctors and nurses across the hospital chain open the staff app at 9:00 to check their rosters, the same 500 employee profiles and the same 25 department directories are read thousands of times a minute, and PostgreSQL does identical work for every request. A cache keeps a copy of an answer close to where it is needed, so the expensive work happens once. The hard part is not storing the copy. It is knowing when the copy is wrong. This lesson covers both halves, using the caching tools built into ASP.NET Core 10.
 
 ## Learning objectives
 
@@ -77,7 +77,7 @@ The costs are:
 - **Memory.** Every entry occupies RAM in every instance (in-memory) or in Redis (distributed).
 - **Complexity.** Invalidation logic, serialisation, a new failure mode (cache down), and bugs that only appear under concurrency.
 
-Rule of thumb: cache data that is **read far more often than it is written**, **expensive to compute**, and **tolerant of a little staleness**. An employee's profile, a department directory, a list of project sites: yes. A leave balance seconds after approval, or a bank balance: be careful.
+Rule of thumb: cache data that is **read far more often than it is written**, **expensive to compute**, and **tolerant of a little staleness**. An employee's profile, a department directory, a list of hospital branches: yes. A leave balance seconds after approval, or a bank balance: be careful.
 
 ### Cache-aside: the default pattern
 
@@ -151,7 +151,7 @@ Output caching stores the **complete HTTP response** (status, headers, body) on 
 - It has built-in stampede protection (resource locking): concurrent misses for the same response wait for the first one.
 - The default store is in memory per instance; a Redis store is available for sharing.
 
-It is ideal for anonymous or shared data: a public staff directory, a list of active project sites, a tender notice feed.
+It is ideal for anonymous or shared data: a public list of doctors and their OPD timings, a list of hospital branches, a feed of job openings.
 
 ### HTTP caching headers
 
@@ -161,7 +161,7 @@ The cheapest request is the one that never reaches your server. HTTP caching (RF
 |---|---|---|
 | `Cache-Control: no-store` | Never store this anywhere | Salary slips, tokens, anything sensitive |
 | `Cache-Control: private, max-age=60` | Only the end user's browser may store it, for 60 s | A user's own dashboard |
-| `Cache-Control: public, max-age=60, s-maxage=300` | Anyone may store it; browsers 60 s, shared caches (CDN) 300 s | Public directory, site list |
+| `Cache-Control: public, max-age=60, s-maxage=300` | Anyone may store it; browsers 60 s, shared caches (CDN) 300 s | Public directory, branch list |
 | `Cache-Control: no-cache` | Store it, but revalidate with the server before every use | Data that must be fresh but is often unchanged |
 | `ETag: "7"` | A version identifier for this representation | The employee's version column |
 | `If-None-Match: "7"` (request) | "I have version 7; send it only if it changed" | Sent automatically by browsers |
@@ -176,7 +176,7 @@ The **response caching middleware** (`AddResponseCaching`) is a server-side cach
 
 Every cached item needs a written answer to "how does this become fresh after a change?". The options, from simplest to most precise:
 
-1. **TTL only.** Accept up to TTL of staleness. Simple and robust; right for reference data like department names or site lists. Add a small random **jitter** (for example ±10 %) so thousands of entries created together do not expire together and stampede the database.
+1. **TTL only.** Accept up to TTL of staleness. Simple and robust; right for reference data like department names or branch lists. Add a small random **jitter** (for example ±10 %) so thousands of entries created together do not expire together and stampede the database.
 2. **Explicit eviction on write.** After the database commit, delete the cache entry (and evict output-cache tags). Precise, but every write path must remember to do it, and there is a race: a reader that loaded the old row just before the write can put it back into the cache just after the delete. Short TTLs bound the damage.
 3. **Tags.** Group entries ("everything about department Finance") and evict the group. HybridCache and output caching both support tags.
 4. **Versioned keys.** Put a version in the key: `emp:v1:{id}:{version}` or a per-department generation number `dept:finance:g42`. Bump the version and old entries become unreachable; they expire naturally. No delete race at all, at the cost of an extra lookup for the current version.
@@ -447,15 +447,9 @@ public sealed class MemoryEmployeeReadCache(
 
         // All concurrent callers for this key share one Lazy, so the repository is called once.
         var load = _inflight.GetOrAdd(key, k => new Lazy<Task<EmployeeDto?>>(() => LoadAsync(k, id)));
-        try
-        {
-            // Each caller may give up (ct), but that must not cancel the shared load for others.
-            return await load.Value.WaitAsync(ct);
-        }
-        finally
-        {
-            if (load.Value.IsCompleted) _inflight.TryRemove(new KeyValuePair<string, Lazy<Task<EmployeeDto?>>>(key, load));
-        }
+
+        // Each caller may give up (ct), but that must not cancel the shared load for others.
+        return await load.Value.WaitAsync(ct);
     }
 
     public Task InvalidateAsync(Guid id, string department, CancellationToken ct)
@@ -466,16 +460,24 @@ public sealed class MemoryEmployeeReadCache(
 
     private async Task<EmployeeDto?> LoadAsync(string key, Guid id)
     {
-        logger.LogDebug("Cache miss for {CacheKey}", key);
-        var employee = await repository.GetAsync(id, CancellationToken.None);
-        var dto = employee is null ? null : EmployeeDto.From(employee);
-
-        cache.Set(key, new Slot(dto), new MemoryCacheEntryOptions
+        try
         {
-            AbsoluteExpirationRelativeToNow = dto is null ? NegativeTtl : WithJitter(Ttl),
-            Size = 1,
-        });
-        return dto;
+            logger.LogDebug("Cache miss for {CacheKey}", key);
+            var employee = await repository.GetAsync(id, CancellationToken.None);
+            var dto = employee is null ? null : EmployeeDto.From(employee);
+
+            cache.Set(key, new Slot(dto), new MemoryCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = dto is null ? NegativeTtl : WithJitter(Ttl),
+                Size = 1,
+            });
+            return dto;
+        }
+        finally
+        {
+            // The load removes itself, success or failure, even if every waiting caller has already given up.
+            _inflight.TryRemove(key, out _);
+        }
     }
 
     /// <summary>Adds 0-10 % so entries created together do not all expire in the same second.</summary>
@@ -484,7 +486,7 @@ public sealed class MemoryEmployeeReadCache(
 }
 ```
 
-Three details are easy to get wrong. The shared load uses `CancellationToken.None`, because if it used the first caller's token, that caller closing their browser would fail the request for everyone waiting. The `Slot` wrapper lets us cache "not found" separately from "not cached". And exceptions are never cached: if `LoadAsync` throws, nothing is stored, the in-flight entry is removed, and the next request tries again.
+Three details are easy to get wrong. The shared load uses `CancellationToken.None`, because if it used the first caller's token, that caller closing their browser would fail the request for everyone waiting. The `Slot` wrapper lets us cache "not found" separately from "not cached". And exceptions are never cached: if `LoadAsync` throws, nothing is stored, the in-flight entry is removed, and the next request tries again. The removal lives inside the load itself, not in the callers: if every waiting caller cancels before the load finishes, a caller-side cleanup would never run, and the finished `Lazy` would sit in the dictionary and hand its old value to the next miss.
 
 ### The same contract with `HybridCache`
 
@@ -522,7 +524,8 @@ public sealed class HybridEmployeeReadCache(HybridCache cache, IEmployeeReposito
     public async Task InvalidateAsync(Guid id, string department, CancellationToken ct)
     {
         await cache.RemoveAsync(CacheKeys.Employee(id), ct);
-        await cache.RemoveByTagAsync(CacheKeys.DepartmentTag(department), ct);
+        // Also drop any other entry tagged with this employee (for example a future "team view" that embeds them).
+        await cache.RemoveByTagAsync(CacheKeys.EmployeeTag(id), ct);
     }
 }
 ```
@@ -970,10 +973,10 @@ public class CacheKeyBuilderTests
     [Fact]
     public void Equivalent_queries_share_a_key()
     {
-        var a = CacheKeyBuilder.ForQuery(1, "Rodic", "Employees", new Dictionary<string, string?> { ["Department"] = "Finance", ["limit"] = "20" }, Ci);
-        var b = CacheKeyBuilder.ForQuery(1, "rodic", "employees", new Dictionary<string, string?> { ["limit"] = "20", ["department"] = "finance" }, Ci);
+        var a = CacheKeyBuilder.ForQuery(1, "CityCare", "Employees", new Dictionary<string, string?> { ["Department"] = "Finance", ["limit"] = "20" }, Ci);
+        var b = CacheKeyBuilder.ForQuery(1, "citycare", "employees", new Dictionary<string, string?> { ["limit"] = "20", ["department"] = "finance" }, Ci);
         Assert.Equal(a, b);
-        Assert.Equal("v1:rodic:employees?department=finance&limit=20", a);
+        Assert.Equal("v1:citycare:employees?department=finance&limit=20", a);
     }
 
     [Fact]
@@ -986,8 +989,8 @@ public class CacheKeyBuilderTests
     [Fact]
     public void Empty_values_are_dropped_and_no_query_means_no_question_mark()
     {
-        var key = CacheKeyBuilder.ForQuery(2, "t", "sites", new Dictionary<string, string?> { ["q"] = "", ["status"] = null }, Ci);
-        Assert.Equal("v2:t:sites", key);
+        var key = CacheKeyBuilder.ForQuery(2, "t", "branches", new Dictionary<string, string?> { ["q"] = "", ["status"] = null }, Ci);
+        Assert.Equal("v2:t:branches", key);
     }
 
     [Fact]
@@ -1056,14 +1059,14 @@ Hash the canonical string (SHA-256, hex) when keys get long; Redis handles long 
 :::
 
 :::exercise id=m03-caching-ex2 difficulty=beginner kind=written title="Choose the Cache-Control header"
-For each endpoint of an infrastructure-project platform, write the `Cache-Control` header you would send (and `ETag`/`Vary` if relevant), plus one sentence of justification.
+For each endpoint of a hospital chain's staff and patient platform, write the `Cache-Control` header you would send (and `ETag`/`Vary` if relevant), plus one sentence of justification.
 
 1. `GET /api/employees/{id}`: profile including monthly salary, requested by authenticated HR users.
-2. `GET /api/sites`: the public list of 60 active project sites with city and status; changes a few times a week.
+2. `GET /api/branches`: the public list of 60 hospitals and clinics with city, address and OPD hours; changes a few times a week.
 3. `GET /api/payslips/{month}`: a PDF salary slip for the logged-in employee.
 4. `GET /assets/app.4f9c2b.js`: a JavaScript bundle whose file name contains a content hash.
 5. `GET /api/directory/finance`: names and work emails, shown to all logged-in staff, available in English and Hindi via `Accept-Language`.
-6. `GET /api/tenders/latest`: the latest tender notices, polled by partner systems every minute.
+6. `GET /api/vacancies/latest`: the latest job openings for nurses and technicians, polled by partner job portals every minute.
 ::acceptance
 - Each answer names `public` or `private` (or `no-store`) correctly for who may cache it.
 - Sensitive data is never `public`, and the payslip is `no-store`.
@@ -1708,7 +1711,7 @@ public class MemoryEmployeeReadCacheTests
     public async Task Concurrent_misses_cause_one_database_read()
     {
         var repo = new InMemoryEmployeeRepository();
-        var kavya = new Employee { FullName = "Kavya Iyer", Email = "kavya@rodic.example", Department = "Finance", MonthlySalary = 91_000m };
+        var kavya = new Employee { FullName = "Kavya Iyer", Email = "kavya@example.com", Department = "Finance", MonthlySalary = 91_000m };
         repo.Add(kavya);
         var sut = new MemoryEmployeeReadCache(new MemoryCache(new MemoryCacheOptions { SizeLimit = 100 }), repo, NullLogger<MemoryEmployeeReadCache>.Instance);
 
@@ -1779,8 +1782,8 @@ What else to test: that a `null` result is cached only for the negative TTL (adv
 ## Real-world application
 
 - **High-traffic read APIs** (product catalogues, train timetables, exam results on result day) rely on layered caching: CDN for static and public JSON, an application cache for hot records, and the database only for misses. Result-day traffic is the textbook case for pre-warming the cache before the announcement.
-- **Government portals** serving public data (tender listings, land records, scheme guidelines) benefit most from HTTP caching with `public, max-age` and ETags, because the data is the same for every visitor and changes rarely.
-- **Infrastructure project dashboards** aggregate daily progress across dozens of sites. Computing the portfolio summary once per minute into a distributed cache, instead of per request, turns a heavy aggregation query into a key lookup.
+- **Government portals** serving public data (exam notifications, land records, scheme guidelines) benefit most from HTTP caching with `public, max-age` and ETags, because the data is the same for every visitor and changes rarely.
+- **Hospital operations dashboards** aggregate bed occupancy and OPD queue lengths across dozens of branches. Computing the chain-wide summary once per minute into a distributed cache, instead of per request, turns a heavy aggregation query into a key lookup.
 - **Payment and banking systems** cache cautiously: reference data (IFSC codes, bank lists) for hours, balances never, or only with explicit, short-lived and well-understood rules.
 - **Multi-instance ASP.NET Core services** in containers typically use `HybridCache` with Redis as L2, short L1 lifetimes, and Redis-backed output caching so that all instances share one response cache.
 
@@ -1861,7 +1864,7 @@ At 9:00 every Monday the profile endpoint's 60-second cache entries for the 500 
 ::q single
 Which endpoint is the best candidate for output caching with the default policy?
 - [ ] `GET /api/employees/{id}` requiring a bearer token and returning salary.
-- [x] `GET /api/sites`, an anonymous list of project sites that changes weekly.
+- [x] `GET /api/branches`, an anonymous list of hospital branches that changes weekly.
 - [ ] `POST /api/leave-requests`.
 - [ ] `GET /api/payslips/2026-09` for the logged-in user.
 > The default policy caches anonymous GETs with 200 responses. Authenticated, personal or non-GET endpoints are excluded for safety.
@@ -1894,12 +1897,12 @@ Which write-path sequence is correct for cache-aside?
 - [ ] Update database only, and let the TTL handle it.
 > Deleting first lets a concurrent reader reload the old value before the commit. Updating the cache first can cache a value that the database then rejects.
 ::q single
-A scraper requests thousands of random employee GUIDs per second. Every request misses the cache and hits PostgreSQL. What helps most at the cache layer?
+A buggy mobile build retries the same 50 deleted employee ids thousands of times per second. Every request misses the cache and hits PostgreSQL. What helps most at the cache layer?
 - [ ] A longer TTL for found employees.
 - [x] Caching "not found" results for a few seconds (negative caching), plus rate limiting.
 - [ ] Switching from IMemoryCache to IDistributedCache.
 - [ ] Adding `Vary: User-Agent`.
-> Misses on non-existent keys bypass a normal cache. Negative caching absorbs repeats; truly random keys also need rate limiting.
+> Misses on non-existent keys bypass a normal cache. Negative caching turns the repeats into cache hits. If the ids were truly random (a scraper), negative caching would not help, and rate limiting is the real defence.
 :::
 
 ## Completion criteria

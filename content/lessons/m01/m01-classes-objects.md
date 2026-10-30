@@ -575,7 +575,7 @@ app.MapPost("/cards/{number}/trips", (string number, TripRequest req, ICardRepos
     var fare = fares.FareFor(req.StationsTravelled);
     return card.TryPayFare(req.From, req.To, fare, clock.GetUtcNow())
         ? Results.Ok(CardView.From(card))
-        : Results.Problem($"Insufficient balance for fare ₹{fare}.", statusCode: 402);
+        : Results.Problem($"Insufficient balance for fare ₹{fare}.", statusCode: 409);   // 409: conflicts with the card's current state; 402 is reserved in HTTP
 });
 
 app.MapGet("/stats", () => Results.Ok(new { issued = MetroCard.IssuedCount }));
@@ -1383,7 +1383,7 @@ Static mutable state makes tests flaky. `MetroCard.IssuedCount` keeps counting a
 ## Real-world application
 
 - **ASP.NET Core** is built from classes. `HttpContext` is an object per request, with properties such as `Request`, `Response` and `User`. `WebApplication` is the object that represents your running app. Your controllers and minimal-API handlers are classes or methods that the framework creates and calls.
-- **Domain models** in business systems are classes that protect rules: an `Invoice` that cannot be edited after it is issued, a `LeaveRequest` that cannot be approved twice, a `RunningBill` on an infrastructure project whose certified amount can never exceed the contract value.
+- **Domain models** in business systems are classes that protect rules: an `Invoice` that cannot be edited after it is issued, a `LeaveRequest` that cannot be approved twice, a hotel `Booking` whose total refunds can never exceed the amount the guest paid.
 - **Banking and wallets** (UPI apps, prepaid cards) depend on exactly the invariant you practised: a balance changes only through validated operations, never by direct assignment.
 - **The .NET libraries themselves**: `List<T>` keeps a private array and a count, and its public `Add` method grows the array when needed. You use the public members and never see the array. That is encapsulation at work in code you call every day.
 

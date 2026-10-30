@@ -8,7 +8,7 @@ template: lesson
 minutes: 80
 prerequisites: [m08-aggregates, m08-entities-value-objects, m06-repository-uow, m04-dip]
 related: [m08-application-services, m08-domain-events, m08-transaction-boundaries, m08-domain-vs-infra, m06-specification]
-tags: [ddd, tactical-design, repository, domain-service, persistence-ignorance, procurement, three-way-match]
+tags: [ddd, tactical-design, repository, domain-service, persistence-ignorance, healthcare, three-way-match]
 patterns: [Repository, Domain Service, Separated Interface]
 summary: Give every aggregate one repository that behaves like an in-memory collection, keep the domain unaware of how it is stored (persistence ignorance), and put business logic that belongs to no single entity into small, stateless domain services.
 references:
@@ -26,7 +26,7 @@ references:
 
 In the [aggregates lesson](#/lesson/m08-aggregates) you drew boundaries around clusters of objects that must change together. Two practical questions follow immediately. First, *how do you get an aggregate back after you saved it yesterday?* Second, *where does a rule go when it needs two or three aggregates at once and belongs to none of them?* The answers are the **repository** and the **domain service**. They are small ideas, but getting them wrong is how most "DDD" codebases slide back into a tangle of database calls and anaemic entities.
 
-Our running example is accounts-payable in a procurement system for infrastructure projects. A contractor's site office raises a **purchase order** (PO) for 500 bags of cement, the store records a **goods receipt note** (GRN) when the trucks arrive, and the vendor later sends an **invoice**. Before anyone pays, finance runs the classic **three-way match**: what was ordered, what was received and what was billed must agree, within a small price tolerance.
+Our running example is accounts-payable for a chain of hospitals. The central pharmacy of one hospital raises a **purchase order** (PO) for 500 boxes of nitrile surgical gloves, the hospital store records a **goods receipt note** (GRN) when the delivery van arrives, and the vendor later sends an **invoice**. Before anyone pays, finance runs the classic **three-way match**: what was ordered, what was received and what was billed must agree, within a small price tolerance.
 
 ## Learning objectives
 
@@ -51,9 +51,9 @@ By the end of this lesson you will be able to:
 
 Think of a big public library. You walk up to the counter and say "I'd like book 978-81-203-4007-7". The librarian goes away and comes back with the whole book: every page, the cover, the stamps inside. You never see the shelves, the basement store, or the inter-library van. Whether the book was on shelf 4 or fetched from another city is not your problem. When you return it, you hand it over the counter and the librarian puts it back wherever it lives.
 
-That counter is a **repository**. For each kind of thing your business cares about as a whole (a purchase order, an invoice, a contract), there is one counter that hands you the whole thing and takes it back. Your business code says "give me PO 4471" and "here is a new invoice, keep it". It does not say "run this SQL join on three tables".
+That counter is a **repository**. For each kind of thing your business cares about as a whole (a purchase order, an invoice, a supplier contract), there is one counter that hands you the whole thing and takes it back. Your business code says "give me PO 4471" and "here is a new invoice, keep it". It does not say "run this SQL join on three tables".
 
-Now imagine a question that no single book can answer: "Do these three documents agree with each other?" A PO says 500 bags at ₹380 each. The goods receipt says 480 bags arrived. The invoice bills 500 bags at ₹385. Which object should decide whether the invoice can be paid? Not the PO: it does not know about receipts. Not the invoice: it does not know what was ordered. Not the receipt either. This is a job for a separate, named piece of business logic, the way a library has an "inter-library loan desk" that is neither a book nor a shelf. In DDD that is a **domain service**: a stateless operation, named in business words ("three-way match"), that takes several domain objects and applies a rule across them.
+Now imagine a question that no single book can answer: "Do these three documents agree with each other?" A PO says 500 boxes of gloves at ₹380 each. The goods receipt says 480 boxes arrived. The invoice bills 500 boxes at ₹385. Which object should decide whether the invoice can be paid? Not the PO: it does not know about receipts. Not the invoice: it does not know what was ordered. Not the receipt either. This is a job for a separate, named piece of business logic, the way a library has an "inter-library loan desk" that is neither a book nor a shelf. In DDD that is a **domain service**: a stateless operation, named in business words ("three-way match"), that takes several domain objects and applies a rule across them.
 
 Two rules of thumb:
 
@@ -90,7 +90,7 @@ A repository interface belongs to the **domain** (it is a "separated interface":
 public interface IPurchaseOrderRepository
 {
     Task<PurchaseOrder?> GetAsync(PurchaseOrderId id, CancellationToken ct = default);
-    Task<IReadOnlyList<PurchaseOrder>> ListAwaitingApprovalAsync(string projectCode, CancellationToken ct = default);
+    Task<IReadOnlyList<PurchaseOrder>> ListAwaitingApprovalAsync(string hospitalCode, CancellationToken ct = default);
     void Add(PurchaseOrder order);
 }
 ```
@@ -99,9 +99,9 @@ Notice what is *not* there:
 
 - No `Update` method. In the collection metaphor you change the object you got back, and a unit of work (EF Core's `DbContext.SaveChangesAsync`) notices. Some teams prefer an explicit `UpdateAsync` because their storage (Dapper, a document database) does not track changes. Both are fine. Be consistent.
 - No `IQueryable<PurchaseOrder>`. Returning `IQueryable` lets every caller compose arbitrary database queries, which spreads persistence knowledge everywhere and makes the repository impossible to fake honestly.
-- No `GetByVendorAndStatusAndDateRangeAndProject...`. When the list of finder methods explodes, that is a sign the callers are doing *queries for screens*, which belong to the read side, or that a [Specification](#/lesson/m06-specification) would express the selection better.
+- No `GetByVendorAndStatusAndDateRangeAndHospital...`. When the list of finder methods explodes, that is a sign the callers are doing *queries for screens*, which belong to the read side, or that a [Specification](#/lesson/m06-specification) would express the selection better.
 
-Finder methods should be named after business questions: `ListAwaitingApprovalAsync`, `FindOpenForVendorAsync`. A useful test: could a procurement manager understand the method name?
+Finder methods should be named after business questions: `ListAwaitingApprovalAsync`, `FindOpenForVendorAsync`. A useful test: could the hospital's purchase manager understand the method name?
 
 ### Persistence ignorance
 
@@ -134,8 +134,8 @@ The three-way match is a textbook case. It needs a `PurchaseOrder`, one or more 
 
 Other real examples:
 
-- **Budget transfer between two cost heads** of a project (debit one, credit the other, enforce "a transfer may not take a head below its committed amount").
-- **Liquidated-damages calculation** for a delayed contract milestone, combining the contract's LD clause, the milestone dates and the approved extensions of time.
+- **Budget transfer between two cost heads** of a hospital (say from "consumables" to "equipment repairs": debit one, credit the other, enforce "a transfer may not take a head below its committed amount").
+- **Late-delivery penalty** for a delayed equipment installation (say, a CT scanner), combining the supplier contract's penalty clause, the agreed installation date and any approved extensions.
 - **Vendor selection** from three quotations using a weighted score (price 70 %, delivery 20 %, past rating 10 %).
 - **Currency conversion** using an exchange-rate policy.
 
@@ -254,7 +254,7 @@ sequenceDiagram
     App-->>API: DTO with status OnHold
 ```
 
-The flow shows the division of labour. The application service does all the I/O: three reads, one save. The domain service does a pure calculation in the middle and returns a value (`MatchResult`), not a database command. The invoice aggregate then changes *its own* state through `ApplyMatchResult`, so its invariant ("only a received invoice can be matched") stays inside it. If the match logic changes (say tolerance moves from 2 % to 1.5 % for steel), only the domain service and its tests change.
+The flow shows the division of labour. The application service does all the I/O: three reads, one save. The domain service does a pure calculation in the middle and returns a value (`MatchResult`), not a database command. The invoice aggregate then changes *its own* state through `ApplyMatchResult`, so its invariant ("only a received invoice can be matched") stays inside it. If the match logic changes (say tolerance moves from 2 % to 1.5 % for medical equipment), only the domain service and its tests change.
 
 ## Step-by-step example
 
@@ -373,17 +373,17 @@ public sealed class PurchaseOrder : AggregateRoot<PurchaseOrderId>
 
     private PurchaseOrder() { }  // for the ORM only; domain code uses the public constructor
 
-    public PurchaseOrder(PurchaseOrderId id, VendorId vendorId, string projectCode)
+    public PurchaseOrder(PurchaseOrderId id, VendorId vendorId, string hospitalCode)
     {
-        if (string.IsNullOrWhiteSpace(projectCode)) throw new DomainException("Project code is required.");
+        if (string.IsNullOrWhiteSpace(hospitalCode)) throw new DomainException("Hospital code is required.");
         Id = id;
         VendorId = vendorId;
-        ProjectCode = projectCode;
+        HospitalCode = hospitalCode;
         Status = PurchaseOrderStatus.Draft;
     }
 
     public VendorId VendorId { get; private set; }
-    public string ProjectCode { get; private set; } = "";
+    public string HospitalCode { get; private set; } = "";
     public PurchaseOrderStatus Status { get; private set; }
     public IReadOnlyList<PurchaseOrderLine> Lines => _lines;
     public decimal Total => _lines.Sum(l => l.Total);
@@ -413,7 +413,7 @@ namespace Procurement.Domain;
 
 public sealed record ReceiptLine(string Sku, decimal Quantity);
 
-/// <summary>A goods receipt note (GRN): what physically arrived at site against one PO.</summary>
+/// <summary>A goods receipt note (GRN): what physically arrived at the hospital store against one PO.</summary>
 public sealed class GoodsReceipt : AggregateRoot<GoodsReceiptId>
 {
     private readonly List<ReceiptLine> _lines = new();
@@ -567,7 +567,7 @@ namespace Procurement.Domain;
 public interface IPurchaseOrderRepository
 {
     Task<PurchaseOrder?> GetAsync(PurchaseOrderId id, CancellationToken ct = default);
-    Task<IReadOnlyList<PurchaseOrder>> ListAwaitingApprovalAsync(string projectCode, CancellationToken ct = default);
+    Task<IReadOnlyList<PurchaseOrder>> ListAwaitingApprovalAsync(string hospitalCode, CancellationToken ct = default);
     void Add(PurchaseOrder order);
 }
 
@@ -653,9 +653,9 @@ public sealed class InMemoryPurchaseOrderRepository(InMemoryProcurementStore sto
     public Task<PurchaseOrder?> GetAsync(PurchaseOrderId id, CancellationToken ct = default) =>
         Task.FromResult(store.Orders.TryGetValue(id, out var po) ? po : null);
 
-    public Task<IReadOnlyList<PurchaseOrder>> ListAwaitingApprovalAsync(string projectCode, CancellationToken ct = default) =>
+    public Task<IReadOnlyList<PurchaseOrder>> ListAwaitingApprovalAsync(string hospitalCode, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<PurchaseOrder>>(store.Orders.Values
-            .Where(p => p.ProjectCode == projectCode && p.Status == PurchaseOrderStatus.Draft && p.Lines.Count > 0)
+            .Where(p => p.HospitalCode == hospitalCode && p.Status == PurchaseOrderStatus.Draft && p.Lines.Count > 0)
             .ToList());
 
     public void Add(PurchaseOrder order)
@@ -752,9 +752,9 @@ public sealed class EfPurchaseOrderRepository(ProcurementDbContext db) : IPurcha
     public Task<PurchaseOrder?> GetAsync(PurchaseOrderId id, CancellationToken ct = default) =>
         db.PurchaseOrders.Include(p => p.Lines).SingleOrDefaultAsync(p => p.Id == id, ct);
 
-    public async Task<IReadOnlyList<PurchaseOrder>> ListAwaitingApprovalAsync(string projectCode, CancellationToken ct = default) =>
+    public async Task<IReadOnlyList<PurchaseOrder>> ListAwaitingApprovalAsync(string hospitalCode, CancellationToken ct = default) =>
         await db.PurchaseOrders.Include(p => p.Lines)
-            .Where(p => p.ProjectCode == projectCode && p.Status == PurchaseOrderStatus.Draft)
+            .Where(p => p.HospitalCode == hospitalCode && p.Status == PurchaseOrderStatus.Draft)
             .ToListAsync(ct);
 
     public void Add(PurchaseOrder order) => db.PurchaseOrders.Add(order);
@@ -896,14 +896,14 @@ public static class Program
     {
         var poId = Guid.NewGuid();
         var orders = new InMemoryRepository<Guid, PurchaseOrder>();
-        orders.Add(poId, new PurchaseOrder(poId, new[] { new PoLine("CEMENT-OPC53", 500, 380m), new PoLine("TMT-12MM", 2, 61000m) }));
+        orders.Add(poId, new PurchaseOrder(poId, new[] { new PoLine("GLOVES-NITRILE-M", 500, 380m), new PoLine("MONITOR-5P", 2, 61000m) }));
 
         var grns = new List<GoodsReceipt>
         {
-            new GoodsReceipt(poId, new[] { new ReceiptLine("CEMENT-OPC53", 300) }),
-            new GoodsReceipt(poId, new[] { new ReceiptLine("CEMENT-OPC53", 180), new ReceiptLine("TMT-12MM", 2) }),
+            new GoodsReceipt(poId, new[] { new ReceiptLine("GLOVES-NITRILE-M", 300) }),
+            new GoodsReceipt(poId, new[] { new ReceiptLine("GLOVES-NITRILE-M", 180), new ReceiptLine("MONITOR-5P", 2) }),
         };
-        var invoice = new VendorInvoice(poId, new[] { new InvoiceLine("CEMENT-OPC53", 500, 385m), new InvoiceLine("TMT-12MM", 2, 63500m) });
+        var invoice = new VendorInvoice(poId, new[] { new InvoiceLine("GLOVES-NITRILE-M", 500, 385m), new InvoiceLine("MONITOR-5P", 2, 63500m) });
 
         var po = orders.Get(poId)!;
         var problems = new ThreeWayMatchService().Match(po, grns, invoice, tolerancePercent: 2m);
@@ -914,7 +914,7 @@ public static class Program
 ```
 :::
 
-Expected after your change: cement is flagged for quantity (500 billed, 480 received) but not for price (₹385 is within 2 % of ₹380, the limit is ₹387.60). Steel is flagged for price (₹63,500 is above ₹62,220).
+Expected after your change: the gloves are flagged for quantity (500 billed, 480 received) but not for price (₹385 is within 2 % of ₹380, the limit is ₹387.60). The patient monitors are flagged for price (₹63,500 is above ₹62,220).
 
 ## Exercises
 
@@ -1136,10 +1136,10 @@ Add `Task<bool> ExistsWithNumberAsync(Guid vendorId, string invoiceNumber)` and 
 :::
 
 :::exercise id=m08-repositories-domain-services-ex2 difficulty=beginner kind=written title="Entity method, domain service, application service, or infrastructure?"
-For each piece of logic in a contract-management system, say where it belongs and give a one-line reason.
+For each piece of logic in a hospital's supplier-contract system, say where it belongs and give a one-line reason.
 
 1. "A contract cannot be signed unless all its mandatory clauses are accepted."
-2. "Calculate liquidated damages for a late milestone: 0.05 % of contract value per day of delay, capped at 10 %, minus any approved extension of time." The contract, the milestone and the extension-of-time approvals are three different aggregates.
+2. "Calculate the late-delivery penalty for a delayed equipment installation: 0.05 % of contract value per day of delay, capped at 10 %, minus any approved extension." The contract, the installation milestone and the extension approvals are three different aggregates.
 3. "Load contract C-2291, call sign, save, and return a `ContractDto`."
 4. "Send the signed contract PDF to the vendor by email."
 5. "Pick the winning bid from three vendor quotations using weights: price 70 %, delivery time 20 %, vendor rating 10 %."
@@ -1156,10 +1156,10 @@ Then ask: does this code perform I/O (database, email, HTTP)? Domain code never 
 For item 6, split it: the *rule* ("use the reference rate on the bid date, rounded to 2 decimals") versus *fetching* the rate.
 ::solution
 1. **Aggregate method** `Contract.Sign()`. The rule only needs the contract's own clauses, which are inside its boundary. Putting it in a service would make `Contract` anaemic.
-2. **Domain service** `LiquidatedDamagesCalculator.Calculate(contract, milestone, extensions)`. It spans three aggregates, is stateless, and is a named business concept that contract managers discuss.
+2. **Domain service** `LateDeliveryPenaltyCalculator.Calculate(contract, milestone, extensions)`. It spans three aggregates, is stateless, and is a named business concept that the purchase team discusses.
 3. **Application service**. It is orchestration: load, delegate, save, map. No rule lives here.
 4. **Infrastructure service** behind an application-level interface such as `IContractDocumentSender`. Usually triggered by a `ContractSigned` domain event handler (see [Domain events](#/lesson/m08-domain-events)).
-5. **Domain service** `BidEvaluationService`. Several bid aggregates, a weighted policy, stateless. The weights could be an injected value object so tenders can configure them.
+5. **Domain service** `BidEvaluationService`. Several bid aggregates, a weighted policy, stateless. The weights could be an injected value object so the purchase committee can configure them.
 6. **Domain service with a port**: `CurrencyConversionService` depends on `IExchangeRateProvider` (declared in the domain). The implementation that calls an external rate feed lives in infrastructure. The conversion rule (which date, how to round) stays testable with a fake provider that returns ₹83.12.
 ::mistakes
 - Calling item 3 a domain service because it has "service" in its name.
@@ -1245,7 +1245,7 @@ using Xunit;
 public class ThreeWayMatchTests
 {
     private static readonly Guid PoId = Guid.NewGuid();
-    private static PurchaseOrder Po() => new PurchaseOrder(PoId, new[] { new PoLine("CEM", 10, 100m), new PoLine("STEEL", 2, 60000m) });
+    private static PurchaseOrder Po() => new PurchaseOrder(PoId, new[] { new PoLine("GLOVES", 10, 100m), new PoLine("MONITOR", 2, 60000m) });
     private static GoodsReceipt Grn(params ReceiptLine[] lines) => new GoodsReceipt(PoId, lines);
     private static VendorInvoice Inv(params InvoiceLine[] lines) => new VendorInvoice(PoId, lines);
     private readonly ThreeWayMatchService _svc = new ThreeWayMatchService();
@@ -1253,72 +1253,72 @@ public class ThreeWayMatchTests
     [Fact]
     public void Perfect_match()
     {
-        var r = _svc.Match(Po(), new[] { Grn(new ReceiptLine("CEM", 10)) }, Inv(new InvoiceLine("CEM", 10, 100m)), 2m);
+        var r = _svc.Match(Po(), new[] { Grn(new ReceiptLine("GLOVES", 10)) }, Inv(new InvoiceLine("GLOVES", 10, 100m)), 2m);
         Assert.True(r.IsMatched);
     }
 
     [Fact]
     public void Price_within_tolerance_matches()
     {
-        var r = _svc.Match(Po(), new[] { Grn(new ReceiptLine("CEM", 10)) }, Inv(new InvoiceLine("CEM", 10, 101.50m)), 2m);
+        var r = _svc.Match(Po(), new[] { Grn(new ReceiptLine("GLOVES", 10)) }, Inv(new InvoiceLine("GLOVES", 10, 101.50m)), 2m);
         Assert.True(r.IsMatched);
     }
 
     [Fact]
     public void Price_above_tolerance_is_flagged()
     {
-        var r = _svc.Match(Po(), new[] { Grn(new ReceiptLine("CEM", 10)) }, Inv(new InvoiceLine("CEM", 10, 103m)), 2m);
+        var r = _svc.Match(Po(), new[] { Grn(new ReceiptLine("GLOVES", 10)) }, Inv(new InvoiceLine("GLOVES", 10, 103m)), 2m);
         var d = Assert.Single(r.Discrepancies);
         Assert.Equal(DiscrepancyKind.PriceAboveOrder, d.Kind);
-        Assert.Equal("CEM", d.Sku);
+        Assert.Equal("GLOVES", d.Sku);
     }
 
     [Fact]
     public void Receipts_are_summed()
     {
-        var r = _svc.Match(Po(), new[] { Grn(new ReceiptLine("CEM", 6)), Grn(new ReceiptLine("CEM", 4)) }, Inv(new InvoiceLine("CEM", 10, 100m)), 0m);
+        var r = _svc.Match(Po(), new[] { Grn(new ReceiptLine("GLOVES", 6)), Grn(new ReceiptLine("GLOVES", 4)) }, Inv(new InvoiceLine("GLOVES", 10, 100m)), 0m);
         Assert.True(r.IsMatched);
     }
 
     [Fact]
     public void Billed_more_than_received()
     {
-        var r = _svc.Match(Po(), new[] { Grn(new ReceiptLine("CEM", 6)), Grn(new ReceiptLine("CEM", 3)) }, Inv(new InvoiceLine("CEM", 10, 100m)), 2m);
+        var r = _svc.Match(Po(), new[] { Grn(new ReceiptLine("GLOVES", 6)), Grn(new ReceiptLine("GLOVES", 3)) }, Inv(new InvoiceLine("GLOVES", 10, 100m)), 2m);
         Assert.Equal(DiscrepancyKind.QuantityNotReceived, Assert.Single(r.Discrepancies).Kind);
     }
 
     [Fact]
     public void Split_invoice_lines_are_grouped()
     {
-        var r = _svc.Match(Po(), new[] { Grn(new ReceiptLine("CEM", 10)) },
-            Inv(new InvoiceLine("CEM", 5, 100m), new InvoiceLine("CEM", 6, 100m)), 2m);
+        var r = _svc.Match(Po(), new[] { Grn(new ReceiptLine("GLOVES", 10)) },
+            Inv(new InvoiceLine("GLOVES", 5, 100m), new InvoiceLine("GLOVES", 6, 100m)), 2m);
         Assert.Equal(DiscrepancyKind.QuantityNotReceived, Assert.Single(r.Discrepancies).Kind);
     }
 
     [Fact]
     public void Item_not_on_order_skips_other_checks()
     {
-        var r = _svc.Match(Po(), new[] { Grn(new ReceiptLine("CEM", 10)) },
-            Inv(new InvoiceLine("SAND", 5, 999m), new InvoiceLine("CEM", 10, 100m)), 2m);
+        var r = _svc.Match(Po(), new[] { Grn(new ReceiptLine("GLOVES", 10)) },
+            Inv(new InvoiceLine("SYRINGE", 5, 999m), new InvoiceLine("GLOVES", 10, 100m)), 2m);
         var d = Assert.Single(r.Discrepancies);
         Assert.Equal(DiscrepancyKind.NotOnOrder, d.Kind);
-        Assert.Equal("SAND", d.Sku);
+        Assert.Equal("SYRINGE", d.Sku);
     }
 
     [Fact]
     public void Multiple_problems_in_invoice_order()
     {
-        var r = _svc.Match(Po(), new[] { Grn(new ReceiptLine("CEM", 4), new ReceiptLine("STEEL", 2)) },
-            Inv(new InvoiceLine("STEEL", 2, 64000m), new InvoiceLine("CEM", 10, 100m)), 2m);
-        Assert.Equal(new[] { "STEEL", "CEM" }, r.Discrepancies.Select(d => d.Sku));
+        var r = _svc.Match(Po(), new[] { Grn(new ReceiptLine("GLOVES", 4), new ReceiptLine("MONITOR", 2)) },
+            Inv(new InvoiceLine("MONITOR", 2, 64000m), new InvoiceLine("GLOVES", 10, 100m)), 2m);
+        Assert.Equal(new[] { "MONITOR", "GLOVES" }, r.Discrepancies.Select(d => d.Sku));
         Assert.Equal(new[] { DiscrepancyKind.PriceAboveOrder, DiscrepancyKind.QuantityNotReceived }, r.Discrepancies.Select(d => d.Kind));
     }
 
     [Fact]
     public void Wrong_po_returns_single_discrepancy()
     {
-        var r = _svc.Match(Po(), new[] { Grn(new ReceiptLine("CEM", 10)) },
-            new VendorInvoice(Guid.NewGuid(), new[] { new InvoiceLine("CEM", 10, 100m) }), 2m);
+        var r = _svc.Match(Po(), new[] { Grn(new ReceiptLine("GLOVES", 10)) },
+            new VendorInvoice(Guid.NewGuid(), new[] { new InvoiceLine("GLOVES", 10, 100m) }), 2m);
         var d = Assert.Single(r.Discrepancies);
         Assert.Equal(DiscrepancyKind.WrongPurchaseOrder, d.Kind);
         Assert.Equal("*", d.Sku);
@@ -1327,15 +1327,15 @@ public class ThreeWayMatchTests
     [Fact]
     public void Receipt_for_other_po_is_a_caller_bug()
     {
-        var foreign = new GoodsReceipt(Guid.NewGuid(), new[] { new ReceiptLine("CEM", 10) });
-        Assert.Throws<ArgumentException>(() => _svc.Match(Po(), new[] { foreign }, Inv(new InvoiceLine("CEM", 10, 100m)), 2m));
+        var foreign = new GoodsReceipt(Guid.NewGuid(), new[] { new ReceiptLine("GLOVES", 10) });
+        Assert.Throws<ArgumentException>(() => _svc.Match(Po(), new[] { foreign }, Inv(new InvoiceLine("GLOVES", 10, 100m)), 2m));
     }
 
     [Fact]
     public void Service_is_stateless()
     {
-        var bad = _svc.Match(Po(), new[] { Grn(new ReceiptLine("CEM", 1)) }, Inv(new InvoiceLine("CEM", 10, 100m)), 2m);
-        var good = _svc.Match(Po(), new[] { Grn(new ReceiptLine("CEM", 10)) }, Inv(new InvoiceLine("CEM", 10, 100m)), 2m);
+        var bad = _svc.Match(Po(), new[] { Grn(new ReceiptLine("GLOVES", 1)) }, Inv(new InvoiceLine("GLOVES", 10, 100m)), 2m);
+        var good = _svc.Match(Po(), new[] { Grn(new ReceiptLine("GLOVES", 10)) }, Inv(new InvoiceLine("GLOVES", 10, 100m)), 2m);
         Assert.False(bad.IsMatched);
         Assert.True(good.IsMatched);
     }
@@ -1423,44 +1423,44 @@ public sealed class ThreeWayMatchService
 
 Notice what the service does *not* do: it does not change the invoice's status. It returns a value, and the invoice aggregate decides what that value means for itself (`ApplyMatchResult`). This keeps the invoice's own rules (a paid invoice cannot be re-matched) inside the invoice.
 ::alternatives
-Each check could be a small rule object (`IMatchRule`) and the service runs a list of them, which is Strategy plus Composite. Worth it once there are 6 or more rules, or when rules differ by vendor category (for example quantity tolerance for bulk aggregates like sand, measured by weighbridge).
+Each check could be a small rule object (`IMatchRule`) and the service runs a list of them, which is Strategy plus Composite. Worth it once there are 6 or more rules, or when rules differ by vendor category (for example a quantity tolerance for bulk liquids such as hand sanitiser or liquid oxygen, measured by volume or weight).
 ::mistakes
-- Checking per invoice *line* instead of per SKU: a vendor who bills 5 + 6 bags on two lines escapes the quantity check.
+- Checking per invoice *line* instead of per SKU: a vendor who bills 5 + 6 boxes on two lines escapes the quantity check.
 - Using `double` for prices. Money is `decimal`.
 - Making the service mutate the invoice. Then it is no longer a pure, reusable calculation.
 - Comparing with `>=` instead of `>` at the tolerance boundary. ₹102.00 against ₹100 with 2 % is allowed.
 ::extensions
-Add a quantity tolerance for weighed materials (accept up to 0.5 % more billed than received for SKUs whose unit is "tonne") without adding an `if` for each SKU.
+Add a quantity tolerance for bulk liquids (accept up to 0.5 % more billed than received for SKUs whose unit is "litre") without adding an `if` for each SKU.
 :::
 
 :::exercise id=m08-repositories-domain-services-ex4 difficulty=intermediate kind=design title="Replace a generic repository with aggregate repositories"
-A contract-management module has a single `IRepository<T>` with `IQueryable<T> Query()`, `Add`, `Update`, `Delete`, used for `Contract`, `ContractClause`, `Milestone`, `Vendor` and `PaymentCertificate`. Handlers query clauses and milestones directly and update them without going through the contract.
+A hospital's supplier-contract module (equipment purchases with delivery, installation and training milestones) has a single `IRepository<T>` with `IQueryable<T> Query()`, `Add`, `Update`, `Delete`, used for `Contract`, `ContractClause`, `Milestone`, `Vendor` and `VendorBill`. Handlers query clauses and milestones directly and update them without going through the contract.
 
-Design the replacement in the LLD designer. Decide which types are aggregate roots, give each root a repository interface with intention-revealing methods, and add one domain service for "calculate the amount payable on a payment certificate" (it needs the contract's retention percentage, the certified milestone values and previous certificates). Mark repositories as `interface`, aggregate roots as `class` with "Aggregate root" in `responsibility`.
+Design the replacement in the LLD designer. Decide which types are aggregate roots, give each root a repository interface with intention-revealing methods, and add one domain service for "calculate the amount payable on a vendor bill" (it needs the contract's warranty holdback percentage, the accepted milestone values and previous bills). Mark repositories as `interface`, aggregate roots as `class` with "Aggregate root" in `responsibility`.
 ::acceptance
 - `ContractClause` and `Milestone` are inside the `Contract` aggregate and have no repositories.
-- `Contract`, `Vendor` and `PaymentCertificate` each have exactly one repository interface; no `IQueryable` anywhere.
+- `Contract`, `Vendor` and `VendorBill` each have exactly one repository interface; no `IQueryable` anywhere.
 - Every finder is named after a business question (for example `ListActiveForVendorAsync`).
 - A stateless domain service computes the payable amount from parameters, with no repository dependency.
 - Relations show dependencies from repositories to their aggregate and from the domain service to the objects it reads.
 ::hint
 For each type, ask: can it change on its own, or only as part of something else? Clauses are never edited without the contract.
 ::hint
-Payment certificates are raised monthly and each has its own approval workflow, so they change independently of the contract.
+Vendor bills arrive one per milestone and each has its own approval workflow, so they change independently of the contract.
 ::hint
-The payable calculation: gross certified value minus retention minus amounts already paid on earlier certificates. What does it need as inputs?
+The payable calculation: gross accepted value minus the warranty holdback minus amounts already paid on earlier bills. What does it need as inputs?
 ::hint
-Give the service a signature such as `Money CalculatePayable(Contract contract, PaymentCertificate current, IReadOnlyList~PaymentCertificate~ previous)`.
+Give the service a signature such as `Money CalculatePayable(Contract contract, VendorBill current, IReadOnlyList~VendorBill~ previous)`.
 ::starter
 ```json
 {
   "classes": [
     { "id": "IRepository", "name": "IRepository~T~", "kind": "interface", "fields": [], "methods": ["IQueryable~T~ Query()", "void Add(T e)", "void Update(T e)", "void Delete(T e)"], "responsibility": "TODO: replace me" },
-    { "id": "Contract", "name": "Contract", "kind": "class", "fields": ["-ContractId Id", "-VendorId VendorId", "-decimal RetentionPercent"], "methods": [], "responsibility": "TODO" },
+    { "id": "Contract", "name": "Contract", "kind": "class", "fields": ["-ContractId Id", "-VendorId VendorId", "-decimal HoldbackPercent"], "methods": [], "responsibility": "TODO" },
     { "id": "ContractClause", "name": "ContractClause", "kind": "class", "fields": ["-string Code", "-bool Accepted"], "methods": [], "responsibility": "TODO" },
     { "id": "Milestone", "name": "Milestone", "kind": "class", "fields": ["-string Name", "-Money Value"], "methods": [], "responsibility": "TODO" },
     { "id": "Vendor", "name": "Vendor", "kind": "class", "fields": ["-VendorId Id", "-string Gstin"], "methods": [], "responsibility": "TODO" },
-    { "id": "PaymentCertificate", "name": "PaymentCertificate", "kind": "class", "fields": ["-CertificateId Id", "-ContractId ContractId"], "methods": [], "responsibility": "TODO" }
+    { "id": "VendorBill", "name": "VendorBill", "kind": "class", "fields": ["-BillId Id", "-ContractId ContractId"], "methods": [], "responsibility": "TODO" }
   ],
   "relations": []
 }
@@ -1470,45 +1470,45 @@ Give the service a signature such as `Money CalculatePayable(Contract contract, 
 {
   "classes": [
     { "id": "Contract", "name": "Contract", "kind": "class",
-      "fields": ["-ContractId Id", "-VendorId VendorId", "-decimal RetentionPercent", "-ContractStatus Status", "-List~ContractClause~ _clauses", "-List~Milestone~ _milestones"],
-      "methods": ["+void AcceptClause(string code)", "+void Sign(DateOnly on)", "+void CertifyMilestone(string name, Money value)", "+Money CertifiedValueTo(DateOnly date)"],
+      "fields": ["-ContractId Id", "-VendorId VendorId", "-decimal HoldbackPercent", "-ContractStatus Status", "-List~ContractClause~ _clauses", "-List~Milestone~ _milestones"],
+      "methods": ["+void AcceptClause(string code)", "+void Sign(DateOnly on)", "+void AcceptMilestone(string name, Money value)", "+Money AcceptedValueTo(DateOnly date)"],
       "responsibility": "Aggregate root. Invariants: cannot sign with unaccepted mandatory clauses; milestone values sum to contract value" },
     { "id": "ContractClause", "name": "ContractClause", "kind": "class", "fields": ["+string Code", "+bool Mandatory", "+bool Accepted"], "methods": [], "responsibility": "Child entity of Contract" },
-    { "id": "Milestone", "name": "Milestone", "kind": "class", "fields": ["+string Name", "+Money Value", "+Money Certified"], "methods": [], "responsibility": "Child entity of Contract" },
+    { "id": "Milestone", "name": "Milestone", "kind": "class", "fields": ["+string Name", "+Money Value", "+Money Accepted"], "methods": [], "responsibility": "Child entity of Contract" },
     { "id": "Vendor", "name": "Vendor", "kind": "class", "fields": ["-VendorId Id", "-string Gstin", "-bool Blacklisted"], "methods": ["+void Blacklist(string reason)"], "responsibility": "Aggregate root" },
-    { "id": "PaymentCertificate", "name": "PaymentCertificate", "kind": "class",
-      "fields": ["-CertificateId Id", "-ContractId ContractId", "-int Sequence", "-Money GrossCertified", "-Money AmountPaid", "-CertificateStatus Status"],
+    { "id": "VendorBill", "name": "VendorBill", "kind": "class",
+      "fields": ["-BillId Id", "-ContractId ContractId", "-int Sequence", "-Money GrossAccepted", "-Money AmountPaid", "-BillStatus Status"],
       "methods": ["+void Approve(Money payable)", "+void MarkPaid(Money amount)"],
       "responsibility": "Aggregate root. References Contract by id" },
     { "id": "IContractRepository", "name": "IContractRepository", "kind": "interface", "fields": [],
       "methods": ["Task~Contract~ GetAsync(ContractId id)", "Task~IReadOnlyList~Contract~~ ListActiveForVendorAsync(VendorId id)", "void Add(Contract c)"] },
     { "id": "IVendorRepository", "name": "IVendorRepository", "kind": "interface", "fields": [],
       "methods": ["Task~Vendor~ GetAsync(VendorId id)", "Task~Vendor~ FindByGstinAsync(string gstin)", "void Add(Vendor v)"] },
-    { "id": "IPaymentCertificateRepository", "name": "IPaymentCertificateRepository", "kind": "interface", "fields": [],
-      "methods": ["Task~PaymentCertificate~ GetAsync(CertificateId id)", "Task~IReadOnlyList~PaymentCertificate~~ ListPreviousAsync(ContractId id, int beforeSequence)", "void Add(PaymentCertificate p)"] },
+    { "id": "IVendorBillRepository", "name": "IVendorBillRepository", "kind": "interface", "fields": [],
+      "methods": ["Task~VendorBill~ GetAsync(BillId id)", "Task~IReadOnlyList~VendorBill~~ ListPreviousAsync(ContractId id, int beforeSequence)", "void Add(VendorBill p)"] },
     { "id": "PayableCalculator", "name": "PayableAmountCalculator", "kind": "class", "fields": [],
-      "methods": ["+Money CalculatePayable(Contract contract, PaymentCertificate current, IReadOnlyList~PaymentCertificate~ previous)"],
-      "responsibility": "Domain service. Stateless. payable = gross certified to date - retention - paid on previous certificates" }
+      "methods": ["+Money CalculatePayable(Contract contract, VendorBill current, IReadOnlyList~VendorBill~ previous)"],
+      "responsibility": "Domain service. Stateless. payable = gross accepted to date - warranty holdback - paid on previous bills" }
   ],
   "relations": [
     { "from": "Contract", "to": "ContractClause", "kind": "composition", "multiplicity": "1..*" },
     { "from": "Contract", "to": "Milestone", "kind": "composition", "multiplicity": "1..*" },
     { "from": "Contract", "to": "Vendor", "kind": "association", "label": "by id" },
-    { "from": "PaymentCertificate", "to": "Contract", "kind": "association", "label": "by id" },
+    { "from": "VendorBill", "to": "Contract", "kind": "association", "label": "by id" },
     { "from": "IContractRepository", "to": "Contract", "kind": "dependency", "label": "stores" },
     { "from": "IVendorRepository", "to": "Vendor", "kind": "dependency", "label": "stores" },
-    { "from": "IPaymentCertificateRepository", "to": "PaymentCertificate", "kind": "dependency", "label": "stores" },
+    { "from": "IVendorBillRepository", "to": "VendorBill", "kind": "dependency", "label": "stores" },
     { "from": "PayableCalculator", "to": "Contract", "kind": "dependency", "label": "reads" },
-    { "from": "PayableCalculator", "to": "PaymentCertificate", "kind": "dependency", "label": "reads" }
+    { "from": "PayableCalculator", "to": "VendorBill", "kind": "dependency", "label": "reads" }
   ]
 }
 ```
 
-**Reasoning.** Clauses and milestones only change as part of the contract (accepting a clause can make the contract signable, certifying a milestone must keep totals consistent), so they are composition children with no repositories. Vendors and certificates have their own life cycles and are referenced by id. The calculator receives everything it needs; the application service uses `IPaymentCertificateRepository.ListPreviousAsync` to fetch earlier certificates and passes them in. With 30 certificates over a 30-month contract, passing a list is cheap. If it grew to thousands, the service could instead receive a single precomputed "amount paid to date" value.
+**Reasoning.** Clauses and milestones only change as part of the contract (accepting a clause can make the contract signable, accepting a milestone must keep totals consistent), so they are composition children with no repositories. Vendors and bills have their own life cycles and are referenced by id. The calculator receives everything it needs; the application service uses `IVendorBillRepository.ListPreviousAsync` to fetch earlier bills and passes them in. With a handful of bills per contract (even a 5-year maintenance contract billed monthly has 60), passing a list is cheap. If it grew to thousands, the service could instead receive a single precomputed "amount paid to date" value.
 ::mistakes
-- Keeping a `IMilestoneRepository` "for the progress dashboard". Dashboards read from a query model, not from domain repositories.
-- Putting `PaymentCertificate` inside `Contract`: every monthly certificate approval would then lock and version the whole contract.
-- Injecting `IPaymentCertificateRepository` into the calculator, which couples a pure calculation to data access.
+- Keeping an `IMilestoneRepository` "for the installation-progress dashboard". Dashboards read from a query model, not from domain repositories.
+- Putting `VendorBill` inside `Contract`: every bill approval would then lock and version the whole contract.
+- Injecting `IVendorBillRepository` into the calculator, which couples a pure calculation to data access.
 :::
 
 :::exercise id=m08-repositories-domain-services-ex5 difficulty=advanced kind=code title="A duplicate-invoice domain service with a domain-owned port"
@@ -1780,12 +1780,12 @@ Add a configurable window (from options) and a rule for "same amount within ±1 
 
 ```csharp
 [Fact]
-public void Steel_over_tolerance_is_put_on_hold()
+public void Monitor_over_tolerance_is_put_on_hold()
 {
-    var po = new PurchaseOrder(PurchaseOrderId.New(), VendorId.New(), "NH-48-PKG3");
-    po.AddLine("TMT-12MM", 2, 61000m);
-    var grn = new GoodsReceipt(GoodsReceiptId.New(), po.Id, new DateOnly(2026, 5, 2), new[] { new ReceiptLine("TMT-12MM", 2) });
-    var inv = new VendorInvoice(InvoiceId.New(), po.VendorId, po.Id, "SI/2026/118", new[] { new InvoiceLine("TMT-12MM", 2, 63500m) });
+    var po = new PurchaseOrder(PurchaseOrderId.New(), VendorId.New(), "HSP-BLR-01");
+    po.AddLine("MONITOR-5P", 2, 61000m);
+    var grn = new GoodsReceipt(GoodsReceiptId.New(), po.Id, new DateOnly(2026, 5, 2), new[] { new ReceiptLine("MONITOR-5P", 2) });
+    var inv = new VendorInvoice(InvoiceId.New(), po.VendorId, po.Id, "SI/2026/118", new[] { new InvoiceLine("MONITOR-5P", 2, 63500m) });
 
     var result = new ThreeWayMatchService().Match(po, new[] { grn }, inv, new PriceTolerance(2m));
 
@@ -1820,7 +1820,7 @@ public async Task Match_puts_invoice_on_hold_and_commits_once()
 ## Real-world application
 
 - **ERP-style procurement** systems (for example SAP-like or Oracle-like accounts payable modules) have run three-way and two-way matching for decades; modelling it as a named domain service mirrors how finance teams talk about it.
-- **Infrastructure contract management**: running-account (RA) bill certification, retention and mobilisation-advance recovery are classic domain services that read the contract, previous bills and approved variations.
+- **Subscription and SaaS billing**: proration when a customer changes plan mid-month, and credit-note calculation after an outage, are classic domain services that read the subscription, the plan catalogue and previous invoices.
 - **GST compliance**: matching purchase invoices against a supplier's filed returns is a matching domain service with a port to the returns data.
 - **E-commerce order management**: `IOrderRepository` per order aggregate, and a `ShippingCostCalculator` domain service that combines the order, a rate card and a warehouse.
 - **ASP.NET Core and EF Core** themselves encourage this shape: `DbSet<T>` per aggregate root, owned types for children, and the Microsoft eShop reference application uses per-aggregate repository interfaces in its ordering domain.
@@ -1901,9 +1901,9 @@ A handler needs to change the quantity on one line of a purchase order. A collea
 Which of these is a domain service?
 - [ ] `SmtpInvoiceMailer.SendAsync(invoice)`
 - [ ] `InvoiceAppService.ApproveAsync(invoiceId)` that loads, approves and saves
-- [x] `RetentionCalculator.Calculate(contract, certificate, previousCertificates)`
+- [x] `HoldbackCalculator.Calculate(contract, bill, previousBills)`
 - [ ] `VendorInvoice.MarkPaid()`
-> The retention calculator spans several aggregates, is stateless and has no I/O. The mailer is infrastructure, the app service is orchestration, and `MarkPaid` belongs on the entity.
+> The holdback calculator spans several aggregates, is stateless and has no I/O. The mailer is infrastructure, the app service is orchestration, and `MarkPaid` belongs on the entity.
 ::q multi
 Which are acceptable compromises to persistence ignorance when using EF Core? (Select all that apply.)
 - [x] A private parameterless constructor on the aggregate.

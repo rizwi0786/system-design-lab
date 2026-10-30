@@ -24,7 +24,7 @@ references:
     url: https://en.wikipedia.org/wiki/Characterization_test
 ---
 
-Most professional work isn't writing new code. It's changing code that someone else wrote years ago, that has no tests, that nobody fully understands, and that the business depends on every day. This lesson is a toolkit for that job. We'll work on a realistic, ugly C# class that processes contractor bills on a road project, and we'll change it safely: first pin its behaviour, then open it up, then replace it piece by piece while it keeps running.
+Most professional work isn't writing new code. It's changing code that someone else wrote years ago, that has no tests, that nobody fully understands, and that the business depends on every day. This lesson is a toolkit for that job. We'll work on a realistic, ugly C# class that produces patient bills at a hospital, and we'll change it safely: first pin its behaviour, then open it up, then replace it piece by piece while it keeps running.
 
 ## Learning objectives
 
@@ -82,7 +82,7 @@ A dependable routine, adapted from Feathers:
 A characterization test is written in three moves:
 
 1. Call the code with some input, and assert something you know is wrong (for example `Assert.Equal(0m, net)`).
-2. Run it. The failure message tells you the real output: "Expected 0, Actual 1,13,240.50".
+2. Run it. The failure message tells you the real output: "Expected 0, Actual 18,240.50".
 3. Paste the actual value into the assertion. The test now documents current behaviour.
 
 You're not judging the behaviour yet. If the code has a bug that customers rely on (it happens: a report that always rounds up, which a finance team has reconciled against for five years), changing it is a *business* decision. Characterization tests make those decisions visible instead of accidental.
@@ -130,7 +130,7 @@ When the old logic needs replacing, not just extending, a **big-bang rewrite** i
 
 1. **Put an abstraction in front of the old code** (`IBillCalculator`), with the old code as the first implementation (`LegacyBillCalculator`). All callers go through the abstraction.
 2. **Build the new implementation** behind the same abstraction.
-3. **Route** between them: per contract, per tenant, by percentage, or in **shadow mode** (run both, return the old answer, log differences).
+3. **Route** between them: per hospital branch, per tenant, by percentage, or in **shadow mode** (run both, return the old answer, log differences).
 4. **Move traffic over** gradually as differences are explained and fixed.
 5. **Delete the old implementation** and, if it no longer earns its keep, the router.
 
@@ -142,7 +142,7 @@ Fowler calls this **branch by abstraction** when it's done inside one codebase; 
 - **Tiny steps.** Rename, extract, move, inline. Compile and run tests after each. If a step breaks something, undo it rather than debugging forward.
 - **Prefer automated refactorings.** IDE rename and extract-method are far less error-prone than hand edits.
 - **Preserve signatures** when you have no tests: copy parameter lists exactly when extracting, to avoid accidental conversions (`int` to `double`).
-- **Commit often**, with messages like "refactor: extract LD calculation (no behaviour change)". Reviewers can check refactoring commits quickly.
+- **Commit often**, with messages like "refactor: extract senior-discount calculation (no behaviour change)". Reviewers can check refactoring commits quickly.
 - **Scratch refactoring.** To *understand* a scary method, refactor it aggressively on a throwaway branch, learn what it does, then delete the branch and do it properly.
 - **Know when to stop.** You refactor to make the next change easy, not to make the code beautiful. Stop when the change at hand is easy and the code you touched is tested.
 
@@ -176,30 +176,30 @@ Read it top to bottom. The loop between "can it run in a harness?" and "break de
 
 ```mermaid
 sequenceDiagram
-    participant P as RaBillProcessor
+    participant P as PatientBillProcessor
     participant R as Router (IBillCalculator)
     participant L as LegacyBillCalculator
     participant M as BillCalculator (new)
     participant S as Mismatch log
     P->>R: Compute(bill, today)
     R->>L: Compute(bill, today)
-    L-->>R: net 1,13,240.47
+    L-->>R: patient pays 18,240.47
     R->>M: Compute(bill, today) (shadow)
-    M-->>R: net 1,13,240.50
+    M-->>R: patient pays 18,240.50
     R->>S: record bill 812: diff 0.03
     R-->>P: legacy result (still the source of truth)
 ```
 
-The processor calls the abstraction and doesn't know a migration is happening. In shadow mode the router asks both implementations, returns the **legacy** answer (so customers see no change), and logs any difference. The team reviews the mismatch log daily. Here the 3-paise difference comes from rounding each line instead of only the total. Once differences are understood and accepted, contracts move to the new calculator one by one.
+The processor calls the abstraction and doesn't know a migration is happening. In shadow mode the router asks both implementations, returns the **legacy** answer (so customers see no change), and logs any difference. The team reviews the mismatch log daily. Here the 3-paise difference comes from rounding each line instead of only the total. Once differences are understood and accepted, hospital branches move to the new calculator one by one.
 
 ## Step-by-step example
 
 ### The legacy class
 
-This is the kind of class you meet on real projects. It processes a **running account bill** (RA bill): a periodic bill a road contractor submits for work measured so far. Read it slowly and count the problems before reading the list below.
+This is the kind of class you meet on real projects. It finalises a **patient bill** at a hospital: the bill a patient receives at discharge, covering room charges, lab tests, medicines and procedures, with the health insurer's share taken off. Read it slowly and count the problems before reading the list below.
 
 ```csharp
-public class RaBillProcessor
+public class PatientBillProcessor
 {
     public static string LastError;
 
@@ -207,37 +207,33 @@ public class RaBillProcessor
     {
         try
         {
-            var dt = SqlHelper.ExecuteDataTable("select * from ra_bill where id=" + billId);
+            var dt = SqlHelper.ExecuteDataTable("select * from patient_bill where id=" + billId);
             if (dt.Rows.Count == 0) { LastError = "not found"; return false; }
             var row = dt.Rows[0];
-            if ((int)row["status"] == 3 || (int)row["status"] == 4) { LastError = "already processed"; return false; }
+            if ((int)row["status"] == 3 || (int)row["status"] == 4) { LastError = "already finalised"; return false; }
 
-            double gross = 0;
-            var items = SqlHelper.ExecuteDataTable("select * from measurement where bill_id=" + billId);
+            double gross = 0, premiumRoom = 0;
+            var items = SqlHelper.ExecuteDataTable("select * from bill_item where bill_id=" + billId);
             foreach (DataRow it in items.Rows)
             {
-                if (it["item_code"].ToString().StartsWith("EXTRA") && mode != 2) continue; // extra items need approval
-                gross += Convert.ToDouble(it["qty"]) * Convert.ToDouble(it["rate"]);
+                var code = it["item_code"].ToString();
+                if (code.StartsWith("ADHOC") && mode != 2) continue; // ad-hoc items need billing-manager approval
+                double amount = Convert.ToDouble(it["qty"]) * Convert.ToDouble(it["rate"]);
+                gross += amount;
+                if (code.StartsWith("ROOM") && Convert.ToDouble(it["rate"]) > 5000) premiumRoom += amount;
             }
 
-            // LD: 0.5% per week late, max 10%
-            DateTime due = (DateTime)row["milestone_due"];
-            double ld = 0;
-            if (DateTime.Now > due)
-            {
-                int weeks = (int)((DateTime.Now - due).TotalDays / 7);
-                ld = gross * Math.Min(weeks * 0.005, 0.10);
-            }
-            double retention = gross * 0.05; if (retention > 500000) retention = 500000;
-            double tds = (gross - ld) * 0.02;
-            double advRec = Math.Min(gross * 0.10, Convert.ToDouble(row["advance_outstanding"]));
-            double gst = (gross - ld) * 0.18;
-            double net = Math.Round(gross - ld - retention - tds - advRec + gst, 2);
+            // senior citizens get 10% off from age 60
+            int age = (int)((DateTime.Now - (DateTime)row["date_of_birth"]).TotalDays / 365);
+            double senior = age >= 60 ? gross * 0.10 : 0;
+            double insurer = Math.Min((gross - senior) * 0.80, Convert.ToDouble(row["cover_remaining"]));
+            double gst = premiumRoom * 0.05; // GST on rooms above Rs 5,000 a day
+            double net = Math.Round(gross - senior - insurer + gst, 2);
 
-            SqlHelper.ExecuteNonQuery("update ra_bill set net=" + net + ", status=3, processed_on='" + DateTime.Now.ToString("yyyy-MM-dd") + "' where id=" + billId);
-            SqlHelper.ExecuteNonQuery("update contract set advance_outstanding=advance_outstanding-" + advRec + " where id=" + row["contract_id"]);
-            File.WriteAllText(@"C:\RaBills\" + billId + ".txt", "NET:" + net);
-            if (sendMail) new SmtpClient("10.0.0.5").Send("billing@contractor.example", row["engineer_email"].ToString(), "RA bill " + billId, "Net payable: " + net);
+            SqlHelper.ExecuteNonQuery("update patient_bill set net=" + net + ", status=3, finalised_on='" + DateTime.Now.ToString("yyyy-MM-dd") + "' where id=" + billId);
+            SqlHelper.ExecuteNonQuery("update insurance_policy set cover_remaining=cover_remaining-" + insurer + " where id=" + row["policy_id"]);
+            File.WriteAllText(@"C:\PatientBills\" + billId + ".txt", "NET:" + net + " DOB:" + row["date_of_birth"]);
+            if (sendMail) new SmtpClient("10.0.0.5").Send("billing@hospital.example", row["patient_email"].ToString(), "Your bill " + billId, "Amount payable: " + net);
             return true;
         }
         catch (Exception ex) { LastError = ex.Message; return false; }
@@ -245,18 +241,19 @@ public class RaBillProcessor
 }
 ```
 
-The rates (5 % retention, 2 % TDS, 18 % GST, 0.5 %/week liquidated damages) are illustrative; real contracts and tax rules vary. What's wrong:
+The rules (10 % senior-citizen discount, insurer pays 80 % with a 20 % co-pay up to the remaining cover, 5 % GST on non-ICU rooms charged above ₹5,000 a day) are illustrative; real hospital tariffs, insurance policies and tax rules vary. What's wrong:
 
-- **Six reasons to change in one method**: data access, measurement rules, contract penalties, tax, file export, email.
+- **Six reasons to change in one method**: data access, item-approval rules, patient concessions, insurance, tax, file export and email.
 - **No seams**: `SqlHelper`, `DateTime.Now`, `File` and `SmtpClient` are all static or `new`ed inline.
 - **SQL built by string concatenation**. With `int billId` it isn't injectable *today*, but the pattern spreads.
 - **`double` for money**, so `0.1 + 0.2 != 0.3` and rounding at midpoints is unreliable.
-- **`int mode` with a magic value 2** that really means "include extra items".
+- **`int mode` with a magic value 2** that really means "include ad-hoc items".
 - **Errors swallowed into a static `LastError`**, which is shared across all threads and requests.
-- **No transaction**: if the second `update` fails, the bill is processed but the advance is never recovered.
-- `DateTime.Now` is read **three times**, so a bill processed at 23:59:59.9 can use two different dates.
+- **No transaction**: if the second `update` fails, the bill is finalised but the policy's remaining cover is never reduced, so the same cover can be used again on the next bill.
+- `DateTime.Now` is read **twice**, so a bill finalised at 23:59:59.9 the night before a patient's 60th birthday can use two different dates.
+- **Health data in a plain-text file** on the server's `C:\` drive. Dates of birth and bill amounts are personal data; under India's DPDP Act 2023 (and HIPAA-style rules elsewhere) they need access control, encryption and a retention policy, not a shared folder.
 
-A new requirement arrives: *deduct a 1 % labour welfare cess from the gross amount.* Let's make that change safely.
+A new requirement arrives: *patients with the hospital's health card get an extra 1 % off the gross amount.* Let's make that change safely.
 
 ### Step 1 — identify the change point and test points
 
@@ -267,9 +264,9 @@ The change point is the line that computes `net`. The test points are the `net` 
 Select the arithmetic block (from `double gross = 0` to the `Math.Round`) and use the IDE's **Extract Method**. Make the inputs explicit parameters and return all the components. Keep `double`. Keep the formula character-for-character. This is the riskiest step, so do it mechanically and review the diff line by line.
 
 ```csharp
-internal static (double Gross, double Ld, double Retention, double Tds, double AdvRec, double Gst, double Net)
-    ComputeLegacy(IEnumerable<(string Code, double Qty, double Rate)> items, bool includeExtra,
-                  DateTime dueDate, DateTime now, double advanceOutstanding)
+internal static (double Gross, double Senior, double Insurer, double Gst, double Net)
+    ComputeLegacy(IEnumerable<(string Code, double Qty, double Rate)> items, bool includeAdHoc,
+                  DateTime dateOfBirth, DateTime now, double coverRemaining)
 {
     // ... the exact same lines, with DateTime.Now replaced by the `now` parameter
 }
@@ -279,15 +276,17 @@ internal static (double Gross, double Ld, double Retention, double Tds, double A
 
 ### Step 3 — characterization tests
 
-Write tests for `ComputeLegacy` using the three-move technique. Cover: on-time bill, 3 weeks late, 30 weeks late (cap at 10 %), retention cap (gross above ₹1 crore), advance fully recovered, extra items excluded and included. Each test asserts the value the code *actually* produced. One of them will surprise you; for example, TDS is computed on `gross - ld` but retention on `gross`. That might be a bug or a contract term. Write it down and ask the commercial team; don't "fix" it inside a refactoring.
+Write tests for `ComputeLegacy` using the three-move technique. Cover: a patient under 60, a senior patient, insurance cover exhausted, a premium room (with GST) and a standard room (without), ad-hoc items excluded and included. Each test asserts the value the code *actually* produced.
+
+Some of them will surprise you. Dividing days by 365 ignores leap days, so a patient born on 4 October 1966 gets the senior discount from **19 September** 2026, fifteen days before turning 60. And the insurer's 80 % is computed *after* the senior discount, so most of that discount actually lowers the insurer's share, not the patient's. Either might be a bug or a deliberate policy term. Write them down and ask the billing and insurance (TPA) desks; don't "fix" them inside a refactoring.
 
 ### Step 4 — sprout the new rule
 
-Write `LabourCess.Compute(decimal gross)` as a new, tested function (exercise 1). Then add **one line** to the legacy calculation: `net -= (double)LabourCess.Compute((decimal)gross);`. Update the characterization tests whose `net` changed by exactly 1 % of gross; every other assertion stays the same, which proves nothing else moved.
+Write `HealthCardDiscount.Compute(decimal gross)` as a new, tested function (exercise 1). Then add it to the legacy calculation: one new line, `double card = hasHealthCard ? (double)HealthCardDiscount.Compute((decimal)gross) : 0;`, and `- card` in the `net` line. Update the characterization tests for card-holders, whose `net` changed by exactly 1 % of gross; every other assertion stays the same, which proves nothing else moved.
 
 ### Step 5 — open the remaining seams
 
-Use **wrap static** for `SqlHelper` (an `IRaBillRepository` whose first implementation just calls `SqlHelper`), and **extract interface** for mail (`IBillNotifier`). Add a constructor that takes them; keep a parameterless constructor that passes the real ones, so the 14 existing callers compile unchanged. This is **parameterize constructor**.
+Use **wrap static** for `SqlHelper` (an `IPatientBillRepository` whose first implementation just calls `SqlHelper`), and **extract interface** for mail (`IBillNotifier`). Add a constructor that takes them; keep a parameterless constructor that passes the real ones, so the 14 existing callers compile unchanged. This is **parameterize constructor**.
 
 ### Step 6 — strangle the calculation
 
@@ -295,56 +294,58 @@ Now introduce `IBillCalculator`. The first implementation wraps the extracted le
 
 ## Production-style C# implementation
 
-The end state after a few weeks of incremental work. The legacy arithmetic still exists, behind the same interface as the new calculator, and a router decides per contract which one is used.
+The end state after a few weeks of incremental work. The legacy arithmetic still exists, behind the same interface as the new calculator, and a router decides per hospital branch which one is used.
 
 ```text
-RaBilling.Api/
+HospitalBilling.Api/
   Program.cs
-  RaBilling/
+  HospitalBilling/
     BillModels.cs
     IBillCalculator.cs
     LegacyBillCalculator.cs      extracted legacy arithmetic, behaviour preserved
     BillCalculator.cs            new decimal implementation
-    BillCalculatorRouter.cs      branch by abstraction, per-contract rollout
-    RaBillProcessor.cs           thin orchestrator with seams
+    BillCalculatorRouter.cs      branch by abstraction, per-branch rollout
+    PatientBillProcessor.cs      thin orchestrator with seams
     InMemoryAdapters.cs
 ```
 
-```csharp file=RaBilling/BillModels.cs
-namespace RaBilling;
+```csharp file=HospitalBilling/BillModels.cs
+namespace HospitalBilling;
 
-public enum BillStatus { Draft = 1, Submitted = 2, Processed = 3, Paid = 4 }
+public enum BillStatus { Draft = 1, Submitted = 2, Finalised = 3, Paid = 4 }
 
-public sealed record MeasurementItem(string ItemCode, decimal Quantity, decimal Rate)
+public sealed record BillItem(string ItemCode, decimal Quantity, decimal Rate)
 {
-    public bool IsExtraItem => ItemCode.StartsWith("EXTRA", StringComparison.OrdinalIgnoreCase);
+    /// <summary>Ad-hoc items (added at the counter) need a billing manager's approval.</summary>
+    public bool IsAdHoc => ItemCode.StartsWith("ADHOC", StringComparison.OrdinalIgnoreCase);
+    public bool IsRoom => ItemCode.StartsWith("ROOM", StringComparison.OrdinalIgnoreCase);
 }
 
-public sealed record RaBill(
-    int Id, int ContractId, string EngineerEmail, IReadOnlyList<MeasurementItem> Items,
-    DateOnly MilestoneDue, decimal AdvanceOutstanding, BillStatus Status);
+public sealed record PatientBill(
+    int Id, int BranchId, string PatientEmail, IReadOnlyList<BillItem> Items,
+    DateOnly DateOfBirth, bool HasHealthCard, decimal InsuranceCoverRemaining, BillStatus Status);
 
 public sealed record BillComputation(
-    decimal Gross, decimal LiquidatedDamages, decimal Retention, decimal Tds,
-    decimal AdvanceRecovery, decimal Gst, decimal LabourCess, decimal Net);
+    decimal Gross, decimal SeniorDiscount, decimal InsurerPays, decimal RoomGst,
+    decimal HealthCardDiscount, decimal PatientPays);
 
-public enum ProcessOutcome { Processed, NotFound, AlreadyProcessed }
+public enum FinaliseOutcome { Finalised, NotFound, AlreadyFinalised }
 
-public sealed record ProcessResult(ProcessOutcome Outcome, BillComputation? Computation = null);
+public sealed record FinaliseResult(FinaliseOutcome Outcome, BillComputation? Computation = null);
 ```
 
-```csharp file=RaBilling/IBillCalculator.cs
-namespace RaBilling;
+```csharp file=HospitalBilling/IBillCalculator.cs
+namespace HospitalBilling;
 
 /// <summary>The abstraction both the legacy and the new calculation sit behind.
 /// It takes "today" as a parameter: a parameter seam instead of DateTime.Now.</summary>
 public interface IBillCalculator
 {
-    BillComputation Compute(RaBill bill, DateOnly today, bool includeExtraItems);
+    BillComputation Compute(PatientBill bill, DateOnly today, bool includeAdHocItems);
 }
 
 /// <summary>Sprouted rule (new, tested on its own), shared by both calculators.</summary>
-public static class LabourCess
+public static class HealthCardDiscount
 {
     public const decimal Rate = 0.01m;
     public static decimal Compute(decimal gross) =>
@@ -352,114 +353,112 @@ public static class LabourCess
 }
 ```
 
-```csharp file=RaBilling/LegacyBillCalculator.cs
-namespace RaBilling;
+```csharp file=HospitalBilling/LegacyBillCalculator.cs
+namespace HospitalBilling;
 
-/// <summary>The arithmetic extracted verbatim from the old RaBillProcessor.Process.
-/// It deliberately keeps double maths and rounds only the final net, because
-/// characterization tests pinned that behaviour. Do not "fix" it here.</summary>
+/// <summary>The arithmetic extracted verbatim from the old PatientBillProcessor.Process.
+/// It deliberately keeps double maths, the days/365 age rule and rounds only the final net,
+/// because characterization tests pinned that behaviour. Do not "fix" it here.</summary>
 public sealed class LegacyBillCalculator : IBillCalculator
 {
-    public BillComputation Compute(RaBill bill, DateOnly today, bool includeExtraItems)
+    public BillComputation Compute(PatientBill bill, DateOnly today, bool includeAdHocItems)
     {
-        double gross = 0;
+        double gross = 0, premiumRoom = 0;
         foreach (var it in bill.Items)
         {
-            if (it.IsExtraItem && !includeExtraItems) continue;
-            gross += (double)it.Quantity * (double)it.Rate;
+            if (it.IsAdHoc && !includeAdHocItems) continue;
+            double amount = (double)it.Quantity * (double)it.Rate;
+            gross += amount;
+            if (it.IsRoom && (double)it.Rate > 5000) premiumRoom += amount;
         }
 
-        double ld = 0;
-        var daysLate = today.DayNumber - bill.MilestoneDue.DayNumber;
-        if (daysLate > 0)
-        {
-            int weeks = daysLate / 7;
-            ld = gross * Math.Min(weeks * 0.005, 0.10);
-        }
-        double retention = gross * 0.05; if (retention > 500000) retention = 500000;
-        double tds = (gross - ld) * 0.02;
-        double advRec = Math.Min(gross * 0.10, (double)bill.AdvanceOutstanding);
-        double gst = (gross - ld) * 0.18;
-        double cess = (double)LabourCess.Compute((decimal)gross);              // the one sprouted line
-        double net = Math.Round(gross - ld - retention - tds - advRec + gst - cess, 2);
+        int age = (int)((today.DayNumber - bill.DateOfBirth.DayNumber) / 365.0);   // ignores leap days (ticket BILL-412)
+        double senior = age >= 60 ? gross * 0.10 : 0;
+        double insurer = Math.Min((gross - senior) * 0.80, (double)bill.InsuranceCoverRemaining);
+        double gst = premiumRoom * 0.05;
+        double card = bill.HasHealthCard ? (double)HealthCardDiscount.Compute((decimal)gross) : 0;   // sprouted
+        double net = Math.Round(gross - senior - insurer + gst - card, 2);
 
-        return new BillComputation((decimal)gross, (decimal)ld, (decimal)retention, (decimal)tds,
-                                   (decimal)advRec, (decimal)gst, (decimal)cess, (decimal)net);
+        return new BillComputation((decimal)gross, (decimal)senior, (decimal)insurer, (decimal)gst,
+                                   (decimal)card, (decimal)net);
     }
 }
 ```
 
-```csharp file=RaBilling/BillCalculator.cs
-namespace RaBilling;
+```csharp file=HospitalBilling/BillCalculator.cs
+namespace HospitalBilling;
 
 /// <summary>New calculator: decimal money, every printed line rounded half away from zero,
-/// net = sum of the rounded lines so the printed bill always adds up.</summary>
+/// patient share = sum of the rounded lines so the printed bill always adds up.</summary>
 public sealed class BillCalculator : IBillCalculator
 {
-    private const decimal RetentionRate = 0.05m, RetentionCap = 500_000m;
-    private const decimal TdsRate = 0.02m, GstRate = 0.18m, AdvanceRecoveryRate = 0.10m;
-    private const decimal LdPerWeek = 0.005m, LdCap = 0.10m;
+    private const decimal SeniorRate = 0.10m, InsurerShare = 0.80m;
+    private const decimal RoomGstRate = 0.05m, PremiumRoomThreshold = 5_000m;
 
-    public BillComputation Compute(RaBill bill, DateOnly today, bool includeExtraItems)
+    public BillComputation Compute(PatientBill bill, DateOnly today, bool includeAdHocItems)
     {
         ArgumentNullException.ThrowIfNull(bill);
 
-        var gross = R(bill.Items.Where(i => includeExtraItems || !i.IsExtraItem).Sum(i => i.Quantity * i.Rate));
-        var weeksLate = Math.Max(0, today.DayNumber - bill.MilestoneDue.DayNumber) / 7;
-        var ld = R(gross * Math.Min(weeksLate * LdPerWeek, LdCap));
-        var retention = Math.Min(R(gross * RetentionRate), RetentionCap);
-        var tds = R((gross - ld) * TdsRate);
-        var advance = Math.Min(R(gross * AdvanceRecoveryRate), bill.AdvanceOutstanding);
-        var gst = R((gross - ld) * GstRate);
-        var cess = LabourCess.Compute(gross);
-        var net = gross - ld - retention - tds - advance + gst - cess;
+        var items = bill.Items.Where(i => includeAdHocItems || !i.IsAdHoc).ToList();
+        var gross = R(items.Sum(i => i.Quantity * i.Rate));
+        var premiumRoom = items.Where(i => i.IsRoom && i.Rate > PremiumRoomThreshold).Sum(i => i.Quantity * i.Rate);
 
-        return new BillComputation(gross, ld, retention, tds, advance, gst, cess, net);
+        var senior = LegacyAge(bill.DateOfBirth, today) >= 60 ? R(gross * SeniorRate) : 0m;
+        var insurer = Math.Min(R((gross - senior) * InsurerShare), bill.InsuranceCoverRemaining);
+        var gst = R(premiumRoom * RoomGstRate);
+        var card = bill.HasHealthCard ? HealthCardDiscount.Compute(gross) : 0m;
+        var patientPays = gross - senior - insurer + gst - card;
+
+        return new BillComputation(gross, senior, insurer, gst, card, patientPays);
     }
+
+    /// <summary>Kept identical to the legacy rule until the business decides on BILL-412.
+    /// Changing it here would be an unapproved behaviour change hidden inside a migration.</summary>
+    private static int LegacyAge(DateOnly dateOfBirth, DateOnly today) => (today.DayNumber - dateOfBirth.DayNumber) / 365;
 
     private static decimal R(decimal v) => Math.Round(v, 2, MidpointRounding.AwayFromZero);
 }
 ```
 
-```csharp file=RaBilling/BillCalculatorRouter.cs
+```csharp file=HospitalBilling/BillCalculatorRouter.cs
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace RaBilling;
+namespace HospitalBilling;
 
 public sealed class BillingMigrationOptions
 {
-    /// <summary>Contracts that have been moved to the new calculator.</summary>
-    public HashSet<int> ModernContractIds { get; set; } = [];
-    /// <summary>For every other contract, also run the new calculator and log differences.</summary>
+    /// <summary>Hospital branches that have been moved to the new calculator.</summary>
+    public HashSet<int> ModernBranchIds { get; set; } = [];
+    /// <summary>For every other branch, also run the new calculator and log differences.</summary>
     public bool ShadowCompare { get; set; } = true;
     public decimal Tolerance { get; set; } = 0.05m;
 }
 
 /// <summary>Branch by abstraction: callers depend on IBillCalculator and never know which
-/// implementation answered. IOptionsMonitor lets ops move a contract without a redeploy.</summary>
+/// implementation answered. IOptionsMonitor lets ops move a branch without a redeploy.</summary>
 public sealed class BillCalculatorRouter(
     LegacyBillCalculator legacy,
     BillCalculator modern,
     IOptionsMonitor<BillingMigrationOptions> options,
     ILogger<BillCalculatorRouter> logger) : IBillCalculator
 {
-    public BillComputation Compute(RaBill bill, DateOnly today, bool includeExtraItems)
+    public BillComputation Compute(PatientBill bill, DateOnly today, bool includeAdHocItems)
     {
         var o = options.CurrentValue;
-        if (o.ModernContractIds.Contains(bill.ContractId))
-            return modern.Compute(bill, today, includeExtraItems);
+        if (o.ModernBranchIds.Contains(bill.BranchId))
+            return modern.Compute(bill, today, includeAdHocItems);
 
-        var result = legacy.Compute(bill, today, includeExtraItems);
+        var result = legacy.Compute(bill, today, includeAdHocItems);
         if (!o.ShadowCompare) return result;
 
         try
         {
-            var candidate = modern.Compute(bill, today, includeExtraItems);
-            var diff = Math.Abs(candidate.Net - result.Net);
+            var candidate = modern.Compute(bill, today, includeAdHocItems);
+            var diff = Math.Abs(candidate.PatientPays - result.PatientPays);
             if (diff > o.Tolerance)
-                logger.LogWarning("Bill {BillId} (contract {ContractId}): legacy net {Legacy}, new net {Modern}, diff {Diff}",
-                    bill.Id, bill.ContractId, result.Net, candidate.Net, diff);
+                logger.LogWarning("Bill {BillId} (branch {BranchId}): legacy {Legacy}, new {Modern}, diff {Diff}",
+                    bill.Id, bill.BranchId, result.PatientPays, candidate.PatientPays, diff);
         }
         catch (Exception ex)
         {
@@ -471,88 +470,97 @@ public sealed class BillCalculatorRouter(
 }
 ```
 
-```csharp file=RaBilling/RaBillProcessor.cs
+```csharp file=HospitalBilling/PatientBillProcessor.cs
 using Microsoft.Extensions.Logging;
 
-namespace RaBilling;
+namespace HospitalBilling;
 
-public interface IRaBillRepository
+public interface IPatientBillRepository
 {
-    Task<RaBill?> FindAsync(int billId, CancellationToken ct);
-    /// <summary>Marks the bill processed and reduces the contract's advance, in ONE transaction.</summary>
-    Task SaveProcessedAsync(RaBill bill, BillComputation computation, DateOnly processedOn, CancellationToken ct);
+    Task<PatientBill?> FindAsync(int billId, CancellationToken ct);
+    /// <summary>Marks the bill finalised and reduces the policy's remaining cover, in ONE transaction.
+    /// Returns false if another request finalised the bill first (optimistic concurrency on status).</summary>
+    Task<bool> SaveFinalisedAsync(PatientBill bill, BillComputation computation, DateOnly finalisedOn, CancellationToken ct);
 }
 
 public interface IBillNotifier
 {
-    Task BillProcessedAsync(RaBill bill, BillComputation computation, CancellationToken ct);
+    Task BillFinalisedAsync(PatientBill bill, BillComputation computation, CancellationToken ct);
 }
 
-/// <summary>What is left of the old 60-line method: orchestration only.
+/// <summary>What is left of the old 40-line method: orchestration only.
 /// Every collaborator is a seam, and "today" is read exactly once.</summary>
-public sealed class RaBillProcessor(
-    IRaBillRepository bills, IBillCalculator calculator, IBillNotifier notifier,
-    TimeProvider clock, ILogger<RaBillProcessor> logger)
+public sealed class PatientBillProcessor(
+    IPatientBillRepository bills, IBillCalculator calculator, IBillNotifier notifier,
+    TimeProvider clock, ILogger<PatientBillProcessor> logger)
 {
-    public async Task<ProcessResult> ProcessAsync(int billId, bool includeExtraItems, CancellationToken ct)
+    public async Task<FinaliseResult> FinaliseAsync(int billId, bool includeAdHocItems, CancellationToken ct)
     {
         var bill = await bills.FindAsync(billId, ct);
-        if (bill is null) return new ProcessResult(ProcessOutcome.NotFound);
-        if (bill.Status is BillStatus.Processed or BillStatus.Paid) return new ProcessResult(ProcessOutcome.AlreadyProcessed);
+        if (bill is null) return new FinaliseResult(FinaliseOutcome.NotFound);
+        if (bill.Status is BillStatus.Finalised or BillStatus.Paid) return new FinaliseResult(FinaliseOutcome.AlreadyFinalised);
 
         var today = DateOnly.FromDateTime(clock.GetLocalNow().DateTime);
-        var computation = calculator.Compute(bill, today, includeExtraItems);
-        await bills.SaveProcessedAsync(bill, computation, today, ct);
+        var computation = calculator.Compute(bill, today, includeAdHocItems);
+        if (!await bills.SaveFinalisedAsync(bill, computation, today, ct))
+            return new FinaliseResult(FinaliseOutcome.AlreadyFinalised);
 
         try
         {
-            await notifier.BillProcessedAsync(bill, computation, ct);
+            await notifier.BillFinalisedAsync(bill, computation, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.LogWarning(ex, "Bill {BillId} processed but notification failed", billId);
+            logger.LogWarning(ex, "Bill {BillId} finalised but notification failed", billId);
         }
-        return new ProcessResult(ProcessOutcome.Processed, computation);
+        return new FinaliseResult(FinaliseOutcome.Finalised, computation);
     }
 }
 ```
 
-```csharp file=RaBilling/InMemoryAdapters.cs
+```csharp file=HospitalBilling/InMemoryAdapters.cs
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 
-namespace RaBilling;
+namespace HospitalBilling;
 
-public sealed class InMemoryRaBillRepository : IRaBillRepository
+public sealed class InMemoryPatientBillRepository : IPatientBillRepository
 {
-    private readonly ConcurrentDictionary<int, RaBill> _bills = new();
+    private readonly ConcurrentDictionary<int, PatientBill> _bills = new();
     private readonly ConcurrentDictionary<int, BillComputation> _results = new();
 
-    public void Seed(RaBill bill) => _bills[bill.Id] = bill;
+    public void Seed(PatientBill bill) => _bills[bill.Id] = bill;
     public BillComputation? ResultFor(int billId) => _results.GetValueOrDefault(billId);
 
-    public Task<RaBill?> FindAsync(int billId, CancellationToken ct) => Task.FromResult(_bills.GetValueOrDefault(billId));
+    public Task<PatientBill?> FindAsync(int billId, CancellationToken ct) => Task.FromResult(_bills.GetValueOrDefault(billId));
 
-    public Task SaveProcessedAsync(RaBill bill, BillComputation computation, DateOnly processedOn, CancellationToken ct)
+    public Task<bool> SaveFinalisedAsync(PatientBill bill, BillComputation computation, DateOnly finalisedOn, CancellationToken ct)
     {
-        _bills[bill.Id] = bill with { Status = BillStatus.Processed };
+        // Compare-and-swap stands in for "UPDATE ... WHERE id = @id AND status = 2" inside a transaction.
+        var finalised = bill with
+        {
+            Status = BillStatus.Finalised,
+            InsuranceCoverRemaining = bill.InsuranceCoverRemaining - computation.InsurerPays,
+        };
+        if (!_bills.TryUpdate(bill.Id, finalised, bill)) return Task.FromResult(false);
         _results[bill.Id] = computation;
-        return Task.CompletedTask;
+        return Task.FromResult(true);
     }
 }
 
 public sealed class LoggingBillNotifier(ILogger<LoggingBillNotifier> logger) : IBillNotifier
 {
-    public Task BillProcessedAsync(RaBill bill, BillComputation c, CancellationToken ct)
+    public Task BillFinalisedAsync(PatientBill bill, BillComputation c, CancellationToken ct)
     {
-        logger.LogInformation("Mail to {Engineer}: RA bill {BillId} net payable {Net}", bill.EngineerEmail, bill.Id, c.Net);
+        // Log the bill id, never the patient's email or health details.
+        logger.LogInformation("Bill {BillId} ready: patient pays {Amount}", bill.Id, c.PatientPays);
         return Task.CompletedTask;
     }
 }
 ```
 
 ```csharp file=Program.cs
-using RaBilling;
+using HospitalBilling;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -561,21 +569,21 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<LegacyBillCalculator>();
 builder.Services.AddSingleton<BillCalculator>();
 builder.Services.AddSingleton<IBillCalculator, BillCalculatorRouter>();
-builder.Services.AddSingleton<InMemoryRaBillRepository>();
-builder.Services.AddSingleton<IRaBillRepository>(sp => sp.GetRequiredService<InMemoryRaBillRepository>());
+builder.Services.AddSingleton<InMemoryPatientBillRepository>();
+builder.Services.AddSingleton<IPatientBillRepository>(sp => sp.GetRequiredService<InMemoryPatientBillRepository>());
 builder.Services.AddSingleton<IBillNotifier, LoggingBillNotifier>();
-builder.Services.AddScoped<RaBillProcessor>();
+builder.Services.AddScoped<PatientBillProcessor>();
 
 var app = builder.Build();
 
-app.MapPost("/ra-bills/{id:int}/process", async (int id, bool? includeExtra, RaBillProcessor processor, CancellationToken ct) =>
+app.MapPost("/patient-bills/{id:int}/finalise", async (int id, bool? includeAdHoc, PatientBillProcessor processor, CancellationToken ct) =>
 {
-    var result = await processor.ProcessAsync(id, includeExtra ?? false, ct);
+    var result = await processor.FinaliseAsync(id, includeAdHoc ?? false, ct);
     return result.Outcome switch
     {
-        ProcessOutcome.Processed => Results.Ok(result.Computation),
-        ProcessOutcome.NotFound => Results.NotFound(),
-        _ => Results.Conflict(new { error = "Bill already processed" }),
+        FinaliseOutcome.Finalised => Results.Ok(result.Computation),
+        FinaliseOutcome.NotFound => Results.NotFound(),
+        _ => Results.Conflict(new { error = "Bill already finalised" }),
     };
 });
 
@@ -585,27 +593,29 @@ app.Run();
 Things worth noticing:
 
 - **`LegacyBillCalculator` is still ugly on purpose.** It's the characterized behaviour, behind an interface. Cleaning it up would mean re-proving it; the plan is to delete it, not polish it.
+- **The new calculator keeps the questionable age rule.** A migration should change *how* the number is computed, not *which* number the business wants. BILL-412 will be decided, tested and released on its own.
 - **The router is temporary.** Put a removal date in the backlog when you add it. Routers that outlive their migration become their own legacy.
-- **`SaveProcessedAsync` names the transaction boundary.** The old code had two independent `UPDATE`s; the new contract makes "both or neither" part of the interface.
-- **`includeExtraItems` replaced `int mode`.** That rename was a separate, behaviour-preserving commit.
+- **`SaveFinalisedAsync` names the transaction boundary.** The old code had two independent `UPDATE`s; the new contract makes "both or neither" part of the interface. It also returns `false` when another request finalised the bill first: two billing clerks clicking "Finalise" at the same moment must not reduce the insurance cover twice. In PostgreSQL that is `UPDATE patient_bill SET status = 3 ... WHERE id = @id AND status = 2` and checking the affected row count, inside the same transaction as the cover update.
+- **`includeAdHocItems` replaced `int mode`.** That rename was a separate, behaviour-preserving commit.
+- **No patient data in logs or loose files.** The plain-text export was replaced by the notifier, which logs only the bill id and amount.
 
 ## Bad design vs good design
 
-**Bad: the big-bang rewrite.** "Let's rewrite billing properly in a new service. It'll take three months." Six months later, the old code has had 40 bug fixes the new one doesn't know about, the business has been told "no changes until the rewrite ships", and on launch day the first bill differs from the old one by ₹12,000 with nobody able to say which one is right.
+**Bad: the big-bang rewrite.** "Let's rewrite billing properly in a new service. It'll take three months." Six months later, the old code has had 40 bug fixes the new one doesn't know about, the business has been told "no changes until the rewrite ships", and on launch day the first discharge bill differs from the old one by ₹12,000 while the patient waits at the counter, with nobody able to say which number is right.
 
-**Bad: refactor and change behaviour together.** One commit that extracts the calculation, switches `double` to `decimal`, *and* adds the cess. When a bill comes out 3 paise different, you can't tell which of the three changes caused it.
+**Bad: refactor and change behaviour together.** One commit that extracts the calculation, switches `double` to `decimal`, *and* adds the health-card discount. When a bill comes out 3 paise different, you can't tell which of the three changes caused it.
 
-**Bad: "fixing" characterized bugs silently.** You notice TDS is computed on `gross - ld` and "correct" it to `gross` while extracting. The vendor's reconciliation team, who have matched against the old figure for years, now disagree with every bill.
+**Bad: "fixing" characterized bugs silently.** You notice the insurer's 80 % is computed after the senior discount and "correct" it to use the full gross while extracting. The insurer's claims team, who have reconciled against the old figure for years, now disagree with every claim, and payments to the hospital stall.
 
 **Good:**
 
 - Each commit is either a refactoring (no behaviour change, tests unchanged) or a behaviour change (tests change in exactly the expected way).
 - New rules are **sprouted** as tested units, with a one-line call from legacy code.
 - Replacement happens **behind an abstraction**, routed gradually, with shadow comparison and a written list of accepted differences.
-- Questionable behaviour is pinned by a characterization test with a comment linking to the decision ("TDS on gross minus LD: confirmed with commercial team, 2026-09-14").
+- Questionable behaviour is pinned by a characterization test with a comment linking to the decision ("Insurer share after senior discount: confirmed with the TPA desk, 2026-09-14").
 
 :::callout type=tradeoff title="When a rewrite is the right call"
-Incremental strangling has overhead: two implementations, a router, comparison tooling. It's worth it when the old code is in production and the business can't stop. A rewrite can be better when the old code is small (a few hundred lines), its behaviour is fully specified elsewhere (a published tax formula), or the platform is dead (code you can't even compile any more). Even then, keep the old outputs as a golden master to compare against.
+Incremental strangling has overhead: two implementations, a router, comparison tooling. It's worth it when the old code is in production and the business can't stop. A rewrite can be better when the old code is small (a few hundred lines), its behaviour is fully specified elsewhere (a published tax formula or insurer tariff), or the platform is dead (code you can't even compile any more). Even then, keep the old outputs as a golden master to compare against.
 :::
 
 :::callout type=warning title="Characterization tests are a safety net, not a specification"
@@ -614,7 +624,7 @@ They lock in current behaviour, including bugs. After the refactoring, replace o
 
 ## Practical playground
 
-The program below contains the extracted legacy calculation (still `double`) and a new `decimal` version. `Main` runs a small golden master over 2,000 generated bills and prints any differences. Run it, then try the variations listed after it.
+The program below contains the extracted legacy GST calculation for premium rooms (still `double`) and a new `decimal` version. `Main` runs a small golden master over 2,000 generated room-charge amounts and prints any differences. Run it, then try the variations listed after it.
 
 :::playground type=csharp title="Golden master: legacy vs new"
 ```csharp file=Program.cs
@@ -622,25 +632,23 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public static class LegacyRetention
+public static class LegacyRoomGst
 {
     // Extracted verbatim from the old code: double maths, default (banker's) rounding.
-    public static double Compute(double gross)
+    public static double Compute(double roomCharges)
     {
-        if (gross <= 0) return 0;
-        double r = gross * 0.05;
-        if (r > 500000) r = 500000;
-        return Math.Round(r, 2);
+        if (roomCharges <= 0) return 0;
+        double gst = roomCharges * 0.05;
+        return Math.Round(gst, 2);
     }
 }
 
-public static class NewRetention
+public static class NewRoomGst
 {
-    public static decimal Compute(decimal gross)
+    public static decimal Compute(decimal roomCharges)
     {
-        if (gross <= 0) return 0m;
-        var r = Math.Min(gross * 0.05m, 500_000m);
-        return Math.Round(r, 2, MidpointRounding.AwayFromZero);
+        if (roomCharges <= 0) return 0m;
+        return Math.Round(roomCharges * 0.05m, 2, MidpointRounding.AwayFromZero);
     }
 }
 
@@ -649,17 +657,17 @@ public static class Program
     public static void Main()
     {
         var inputs = Enumerable.Range(0, 2000).Select(i => i * 10.10m).ToList();
-        var mismatches = new List<(decimal Gross, decimal Legacy, decimal New)>();
+        var mismatches = new List<(decimal Charges, decimal Legacy, decimal New)>();
         foreach (var g in inputs)
         {
-            var legacy = (decimal)LegacyRetention.Compute((double)g);
-            var modern = NewRetention.Compute(g);
+            var legacy = (decimal)LegacyRoomGst.Compute((double)g);
+            var modern = NewRoomGst.Compute(g);
             if (legacy != modern) mismatches.Add((g, legacy, modern));
         }
 
         Console.WriteLine($"Compared {inputs.Count} inputs, {mismatches.Count} differ.");
         foreach (var m in mismatches.Take(10))
-            Console.WriteLine($"  gross {m.Gross,10:0.00}: legacy {m.Legacy,8:0.00}  new {m.New,8:0.00}  diff {m.New - m.Legacy:+0.00;-0.00}");
+            Console.WriteLine($"  charges {m.Charges,10:0.00}: legacy {m.Legacy,8:0.00}  new {m.New,8:0.00}  diff {m.New - m.Legacy:+0.00;-0.00}");
         Console.WriteLine($"Largest difference: {(mismatches.Count == 0 ? 0 : mismatches.Max(m => Math.Abs(m.New - m.Legacy))):0.00}");
     }
 }
@@ -668,26 +676,26 @@ public static class Program
 
 Try these:
 
-1. Change `MidpointRounding.AwayFromZero` to `MidpointRounding.ToEven` in `NewRetention`. The number of differences changes, but not to zero. Why? (Hint: `0.505` can't be stored exactly as a `double`, so the legacy code sometimes rounds a "midpoint" that is really slightly above or below it.)
-2. Introduce a deliberate bug in `NewRetention` (cap at `50_000m`). Watch the golden master catch it immediately with large differences.
+1. Change `MidpointRounding.AwayFromZero` to `MidpointRounding.ToEven` in `NewRoomGst`. The number of differences changes, but not to zero. Why? (Hint: `0.505` can't be stored exactly as a `double`, so the legacy code sometimes rounds a "midpoint" that is really slightly above or below it.)
+2. Introduce a deliberate bug in `NewRoomGst` (use `0.18m`, the wrong GST rate). Watch the golden master catch it immediately with large differences.
 3. Change the inputs to `i * 1000m`. With no midpoints, both versions agree on everything. A golden master is only as good as the inputs you feed it, so include awkward values.
 
 ## Exercises
 
-:::exercise id=m04-refactoring-legacy-ex1 difficulty=beginner kind=code title="Sprout a labour-cess rule"
-The legacy `LegacyBillMath.NetPayable` deducts retention (5 %) and TDS (2 %). A new rule says: also deduct a labour welfare cess of 1 % of gross. Use **sprout method**: write the cess as a new, tested `LabourCess.Compute`, then add exactly one call to it in `NetPayable`.
+:::exercise id=m04-refactoring-legacy-ex1 difficulty=beginner kind=code title="Sprout a health-card discount rule"
+The hospital's legacy `LegacyBillMath.NetPayable` is called for bills of health-card members. It deducts a corporate tie-up discount (5 %) and a prompt-payment discount (2 %). A new rule says: health-card members also get 1 % off gross. Use **sprout method**: write the discount as a new, tested `HealthCardDiscount.Compute`, then add exactly one call to it in `NetPayable`.
 ::requirements
-- `LabourCess.Compute(decimal gross)` returns 1 % of gross, rounded to 2 decimals with `MidpointRounding.AwayFromZero`.
+- `HealthCardDiscount.Compute(decimal gross)` returns 1 % of gross, rounded to 2 decimals with `MidpointRounding.AwayFromZero`.
 - Zero or negative gross → 0.
-- `NetPayable` = gross − retention − TDS − cess. Don't change how retention or TDS are calculated.
+- `NetPayable` = gross − corporate discount − prompt-payment discount − health-card discount. Don't change how the existing two discounts are calculated.
 ::acceptance
-- `LabourCess.Compute(100000m)` = 1000.00, `Compute(1234567.89m)` = 12345.68, `Compute(0.50m)` = 0.01, `Compute(-5m)` = 0.
+- `HealthCardDiscount.Compute(100000m)` = 1000.00, `Compute(1234567.89m)` = 12345.68, `Compute(0.50m)` = 0.01, `Compute(-5m)` = 0.
 - `NetPayable(100000m)` = 92000.00.
-- The existing retention and TDS behaviour is unchanged.
+- The existing discount behaviour is unchanged.
 ::hint
 The point of sprouting is that the new code is written and tested *on its own*, outside the legacy method.
 ::hint
-`LabourCess.Compute` is a pure static function: decimal in, decimal out, no state.
+`HealthCardDiscount.Compute` is a pure static function: decimal in, decimal out, no state.
 ::hint
 0.50 × 1 % = 0.005, which is a midpoint. Which `MidpointRounding` gives 0.01?
 ::hint
@@ -695,9 +703,9 @@ The point of sprouting is that the new code is written and tested *on its own*, 
 public static decimal Compute(decimal gross) =>
     gross <= 0 ? 0m : Math.Round(gross * 0.01m, 2, MidpointRounding.AwayFromZero);
 ```
-Then in `NetPayable`, subtract `LabourCess.Compute(gross)`: one new line.
+Then in `NetPayable`, subtract `HealthCardDiscount.Compute(gross)`: one new line.
 ::starter
-```csharp file=LabourCess.cs
+```csharp file=HealthCardDiscount.cs
 using System;
 
 // Legacy code: no tests, many callers. Change it as little as possible.
@@ -705,15 +713,15 @@ public static class LegacyBillMath
 {
     public static decimal NetPayable(decimal gross)
     {
-        decimal retention = gross * 0.05m;
-        decimal tds = gross * 0.02m;
-        decimal net = gross - retention - tds;
+        decimal corporate = gross * 0.05m;       // employer tie-up discount
+        decimal promptPayment = gross * 0.02m;   // paid in full at discharge
+        decimal net = gross - corporate - promptPayment;
         return Math.Round(net, 2);
     }
 }
 
 // Sprouted code: new, small and fully tested.
-public static class LabourCess
+public static class HealthCardDiscount
 {
     public static decimal Compute(decimal gross)
     {
@@ -722,10 +730,10 @@ public static class LabourCess
 }
 ```
 ::tests
-```csharp file=LabourCessTests.cs
+```csharp file=HealthCardDiscountTests.cs
 using Xunit;
 
-public class LabourCessTests
+public class HealthCardDiscountTests
 {
     [Theory]
     [InlineData(100000, 1000)]
@@ -733,9 +741,9 @@ public class LabourCessTests
     [InlineData(0.50, 0.01)]
     [InlineData(0, 0)]
     [InlineData(-5, 0)]
-    public void Computes_one_percent(decimal gross, decimal expected) => Assert.Equal(expected, LabourCess.Compute(gross));
+    public void Computes_one_percent(decimal gross, decimal expected) => Assert.Equal(expected, HealthCardDiscount.Compute(gross));
 
-    [Fact] public void Net_payable_includes_cess() => Assert.Equal(92000.00m, LegacyBillMath.NetPayable(100000m));
+    [Fact] public void Net_payable_includes_card_discount() => Assert.Equal(92000.00m, LegacyBillMath.NetPayable(100000m));
 
     [Fact] public void Net_payable_keeps_existing_rounding() => Assert.Equal(1162.27m, LegacyBillMath.NetPayable(1263.33m));
 }
@@ -743,21 +751,21 @@ public class LabourCessTests
 ::solution
 The new rule lives in its own tested function; the legacy method changes by a single line, so the risk to the other 14 callers is tiny and easy to review.
 
-```csharp file=LabourCess.cs
+```csharp file=HealthCardDiscount.cs
 using System;
 
 public static class LegacyBillMath
 {
     public static decimal NetPayable(decimal gross)
     {
-        decimal retention = gross * 0.05m;
-        decimal tds = gross * 0.02m;
-        decimal net = gross - retention - tds - LabourCess.Compute(gross);   // sprouted call
+        decimal corporate = gross * 0.05m;       // employer tie-up discount
+        decimal promptPayment = gross * 0.02m;   // paid in full at discharge
+        decimal net = gross - corporate - promptPayment - HealthCardDiscount.Compute(gross);   // sprouted call
         return Math.Round(net, 2);
     }
 }
 
-public static class LabourCess
+public static class HealthCardDiscount
 {
     public const decimal Rate = 0.01m;
 
@@ -766,17 +774,17 @@ public static class LabourCess
 }
 ```
 
-Check the last test by hand: retention 63.1665, TDS 25.2666, cess 12.63 (already rounded by the sprout), so net = 1263.33 − 101.0631 = 1162.2669, which the legacy `Math.Round` turns into 1162.27. Notice that the legacy rounding of the *total* is untouched; only one subtraction was added.
+Check the last test by hand: corporate discount 63.1665, prompt-payment discount 25.2666, health-card discount 12.63 (already rounded by the sprout), so net = 1263.33 − 101.0631 = 1162.2669, which the legacy `Math.Round` turns into 1162.27. Notice that the legacy rounding of the *total* is untouched; only one subtraction was added.
 ::mistakes
-- Rewriting `NetPayable` "properly" while adding the cess. Now a reviewer can't tell whether retention changed.
-- Putting the cess calculation inline in the legacy method, where it can only be tested through `NetPayable`.
+- Rewriting `NetPayable` "properly" while adding the discount. Now a reviewer can't tell whether the corporate discount changed.
+- Putting the new discount calculation inline in the legacy method, where it can only be tested through `NetPayable`.
 - Using default `Math.Round` (banker's rounding) in the sprout: 0.005 would round to 0.00.
 ::extensions
-Turn `LabourCess` into a class implementing `IDeduction`, and make `NetPayable` loop over a list of deductions. When is that worth doing, and when is it overengineering?
+Turn `HealthCardDiscount` into a class implementing `IBillDiscount`, and make `NetPayable` loop over a list of discounts. When is that worth doing, and when is it overengineering?
 :::
 
 :::exercise id=m04-refactoring-legacy-ex2 difficulty=beginner kind=code title="Wrap class: add an audit trail around bill approval"
-Auditors want a log line every time a bill approval succeeds or fails. The legacy `LegacyBillApprover` works and must not be edited. Implement `AuditedBillApprover`, which wraps it (wrap class, also known as a decorator).
+Before a discharge bill with ad-hoc items can be finalised, a billing manager approves it. The hospital's auditors (and its accreditation inspectors) want a log line every time an approval succeeds or fails. The legacy `LegacyBillApprover` works and must not be edited. Implement `AuditedBillApprover`, which wraps it (wrap class, also known as a decorator).
 ::requirements
 - Implements `IBillApprover` and delegates to the inner approver.
 - On success write: `{time} APPROVED bill={id} by={approver}`.
@@ -951,20 +959,20 @@ In `Program.cs`, the wrapper replaces the old registration: `services.AddSinglet
 If writing the audit log itself fails, should the approval fail? Discuss with the auditors' requirements in mind, then implement your answer with a test.
 :::
 
-:::exercise id=m04-refactoring-legacy-ex3 difficulty=intermediate kind=code title="Golden master: compare legacy and new retention"
-You're replacing `LegacyRetention.Compute(double)` with a `decimal` version. Finance has decided the new version must use `MidpointRounding.AwayFromZero` (the legacy code used `double` and default rounding). Build a reusable golden-master comparer and the new calculator, and prove that every difference is a rounding difference of exactly one paisa.
+:::exercise id=m04-refactoring-legacy-ex3 difficulty=intermediate kind=code title="Golden master: compare legacy and new room GST"
+You're replacing `LegacyRoomGst.Compute(double)`, the 5 % GST on premium hospital rooms, with a `decimal` version. Finance has decided the new version must use `MidpointRounding.AwayFromZero` (the legacy code used `double` and default rounding). Build a reusable golden-master comparer and the new calculator, and prove that every difference is a rounding difference of exactly one paisa.
 ::requirements
-- `RetentionCalculator.Compute(decimal gross)`: 5 % of gross, capped at ₹5,00,000, rounded to 2 decimals away from zero; zero or negative gross → 0.
+- `RoomGstCalculator.Compute(decimal roomCharges)`: 5 % of the room charges, rounded to 2 decimals away from zero; zero or negative charges → 0.
 - `GoldenMaster.Compare(inputs, legacy, modern)` runs both functions on every input and returns a `Mismatch(Input, Legacy, Modern, Difference)` for each input where they differ, in input order. `Difference = Modern − Legacy`.
 - `Compare` must call each function exactly once per input.
 ::acceptance
-- `Compute(50.50m)` = 2.53, `Compute(10.10m)` = 0.51, `Compute(12345.67m)` = 617.28, `Compute(20000000m)` = 500000.
+- `Compute(50.50m)` = 2.53, `Compute(10.10m)` = 0.51, `Compute(12345.67m)` = 617.28, `Compute(48000m)` = 2400 (8 nights at ₹6,000).
 - `Compare` with identical functions returns an empty list.
 - Over 2,000 generated inputs, every mismatch against the legacy code has an absolute difference of exactly 0.01.
 ::hint
-Separate the *harness* (`GoldenMaster`) from the *subject* (`RetentionCalculator`). The harness knows nothing about retention.
+Separate the *harness* (`GoldenMaster`) from the *subject* (`RoomGstCalculator`). The harness knows nothing about GST.
 ::hint
-`Compare` takes two `Func<decimal, decimal>` delegates. The legacy one is wrapped by the caller: `g => (decimal)LegacyRetention.Compute((double)g)`.
+`Compare` takes two `Func<decimal, decimal>` delegates. The legacy one is wrapped by the caller: `g => (decimal)LegacyRoomGst.Compute((double)g)`.
 ::hint
 Call each function once, store the results in locals, then compare. Don't call them again to build the `Mismatch`.
 ::hint
@@ -980,21 +988,20 @@ foreach (var input in inputs)
 using System;
 using System.Collections.Generic;
 
-public static class LegacyRetention
+public static class LegacyRoomGst
 {
     // Extracted verbatim from production. Do not change.
-    public static double Compute(double gross)
+    public static double Compute(double roomCharges)
     {
-        if (gross <= 0) return 0;
-        double r = gross * 0.05;
-        if (r > 500000) r = 500000;
-        return Math.Round(r, 2);
+        if (roomCharges <= 0) return 0;
+        double gst = roomCharges * 0.05;
+        return Math.Round(gst, 2);
     }
 }
 
-public static class RetentionCalculator
+public static class RoomGstCalculator
 {
-    public static decimal Compute(decimal gross)
+    public static decimal Compute(decimal roomCharges)
     {
         throw new NotImplementedException();
     }
@@ -1023,10 +1030,10 @@ public class GoldenMasterTests
     [InlineData(50.50, 2.53)]
     [InlineData(10.10, 0.51)]
     [InlineData(12345.67, 617.28)]
-    [InlineData(20000000, 500000)]
+    [InlineData(48000, 2400)]
     [InlineData(0, 0)]
     [InlineData(-10, 0)]
-    public void New_retention_rules(decimal gross, decimal expected) => Assert.Equal(expected, RetentionCalculator.Compute(gross));
+    public void New_room_gst_rules(decimal charges, decimal expected) => Assert.Equal(expected, RoomGstCalculator.Compute(charges));
 
     [Fact]
     public void Identical_functions_have_no_mismatches() =>
@@ -1053,7 +1060,7 @@ public class GoldenMasterTests
     public void Against_legacy_every_difference_is_one_paisa()
     {
         var inputs = Enumerable.Range(0, 2000).Select(i => i * 10.10m).ToList();
-        var mismatches = GoldenMaster.Compare(inputs, g => (decimal)LegacyRetention.Compute((double)g), RetentionCalculator.Compute);
+        var mismatches = GoldenMaster.Compare(inputs, g => (decimal)LegacyRoomGst.Compute((double)g), RoomGstCalculator.Compute);
         Assert.All(mismatches, mm => Assert.Equal(0.01m, Math.Abs(mm.Difference)));
     }
 }
@@ -1065,26 +1072,24 @@ The harness is generic and reusable for every calculation you migrate. The last 
 using System;
 using System.Collections.Generic;
 
-public static class LegacyRetention
+public static class LegacyRoomGst
 {
-    public static double Compute(double gross)
+    public static double Compute(double roomCharges)
     {
-        if (gross <= 0) return 0;
-        double r = gross * 0.05;
-        if (r > 500000) r = 500000;
-        return Math.Round(r, 2);
+        if (roomCharges <= 0) return 0;
+        double gst = roomCharges * 0.05;
+        return Math.Round(gst, 2);
     }
 }
 
-public static class RetentionCalculator
+public static class RoomGstCalculator
 {
     private const decimal Rate = 0.05m;
-    private const decimal Cap = 500_000m;
 
-    public static decimal Compute(decimal gross)
+    public static decimal Compute(decimal roomCharges)
     {
-        if (gross <= 0) return 0m;
-        return Math.Min(Math.Round(gross * Rate, 2, MidpointRounding.AwayFromZero), Cap);
+        if (roomCharges <= 0) return 0m;
+        return Math.Round(roomCharges * Rate, 2, MidpointRounding.AwayFromZero);
     }
 }
 
@@ -1110,17 +1115,17 @@ public static class GoldenMaster
 Approval-testing libraries (such as Verify or ApprovalTests) store the golden output in a file and show a diff tool when it changes. They're great for large outputs like generated PDFs or JSON. For numeric calculations, an in-code comparer like this one is often clearer.
 ::mistakes
 - Requiring zero mismatches, then "fixing" the new code to reproduce double-rounding quirks that finance explicitly asked to remove.
-- Using only round inputs (₹1,000, ₹2,000). They contain no midpoints, so the comparison looks perfect and proves little.
-- Comparing with a tolerance like `< 1m`, which would hide a real logic error such as a wrong cap.
+- Using only round inputs (₹6,000, ₹12,000). They contain no midpoints, so the comparison looks perfect and proves little.
+- Comparing with a tolerance like `< 1m`, which would hide a real logic error such as a wrong rate on small amounts.
 :::
 
-:::exercise id=m04-refactoring-legacy-ex4 difficulty=intermediate kind=design title="Plan the dependency-breaking for RaBillProcessor"
-Using the legacy `RaBillProcessor.Process` from the step-by-step example, write a refactoring plan **before** touching code. Produce a class diagram of the target design and an ordered list of commits.
+:::exercise id=m04-refactoring-legacy-ex4 difficulty=intermediate kind=design title="Plan the dependency-breaking for PatientBillProcessor"
+Using the legacy `PatientBillProcessor.Process` from the step-by-step example, write a refactoring plan **before** touching code. Produce a class diagram of the target design and an ordered list of commits.
 ::acceptance
 - Every hard dependency (SQL, clock, file system, SMTP, static `LastError`) is listed with the seam you'll create and the technique (parameterize method, extract interface, wrap static, parameterize constructor, extract and override).
 - Commits are ordered so that characterization tests exist before any behaviour change.
 - Each commit is labelled "refactor (no behaviour change)" or "behaviour change", and none is both.
-- The diagram shows `RaBillProcessor` depending only on abstractions plus `TimeProvider`.
+- The diagram shows `PatientBillProcessor` depending only on abstractions plus `TimeProvider`.
 - The plan says what happens to the 14 existing callers of `Process` (they must keep compiling).
 ::hint
 Start with the change that gives you a test point fastest. Which block of the method has no I/O at all once the clock is a parameter?
@@ -1129,16 +1134,16 @@ Parameterize constructor lets you add seams without touching callers: keep the o
 ::hint
 `LastError` is shared static state. It's a behaviour change to remove it, because callers read it. Plan a replacement (a result type) and migrate callers in separate commits.
 ::hint
-A good first five commits: (1) extract `ComputeLegacy` with a `now` parameter; (2) characterization tests for it; (3) wrap `SqlHelper` behind `IRaBillRepository`; (4) extract `IBillNotifier`; (5) parameterize constructor with both.
+A good first five commits: (1) extract `ComputeLegacy` with a `now` parameter; (2) characterization tests for it; (3) wrap `SqlHelper` behind `IPatientBillRepository`; (4) extract `IBillNotifier`; (5) parameterize constructor with both.
 ::solution
 **Dependencies and seams**
 
 | Dependency | Seam | Technique |
 |---|---|---|
-| `DateTime.Now` (3 reads) | `today` parameter, later `TimeProvider` | Parameterize method, then inject `TimeProvider` |
-| `SqlHelper` queries/updates | `IRaBillRepository` | Wrap static + extract interface |
+| `DateTime.Now` (2 reads) | `today` parameter, later `TimeProvider` | Parameterize method, then inject `TimeProvider` |
+| `SqlHelper` queries/updates | `IPatientBillRepository` | Wrap static + extract interface |
 | `SmtpClient` | `IBillNotifier` | Extract interface (or extract and override as a stop-gap) |
-| `File.WriteAllText` | `IBillExporter` | Extract interface |
+| `File.WriteAllText` (patient data on disk) | `IBillExporter` | Extract interface; later replace with secure storage |
 | Arithmetic | `IBillCalculator` / `LegacyBillCalculator` | Extract method → extract class |
 | `static LastError` | `ProcessResult` return value | Behaviour change, migrated per caller |
 
@@ -1146,36 +1151,36 @@ A good first five commits: (1) extract `ComputeLegacy` with a `now` parameter; (
 
 ```mermaid
 classDiagram
-    class RaBillProcessor {
-        +ProcessAsync(int billId, bool includeExtra) ProcessResult
+    class PatientBillProcessor {
+        +FinaliseAsync(int billId, bool includeAdHoc) FinaliseResult
     }
-    class IRaBillRepository { <<interface>> }
+    class IPatientBillRepository { <<interface>> }
     class IBillCalculator { <<interface>> }
     class IBillNotifier { <<interface>> }
     class IBillExporter { <<interface>> }
     class TimeProvider
-    class SqlRaBillRepository
+    class SqlPatientBillRepository
     class LegacyBillCalculator
-    RaBillProcessor --> IRaBillRepository
-    RaBillProcessor --> IBillCalculator
-    RaBillProcessor --> IBillNotifier
-    RaBillProcessor --> IBillExporter
-    RaBillProcessor --> TimeProvider
-    IRaBillRepository <|.. SqlRaBillRepository
+    PatientBillProcessor --> IPatientBillRepository
+    PatientBillProcessor --> IBillCalculator
+    PatientBillProcessor --> IBillNotifier
+    PatientBillProcessor --> IBillExporter
+    PatientBillProcessor --> TimeProvider
+    IPatientBillRepository <|.. SqlPatientBillRepository
     IBillCalculator <|.. LegacyBillCalculator
 ```
 
 **Commit plan**
 
-1. *refactor*: extract `ComputeLegacy(items, includeExtra, due, now, advance)`; `Process` passes `DateTime.Now`. Read the diff line by line.
-2. *test only*: characterization tests for `ComputeLegacy` (on time, 3 and 30 weeks late, retention cap, advance fully recovered, extra items on/off).
-3. *refactor*: rename `int mode` to `bool includeExtraItems` (callers passing `2` pass `true`). IDE-assisted.
-4. *refactor*: `SqlRaBillRepository` wraps the existing `SqlHelper` calls unchanged; extract `IRaBillRepository`.
+1. *refactor*: extract `ComputeLegacy(items, includeAdHoc, dateOfBirth, now, coverRemaining)`; `Process` passes `DateTime.Now`. Read the diff line by line.
+2. *test only*: characterization tests for `ComputeLegacy` (under 60, senior, turning 60 within 15 days, cover exhausted, premium and standard room, ad-hoc items on/off).
+3. *refactor*: rename `int mode` to `bool includeAdHocItems` (callers passing `2` pass `true`). IDE-assisted.
+4. *refactor*: `SqlPatientBillRepository` wraps the existing `SqlHelper` calls unchanged; extract `IPatientBillRepository`.
 5. *refactor*: extract `IBillNotifier` (SMTP) and `IBillExporter` (file).
 6. *refactor*: parameterize constructor; parameterless constructor passes the real implementations, so the 14 callers still compile.
 7. *refactor*: read the clock once into `today`, pass it everywhere. Characterization tests stay green.
 8. *behaviour change*: wrap the two updates in one transaction inside the repository. New test with a fake that fails the second write.
-9. *behaviour change*: sprout labour cess. Characterization tests for `net` change by exactly 1 % of gross.
+9. *behaviour change*: sprout the health-card discount. Characterization tests for card-holders' `net` change by exactly 1 % of gross; all others stay green.
 10. *behaviour change*, one per caller group: return `ProcessResult` and stop writing `LastError`; delete it when unused.
 11. *refactor*: introduce `IBillCalculator` + router; start shadow comparison with the new decimal calculator.
 ::mistakes
@@ -1219,7 +1224,7 @@ using System.Collections.Generic;
 
 public enum MigrationMode { Legacy, Shadow, Modern }
 
-public sealed record BillInput(int BillId, decimal Gross, decimal AdvanceOutstanding);
+public sealed record BillInput(int BillId, decimal Gross, decimal InsuranceCoverRemaining);
 
 public interface IBillCalculator
 {
@@ -1262,7 +1267,7 @@ public class StranglerBillCalculatorTests
     }
     private sealed class ThrowingCalc : IBillCalculator
     {
-        public decimal ComputeNet(BillInput input) => throw new InvalidOperationException("rate table missing");
+        public decimal ComputeNet(BillInput input) => throw new InvalidOperationException("tariff table missing");
     }
     private sealed class ListSink : IMismatchSink
     {
@@ -1270,7 +1275,7 @@ public class StranglerBillCalculatorTests
         public void Record(BillMismatch m) => Items.Add(m);
     }
 
-    private static readonly BillInput Bill = new(812, 100000m, 0m);
+    private static readonly BillInput Bill = new(812, 34_000m, 20_000m);
 
     [Fact]
     public void Legacy_mode_never_calls_modern()
@@ -1314,7 +1319,7 @@ public class StranglerBillCalculatorTests
         var sink = new ListSink();
         var sut = new StranglerBillCalculator(new FixedCalc(55m), new ThrowingCalc(), sink, () => MigrationMode.Shadow, 0.05m);
         Assert.Equal(55m, sut.ComputeNet(Bill));
-        Assert.Equal(new BillMismatch(812, 55m, null, "rate table missing"), Assert.Single(sink.Items));
+        Assert.Equal(new BillMismatch(812, 55m, null, "tariff table missing"), Assert.Single(sink.Items));
     }
 
     [Fact]
@@ -1349,7 +1354,7 @@ using System.Collections.Generic;
 
 public enum MigrationMode { Legacy, Shadow, Modern }
 
-public sealed record BillInput(int BillId, decimal Gross, decimal AdvanceOutstanding);
+public sealed record BillInput(int BillId, decimal Gross, decimal InsuranceCoverRemaining);
 
 public interface IBillCalculator
 {
@@ -1405,13 +1410,13 @@ public sealed class StranglerBillCalculator : IBillCalculator
 }
 ```
 ::alternatives
-- **Per-contract routing** (as in the lesson's `BillCalculatorRouter`) lets you move customers one at a time. Combine it with shadow mode for everyone not yet moved.
-- **Percentage rollout** by hashing the bill id (`id % 100 < percent`) spreads risk evenly, but makes it harder to explain to a specific customer which calculation they got.
+- **Per-branch routing** (as in the lesson's `BillCalculatorRouter`) lets you move one hospital branch at a time. Combine it with shadow mode for everyone not yet moved.
+- **Percentage rollout** by hashing the bill id (`id % 100 < percent`) spreads risk evenly, but makes it harder to explain to a specific patient which calculation they got.
 - In ASP.NET Core, read the mode from `IOptionsMonitor<T>.CurrentValue` instead of a `Func`; the `Func` keeps this exercise free of configuration plumbing.
 ::mistakes
 - Running the shadow calculation *before* legacy, so a slow or throwing modern implementation delays or breaks production.
 - Reading the mode once in the constructor; a singleton router then needs a restart to change mode.
-- Shadowing code with side effects (sending emails, writing rows). Shadow only pure calculations, or point the shadow at fakes.
+- Shadowing code with side effects (emailing patients, writing rows, reducing insurance cover). Shadow only pure calculations, or point the shadow at fakes.
 ::extensions
 Add sampling: in shadow mode, only run the modern calculator for a configurable percentage of calls, to limit extra CPU on the hot path.
 :::
@@ -1420,23 +1425,38 @@ Add sampling: in shadow mode, only run the modern calculator for a configurable 
 
 Legacy refactoring uses four layers of tests, roughly in this order.
 
-**1. Characterization tests** pin today's behaviour of extracted code. They often look odd, with exact paise values and comments explaining surprises:
+**1. Characterization tests** pin today's behaviour of extracted code. They often look odd, with exact rupee and paise values and comments explaining surprises:
 
 ```csharp
 public class LegacyBillCalculatorCharacterizationTests
 {
-    private static RaBill Bill(decimal qty, decimal rate, DateOnly due, decimal advance = 0m) =>
-        new(1, 10, "eng@example.com", new[] { new MeasurementItem("EW-01", qty, rate) }, due, advance, BillStatus.Submitted);
+    private static PatientBill Bill(DateOnly dateOfBirth, decimal cover, params BillItem[] items) =>
+        new(1, 10, "patient@example.com", items, dateOfBirth, false, cover, BillStatus.Submitted);
 
     [Fact]
-    public void Three_weeks_late_bill()
+    public void Senior_patient_in_premium_room()
     {
-        var c = new LegacyBillCalculator().Compute(Bill(1200m, 850m, new DateOnly(2026, 9, 1), 50_000m), new DateOnly(2026, 9, 23), false);
-        // Recorded from the legacy code on 2026-10-02. TDS is on (gross - LD) but retention on gross:
-        // confirmed as a contract term with the commercial team, not a bug.
-        Assert.Equal(1_020_000m, c.Gross);
-        Assert.Equal(15_300m, c.LiquidatedDamages);
-        Assert.Equal(50_000m, c.AdvanceRecovery);
+        var bill = Bill(new DateOnly(1960, 5, 10), 20_000m,
+            new BillItem("ROOM-PVT", 4m, 6_000m), new BillItem("LAB-CBC", 3m, 450m), new BillItem("PHARM-IP", 1m, 8_650m));
+        var c = new LegacyBillCalculator().Compute(bill, new DateOnly(2026, 9, 23), includeAdHocItems: false);
+
+        // Recorded from the legacy code on 2026-10-02. The insurer's 80 % is applied AFTER the senior
+        // discount: confirmed as a policy term with the TPA desk, not a bug.
+        Assert.Equal(34_000m, c.Gross);           // 24,000 room + 1,350 lab + 8,650 pharmacy
+        Assert.Equal(3_400m, c.SeniorDiscount);   // 10 %
+        Assert.Equal(20_000m, c.InsurerPays);     // 80 % of 30,600 = 24,480, capped by remaining cover
+        Assert.Equal(11_800m, c.PatientPays);     // 34,000 - 3,400 - 20,000 + 1,200 GST on the room
+    }
+
+    [Fact]
+    public void Senior_discount_starts_15_days_before_60th_birthday()
+    {
+        var bill = Bill(new DateOnly(1966, 10, 4), 0m, new BillItem("LAB-CBC", 1m, 450m));
+        var c = new LegacyBillCalculator().Compute(bill, new DateOnly(2026, 9, 19), includeAdHocItems: false);
+
+        // Days / 365 ignores the 15 leap days since 1966, so the patient counts as 60 from 19 September,
+        // not 4 October. Pinned as-is; ticket BILL-412 asks the business whether to change it.
+        Assert.Equal(45m, c.SeniorDiscount);
     }
 }
 ```
@@ -1456,10 +1476,10 @@ Tips:
 ## Real-world application
 
 - **Payment and billing systems** are the classic case: money calculations with years of accumulated rules, where every paisa difference is a support ticket. Shadow comparison against the old calculator is standard practice before switching.
-- **Government and infrastructure platforms** often run on older .NET Framework code (Web Forms, WCF, `DataTable`-heavy data access). Migrating them to ASP.NET Core usually starts with wrapping static data helpers behind repositories and extracting pure calculations, exactly as in this lesson.
-- **Tax rule changes** (a GST rate change, a new cess) are natural sprout-method changes: a new, tested rule plus a one-line call, deployed before the effective date and switched on by date.
+- **Hospital information systems and government platforms** often run on older .NET Framework code (Web Forms, WCF, `DataTable`-heavy data access). Migrating them to ASP.NET Core usually starts with wrapping static data helpers behind repositories and extracting pure calculations, exactly as in this lesson.
+- **Tax and tariff changes** (a GST rate change, a new insurer tariff, a new patient concession) are natural sprout-method changes: a new, tested rule plus a one-line call, deployed before the effective date and switched on by date.
 - **Monolith to services migrations** use the same strangler idea at the HTTP level: a gateway routes `/billing/*` to the new service for some tenants and to the monolith for others. The code-level version in this lesson is often the first step, because it lets you build the new logic inside the monolith before extracting it.
-- **Static `DateTime.Now` removal** is one of the most common first refactorings in any older codebase. Parameterizing time unlocks tests for every date rule: penalties, expiries, SLAs, reminders.
+- **Static `DateTime.Now` removal** is one of the most common first refactorings in any older codebase. Parameterizing time unlocks tests for every date rule: age-based concessions, policy expiries, SLAs, reminders.
 
 ## Interview questions
 
@@ -1471,7 +1491,7 @@ A characterization test records what code **currently** does, not what it should
 ::q beginner
 What's the difference between sprout method and wrap method?
 ::a
-**Sprout method** puts new logic in a new, tested method and adds one call to it from inside the legacy code. Use it when the new behaviour is a step *within* the existing flow (an extra deduction). **Wrap method** (or wrap class) puts new behaviour *around* the existing call: rename or wrap the old method and call it from a new one that does extra work before or after (audit logging, notifications). Both keep edits to untested code to a minimum, and both mean all new code is tested.
+**Sprout method** puts new logic in a new, tested method and adds one call to it from inside the legacy code. Use it when the new behaviour is a step *within* the existing flow (an extra discount). **Wrap method** (or wrap class) puts new behaviour *around* the existing call: rename or wrap the old method and call it from a new one that does extra work before or after (audit logging, notifications). Both keep edits to untested code to a minimum, and both mean all new code is tested.
 ::q intermediate
 What is a seam? Give three examples in C#.
 ::a
@@ -1487,7 +1507,7 @@ Branch by abstraction replaces a component *on the main branch* without a long-l
 ::q advanced
 A characterization test shows the legacy code rounds GST per invoice total, but the new spec says round per line. Customers have been invoiced the old way for five years. How do you handle it?
 ::a
-It's a business decision, not a refactoring one. I'd quantify the impact with a golden master over historical invoices (how many differ, by how much, max difference), then take that to finance and compliance. Options: keep the old behaviour for existing contracts and use the new one for new contracts (route by contract start date); switch everyone on an effective date with customer communication; or keep the old behaviour if regulations allow and the new spec was simply wrong. Whatever is decided, the characterization test is updated in the same commit as the change, with a reference to the decision, and the migration uses shadow mode first to confirm the differences match the analysis.
+It's a business decision, not a refactoring one. I'd quantify the impact with a golden master over historical invoices (how many differ, by how much, max difference), then take that to finance and compliance. Options: keep the old behaviour for existing customers and use the new one for new customers (route by account start date); switch everyone on an effective date with customer communication; or keep the old behaviour if regulations allow and the new spec was simply wrong. Whatever is decided, the characterization test is updated in the same commit as the change, with a reference to the decision, and the migration uses shadow mode first to confirm the differences match the analysis.
 :::
 
 ## Summary and revision
@@ -1527,14 +1547,14 @@ A: When the change you need is easy and the code you touched is tested — not w
 
 :::quiz pass=70
 ::q single
-You must add a 1 % cess to a 300-line untested billing method. What's the safest first move?
-- [ ] Rewrite the method with decimal maths and add the cess.
-- [x] Write the cess as a new, tested function and add one call to it in the legacy method.
-- [ ] Add the cess inline and test the whole method manually in production.
+You must add a 1 % health-card discount to a 300-line untested billing method. What's the safest first move?
+- [ ] Rewrite the method with decimal maths and add the discount.
+- [x] Write the discount as a new, tested function and add one call to it in the legacy method.
+- [ ] Add the discount inline and test the whole method manually in production.
 - [ ] Wait until the whole class has full test coverage.
 > Sprout method keeps the edit to untested code to one line while all new logic is tested.
 ::q single
-A characterization test reveals that TDS is computed on gross minus penalties, while the documentation says gross. What should you do during the refactoring?
+A characterization test reveals that the insurer's 80 % share is computed after the senior-citizen discount, while the documentation says it uses the full gross. What should you do during the refactoring?
 - [ ] Fix it to match the documentation as part of the refactoring commit.
 - [x] Keep the current behaviour pinned by the test, and raise it as a separate business decision.
 - [ ] Delete the test because it encodes a bug.
@@ -1548,7 +1568,7 @@ Which are seams that let a test substitute behaviour? (Select all that apply.)
 - [x] A `protected virtual` method a test subclass can override.
 > Static calls have no enabling point, so tests can't substitute them. Turning them into one of the other forms is what dependency-breaking means.
 ::q single
-In shadow mode, the new calculator throws an exception for 2 % of bills. What should customers experience?
+In shadow mode, the new calculator throws an exception for 2 % of bills. What should patients and the billing desk experience?
 - [x] Nothing different; the legacy result is returned and the failure is logged.
 - [ ] A 500 error for those bills.
 - [ ] The new calculator's partial result.
@@ -1562,7 +1582,7 @@ Which commit is a pure refactoring?
 - [ ] Wrapping two updates in a transaction.
 > The others all change observable behaviour (rounding results, error reporting, failure atomicity), so each needs its own tests and commit.
 ::q single
-A golden master over 2,000 inputs shows 168 differences, all exactly ₹0.01 at rounding midpoints. Finance has chosen the new rounding rule. What does this result tell you?
+A golden master over 2,000 inputs (like the playground's) shows 344 differences, all exactly ₹0.01 at rounding midpoints. Finance has chosen the new rounding rule. What does this result tell you?
 - [ ] The new code has a bug and must reproduce the legacy output.
 - [x] The only differences are the expected rounding ones, which supports switching once the change is approved.
 - [ ] The golden master is useless because it found differences.

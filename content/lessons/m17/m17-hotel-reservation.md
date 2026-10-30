@@ -7,7 +7,7 @@ status: reviewed
 template: hld-case
 minutes: 100
 prerequisites: [m11-capacity-estimation, m09-transactions-acid, m09-locking, m12-idempotent-consumers, m17-movie-booking]
-related: [m17-movie-booking, m17-ecommerce, m17-payment-system, m12-outbox, m12-eventual-consistency, m16-multi-tenancy]
+related: [m17-movie-booking, m17-flash-sale, m17-ecommerce, m17-payment-system, m12-outbox, m12-eventual-consistency, m16-multi-tenancy]
 tags: [hld, case-study, inventory, availability-calendar, overbooking, channel-manager, ota, idempotency]
 patterns: []
 summary: Design a hotel central reservation system — a per-night availability calendar, all-or-nothing multi-night bookings, a deliberate overbooking policy, and synchronising inventory with online travel agencies without selling the same last room twice — with capacity maths, a PostgreSQL data model and C# for the calendar, overbooking and channel sync.
@@ -129,7 +129,7 @@ GET  /v1/hotels/{hotelId}/availability?checkIn=…&checkOut=…   -> per room ty
 POST /v1/reservations                        Idempotency-Key: 7d3a…
 { "hotelId": 12, "roomType": "DLX", "ratePlan": "BB", "checkIn": "2026-12-24", "checkOut": "2026-12-27",
   "guests": [ { "name": "A. Sharma" } ], "paymentToken": "tok_…" }
-201 { "reservationId": "r_9f…", "confirmation": "TJ-482913", "status": "CONFIRMED", "total": { "amount": 21600.00, "currency": "INR" } }
+201 { "reservationId": "r_9f…", "confirmation": "HX-482913", "status": "CONFIRMED", "total": { "amount": 21600.00, "currency": "INR" } }
 409 { "error": "NO_AVAILABILITY", "nights": ["2026-12-25"] }
 
 PATCH /v1/reservations/{id}                  { "checkOut": "2026-12-28", "expectedVersion": 2 }
@@ -236,13 +236,13 @@ WHERE hotel_id = $1 AND room_type = $2
 -- If the updated row count != number of nights, ROLLBACK. All nights or none.
 ```
 
-  Two concurrent bookings for the last room serialise on the row lock of the contested night; the second re-checks `sold + 1 <= total + overbook_limit` and fails for that night, so its transaction rolls back entirely.
+  Two concurrent bookings for the last room serialise on the row lock of the contested night; under PostgreSQL's default READ COMMITTED level the second waits, re-reads the updated row, re-checks `sold + 1 <= total + overbook_limit` and fails for that night, so its transaction rolls back entirely. Two overlapping multi-night bookings can deadlock if they lock the same nights in different orders (for example a modification that touches the 26th before the 24th). Lock nights in one fixed order, with `SELECT … WHERE … ORDER BY stay_date FOR UPDATE` before the update when a transaction touches several ranges, and retry the rare deadlock error (SQLSTATE `40P01`) once.
 - **`overbook_limit` per night** turns overbooking from an accident into a policy that the database enforces. Normal channels can't sell beyond `total + overbook_limit`.
 - **`version` on inventory and rates** gives each change an order, so channel messages can be compared ("is this newer than what I last sent?") and duplicates or reordering can be detected.
 - **`UNIQUE (channel, external_ref)`** is the idempotency rule for channel reservations, and for direct bookings (channel `DIRECT`, idempotency key as `external_ref`).
 - **`over_limit`** marks reservations that had to be accepted beyond the limit (an OTA sold a room on stale data and the guest already has a confirmation). They appear on a revenue manager's worklist.
 - **The exclusion constraint** on `room_assignment` uses a date range and the `btree_gist` extension so that the database itself refuses two overlapping stays in room 304.
-- **Shard key: `hotel_id`.** Every booking, search result and channel message is about one hotel. 5,000 hotels split naturally across a few database shards (and tenants, for a SaaS CRS; see [multi-tenancy](#/lesson/m16-multi-tenancy)).
+- **Partition key: `hotel_id`.** Every booking, search result and channel message is about one hotel, so `hotel_id` leads every primary key and every index. At these numbers (about 25 inventory row updates/s at peak and a few GB of data) **one PostgreSQL primary with a standby** holds everything; sharding would add cost and operational risk for no gain. If the group grows tenfold, or a SaaS CRS needs hard tenant isolation, `hotel_id` is the shard key that splits cleanly (see [multi-tenancy](#/lesson/m16-multi-tenancy)).
 
 ## High-level architecture
 
@@ -257,7 +257,7 @@ flowchart LR
   GW --> RS["Reservation service"]
   CH -->|"channel reservations"| ING["Channel ingest (idempotent)"]
   ING --> RS
-  RS --> DB[("Inventory and reservations DB, sharded by hotel")]
+  RS --> DB[("Inventory and reservations DB (PostgreSQL primary + standby)")]
   RM["Revenue management UI"] --> INV["Inventory and rates service"]
   INV --> DB
   DB -->|"outbox: inventory and rate changes"| BUS["Change stream"]
@@ -701,10 +701,10 @@ Inventory counts room types; guests sleep in rooms. Assignment happens at the pr
 
 **Scaling.**
 
-- **Booking writes are small**; one PostgreSQL primary per shard group handles them. Shard by `hotel_id` for growth, tenant isolation and blast radius.
+- **Booking writes are small**: about 10 reservations/s at peak is a few percent of what one PostgreSQL primary handles. Keep one primary with a synchronous standby; shard by `hotel_id` only when growth or tenant isolation demands it, not on day one.
 - **Reads scale through the cache**, not replicas: search and channel pulls never hit the primary.
 - **Channel sync scales by channel and hotel**: workers partitioned by hotel range, rate-limited per channel.
-- **Hot nights** (New Year's Eve in Goa, a cricket final in Ahmedabad) concentrate bookings on a few rows of a few hotels; row-level locking on `room_inventory` serialises them correctly, and close-out buffers limit cross-channel races.
+- **Hot nights** (New Year's Eve in Goa, a cricket final in Ahmedabad) concentrate bookings on a few rows of a few hotels; row-level locking on `room_inventory` serialises them correctly, and close-out buffers limit cross-channel races. That is mild contention (a few bookings per second on one row). When thousands of buyers per second compete for one counter, you need the techniques in the [flash sale](#/lesson/m17-flash-sale) case study.
 
 ## Failure handling
 
@@ -782,7 +782,7 @@ var builder = WebApplication.CreateBuilder(args);
 string[] channels = ["OTA_A", "OTA_B", "META"];
 builder.Services.AddSingleton(new ChannelSyncQueue(channels));
 builder.Services.AddSingleton<IInventoryChangeSink>(sp => sp.GetRequiredService<ChannelSyncQueue>());
-builder.Services.AddSingleton<InventoryCalendar>();                     // demo: one hotel; production: per-hotel shards
+builder.Services.AddSingleton<InventoryCalendar>();                     // demo: one hotel; production: room_inventory rows keyed by hotel_id
 builder.Services.AddSingleton<IRevenueAlerts, LoggingRevenueAlerts>();
 builder.Services.AddSingleton<ChannelReservationIngest>();
 foreach (var channel in channels)
@@ -1386,7 +1386,7 @@ Design the system for this lesson's numbers: 5,000 hotels (300,000 rooms), ~84,0
 - Search and channel pulls served from per-hotel availability documents.
 - Notes discuss the race window, close-out buffers and nightly reconciliation.
 ::hint
-What single attribute do all bookings, searches and channel messages share? Use it to shard.
+What single attribute do all bookings, searches and channel messages share? Use it as the partition key, and ask whether the numbers justify sharding at all.
 ::hint
 Why must rate updates not delay availability updates?
 ::hint
@@ -1429,7 +1429,7 @@ Reference architecture:
     { "id": "inq", "type": "queue", "label": "Channel reservation inbox" },
     { "id": "ing", "type": "worker", "label": "Channel ingest (idempotent, accept beyond limit + alert)", "props": { "instances": 4 } },
     { "id": "invs", "type": "app-server", "label": "Inventory and rates service (revenue UI)", "props": { "instances": 3 } },
-    { "id": "db", "type": "database", "label": "Inventory + reservations DB, sharded by hotel_id", "props": { "replicas": 2, "multiAz": true } },
+    { "id": "db", "type": "database", "label": "Inventory + reservations DB (one primary, keyed by hotel_id)", "props": { "replicas": 2, "multiAz": true } },
     { "id": "bus", "type": "stream", "label": "Change stream (outbox, key = hotel_id)" },
     { "id": "sync", "type": "worker", "label": "Channel sync (coalesce, ranges, availability first)", "props": { "instances": 8 } },
     { "id": "rl", "type": "rate-limiter", "label": "Per-channel token buckets" },
@@ -1467,7 +1467,7 @@ Reference architecture:
 
 Reasoning:
 
-- **Inventory model**: counters per (hotel, room type, night) with `sold`, `total`, `overbook_limit` and `stop_sell`; booking is one conditional `UPDATE` over `[check_in, check_out)` that must touch every night, in a transaction with the reservation insert and an outbox row. Shard by `hotel_id`.
+- **Inventory model**: counters per (hotel, room type, night) with `sold`, `total`, `overbook_limit` and `stop_sell`; booking is one conditional `UPDATE` over `[check_in, check_out)` that must touch every night, in a transaction with the reservation insert and an outbox row. `hotel_id` leads every key; at ~10 bookings/s one primary with a standby is enough, and `hotel_id` is the shard key if that ever changes.
 - **Overbooking** limits are recomputed nightly from no-show data per hotel and segment, stored per night and enforced by the update's `sold + 1 <= total + overbook_limit`; they are reduced to zero close to arrival.
 - **Channel sync** consumes the change stream, coalesces to the latest version per key, merges nights into ranges, sends availability before rates and respects each channel's token bucket, so availability changes reach channels in seconds even during repricing bursts. Close-out buffers apply on hot nights; a nightly full refresh repairs drift.
 - **Ingest** deduplicates on `(channel, external_ref)`; stale-availability bookings are accepted beyond the limit (the guest has a confirmation), flagged for the revenue team and resolved by upgrade, cancellation or walk.

@@ -1,6 +1,7 @@
 // Parses lesson Markdown (YAML frontmatter + Markdown + ::: directive blocks).
 // Shared by the web app and the Node validator script, so it has no browser/Node-only imports.
 import { parse as parseYaml } from 'yaml';
+import { VISUAL_KINDS, validateVisual, type VisualKind } from './visuals.ts';
 
 export type Level = 'beginner' | 'intermediate' | 'advanced';
 export type ContentStatus = 'planned' | 'draft' | 'reviewed' | 'tested' | 'published';
@@ -65,6 +66,7 @@ export type Block =
   | { type: 'interview'; questions: InterviewQ[] }
   | { type: 'callout'; kind: string; title: string; text: string }
   | { type: 'playground'; kind: string; attrs: Record<string, string>; body: string; files: CodeFile[] }
+  | { type: 'visual'; kind: VisualKind; attrs: Record<string, string>; body: string }
   | { type: 'unknown'; name: string; body: string };
 
 export interface Section { id: string; title: string; blocks: Block[] }
@@ -80,6 +82,10 @@ export interface ParsedLesson {
   wordCount: number;
   mermaidCount: number;
   csharpBlockCount: number;
+  /** Number of :::flow / :::steps / :::compare / :::stats / :::tldr blocks. */
+  visualCount: number;
+  /** Longest unbroken run of prose and the section it is in — long runs read as a wall of text. */
+  longestProse: { words: number; section: string };
   errors: string[];
 }
 
@@ -291,11 +297,18 @@ export function parseLesson(source: string, fallbackId = 'lesson'): ParsedLesson
   let md: string[] = [];
   let mermaidCount = 0;
   let csharpBlockCount = 0;
+  let visualCount = 0;
   let words = 0;
+  let longestProse = { words: 0, section: '' };
+  let currentSection = '(intro)';
 
   const flush = () => {
     const text = md.join('\n');
-    if (text.trim()) target.push({ type: 'markdown', text });
+    if (text.trim()) {
+      target.push({ type: 'markdown', text });
+      const run = longestProseRun(text);
+      if (run > longestProse.words) longestProse = { words: run, section: currentSection };
+    }
     md = [];
   };
 
@@ -310,6 +323,7 @@ export function parseLesson(source: string, fallbackId = 'lesson'): ParsedLesson
       flush();
       const sec: Section = { id: slugify(h2[1]), title: h2[1], blocks: [] };
       sections.push(sec);
+      currentSection = h2[1];
       target = sec.blocks;
       continue;
     }
@@ -342,7 +356,13 @@ export function parseLesson(source: string, fallbackId = 'lesson'): ParsedLesson
         case 'interview': { const q = parseInterview(blockBody); interview.push(...q); target.push({ type: 'interview', questions: q }); break; }
         case 'callout': target.push({ type: 'callout', kind: attrs.type || 'note', title: attrs.title || '', text: blockBody }); break;
         case 'playground': target.push({ type: 'playground', kind: attrs.type || 'csharp', attrs, body: blockBody, files: extractCodeFiles(blockBody) }); break;
-        default: errors.push(`unknown directive :::${name}`); target.push({ type: 'unknown', name, body: blockBody });
+        default:
+          if ((VISUAL_KINDS as readonly string[]).includes(name)) {
+            const kind = name as VisualKind;
+            errors.push(...validateVisual(kind, blockBody).map(e => `line ${i + 1}: ${e}`));
+            target.push({ type: 'visual', kind, attrs, body: blockBody });
+            visualCount++;
+          } else { errors.push(`unknown directive :::${name}`); target.push({ type: 'unknown', name, body: blockBody }); }
       }
       continue;
     }
@@ -351,7 +371,20 @@ export function parseLesson(source: string, fallbackId = 'lesson'): ParsedLesson
   flush();
   const ids = new Set<string>();
   for (const ex of exercises) { if (ids.has(ex.id)) errors.push(`duplicate exercise id ${ex.id}`); ids.add(ex.id); }
-  return { meta, intro, sections, exercises, quiz, flashcards, interview, wordCount: words, mermaidCount, csharpBlockCount, errors };
+  return { meta, intro, sections, exercises, quiz, flashcards, interview, wordCount: words, mermaidCount, csharpBlockCount, visualCount, longestProse, errors };
+}
+
+/** Longest stretch of plain prose (words) in a markdown chunk, broken by code fences, tables, lists, sub-headings and images. */
+function longestProseRun(text: string): number {
+  let best = 0, run = 0, fence = false;
+  for (const line of text.split('\n')) {
+    const t = line.trim();
+    if (/^(`{3,}|~{3,})/.test(t)) { fence = !fence; run = 0; continue; }
+    if (fence || /^(\||#{3,}|!\[|[-*]\s|\d+\.\s)/.test(t)) { run = 0; continue; }
+    run += t.split(/\s+/).filter(Boolean).length;
+    best = Math.max(best, run);
+  }
+  return best;
 }
 
 // ---------- validation ----------
@@ -405,5 +438,7 @@ export function validateLesson(p: ParsedLesson, minWords = 1800): ValidationRepo
   if (m.template !== 'capstone' && p.csharpBlockCount < 1 && m.template !== 'hld-case') problems.push('needs at least one ```csharp code block');
   if (p.wordCount < minWords) problems.push(`too short: ${p.wordCount} words (min ${minWords})`);
   if (p.wordCount > 9000) warnings.push(`very long: ${p.wordCount} words`);
+  if (p.longestProse.words > 350) warnings.push(`wall of text: ${p.longestProse.words} words of unbroken prose in "${p.longestProse.section}"`);
+  if (p.visualCount < 2 && m.template !== 'capstone') warnings.push(`few visuals: ${p.visualCount} :::flow/:::steps/:::compare/:::stats/:::tldr blocks (aim for 3+)`);
   return { id: m.id, ok: problems.length === 0, problems, warnings };
 }

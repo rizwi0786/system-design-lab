@@ -109,7 +109,7 @@ Every artifact needs a version a human can read and a link back to its source. A
 
 A practical layering for GSTSetu:
 
-1. **On every pull request**: restore with a lock file, build with warnings as errors, unit tests, integration tests against a throwaway PostgreSQL **service container**, a vulnerability scan of NuGet packages (`dotnet list package --vulnerable`), and a container build (not pushed).
+1. **On every pull request**: restore with a lock file, build with warnings as errors, unit tests, integration tests against a throwaway PostgreSQL **service container**, a vulnerability scan of NuGet packages, and a container build (not pushed). Since .NET 8, `dotnet restore` audits packages against the GitHub Advisory Database (**NuGet Audit**), and in .NET 10 it audits transitive packages by default; setting `<NuGetAuditLevel>high</NuGetAuditLevel>` and treating warnings `NU1903`/`NU1904` as errors fails the restore on high or critical advisories, with no extra step. `dotnet package list --vulnerable` (the .NET 10 spelling of `dotnet list package`) gives a readable report.
 2. **On merge to `main`**: everything above, then push the image to the registry with its version tag and record its digest.
 3. **After deploying to staging**: database migrations, smoke tests (a handful of HTTP calls against the real deployment) and optionally a short load test.
 4. **After deploying to production**: the same smoke tests, then monitoring watches error rate and latency for a bake period.
@@ -141,6 +141,7 @@ Pipeline hygiene rules:
 - Give the workflow token the **least permissions** it needs (`permissions: contents: read` by default).
 - **Pin third-party actions to a full commit SHA**, not a moving tag like `@v4`. A compromised tag can run code with your secrets. First-party actions from `actions/` are lower risk but pinning still helps reproducibility.
 - Never echo secrets. Both tools mask registered secrets in logs, but masking fails on transformed values (a base64-encoded secret is not masked).
+- Record **where an image came from**. A build-provenance attestation (for example `actions/attest-build-provenance`, which needs `attestations: write` and `id-token: write` on that job) signs "this digest was built by this workflow from this commit", and the deploy step or the cluster can refuse images without one.
 - Pull requests from forks do not receive secrets by default. Do not work around this with `pull_request_target` plus a checkout of the fork's code; that is a well-known way to leak secrets.
 
 ### Pipeline speed: what breaks first
@@ -300,9 +301,9 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4        # pin third-party actions to a full commit SHA
+      - uses: actions/checkout@v5        # pin third-party actions to a full commit SHA
         with: { fetch-depth: 0 }         # full history for version calculation
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 10.0.x
           cache: true                    # keyed on packages.lock.json
@@ -328,7 +329,7 @@ jobs:
     outputs:
       digest: ${{ steps.push.outputs.digest }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: docker/login-action@v3
         with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
       - id: push
@@ -349,7 +350,7 @@ jobs:
     environment: staging                 # rules live in repo settings, not here
     permissions: { contents: read, id-token: write }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: azure/login@v2             # OIDC: no stored cloud secret
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -364,7 +365,7 @@ jobs:
     environment: production              # required reviewers, wait timer, main only
     permissions: { contents: read, id-token: write }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: azure/login@v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -451,7 +452,7 @@ resources:
     env: { POSTGRES_USER: ci, POSTGRES_PASSWORD: ci-only-password, POSTGRES_DB: gstsetu_test }
 ```
 
-In Azure Pipelines, a `deployment` job targeting an `environment` pauses until the environment's **approvals and checks** pass. Those are configured in the Environments page (approvers, business hours, Azure Monitor alerts, invoke REST API, exclusive lock), so the YAML stays free of policy that developers could edit away. Variable groups can be linked to Key Vault for values the deploy scripts need.
+In Azure Pipelines, a `deployment` job targeting an `environment` pauses until the environment's **approvals and checks** pass. Those are configured in the Environments page (approvers, business hours, Azure Monitor alerts, invoke REST API, exclusive lock), so the YAML stays free of policy that developers could edit away. Variable groups can be linked to Key Vault for values the deploy scripts need. One difference from the GitHub version: this pipeline promotes the **tag** `$(Build.BuildNumber)`. That is safe only if the registry makes tags immutable (Azure Container Registry supports locking a tag); otherwise capture the pushed digest in the Build stage as an output variable and deploy `$(image)@sha256:...`, exactly as the GitHub workflow does.
 
 ### The Dockerfile carries version metadata
 
@@ -482,7 +483,7 @@ jobs:
     runs-on: [self-hosted, local-docker]
     environment: local-staging
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: docker build -t localhost:5000/gstsetu/api:${{ github.run_number }} --build-arg GIT_SHA=${{ github.sha }} -f src/GstSetu.Api/Dockerfile .
       - run: docker push localhost:5000/gstsetu/api:${{ github.run_number }}
       - run: API_TAG=${{ github.run_number }} docker compose -f deploy/compose.staging.yaml up -d --wait

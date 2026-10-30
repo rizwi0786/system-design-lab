@@ -186,7 +186,7 @@ Design notes:
 - **Aggregates, not raw logs, in the relational store.** The raw log stays in the stream and object storage; only per-day counts per query land here. 30 days × 10–20 M rows per day is manageable with daily partitions, and old partitions are dropped.
 - **Score** for ranking is computed by the build job, not stored per row: for example `score = Σ searches(day) × 0.5^(age_days / 7)` (exponential decay with a 7-day half-life), multiplied by a quality factor such as click-through rate, and zeroed for queries with mostly zero results. Suggesting a query that returns nothing is worse than suggesting nothing.
 - **Blocklist** is applied twice: at build time (blocked phrases never enter the trie) and at serving time (phrases blocked since the last build are filtered from results).
-- **Snapshots are immutable files** with a version. `status` lets the build job validate a snapshot (size within ±20 % of the previous one, spot-check queries) before marking it `live`, and makes rollback a one-row update.
+- **Snapshots are immutable files** with a version. `status` lets the build job validate a snapshot (size within ±20 % of the previous one, spot-check queries) before marking it `live`, and makes rollback a one-row update: point `live` back at the previous version and instances load whatever version is live, older or newer.
 - **Personal history** isn't in this database. It is either on the device (local storage, the simplest and most private option) or in a key-value store keyed by user id with a short list of recent normalised queries.
 
 ## High-level architecture
@@ -430,8 +430,11 @@ public sealed record TrieSnapshot(string Version, SuggestionTrie Trie, DateTimeO
 
 public interface ISnapshotSource
 {
-    /// <summary>Returns a newer snapshot than <paramref name="currentVersion"/>, or null if there is none.</summary>
-    Task<TrieSnapshot?> TryLoadNewerAsync(string currentVersion, CancellationToken ct);
+    /// <summary>
+    /// Returns the snapshot currently marked live if its version differs from <paramref name="currentVersion"/>,
+    /// or null if nothing changed. "Differs", not "is newer": a rollback makes an older version live again.
+    /// </summary>
+    Task<TrieSnapshot?> TryLoadLiveAsync(string currentVersion, CancellationToken ct);
 }
 
 /// <summary>Readers always see one complete snapshot; a swap is a single reference write.</summary>
@@ -447,10 +450,10 @@ public sealed class InMemorySnapshotSource : ISnapshotSource
     private TrieSnapshot? _latest;
     public void Publish(TrieSnapshot snapshot) => Volatile.Write(ref _latest, snapshot);
 
-    public Task<TrieSnapshot?> TryLoadNewerAsync(string currentVersion, CancellationToken ct)
+    public Task<TrieSnapshot?> TryLoadLiveAsync(string currentVersion, CancellationToken ct)
     {
         var latest = Volatile.Read(ref _latest);
-        return Task.FromResult(latest is not null && string.CompareOrdinal(latest.Version, currentVersion) > 0 ? latest : null);
+        return Task.FromResult(latest is not null && !string.Equals(latest.Version, currentVersion, StringComparison.Ordinal) ? latest : null);
     }
 }
 
@@ -467,7 +470,7 @@ public sealed class SnapshotRefresher(ISnapshotSource source, SnapshotHolder hol
             try
             {
                 var current = holder.Current;
-                var next = await source.TryLoadNewerAsync(current.Version, stoppingToken);
+                var next = await source.TryLoadLiveAsync(current.Version, stoppingToken);
                 if (next is null) continue;
                 if (next.Trie.PhraseCount < current.Trie.PhraseCount * MaxShrink)
                 {
@@ -627,6 +630,8 @@ Points to notice:
 - `SuggestionTrie.Build` sorts once and inserts; there is no per-node sorting or heap. Ties are broken by text so builds are deterministic, which makes snapshot diffs meaningful.
 - `SnapshotHolder` publishes a fully built trie with one reference write. A request reads `Current` once and uses that snapshot throughout, so it can't see half of one version and half of another.
 - `SnapshotRefresher` refuses a snapshot that shrank by more than 20 %, a cheap guard against a broken build (an empty input file produces an empty trie that would otherwise go live everywhere).
+- The refresher follows the version marked live rather than "the highest version string". Comparing version strings ordinally is a trap anyway ("2026-10-19.10" sorts before "2026-10-19.9"), and following the live pointer is what makes rollback work.
+- While a new snapshot loads, the old one is still serving, so an instance briefly holds **two** tries. Size memory for that peak, not for one snapshot.
 - `SuggestService` treats personalisation and the blocklist as filters around the trie, so they can change every minute without a rebuild.
 - The endpoint sets `public` caching only for anonymous requests.
 
@@ -650,7 +655,7 @@ Points to notice:
 
 ### Scaling
 
-- **Read path**: stateless replicas, each with the whole trie. Scale out on CPU. Startup time (downloading and loading 5 GB) is the main operational cost; keep a warm pool and use readiness probes so instances join the load balancer only after the snapshot is loaded.
+- **Read path**: stateless replicas, each with the whole trie. Scale out on CPU. Memory must hold two snapshots during a swap (about 10 GB at the peak of a load). Startup time (downloading and loading 5 GB) is the main operational cost; keep a warm pool and use readiness probes so instances join the load balancer only after the snapshot is loaded.
 - **Multiple locales**: one trie per locale. If the total gets too large for one machine, route by locale to different pools.
 - **Sharding** becomes necessary only if one locale's trie outgrows a machine. Shard by **prefix range** (a–f, g–m, ...) with a router, but beware skew: far more phrases start with "s" than with "x". Use split points from the data, not the alphabet. Replication is preferable as long as it fits.
 - **Build pipeline**: scales with the log size; a daily job over 30 days of aggregates is minutes of work.
@@ -700,14 +705,14 @@ Autocomplete is a **degradable** feature. Every failure mode should end in "fewe
 
 ### Cost drivers (estimates)
 
-1. **Serving compute and memory**: 10–12 instances with ~8 GB RAM each per locale group. Modest.
+1. **Serving compute and memory**: 10–12 instances with ~16 GB RAM each per locale group (two 5 GB snapshots during a swap, plus the runtime and headroom). Modest.
 2. **CDN requests**: tens of thousands of requests per second of tiny responses. CDN pricing per request can exceed the bandwidth cost; check your provider's pricing model.
 3. **Log storage and the pipeline**: 60 GB/day raw, compressed to a few GB, plus a short-lived daily batch cluster.
 4. **People**: moderation of trending and blocklist requests is an ongoing operational cost.
 
 ### When a simpler design is enough
 
-An internal tool with 50,000 product names and 100 requests per second doesn't need any of this. Put the names in PostgreSQL with a `text_pattern_ops` index (or a trigram index for "contains" matching) and run `WHERE name LIKE 'iph%' ORDER BY popularity DESC LIMIT 10`; or load the 50,000 names into memory at startup and filter a sorted list. If you already run a search engine, its completion suggester gives you a production-grade prefix index without building a pipeline. Build the custom trie and log pipeline when traffic or ranking quality demands it.
+An internal tool with 50,000 product names and 100 requests per second doesn't need any of this. Put the names in PostgreSQL with a `text_pattern_ops` index (or a trigram index for "contains" matching) and run `WHERE name LIKE 'iph%' ORDER BY popularity DESC LIMIT 10`; or load the 50,000 names into memory at startup and filter a sorted list. If you already run a search engine, its completion suggester gives you a production-grade prefix index without building a pipeline. Build the custom trie and log pipeline when traffic or ranking quality demands it. The [scaling journey case study](#/lesson/m17-scaling-journey) shows the same habit across a whole product: add each piece only when a measured number forces it.
 
 ## Alternatives and trade-offs
 

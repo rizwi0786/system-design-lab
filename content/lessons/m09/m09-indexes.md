@@ -586,9 +586,9 @@ The in-browser engine is PGlite, which is built on PostgreSQL 18. Its plans show
 ```sql
 CREATE TABLE department (id int PRIMARY KEY, name text NOT NULL);
 INSERT INTO department VALUES
- (1,'Water Resources'),(2,'Road Construction'),(3,'Energy'),(4,'Urban Development'),(5,'Rural Works'),
+ (1,'Water Supply'),(2,'Roads and Street Lights'),(3,'Electricity'),(4,'Urban Development'),(5,'Sanitation'),
  (6,'Health'),(7,'Education'),(8,'Social Welfare'),(9,'Revenue and Land Reforms'),(10,'Panchayati Raj'),
- (11,'Public Health Engineering'),(12,'Transport');
+ (11,'Waste Management'),(12,'Transport');
 CREATE TABLE grievance (
   id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   tracking_token text        NOT NULL,
@@ -1093,7 +1093,7 @@ CREATE INDEX CONCURRENTLY grievance_tags_gin ON grievance USING gin (tags);
 
 **Q4.** `tags @> '{flood}'` uses the GIN index, and the planner can `BitmapAnd` it with a time condition, or simply filter the matches by date. If monsoon spikes make it slow, a partial GIN index on `WHERE filed_at > '2026-06-01'` rebuilt each season is an option.
 
-**Q5: no new index.** 50 runs a month on a replica. A sequential scan of one month's partition (see [Partitioning and sharding](#/lesson/m09-partitioning-sharding)) or a BRIN index on `filed_at` (a few MB, ideal because rows arrive in time order and are rarely moved) is enough. Do not add a B-tree on the primary for a monthly report.
+**Q5: no new index.** 50 runs a month on a replica. A sequential scan of one month's partition (see [Partitioning and sharding](#/lesson/m09-partitioning-sharding)) or a BRIN index on `filed_at` (a few MB, ideal because rows arrive in time order and are rarely moved) is enough. Do not add a B-tree on the primary for a monthly report. Remember that a physical streaming replica cannot have indexes of its own: every index you want on the replica must be built on the primary and is then maintained by every primary write. If the report ever needs its own indexes, move it to a logically replicated reporting database or a warehouse.
 
 **Write amplification.** Non-BRIN indexes: primary key, worklist, citizen, token, GIN (say 2 tags per row) → 1 + 1 + 1 + 1 + 2 = 6 entries per insert, and the worklist index only for active rows (new grievances are active, so it counts). Peak: 150 × 6 = 900 index entries per second. A status update touches a column in the worklist predicate, so it is non-HOT: up to 6 entries each (the partial index skips the new version once the grievance is resolved), about 10 per second on average. An `assigned_officer` update touches no indexed column, so with `fillfactor = 90` most are HOT and touch no index.
 

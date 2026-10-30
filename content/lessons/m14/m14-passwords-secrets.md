@@ -53,7 +53,7 @@ But thieves are clever. If everyone's impression is made the same way, they can 
 
 Finally, the bank makes impression-making **deliberately slow**: the wax takes a quarter of a second to set. For one customer at the counter, that's nothing. For a thief trying 10 million keys against 12 lakh customers, it's centuries. That is a **slow hash** (also called a key-derivation or password-hashing function).
 
-**Application secrets.** Your app also has keys: the database password, the SMS gateway key, the token-signing key. Writing them in the code is like taping the strongroom key under the manager's desk. Everyone who ever sees the code, including every former contractor and every backup, has the key. Instead, keep them in a **vault** that hands keys only to the right machine, logs every use, and lets you change the locks (**rotation**) without closing the bank.
+**Application secrets.** Your app also has keys: the database password, the SMS gateway key, the token-signing key. Writing them in the code is like taping the strongroom key under the manager's desk. Everyone who ever sees the code, including every former employee or freelancer and every backup, has the key. Instead, keep them in a **vault** that hands keys only to the right machine, logs every use, and lets you change the locks (**rotation**) without closing the bank.
 
 ## First-principles explanation
 
@@ -80,7 +80,7 @@ Three defences work together:
 | **bcrypt** | Slow, fixed small memory | cost ≥ 10 | Widely supported. Only the first 72 bytes of the password are used |
 | **PBKDF2-HMAC-SHA256** | Repeats HMAC many times | 600,000 iterations | Built into .NET (`Rfc2898DeriveBytes.Pbkdf2`), FIPS-approved. Not memory-hard, so GPUs help attackers more |
 
-ASP.NET Core Identity's default `PasswordHasher<TUser>` uses PBKDF2 with HMAC-SHA512 and, since .NET 7, 100,000 iterations, with a 128-bit salt. That is reasonable, and if you use Identity you should keep it, increasing `IterationCount` in `PasswordHasherOptions` if your hardware allows.
+ASP.NET Core Identity's default `PasswordHasher<TUser>` uses PBKDF2 with HMAC-SHA512 and, since .NET 7, 100,000 iterations, with a 128-bit salt and a 256-bit output. The format is versioned, so old hashes keep verifying. 100,000 is below OWASP's current figure for PBKDF2-HMAC-SHA512 (210,000 iterations), so if you use Identity keep its hasher but raise `PasswordHasherOptions.IterationCount` after measuring login cost; Identity then returns `SuccessRehashNeeded` for older hashes and upgrades them on the next sign-in.
 
 **Tune by measurement, not by copying numbers.** Pick parameters so that one hash takes roughly 50–250 ms on your production servers, then check the cost at peak (below).
 
@@ -545,7 +545,7 @@ if (builder.Environment.IsProduction())
 {
     builder.Configuration.AddAzureKeyVault(
         new Uri($"https://{builder.Configuration["KeyVaultName"]}.vault.azure.net/"),
-        new DefaultAzureCredential(),   // managed identity in Azure, your login on a dev machine
+        new ManagedIdentityCredential(),   // production: a specific credential, not the DefaultAzureCredential probe chain
         new AzureKeyVaultConfigurationOptions { ReloadInterval = TimeSpan.FromMinutes(5) });
 }
 // Secret "Security--Pepper--Keys--p1" becomes configuration key "Security:Pepper:Keys:p1".
@@ -1214,7 +1214,7 @@ Microsoft's ASP.NET Core Data Protection system is a production key ring of exac
 :::
 
 :::exercise id=m14-passwords-secrets-ex5 difficulty=advanced kind=hld title="Secrets management for 25 services across cloud and on-prem"
-An infrastructure consultancy runs 25 services: 18 on AKS in Azure (Central India), and 7 legacy ASP.NET Core apps on on-prem IIS servers in Gurgaon. Today, connection strings, SMTP passwords, map API keys and JWT signing keys live in `appsettings.Production.json` files copied by hand, and some are committed to git. There are three environments (dev, UAT, production). An auditor requires: no secrets in source control, quarterly rotation of all secrets, rotation within 4 hours of a suspected leak, and an access log of who read which production secret.
+A travel-booking company (flights, hotels and bus tickets) runs 25 services: 18 on AKS in Azure (Central India), and 7 legacy ASP.NET Core apps on on-prem IIS servers in Gurgaon. Today, connection strings, SMTP passwords, map and payment-gateway API keys and JWT signing keys live in `appsettings.Production.json` files copied by hand, and some are committed to git. There are three environments (dev, UAT, production). An auditor requires: no secrets in source control, quarterly rotation of all secrets, rotation within 4 hours of a suspected leak, and an access log of who read which production secret.
 
 Design the target architecture and the rotation process, including how the on-prem servers authenticate, how database credentials rotate without downtime, how CI/CD deploys without seeing production secrets, and what happens if Key Vault is unavailable.
 ::acceptance

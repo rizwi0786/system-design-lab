@@ -22,7 +22,7 @@ references:
     url: https://docs.github.com/get-started/writing-on-github/working-with-advanced-formatting/creating-diagrams
 ---
 
-Software is invisible. You cannot walk around a running program the way a site engineer walks around a half-built flyover. Diagrams are how engineers make the invisible visible, so a team can agree on a design before spending weeks building it. UML is the most widely known standard set of diagram symbols. This lesson explains what it is, which parts of it are worth learning, when a diagram is the wrong tool, and how to write diagrams as plain text with Mermaid.
+Software is invisible. You cannot walk around a running program the way you walk around a new flat before you rent it. Diagrams are how engineers make the invisible visible, so a team can agree on a design before spending weeks building it. UML is the most widely known standard set of diagram symbols. This lesson explains what it is, which parts of it are worth learning, when a diagram is the wrong tool, and how to write diagrams as plain text with Mermaid.
 
 ## Learning objectives
 
@@ -134,7 +134,7 @@ Martin Fowler describes three modes in which people use UML. They differ in how 
 
 **1. UML as a sketch.** Quick, partial diagrams to think and to talk. Drawn on a whiteboard, a notebook or a few lines of Mermaid. They show only what matters for the conversation and are often thrown away afterwards. This is how most good engineers use UML today. Example: during a design discussion, you sketch four boxes to show that `Booking` should not hold a reference to `Driver` directly, only to `Tanker`.
 
-**2. UML as a blueprint.** Detailed, complete diagrams that someone else will build from, like an architect's drawings for a contractor. Popular in the 1990s and 2000s, especially with expensive modelling tools. Still useful in a few places: interface contracts between two companies, safety-critical systems, regulated domains, and outsourcing where the builders are not the designers. The cost is high: a blueprint must be kept correct, and it goes out of date the moment code changes without it.
+**2. UML as a blueprint.** Detailed, complete diagrams that someone else will build from, like the full set of drawings a car factory works from. Popular in the 1990s and 2000s, especially with expensive modelling tools. Still useful in a few places: interface contracts between two companies, safety-critical systems, regulated domains, and outsourcing where the builders are not the designers. The cost is high: a blueprint must be kept correct, and it goes out of date the moment code changes without it.
 
 **3. UML as a programming language.** Diagrams detailed enough to generate the whole program (model-driven architecture). This has a niche in embedded and automotive tooling, but it never became mainstream for business software. Code turned out to be a better language for code.
 
@@ -607,6 +607,8 @@ var app = builder.Build();
 // POST a Markdown document as text/plain. Returns the findings as JSON.
 app.MapPost("/lint", async (HttpRequest request, DiagramLinter linter, CancellationToken ct) =>
 {
+    // Docs files are small; refuse anything large before reading it into memory.
+    if (request.ContentLength > 1_000_000) return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
     using var reader = new StreamReader(request.Body);
     var markdown = await reader.ReadToEndAsync(ct);
     var findings = linter.Lint("request.md", markdown);
@@ -1221,7 +1223,7 @@ The failure message lists each problem as `file:line rule message`, which most C
 - **Design reviews and RFCs.** A design document for a new feature typically contains one or two small diagrams: a sequence diagram of the main flow and perhaps a class or state diagram. Reviewers comment on the picture before code exists.
 - **Pull requests.** GitHub and Azure DevOps render Mermaid in Markdown files and in pull request descriptions, so a reviewer can see "here is the new state" next to the code change.
 - **Architecture documentation.** Teams combine UML with the [C4 model](#/lesson/m05-c4-model): C4 for the big picture (systems and containers), UML class, sequence and state diagrams for the details inside one service.
-- **Government and infrastructure projects.** Tenders and detailed project reports often require process flows (activity diagrams), data models and deployment diagrams for hosting approval. Clear, standard notation makes these easier for evaluators to assess.
+- **Regulated and public-sector systems.** Banks, insurers and government departments often ask vendors for process flows (activity diagrams), data models and deployment diagrams, for example before approving where personal data is hosted. Clear, standard notation makes these easier for reviewers and auditors to assess.
 - **Interviews.** LLD rounds expect class diagrams and often a sequence or state diagram. HLD rounds expect architecture and sequence diagrams. Speed and clarity matter more than perfect notation.
 - **Incident reviews.** A sequence diagram of "what actually happened" during an outage, with timestamps, is often the clearest part of a post-incident report.
 

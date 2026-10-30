@@ -1764,9 +1764,9 @@ Edge cases worth a test: unsubscribing inside `OnNext`, subscribing the same obs
 
 - **.NET itself.** `IOptionsMonitor<T>.OnChange` notifies you when configuration reloads and returns an `IDisposable` to unsubscribe. `IChangeToken` does the same for file providers. `DiagnosticListener` and `ActivityListener` are observers that OpenTelemetry uses to receive tracing data from ASP.NET Core and `HttpClient`.
 - **Blazor and UI frameworks.** Components subscribe to state-container events and must unsubscribe in `Dispose`, otherwise a component that was navigated away from keeps re-rendering. This is the lapsed-listener leak in its most common modern form.
-- **Live dashboards.** A system like a construction-progress dashboard can push updates to browsers through SignalR: an in-process event ("progress updated for chainage 12+400") triggers a hub broadcast to all connected clients watching that project.
+- **Live dashboards.** A system like a food-delivery order tracker can push updates to browsers through SignalR: an in-process event ("order 4512 is out for delivery") triggers a hub broadcast to all connected clients watching that order.
 - **Commerce.** "Order placed" fans out to stock reservation, email, loyalty points and analytics: in-process handlers inside one service, broker messages via an outbox across services.
-- **IoT and telemetry.** Sensor readings from water tanks, bridge strain gauges or energy meters are streams; `IObservable<T>` plus Rx operators (buffer, throttle, sliding window) or a bounded `Channel<T>` are natural fits.
+- **IoT and telemetry.** Sensor readings from water tanks, smart electricity meters or fitness wearables are streams; `IObservable<T>` plus Rx operators (buffer, throttle, sliding window) or a bounded `Channel<T>` are natural fits.
 
 ## Interview questions
 

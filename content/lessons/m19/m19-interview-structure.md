@@ -122,7 +122,7 @@ These numbers are a sensible starting plan, not a law. Some interviewers want to
 
 ### What interviewers score
 
-Most companies use a written rubric with 4–6 dimensions, each scored on a scale (often 1–4), with **evidence notes** for each score. Exact wording differs, but the dimensions are remarkably consistent:
+Many companies use a written rubric with 4–6 dimensions, each scored on a scale (often 1–4), with **evidence notes** for each score. Every company words and weights its rubric differently, and none publishes the internal version, so treat the table below as a typical shape rather than any one company's form. The dimensions themselves are remarkably consistent:
 
 | Dimension | Weak evidence | Strong evidence |
 |---|---|---|
@@ -141,7 +141,7 @@ Most companies use a written rubric with 4–6 dimensions, each scored on a scal
 
 | | LLD round | HLD round |
 |---|---|---|
-| Typical prompt | "Design a parking lot / elevator / splitwise / library system" | "Design a URL shortener / chat / ride-hailing / ticketing system" |
+| Typical prompt | "Design a parking lot / elevator / [expense-splitting app](#/lesson/m18-splitwise) / [LRU cache](#/lesson/m18-lru-cache)" | "Design a URL shortener / chat / ride-hailing / [web crawler](#/lesson/m17-web-crawler) / [job scheduler](#/lesson/m17-job-scheduler)" |
 | Unit of design | Classes, interfaces, methods, states | Services, stores, caches, queues, regions |
 | Requirements focus | Entities, operations, rules, edge cases ("can a car park in two slots?") | Scale, latency, availability, consistency |
 | Key artefacts | Class diagram, state diagram, method signatures, sometimes code | Architecture diagram, API, data model, capacity numbers |
@@ -211,38 +211,38 @@ This is the rhythm of a good session. The candidate drives, but checks in at eac
 
 ## Step-by-step example
 
-Let's walk through the first 15 minutes of a 45-minute round: "Design a system that sends alerts to site engineers when concrete test results fail."
+Let's walk through the first 15 minutes of a 45-minute round: "Design a system that alerts kitchen managers when a food-safety check fails at a chain of cloud kitchens."
 
 ### Minute 0–5: clarify
 
 Questions, grouped:
 
-- **Users and features**: Who gets alerts: site engineers only, or also project managers? Channels: SMS, email, in-app push? Do they need to acknowledge an alert?
-- **Scale**: How many projects and engineers? How many test results a day?
-- **Quality**: How fast must an alert arrive? Can we ever drop one? Do we need an audit trail for disputes with the contractor?
+- **Users and features**: Who gets alerts: the kitchen manager only, or also the area manager and the food-safety lead? Channels: SMS, email, in-app push? Do they need to acknowledge an alert?
+- **Scale**: How many kitchens and staff? How many checks (fridge temperatures, cooking temperatures, hygiene checklists) a day?
+- **Quality**: How fast must an alert arrive? Can we ever drop one? Do we need an audit trail for food-safety inspections and customer complaints?
 
-Assumed answers (stated out loud, confirmed): 400 active projects, 6,000 engineers, about 20,000 test results a day, about 3 % fail. Alerts via push and SMS within 2 minutes. Must not be lost. Acknowledgement and an audit trail required. Lab system integration is out of scope: results arrive through an existing API.
+Assumed answers (stated out loud, confirmed): 400 kitchens, 6,000 staff, about 20,000 check results a day, about 3 % fail. Alerts via push and SMS within 2 minutes. Must not be lost. Acknowledgement and an audit trail required. Sensor integration is out of scope: results arrive through the existing sensor platform's API.
 
 Write them down:
 
-- **FR**: receive results, detect failure, notify the right engineers, record acknowledgement.
+- **FR**: receive results, detect failure, notify the right managers, record acknowledgement.
 - **NFR**: alert within 2 min at p99, no lost alerts, 7-year audit trail.
-- **Out of scope**: lab integration, escalation policies (mention as an extension).
+- **Out of scope**: sensor integration, escalation policies (mention as an extension).
 
 ### Minute 5–8: estimate
 
-- Results: 20,000 a day ÷ 86,400 s ≈ 0.25 per second on average. Even ×10 for a working-hours peak, it's about 2.5 per second.
+- Results: 20,000 a day ÷ 86,400 s ≈ 0.25 per second on average. Even ×10 for a meal-time peak, it's about 2.5 per second.
 - Failures: 3 % of 20,000 = 600 a day. Each notifies about 3 people over 2 channels, so about 3,600 messages a day.
 - Storage: 20,000 results × about 2 KB ≈ 40 MB a day, about 15 GB a year. Trivial for PostgreSQL.
 
-**Say the conclusion:** "This is a low-throughput system. Scale isn't the challenge. Reliability is: never losing an alert, and proving delivery for disputes. I'll keep it simple: one service, PostgreSQL, a queue for delivery retries."
+**Say the conclusion:** "This is a low-throughput system. Scale isn't the challenge. Reliability is: never losing an alert, and proving delivery for inspections and complaints. I'll keep it simple: one service, PostgreSQL, a queue for delivery retries."
 
 That sentence is worth more than the arithmetic. It shows the numbers drove a decision.
 
 ### Minute 8–13: API and data model
 
-- `POST /test-results` (from the lab API), `POST /alerts/{id}/ack`, `GET /alerts?engineer=…`
-- Tables: `test_results`, `alerts` (one per result × recipient), `deliveries` (one per alert × channel, with status and attempt count).
+- `POST /check-results` (from the sensor platform), `POST /alerts/{id}/ack`, `GET /alerts?manager=…`
+- Tables: `check_results`, `alerts` (one per result × recipient), `deliveries` (one per alert × channel, with status and attempt count).
 
 ### Minute 13–23: high-level design
 
@@ -933,12 +933,12 @@ Why the must-have cap matters: a candidate who is brilliant on depth but can't c
 - Capping only StrongHire and Hire, but forgetting LeanHire.
 :::
 
-:::exercise id=m19-interview-structure-ex5 difficulty=advanced kind=hld title="Run a timed round: inspection photo uploads"
-Run this as a real timed 45-minute round, alone or with a partner. Prompt: **"Design a system where site engineers upload inspection photos from their phones, often on weak 3G or 4G networks, and project managers review them on a web dashboard."**
+:::exercise id=m19-interview-structure-ex5 difficulty=advanced kind=hld title="Run a timed round: proof-of-delivery photo uploads"
+Run this as a real timed 45-minute round, alone or with a partner. Prompt: **"Design a system where parcel delivery riders upload proof-of-delivery photos from their phones, often on weak 3G or 4G networks, and the operations team reviews them on a web dashboard when a customer disputes a delivery."**
 
 Use the time plan from this lesson. At the end, your board should contain the starter graph evolved into your design. In your notes, record: the assumptions you stated, your estimate, the checkpoint minute when your design was complete, your chosen deep dive, and one failure mode you discussed.
 ::acceptance
-- Assumptions with numbers (engineers, photos per day, photo size, freshness target).
+- Assumptions with numbers (riders, photos per day, photo size, freshness target).
 - An estimate that drives at least one decision, for example direct-to-storage uploads.
 - An end-to-end design by about minute 23 covering upload, storage, metadata, review and thumbnails.
 - Uploads designed for weak networks (resumable or chunked, retried safely).
@@ -946,7 +946,7 @@ Use the time plan from this lesson. At the end, your board should contain the st
 ::hint
 Photos are big, and networks are weak. Should photo bytes go through your API servers at all?
 ::hint
-Estimate: engineers × photos per day × MB per photo. Then think about upload time on a slow link.
+Estimate: riders × photos per day × MB per photo. Then think about upload time on a slow link.
 ::hint
 Presigned URLs let the phone upload straight to object storage. The API only handles metadata.
 ::hint
@@ -957,8 +957,8 @@ Shape: phone → API (request upload URL) → object storage (direct upload) →
 ```json
 {
   "nodes": [
-    { "id": "phone", "type": "client", "label": "Engineer phone app", "props": { "rps": 20 } },
-    { "id": "web", "type": "client", "label": "PM web dashboard" },
+    { "id": "phone", "type": "client", "label": "Rider phone app", "props": { "rps": 20 } },
+    { "id": "web", "type": "client", "label": "Ops web dashboard" },
     { "id": "api", "type": "app-server", "label": "API", "props": { "instances": 2 } },
     { "id": "db", "type": "database", "label": "PostgreSQL" }
   ],
@@ -970,12 +970,12 @@ Shape: phone → API (request upload URL) → object storage (direct upload) →
 }
 ```
 ::solution
-**Assumptions (stated at minute 3):** 3,000 engineers, 40 photos each per working day, 3 MB per photo after in-app compression, 8 working hours, photos visible to PMs within 5 minutes, kept 7 years for contract disputes.
+**Assumptions (stated at minute 3):** 3,000 riders, 40 deliveries (one photo each) per working day, 3 MB per photo (high resolution, so labels and damage are readable), 8 working hours, about 300 working days a year, photos visible to the ops team within 5 minutes, kept 3 years for delivery disputes and insurance claims.
 
 **Estimate (minutes 5–8):**
 
 - Photos/day = 3,000 × 40 = 120,000. Over 8 h (28,800 s) ≈ 4 per second average, assume ×3 at peaks ≈ 12 per second.
-- Bytes/day = 120,000 × 3 MB = 360 GB/day, about 90 TB/year (assuming about 250 working days). 7-year retention means hundreds of terabytes, so object storage with lifecycle tiering, not a database.
+- Bytes/day = 120,000 × 3 MB = 360 GB/day, about 108 TB/year (360 GB × 300 days). 3-year retention means over 300 TB, so object storage with lifecycle tiering, not a database.
 - Upload time on a 1 Mbit/s link: 3 MB = 24 Mbit, about 24 s per photo. Interruptions are normal.
 - **Decision:** photo bytes go straight from phone to object storage with presigned URLs and resumable (multipart) uploads. The API handles only metadata.
 
@@ -984,11 +984,11 @@ Shape: phone → API (request upload URL) → object storage (direct upload) →
 ```json
 {
   "nodes": [
-    { "id": "phone", "type": "client", "label": "Engineer app (offline queue, resumable upload)", "props": { "rps": 12 } },
-    { "id": "web", "type": "client", "label": "PM web dashboard" },
+    { "id": "phone", "type": "client", "label": "Rider app (offline queue, resumable upload)", "props": { "rps": 12 } },
+    { "id": "web", "type": "client", "label": "Ops web dashboard" },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
-    { "id": "api", "type": "app-server", "label": "Inspection API (metadata, presigned URLs)", "props": { "instances": 2 } },
-    { "id": "db", "type": "database", "label": "PostgreSQL (inspections, photo metadata)", "props": { "replicas": 1, "multiAz": true } },
+    { "id": "api", "type": "app-server", "label": "Delivery-proof API (metadata, presigned URLs)", "props": { "instances": 2 } },
+    { "id": "db", "type": "database", "label": "PostgreSQL (deliveries, photo metadata)", "props": { "replicas": 1, "multiAz": true } },
     { "id": "obj", "type": "object-storage", "label": "Object storage (originals, lifecycle to cold tier)" },
     { "id": "q", "type": "queue", "label": "Upload-completed events" },
     { "id": "thumb", "type": "worker", "label": "Thumbnail and EXIF worker", "props": { "instances": 2 } },
@@ -1012,11 +1012,11 @@ Shape: phone → API (request upload URL) → object storage (direct upload) →
 }
 ```
 
-**Checkpoint (about minute 22):** "Upload, storage, processing and review are all in place. I can go deeper on resumable uploads over weak networks, or on retention and cost for 90 TB a year. Which do you prefer?"
+**Checkpoint (about minute 22):** "Upload, storage, processing and review are all in place. I can go deeper on resumable uploads over weak networks, or on retention and cost for about 110 TB a year. Which do you prefer?"
 
 **Deep dive (resumable uploads):** the app writes each photo to a local queue first (works offline). It requests a photo id and a multipart upload from the API, uploads parts of about 1 MB each, and retries failed parts. Completion is confirmed both by the storage event and by the app's confirm call. Either one can mark the row uploaded, so the step is idempotent on photo id. Duplicate taps reuse the same client-generated photo id.
 
-**Failure mode:** the thumbnail worker falls behind, for example after a 3-hour network outage on a big site when 5,000 photos arrive at once. The queue absorbs the burst. The dashboard shows "processing" placeholders. An alert fires when the oldest queue message is more than 10 minutes old. Workers scale on queue depth.
+**Failure mode:** the thumbnail worker falls behind, for example after a 3-hour mobile network outage in one city when 5,000 photos arrive at once. The queue absorbs the burst. The dashboard shows "processing" placeholders. An alert fires when the oldest queue message is more than 10 minutes old. Workers scale on queue depth.
 
 **Why not simpler?** Sending photos through the API would tie up API instances for about 24 s per photo on slow links, and every API deploy would break uploads in progress. Why not more complex? About 12 uploads per second doesn't need microservices or a stream platform. One API, one worker type and managed storage are enough.
 ::mistakes
@@ -1026,7 +1026,7 @@ Shape: phone → API (request upload URL) → object storage (direct upload) →
 - Storing photos as database blobs, which makes backups and costs grow fast.
 - Spending the deep dive on the dashboard UI instead of the risky part.
 ::extensions
-Run the same prompt again as a 60-minute round and use the second deep dive for security: who may see which project's photos, signed URL expiry, and tamper evidence for contract disputes.
+Run the same prompt again as a 60-minute round and use the second deep dive for security: who may see which customer's photos (they show doorsteps and sometimes faces), signed URL expiry, and tamper evidence for delivery disputes.
 :::
 
 ## Automated testing

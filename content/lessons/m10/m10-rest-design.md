@@ -22,7 +22,7 @@ references:
     url: https://martinfowler.com/articles/richardsonMaturityModel.html
 ---
 
-An API is a promise to people you may never meet: the mobile developer in another company, the data team writing a nightly script, the integration partner who will read your docs once and then copy-paste for years. A good REST API is one they can *guess*: if `GET /v1/inspections/{id}` exists, they expect `GET /v1/projects/{code}/inspections` to list them, errors to look the same everywhere, and lists to page the same way. This lesson turns that "guessability" into concrete rules and an ASP.NET Core implementation.
+An API is a promise to people you may never meet: the mobile developer in another company, the data team writing a nightly script, the integration partner who will read your docs once and then copy-paste for years. A good REST API is one they can *guess*: if `GET /v1/appointments/{id}` exists, they expect `GET /v1/clinics/{code}/appointments` to list them, errors to look the same everywhere, and lists to page the same way. This lesson turns that "guessability" into concrete rules and an ASP.NET Core implementation.
 
 ## Learning objectives
 
@@ -53,7 +53,7 @@ You also get a standard slip back: "Done", "No such file", "You're not allowed",
 
 REST (REpresentational State Transfer) is that office, over HTTP:
 
-- Each file is a **resource**, and its address is a **URI** (`/v1/inspections/4471`).
+- Each file is a **resource**, and its address is a **URI** (`/v1/appointments/4471`).
 - The small set of actions are the **HTTP methods** (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`).
 - The standard slip is the **status code** plus a standard error form (**Problem Details**).
 - The batch token is a **pagination cursor**.
@@ -70,14 +70,14 @@ Why does it work so well at scale? Because it reuses what HTTP infrastructure al
 
 ### Resources and URIs
 
-Our running example: a **site-quality platform** for highway construction. Site engineers raise *inspections* (a quality check at a location, measured as *chainage* — distance along the road, like `112+450` meaning km 112 + 450 m). Inspections belong to a *project package* (`NH48-PKG3`), can have *defects*, and go through *Draft → Submitted → Approved/Rejected*.
+Our running example: **CityCare**, a chain of clinics across Indian cities. Patients use the CityCare app to raise *appointment requests*: a short title ("Knee pain after running"), a self-reported *severity* (low, medium, high, critical) that the front desk uses for triage, and an optional *preferred time* such as `10:30`. Each appointment belongs to a *clinic* (`BLR-KRM` is the Koramangala clinic in Bengaluru), can have *lab reports* attached, and goes through *Draft → Submitted → Approved/Rejected* as the clinic's doctors review requests and either confirm a slot or turn them down.
 
 Rules for URIs:
 
-1. **Nouns, plural for collections.** `/v1/projects/NH48-PKG3/inspections`, not `/v1/getInspections`.
-2. **Identify one item by id.** `/v1/inspections/0192f3a0-...`. Use ids that don't leak information or invite guessing: UUIDs (v7 sorts by time, which keeps database indexes friendly) or opaque strings. Sequential integers reveal volumes ("we're inspection 4,471") and invite enumeration.
-3. **Nest one level, for ownership.** `/v1/projects/{code}/inspections` (inspections *of* a project) is natural. Deeper nesting (`/projects/{code}/inspections/{id}/defects/{defectId}/photos/{photoId}`) makes URLs fragile; give each resource one canonical address (`/v1/defects/{id}`) once it has a globally unique id.
-4. **Lower-case, kebab-case, no file extensions.** `/v1/defect-categories`, with the format chosen by `Accept`, not `.json`.
+1. **Nouns, plural for collections.** `/v1/clinics/BLR-KRM/appointments`, not `/v1/getAppointments`.
+2. **Identify one item by id.** `/v1/appointments/0192f3a0-...`. Use ids that don't leak information or invite guessing: UUIDs (v7 sorts by time, which keeps database indexes friendly) or opaque strings. Sequential integers reveal volumes ("we're appointment 4,471") and invite enumeration.
+3. **Nest one level, for ownership.** `/v1/clinics/{code}/appointments` (appointments *of* a clinic) is natural. Deeper nesting (`/clinics/{code}/appointments/{id}/lab-reports/{reportId}/files/{fileId}`) makes URLs fragile; give each resource one canonical address (`/v1/lab-reports/{id}`) once it has a globally unique id.
+4. **Lower-case, kebab-case, no file extensions.** `/v1/visit-types`, with the format chosen by `Accept`, not `.json`.
 5. **Version from day one** when external clients exist: `/v1/...` is the simplest and most visible scheme ([see versioning](#/lesson/m10-versioning-contracts)).
 6. **Query strings are for optional modifiers** of a collection: filtering, sorting, paging, field selection. Never for the identity of a single resource.
 
@@ -85,22 +85,28 @@ Rules for URIs:
 
 | Operation | Request | Success | Typical errors |
 |---|---|---|---|
-| List inspections of a project | `GET /v1/projects/{code}/inspections?status=submitted&sort=-raisedAt&limit=25` | `200` with a page | `400` bad filter, `404` unknown project |
-| Create an inspection | `POST /v1/projects/{code}/inspections` | `201 Created` + `Location: /v1/inspections/{id}` + body | `400`/`422` validation, `401`, `403` |
-| Read one | `GET /v1/inspections/{id}` | `200` + `ETag` | `404` |
-| Replace | `PUT /v1/inspections/{id}` + `If-Match` | `200` or `204` | `400`, `404`, `409`, `412`, `428` |
-| Partial update | `PATCH /v1/inspections/{id}` (`application/merge-patch+json`) | `200` | `400`, `404`, `409`, `412` |
-| Delete a draft | `DELETE /v1/inspections/{id}` | `204` | `404`, `409` (not a draft) |
-| Submit for approval | `POST /v1/inspections/{id}/submission` | `200` (or `201` if you model a submission resource) | `404`, `409` (wrong state) |
-| Long-running export | `POST /v1/projects/{code}/inspection-exports` | `202 Accepted` + `Location` of the job | `400`, `429` |
+| List appointments of a clinic | `GET /v1/clinics/{code}/appointments?status=submitted&sort=-raisedAt&limit=25` | `200` with a page | `400` bad filter, `404` unknown clinic |
+| Create an appointment | `POST /v1/clinics/{code}/appointments` | `201 Created` + `Location: /v1/appointments/{id}` + body | `400`/`422` validation, `401`, `403` |
+| Read one | `GET /v1/appointments/{id}` | `200` + `ETag` | `404` |
+| Replace | `PUT /v1/appointments/{id}` + `If-Match` | `200` or `204` | `400`, `404`, `409`, `412`, `428` |
+| Partial update | `PATCH /v1/appointments/{id}` (`application/merge-patch+json`) | `200` | `400`, `404`, `409`, `412` |
+| Delete a draft | `DELETE /v1/appointments/{id}` | `204` | `404`, `409` (not a draft) |
+| Submit for approval | `POST /v1/appointments/{id}/submission` | `200` (or `201` if you model a submission resource) | `404`, `409` (wrong state) |
+| Long-running export | `POST /v1/clinics/{code}/appointment-exports` | `202 Accepted` + `Location` of the job | `400`, `429` |
+
+Three details that RFC 9110 makes precise and that reviewers often catch:
+
+- **Safe and idempotent are different promises.** `GET`, `HEAD` and `OPTIONS` are *safe* (no state change the client asked for). `PUT` and `DELETE` are *idempotent* (sending the same request twice leaves the same state as sending it once), so clients and proxies may retry them. `POST` is neither, and `PATCH` is **not idempotent by default**: a JSON Merge Patch that sets fields usually behaves idempotently, but a patch such as "append a note" does not, so never assume a `PATCH` is safe to replay.
+- **Conditional requests.** `GET` returns an `ETag` (a version tag of the representation). A client that wants to change the resource sends it back in `If-Match`; if someone else changed it in between, the server answers **412 Precondition Failed** and nothing is overwritten (lost-update protection). If your API *requires* `If-Match` and the client left it out, answer **428 Precondition Required**. Use **409 Conflict** for "your request is valid but conflicts with the resource's current state" (cancelling an already-approved appointment), not for a stale `If-Match`.
+- **Retries of creates.** A patient on a weak signal taps "Request appointment", the response is lost, and the app retries. Without protection, the clinic now has two requests. Accept an `Idempotency-Key` header on `POST` creates and return the original `201` for a repeated key ([see idempotency](#/lesson/m10-idempotency)).
 
 ### Actions that aren't CRUD
 
 "Submit", "approve", "reject", "recalculate" are real business operations. Three honest ways to model them:
 
-1. **Sub-resource as a noun**: `POST /v1/inspections/{id}/submission`, `POST /v1/inspections/{id}/approval`. Reads well, keeps the method meaningful (`POST` = "do something that creates a fact"), and gives you a place for the action's data (`{ "remarks": "Re-check after curing" }`).
-2. **State field via PATCH**: `PATCH /v1/inspections/{id}` with `{ "status": "submitted" }`. Simple, but it hides business rules inside a generic update and makes permissions harder ("engineers may edit titles but only managers may approve").
-3. **Custom method** (Google's API style): `POST /v1/inspections/{id}:submit`. Explicit and common in some large public APIs, but less familiar to many clients.
+1. **Sub-resource as a noun**: `POST /v1/appointments/{id}/submission`, `POST /v1/appointments/{id}/approval`. Reads well, keeps the method meaningful (`POST` = "do something that creates a fact"), and gives you a place for the action's data (`{ "remarks": "Please bring your previous blood reports" }`).
+2. **State field via PATCH**: `PATCH /v1/appointments/{id}` with `{ "status": "submitted" }`. Simple, but it hides business rules inside a generic update and makes permissions harder ("patients may edit titles but only doctors may approve").
+3. **Custom method** (Google's API style): `POST /v1/appointments/{id}:submit`. Explicit and common in some large public APIs, but less familiar to many clients.
 
 We use option 1. Whatever you pick, use it consistently and return **409 Conflict** when the current state forbids the transition.
 
@@ -110,18 +116,19 @@ Every error from every endpoint should have the same shape, so a client writes *
 
 ```json
 {
-  "type": "https://api.sitequality.example/problems/invalid-transition",
-  "title": "Inspection cannot be submitted",
+  "type": "https://api.citycare.example/problems/invalid-transition",
+  "title": "Appointment cannot be submitted",
   "status": 409,
-  "detail": "Inspection 0192f3a0-7c1e-7b8e-9d2a-4e1f0c3b5a77 is Approved; only Draft inspections can be submitted.",
-  "instance": "/v1/inspections/0192f3a0-7c1e-7b8e-9d2a-4e1f0c3b5a77/submission",
+  "detail": "Appointment 0192f3a0-7c1e-7b8e-9d2a-4e1f0c3b5a77 is Approved; only Draft appointments can be submitted.",
+  "instance": "/v1/appointments/0192f3a0-7c1e-7b8e-9d2a-4e1f0c3b5a77/submission",
   "traceId": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 }
 ```
 
 - **`type`** is a stable URI that identifies the *kind* of problem. Clients branch on it (`if type == ".../invalid-transition"`), never on the human-readable `detail`. Ideally it resolves to a docs page.
 - **`title`** is a short summary of that type; **`detail`** explains this occurrence.
-- **`status`** repeats the HTTP status for convenience.
+- **`status`** repeats the HTTP status for convenience; the HTTP status line is still authoritative.
+- If you have no specific problem type, the RFC's default is `"type": "about:blank"`, and then `title` should be the standard reason phrase for the status ("Not Found"). Define your own `type` URIs only for problems clients need to tell apart.
 - **Extensions** are allowed: `traceId` lets support find the logs; validation problems add `errors`:
 
 ```json
@@ -131,7 +138,7 @@ Every error from every endpoint should have the same shape, so a client writes *
   "status": 400,
   "errors": {
     "title": ["Title is required and must be at most 200 characters."],
-    "chainage": ["Use the format km+metres, for example 112+450."]
+    "preferredTime": ["Use 24-hour HH:mm, for example 10:30."]
   }
 }
 ```
@@ -140,9 +147,9 @@ Never put stack traces, SQL or internal hostnames in `detail` for external clien
 
 ### Filtering, sorting and pagination
 
-A list endpoint without limits is a time bomb. In month one a project has 40 inspections; in year three it has 60,000, and the mobile app that downloads all of them times out on site.
+A list endpoint without limits is a time bomb. In month one a clinic has 40 appointments; in year three it has 60,000, and the front-desk tablet that downloads all of them times out on the clinic's shaky Wi-Fi.
 
-**Filtering**: plain query parameters for the common cases — `?status=submitted&minSeverity=high&raisedAfter=2026-10-01`. Validate them: an unknown status is a `400` with a helpful message, not an empty list (which looks like "no data" and hides the bug). For rich search, offer a separate search endpoint or `POST /v1/inspection-searches` with a body, rather than inventing a query language in the URL.
+**Filtering**: plain query parameters for the common cases — `?status=submitted&minSeverity=high&raisedAfter=2026-10-01`. Validate them: an unknown status is a `400` with a helpful message, not an empty list (which looks like "no data" and hides the bug). For rich search, offer a separate search endpoint or `POST /v1/appointment-searches` with a body, rather than inventing a query language in the URL.
 
 **Sorting**: `?sort=-raisedAt,severity` — comma-separated fields, `-` for descending. Allow only a **whitelist** of fields that have supporting indexes; arbitrary sort fields let one client trigger full table scans. Always add a unique tie-breaker (the id) internally so ordering is total and stable.
 
@@ -159,12 +166,12 @@ Keyset pagination works like a bookmark: "give me 25 items that come *after* (ra
 
 ```sql
 SELECT id, title, raised_at
-FROM inspection
-WHERE project_code = $1
+FROM appointment
+WHERE clinic_code = $1
   AND (raised_at, id) < ($2, $3)        -- strictly after the bookmark, newest first
 ORDER BY raised_at DESC, id DESC
 LIMIT 26;                               -- one extra row tells us whether a next page exists
--- index: CREATE INDEX ON inspection (project_code, raised_at DESC, id DESC);
+-- index: CREATE INDEX ON appointment (clinic_code, raised_at DESC, id DESC);
 ```
 
 The cursor sent to clients is **opaque**: base64url of the sort and the last row's key. Opaque means clients can't build or depend on its structure, so you can change it later. If tampering matters (a cursor could encode a tenant or filter), sign it with an HMAC. See [Offset versus keyset pagination](#/lesson/m09-pagination) for the database side.
@@ -173,10 +180,10 @@ A typical page response:
 
 ```json
 {
-  "items": [ { "id": "...", "title": "Bearing pedestal level off", "status": "submitted" } ],
+  "items": [ { "id": "...", "title": "High fever for three days", "status": "submitted" } ],
   "nextCursor": "LXJhaXNlZEF0fDN8NjM4NjQ...",
-  "links": { "self": { "href": "/v1/projects/NH48-PKG3/inspections?limit=25", "method": "GET" },
-             "next": { "href": "/v1/projects/NH48-PKG3/inspections?limit=25&cursor=LXJh...", "method": "GET" } }
+  "links": { "self": { "href": "/v1/clinics/BLR-KRM/appointments?limit=25", "method": "GET" },
+             "next": { "href": "/v1/clinics/BLR-KRM/appointments?limit=25&cursor=LXJh...", "method": "GET" } }
 }
 ```
 
@@ -191,13 +198,13 @@ HATEOAS (Hypermedia As The Engine Of Application State) means responses include 
 - **Level 2**: proper HTTP methods and status codes. **Most good production APIs live here.**
 - **Level 3**: hypermedia controls (links).
 
-A light, practical dose of Level 3 is useful: a `next` link in pages, and **state-dependent action links** — the `submit` link appears only while an inspection is a draft. A UI can show or hide the "Submit" button based on the link's presence instead of duplicating the state rules. Full HATEOAS (clients that discover the entire API by following links, with formats like HAL or JSON:API) is rare in practice because most clients are written against documentation anyway. Use OpenAPI as the contract ([see OpenAPI](#/lesson/m03-openapi)) and links as a convenience.
+A light, practical dose of Level 3 is useful: a `next` link in pages, and **state-dependent action links** — the `submit` link appears only while an appointment is a draft. A UI can show or hide the "Submit" button based on the link's presence instead of duplicating the state rules. Full HATEOAS (clients that discover the entire API by following links, with formats like HAL or JSON:API) is rare in practice because most clients are written against documentation anyway. Use OpenAPI as the contract ([see OpenAPI](#/lesson/m03-openapi)) and links as a convenience.
 
 ### What happens without these rules
 
-- RPC-style URLs (`/api/doInspectionStuff`) make every endpoint a special case; caches and gateways can't help.
+- RPC-style URLs (`/api/doAppointmentStuff`) make every endpoint a special case; caches and gateways can't help.
 - Inconsistent errors force clients to write per-endpoint parsing; a "200 with error" hides failures from monitoring.
-- Unbounded or offset-paginated lists slow down as data grows and corrupt sync jobs that page while engineers are adding inspections.
+- Unbounded or offset-paginated lists slow down as data grows and corrupt sync jobs that page while patients are booking new appointments.
 - Unvalidated filters return empty lists for typos, and users file "data missing" bugs.
 
 ### When a simpler design is enough
@@ -216,49 +223,49 @@ An internal API with one client, owned by the same team and deployed together (f
 
 ## Visual explanation
 
-### Architecture of the inspections API
+### Architecture of the appointments API
 
 ```mermaid
 flowchart LR
-    Mobile["Site engineer app"] -->|"HTTPS JSON"| GW["API gateway (auth, rate limit)"]
-    Web["PMC dashboard"] -->|"HTTPS JSON"| GW
-    GW --> API["Inspections API (minimal APIs)"]
+    Mobile["Patient app"] -->|"HTTPS JSON"| GW["API gateway (auth, rate limit)"]
+    Web["Front-desk dashboard"] -->|"HTTPS JSON"| GW
+    GW --> API["Appointments API (minimal APIs)"]
     API --> V["Validation + query parsing"]
     V --> H["Endpoint handlers (TypedResults)"]
-    H --> R["IInspectionRepository"]
-    R --> DB[("PostgreSQL: inspection (project_code, raised_at, id) index")]
+    H --> R["IAppointmentRepository"]
+    R --> DB[("PostgreSQL: appointment (clinic_code, raised_at, id) index")]
     H -.->|"DomainRuleException"| EH["IExceptionHandler to Problem Details"]
 ```
 
-Two kinds of client (the field engineers' mobile app and the project management consultant's dashboard) call the same versioned API through a **gateway** that handles authentication and rate limits. Inside the API, each request is first **validated and parsed** (filters, sort, limit, cursor) so handlers only see well-formed queries. **Handlers** return `TypedResults`, which also tells OpenAPI exactly which status codes each endpoint can produce. Data access goes through **`IInspectionRepository`**, backed in production by PostgreSQL with a composite index that matches the default sort, which is what makes keyset paging an index seek. The dotted arrow shows the error path: business-rule violations raised anywhere in the handler are turned into `409` Problem Details by a single **exception handler**, so error formatting lives in one place.
+Two kinds of client (the patients' mobile app and the clinic front desk's dashboard) call the same versioned API through a **gateway** that handles authentication and rate limits. Inside the API, each request is first **validated and parsed** (filters, sort, limit, cursor) so handlers only see well-formed queries. **Handlers** return `TypedResults`, which also tells OpenAPI exactly which status codes each endpoint can produce. Data access goes through **`IAppointmentRepository`**, backed in production by PostgreSQL with a composite index that matches the default sort, which is what makes keyset paging an index seek. The dotted arrow shows the error path: business-rule violations raised anywhere in the handler are turned into `409` Problem Details by a single **exception handler**, so error formatting lives in one place.
 
 ### Sequence: create, read, submit, and a rejected transition
 
 ```mermaid
 sequenceDiagram
-    participant C as Engineer app
-    participant A as Inspections API
+    participant C as Patient app
+    participant A as Appointments API
     participant R as Repository
-    C->>A: POST /v1/projects/NH48-PKG3/inspections
-    A->>A: validate title, severity, chainage
-    A->>R: AddAsync(inspection, status Draft)
-    A-->>C: 201 Created, Location /v1/inspections/{id}, links.submit
-    C->>A: POST /v1/inspections/{id}/submission
+    C->>A: POST /v1/clinics/BLR-KRM/appointments
+    A->>A: validate title, severity, preferredTime
+    A->>R: AddAsync(appointment, status Draft)
+    A-->>C: 201 Created, Location /v1/appointments/{id}, links.submit
+    C->>A: POST /v1/appointments/{id}/submission
     A->>R: FindAsync(id)
     A->>R: TryReplaceAsync(Submitted, expectedVersion 1)
     A-->>C: 200 OK, status Submitted, no submit link
-    C->>A: POST /v1/inspections/{id}/submission (double tap)
+    C->>A: POST /v1/appointments/{id}/submission (double tap)
     A->>R: FindAsync(id)
     A-->>C: 409 application/problem+json, type invalid-transition
 ```
 
-The app creates an inspection; the API validates it, stores it as a draft and answers **201** with a `Location` header and a `submit` link. The app follows that link. The handler loads the inspection, applies the domain transition and saves it with an **expected version** (optimistic concurrency), then returns the updated representation — which no longer has a `submit` link. When the engineer double-taps and the request is sent again, the domain rule rejects it and the client receives a **409 Problem Details** whose `type` it can recognise and show as "Already submitted" rather than a scary error.
+The app creates an appointment; the API validates it, stores it as a draft and answers **201** with a `Location` header and a `submit` link. The app follows that link. The handler loads the appointment, applies the domain transition and saves it with an **expected version** (optimistic concurrency), then returns the updated representation — which no longer has a `submit` link. When the patient double-taps and the request is sent again, the domain rule rejects it and the client receives a **409 Problem Details** whose `type` it can recognise and show as "Already submitted" rather than a scary error.
 
-### Inspection lifecycle
+### Appointment lifecycle
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Draft: POST inspections
+    [*] --> Draft: POST appointments
     Draft --> Submitted: POST submission
     Submitted --> Approved: POST approval
     Submitted --> Rejected: POST rejection
@@ -270,43 +277,43 @@ Every arrow is one action endpoint, and every missing arrow is a **409**. Drawin
 
 ## Step-by-step example
 
-**Requirement**: "The PMC dashboard shows submitted inspections of high or critical severity for a package, newest first, 25 at a time. Engineers raise inspections from site, sometimes on 2G."
+**Requirement**: "The front-desk dashboard shows submitted appointment requests of high or critical severity for a clinic, newest first, 25 at a time. Patients raise requests from the mobile app, often on a weak mobile signal."
 
-**Step 1 — name the resources.** Projects (packages), inspections, defects. Inspections belong to a package → `GET /v1/projects/{code}/inspections`.
+**Step 1 — name the resources.** Clinics, appointments, lab reports. Appointments belong to a clinic → `GET /v1/clinics/{code}/appointments`.
 
 **Step 2 — choose parameters.** `status=submitted`, `minSeverity=high`, `sort=-raisedAt` (default), `limit=25` (max 100), `cursor` (opaque).
 
-**Step 3 — size it** (estimates). 30 packages × 50 engineers × 8 inspections/day = 12,000 new inspections/day; after 3 years ≈ 13 million rows. The dashboard is used by ~300 people, refreshing every minute in working hours: 300 ÷ 60 ≈ 5 list requests per second. Offset paging to page 200 of a busy package would read and discard 5,000 rows per request; keyset reads 26 rows via the index regardless of depth.
+**Step 3 — size it** (estimates). 30 clinics × 20 doctors × 20 appointment requests/day = 12,000 new appointments/day; after 3 years ≈ 12,000 × 365 × 3 ≈ 13 million rows. The dashboard is used by ~300 front-desk staff, refreshing every minute in working hours: 300 ÷ 60 ≈ 5 list requests per second. Offset paging to page 200 of a busy clinic would read and discard 5,000 rows per request; keyset reads 26 rows via the index regardless of depth.
 
-**Step 4 — define the errors.** `400` for unknown `status`/`minSeverity`/`sort`, out-of-range `limit`, or a cursor that doesn't decode or belongs to another sort. `404` for an unknown package. `409` for invalid transitions.
+**Step 4 — define the errors.** `400` for unknown `status`/`minSeverity`/`sort`, out-of-range `limit`, or a cursor that doesn't decode or belongs to another sort. `404` for an unknown clinic. `409` for invalid transitions.
 
-**Step 5 — keep payloads small for 2G.** The list returns summary fields (id, title, severity, status, raisedAt, chainage) and links; photos are separate resources fetched on demand. Responses are compressed.
+**Step 5 — keep payloads small for weak mobile networks.** The list returns summary fields (id, title, severity, status, raisedAt, preferredTime) and links; lab reports and scanned prescriptions are separate resources fetched on demand. Responses are compressed.
 
 **Step 6 — write the contract first.** Put the endpoints in the API design playground (`#/playground/api`), fix the lint warnings, export OpenAPI, and review it with the dashboard and mobile teams *before* writing handlers. Changing a contract on paper costs minutes; changing it after three clients ship costs a version.
 
 ## Production-style C# implementation
 
 ```text
-SiteQuality.Api/
+CityCare.Api/
   Program.cs
-  Inspections/Inspection.cs
-  Inspections/PageCursor.cs
-  Inspections/ListQuery.cs
-  Inspections/InspectionRepository.cs
-  Inspections/InspectionEndpoints.cs
+  Appointments/Appointment.cs
+  Appointments/PageCursor.cs
+  Appointments/ListQuery.cs
+  Appointments/AppointmentRepository.cs
+  Appointments/AppointmentEndpoints.cs
   Errors/DomainExceptionHandler.cs
 ```
 
-```csharp file=Inspections/Inspection.cs
-namespace SiteQuality.Inspections;
+```csharp file=Appointments/Appointment.cs
+namespace CityCare.Appointments;
 
 public enum Severity { Low = 1, Medium = 2, High = 3, Critical = 4 }
 
-public enum InspectionStatus { Draft, Submitted, Approved, Rejected }
+public enum AppointmentStatus { Draft, Submitted, Approved, Rejected }
 
 public static class ProblemTypes
 {
-    public const string Base = "https://api.sitequality.example/problems/";
+    public const string Base = "https://api.citycare.example/problems/";
     public const string InvalidTransition = Base + "invalid-transition";
     public const string ConcurrentChange = Base + "concurrent-change";
     public const string NotFound = Base + "not-found";
@@ -319,44 +326,44 @@ public sealed class DomainRuleException(string problemType, string title, string
     public string Title { get; } = title;
 }
 
-public sealed record Inspection(
-    Guid Id, string ProjectCode, string Title, string? Chainage, Severity Severity,
-    InspectionStatus Status, DateTimeOffset RaisedAt, int Version)
+public sealed record Appointment(
+    Guid Id, string ClinicCode, string Title, string? PreferredTime, Severity Severity,
+    AppointmentStatus Status, DateTimeOffset RaisedAt, int Version)
 {
-    public Inspection Submit() => Status == InspectionStatus.Draft
-        ? this with { Status = InspectionStatus.Submitted, Version = Version + 1 }
-        : throw new DomainRuleException(ProblemTypes.InvalidTransition, "Inspection cannot be submitted",
-            $"Inspection {Id} is {Status}; only Draft inspections can be submitted.");
+    public Appointment Submit() => Status == AppointmentStatus.Draft
+        ? this with { Status = AppointmentStatus.Submitted, Version = Version + 1 }
+        : throw new DomainRuleException(ProblemTypes.InvalidTransition, "Appointment cannot be submitted",
+            $"Appointment {Id} is {Status}; only Draft appointments can be submitted.");
 }
 
-public sealed record CreateInspectionRequest(string? Title, string? Chainage, Severity? Severity);
+public sealed record CreateAppointmentRequest(string? Title, string? PreferredTime, Severity? Severity);
 
 public sealed record Link(string Href, string Method);
 
-public sealed record InspectionResponse(
-    Guid Id, string ProjectCode, string Title, string? Chainage, Severity Severity,
-    InspectionStatus Status, DateTimeOffset RaisedAt, IReadOnlyDictionary<string, Link> Links)
+public sealed record AppointmentResponse(
+    Guid Id, string ClinicCode, string Title, string? PreferredTime, Severity Severity,
+    AppointmentStatus Status, DateTimeOffset RaisedAt, IReadOnlyDictionary<string, Link> Links)
 {
-    public static InspectionResponse From(Inspection i)
+    public static AppointmentResponse From(Appointment i)
     {
         var links = new Dictionary<string, Link>
         {
-            ["self"] = new($"/v1/inspections/{i.Id}", "GET"),
-            ["project"] = new($"/v1/projects/{i.ProjectCode}", "GET"),
+            ["self"] = new($"/v1/appointments/{i.Id}", "GET"),
+            ["clinic"] = new($"/v1/clinics/{i.ClinicCode}", "GET"),
         };
         // State-dependent link: clients show "Submit" only when the server offers it.
-        if (i.Status == InspectionStatus.Draft) links["submit"] = new($"/v1/inspections/{i.Id}/submission", "POST");
-        return new InspectionResponse(i.Id, i.ProjectCode, i.Title, i.Chainage, i.Severity, i.Status, i.RaisedAt, links);
+        if (i.Status == AppointmentStatus.Draft) links["submit"] = new($"/v1/appointments/{i.Id}/submission", "POST");
+        return new AppointmentResponse(i.Id, i.ClinicCode, i.Title, i.PreferredTime, i.Severity, i.Status, i.RaisedAt, links);
     }
 }
 
 public sealed record PageResponse<T>(IReadOnlyList<T> Items, string? NextCursor, IReadOnlyDictionary<string, Link> Links);
 ```
 
-```csharp file=Inspections/PageCursor.cs
+```csharp file=Appointments/PageCursor.cs
 using System.Text;
 
-namespace SiteQuality.Inspections;
+namespace CityCare.Appointments;
 
 /// <summary>Opaque keyset cursor: which sort it belongs to, and the last row's sort key.
 /// Not encrypted — sign it with an HMAC if clients must not be able to forge positions.</summary>
@@ -391,15 +398,15 @@ public sealed record PageCursor(string Sort, int SeverityRank, long RaisedAtUtcT
 }
 ```
 
-```csharp file=Inspections/ListQuery.cs
-namespace SiteQuality.Inspections;
+```csharp file=Appointments/ListQuery.cs
+namespace CityCare.Appointments;
 
 /// <summary>Raw query-string parameters, bound with [AsParameters].</summary>
 public sealed record ListParams(string? Status, string? MinSeverity, string? Sort, int? Limit, string? Cursor);
 
 public enum SortField { RaisedAt, Severity }
 
-public sealed record ListQuery(InspectionStatus? Status, Severity? MinSeverity, SortField SortBy, bool Descending, int Limit, PageCursor? After)
+public sealed record ListQuery(AppointmentStatus? Status, Severity? MinSeverity, SortField SortBy, bool Descending, int Limit, PageCursor? After)
 {
     public string SortToken => (Descending ? "-" : "") + (SortBy == SortField.RaisedAt ? "raisedAt" : "severity");
 }
@@ -414,10 +421,10 @@ public static class ListQueryParser
     {
         var errors = new Dictionary<string, string[]>();
 
-        InspectionStatus? status = null;
+        AppointmentStatus? status = null;
         if (p.Status is not null)
         {
-            if (Enum.TryParse<InspectionStatus>(p.Status, ignoreCase: true, out var s) && Enum.IsDefined(s)) status = s;
+            if (Enum.TryParse<AppointmentStatus>(p.Status, ignoreCase: true, out var s) && Enum.IsDefined(s)) status = s;
             else errors["status"] = [$"Unknown status '{p.Status}'. Allowed: draft, submitted, approved, rejected."];
         }
 
@@ -452,37 +459,37 @@ public static class ListQueryParser
 }
 ```
 
-```csharp file=Inspections/InspectionRepository.cs
-namespace SiteQuality.Inspections;
+```csharp file=Appointments/AppointmentRepository.cs
+namespace CityCare.Appointments;
 
-public interface IInspectionRepository
+public interface IAppointmentRepository
 {
-    Task<Inspection?> FindAsync(Guid id, CancellationToken ct);
-    Task AddAsync(Inspection inspection, CancellationToken ct);
-    Task<(IReadOnlyList<Inspection> Items, PageCursor? Next)> ListAsync(string projectCode, ListQuery query, CancellationToken ct);
+    Task<Appointment?> FindAsync(Guid id, CancellationToken ct);
+    Task AddAsync(Appointment appointment, CancellationToken ct);
+    Task<(IReadOnlyList<Appointment> Items, PageCursor? Next)> ListAsync(string clinicCode, ListQuery query, CancellationToken ct);
     /// <summary>Saves only if the stored version still equals expectedVersion.</summary>
-    Task<bool> TryReplaceAsync(Inspection updated, int expectedVersion, CancellationToken ct);
+    Task<bool> TryReplaceAsync(Appointment updated, int expectedVersion, CancellationToken ct);
 }
 
 /// <summary>In-memory stand-in. The PostgreSQL version uses
 /// WHERE (raised_at, id) &lt; (@t, @id) ORDER BY raised_at DESC, id DESC LIMIT @limit + 1.</summary>
-public sealed class InMemoryInspectionRepository : IInspectionRepository
+public sealed class InMemoryAppointmentRepository : IAppointmentRepository
 {
     private readonly Lock _gate = new();
-    private readonly Dictionary<Guid, Inspection> _rows = new();
+    private readonly Dictionary<Guid, Appointment> _rows = new();
 
-    public Task<Inspection?> FindAsync(Guid id, CancellationToken ct)
+    public Task<Appointment?> FindAsync(Guid id, CancellationToken ct)
     {
         lock (_gate) return Task.FromResult(_rows.GetValueOrDefault(id));
     }
 
-    public Task AddAsync(Inspection inspection, CancellationToken ct)
+    public Task AddAsync(Appointment appointment, CancellationToken ct)
     {
-        lock (_gate) _rows.Add(inspection.Id, inspection);
+        lock (_gate) _rows.Add(appointment.Id, appointment);
         return Task.CompletedTask;
     }
 
-    public Task<bool> TryReplaceAsync(Inspection updated, int expectedVersion, CancellationToken ct)
+    public Task<bool> TryReplaceAsync(Appointment updated, int expectedVersion, CancellationToken ct)
     {
         lock (_gate)
         {
@@ -492,16 +499,16 @@ public sealed class InMemoryInspectionRepository : IInspectionRepository
         }
     }
 
-    public Task<(IReadOnlyList<Inspection> Items, PageCursor? Next)> ListAsync(string projectCode, ListQuery q, CancellationToken ct)
+    public Task<(IReadOnlyList<Appointment> Items, PageCursor? Next)> ListAsync(string clinicCode, ListQuery q, CancellationToken ct)
     {
-        List<Inspection> rows;
-        lock (_gate) rows = _rows.Values.Where(i => string.Equals(i.ProjectCode, projectCode, StringComparison.OrdinalIgnoreCase)).ToList();
+        List<Appointment> rows;
+        lock (_gate) rows = _rows.Values.Where(i => string.Equals(i.ClinicCode, clinicCode, StringComparison.OrdinalIgnoreCase)).ToList();
 
         if (q.Status is { } status) rows = rows.Where(i => i.Status == status).ToList();
         if (q.MinSeverity is { } min) rows = rows.Where(i => i.Severity >= min).ToList();
 
         rows.Sort((a, b) => Compare(a, (int)b.Severity, b.RaisedAt.UtcTicks, b.Id, q));
-        IEnumerable<Inspection> after = rows;
+        IEnumerable<Appointment> after = rows;
         if (q.After is { } c) after = rows.Where(i => Compare(i, c.SeverityRank, c.RaisedAtUtcTicks, c.Id, q) > 0);
 
         var page = after.Take(q.Limit + 1).ToList();      // one extra row = "is there a next page?"
@@ -512,11 +519,11 @@ public sealed class InMemoryInspectionRepository : IInspectionRepository
             var last = page[^1];
             next = new PageCursor(q.SortToken, (int)last.Severity, last.RaisedAt.UtcTicks, last.Id);
         }
-        return Task.FromResult<(IReadOnlyList<Inspection>, PageCursor?)>((page, next));
+        return Task.FromResult<(IReadOnlyList<Appointment>, PageCursor?)>((page, next));
     }
 
     // Total order: primary sort field, then raised time, then id as the unique tie-breaker.
-    private static int Compare(Inspection i, int severityRank, long raisedTicks, Guid id, ListQuery q)
+    private static int Compare(Appointment i, int severityRank, long raisedTicks, Guid id, ListQuery q)
     {
         var c = q.SortBy == SortField.Severity ? ((int)i.Severity).CompareTo(severityRank) : 0;
         if (c == 0) c = i.RaisedAt.UtcTicks.CompareTo(raisedTicks);
@@ -526,93 +533,93 @@ public sealed class InMemoryInspectionRepository : IInspectionRepository
 }
 ```
 
-```csharp file=Inspections/InspectionEndpoints.cs
+```csharp file=Appointments/AppointmentEndpoints.cs
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Http.HttpResults;
 
-namespace SiteQuality.Inspections;
+namespace CityCare.Appointments;
 
-public static class InspectionEndpoints
+public static class AppointmentEndpoints
 {
-    private static readonly Regex ChainagePattern = new(@"^\d{1,4}\+\d{3}$", RegexOptions.Compiled);
+    private static readonly Regex PreferredTimePattern = new(@"^([01]\d|2[0-3]):[0-5]\d$", RegexOptions.Compiled);
 
-    public static IEndpointRouteBuilder MapInspections(this IEndpointRouteBuilder app)
+    public static IEndpointRouteBuilder MapAppointments(this IEndpointRouteBuilder app)
     {
-        var byProject = app.MapGroup("/v1/projects/{projectCode}/inspections").WithTags("Inspections");
-        byProject.MapGet("/", List);
-        byProject.MapPost("/", Create);
+        var byClinic = app.MapGroup("/v1/clinics/{clinicCode}/appointments").WithTags("Appointments");
+        byClinic.MapGet("/", List);
+        byClinic.MapPost("/", Create);
 
-        var items = app.MapGroup("/v1/inspections").WithTags("Inspections");
+        var items = app.MapGroup("/v1/appointments").WithTags("Appointments");
         items.MapGet("/{id:guid}", Get);
         items.MapPost("/{id:guid}/submission", Submit);
         return app;
     }
 
-    private static async Task<Results<Ok<PageResponse<InspectionResponse>>, ValidationProblem>> List(
-        string projectCode, [AsParameters] ListParams p, IInspectionRepository repo, CancellationToken ct)
+    private static async Task<Results<Ok<PageResponse<AppointmentResponse>>, ValidationProblem>> List(
+        string clinicCode, [AsParameters] ListParams p, IAppointmentRepository repo, CancellationToken ct)
     {
         var (query, errors) = ListQueryParser.Parse(p);
         if (query is null) return TypedResults.ValidationProblem(errors);
 
-        var (items, next) = await repo.ListAsync(projectCode, query, ct);
-        var basePath = $"/v1/projects/{projectCode}/inspections?sort={Uri.EscapeDataString(query.SortToken)}&limit={query.Limit}"
+        var (items, next) = await repo.ListAsync(clinicCode, query, ct);
+        var basePath = $"/v1/clinics/{clinicCode}/appointments?sort={Uri.EscapeDataString(query.SortToken)}&limit={query.Limit}"
                        + (query.Status is { } s ? $"&status={s.ToString().ToLowerInvariant()}" : "")
                        + (query.MinSeverity is { } m ? $"&minSeverity={m.ToString().ToLowerInvariant()}" : "");
         var links = new Dictionary<string, Link> { ["self"] = new(basePath, "GET") };
         var nextToken = next?.Encode();
         if (nextToken is not null) links["next"] = new($"{basePath}&cursor={nextToken}", "GET");
 
-        return TypedResults.Ok(new PageResponse<InspectionResponse>(items.Select(InspectionResponse.From).ToList(), nextToken, links));
+        return TypedResults.Ok(new PageResponse<AppointmentResponse>(items.Select(AppointmentResponse.From).ToList(), nextToken, links));
     }
 
-    private static async Task<Results<Created<InspectionResponse>, ValidationProblem>> Create(
-        string projectCode, CreateInspectionRequest body, IInspectionRepository repo, TimeProvider clock, CancellationToken ct)
+    private static async Task<Results<Created<AppointmentResponse>, ValidationProblem>> Create(
+        string clinicCode, CreateAppointmentRequest body, IAppointmentRepository repo, TimeProvider clock, CancellationToken ct)
     {
         var errors = new Dictionary<string, string[]>();
         if (string.IsNullOrWhiteSpace(body.Title) || body.Title.Trim().Length > 200)
             errors["title"] = ["Title is required and must be at most 200 characters."];
         if (body.Severity is null || !Enum.IsDefined(body.Severity.Value))
             errors["severity"] = ["Severity must be one of low, medium, high, critical."];
-        if (body.Chainage is not null && !ChainagePattern.IsMatch(body.Chainage))
-            errors["chainage"] = ["Use the format km+metres, for example 112+450."];
+        if (body.PreferredTime is not null && !PreferredTimePattern.IsMatch(body.PreferredTime))
+            errors["preferredTime"] = ["Use 24-hour HH:mm, for example 10:30."];
         if (errors.Count > 0) return TypedResults.ValidationProblem(errors);
 
-        var inspection = new Inspection(Guid.CreateVersion7(), projectCode.ToUpperInvariant(), body.Title!.Trim(),
-            body.Chainage, body.Severity!.Value, InspectionStatus.Draft, clock.GetUtcNow(), Version: 1);
-        await repo.AddAsync(inspection, ct);
-        return TypedResults.Created($"/v1/inspections/{inspection.Id}", InspectionResponse.From(inspection));
+        var appointment = new Appointment(Guid.CreateVersion7(), clinicCode.ToUpperInvariant(), body.Title!.Trim(),
+            body.PreferredTime, body.Severity!.Value, AppointmentStatus.Draft, clock.GetUtcNow(), Version: 1);
+        await repo.AddAsync(appointment, ct);
+        return TypedResults.Created($"/v1/appointments/{appointment.Id}", AppointmentResponse.From(appointment));
     }
 
-    private static async Task<Results<Ok<InspectionResponse>, ProblemHttpResult>> Get(Guid id, IInspectionRepository repo, CancellationToken ct)
+    private static async Task<Results<Ok<AppointmentResponse>, ProblemHttpResult>> Get(Guid id, IAppointmentRepository repo, CancellationToken ct)
     {
-        var inspection = await repo.FindAsync(id, ct);
-        return inspection is null ? NotFound(id) : TypedResults.Ok(InspectionResponse.From(inspection));
+        var appointment = await repo.FindAsync(id, ct);
+        return appointment is null ? NotFound(id) : TypedResults.Ok(AppointmentResponse.From(appointment));
     }
 
-    private static async Task<Results<Ok<InspectionResponse>, ProblemHttpResult>> Submit(Guid id, IInspectionRepository repo, CancellationToken ct)
+    private static async Task<Results<Ok<AppointmentResponse>, ProblemHttpResult>> Submit(Guid id, IAppointmentRepository repo, CancellationToken ct)
     {
         var current = await repo.FindAsync(id, ct);
         if (current is null) return NotFound(id);
 
         var submitted = current.Submit();   // throws DomainRuleException → 409 via the exception handler
         if (!await repo.TryReplaceAsync(submitted, current.Version, ct))
-            throw new DomainRuleException(ProblemTypes.ConcurrentChange, "Inspection changed",
-                "Someone else changed this inspection while you were submitting it. Reload and try again.");
-        return TypedResults.Ok(InspectionResponse.From(submitted));
+            throw new DomainRuleException(ProblemTypes.ConcurrentChange, "Appointment changed",
+                "Someone else changed this appointment while you were submitting it. Reload and try again.");
+        return TypedResults.Ok(AppointmentResponse.From(submitted));
     }
 
     private static ProblemHttpResult NotFound(Guid id) =>
         TypedResults.Problem(statusCode: StatusCodes.Status404NotFound, type: ProblemTypes.NotFound,
-            title: "Inspection not found", detail: $"No inspection with id {id} exists or you cannot see it.");
+            title: "Appointment not found", detail: $"No appointment with id {id} exists or you cannot see it.");
 }
 ```
 
 ```csharp file=Errors/DomainExceptionHandler.cs
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
-using SiteQuality.Inspections;
+using CityCare.Appointments;
 
-namespace SiteQuality.Errors;
+namespace CityCare.Errors;
 
 /// <summary>Turns business-rule violations into 409 Problem Details. Anything else falls through
 /// to the default handler, which returns a generic 500 without internals.</summary>
@@ -645,8 +652,8 @@ public sealed class DomainExceptionHandler(IProblemDetailsService problems, ILog
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using SiteQuality.Errors;
-using SiteQuality.Inspections;
+using CityCare.Errors;
+using CityCare.Appointments;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -659,13 +666,13 @@ builder.Services.AddProblemDetails(o => o.CustomizeProblemDetails = ctx =>
 builder.Services.AddExceptionHandler<DomainExceptionHandler>();
 
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<IInspectionRepository, InMemoryInspectionRepository>();
+builder.Services.AddSingleton<IAppointmentRepository, InMemoryAppointmentRepository>();
 
 var app = builder.Build();
 
 app.UseExceptionHandler();   // runs registered IExceptionHandlers, then the default 500 Problem Details
 app.UseStatusCodePages();    // bodies for bare 404/405 from routing
-app.MapInspections();
+app.MapAppointments();
 
 app.Run();
 ```
@@ -674,32 +681,34 @@ Points worth noticing:
 
 - **`TypedResults` with `Results<...>`** makes each handler's possible responses part of its signature, so OpenAPI documents them accurately and the compiler stops you returning an undocumented status.
 - **`[AsParameters]`** binds query parameters into a record, so parsing and validation live in one testable class (`ListQueryParser`), not in the handler.
-- **The domain decides transitions** (`Inspection.Submit()`); the endpoint only orchestrates. The exception handler is the single place that knows "rule violation = 409".
+- **The domain decides transitions** (`Appointment.Submit()`); the endpoint only orchestrates. The exception handler is the single place that knows "rule violation = 409".
 - **Validation errors use `ValidationProblem`**, producing the standard `errors` dictionary. .NET 10 also offers built-in minimal API validation from DataAnnotations attributes (`builder.Services.AddValidation()`); hand-written checks are shown here so every rule is visible.
 - **`Guid.CreateVersion7()`** gives time-ordered UUIDs, friendlier to B-tree indexes than random v4 ids.
+- **OpenAPI** in ASP.NET Core 10 comes from the `Microsoft.AspNetCore.OpenApi` package: `builder.Services.AddOpenApi()` and `app.MapOpenApi()` serve the document (OpenAPI 3.1 by default in .NET 10). It is left out of the listing above only because the sample compiles without extra packages.
+- **What this sample still lacks for production**: authentication and per-clinic authorisation (a patient must only see their own requests; front-desk staff only their clinic's), `ETag`/`If-Match` on reads and updates, an `Idempotency-Key` on creates, and audit logging of every transition. Each is covered in its own lesson; leaving any of them out of a real health-care API is a review blocker.
 
 ## Bad design vs good design
 
 **Bad**
 
 ```text
-POST /api/getInspections          body: { "project": "NH48-PKG3", "page": 7 }
-POST /api/createInspection        → 200 { "ok": true, "id": 4471 }
-GET  /api/deleteInspection?id=4471
-POST /api/inspectionAction        body: { "id": 4471, "action": "SUBMIT" }
+POST /api/getAppointments          body: { "clinic": "BLR-KRM", "page": 7 }
+POST /api/createAppointment        → 200 { "ok": true, "id": 4471 }
+GET  /api/deleteAppointment?id=4471
+POST /api/appointmentAction        body: { "id": 4471, "action": "SUBMIT" }
                                   → 200 { "ok": false, "msg": "Object reference not set to an instance of an object." }
 ```
 
-Problems: verbs in URLs; reads via `POST` (uncacheable, unsafe to retry by convention); a destructive `GET` (a link prefetcher or crawler can delete data); one "action" endpoint that hides every business rule; `200` for failures; a leaked exception message; sequential ids; offset pages that shift as engineers add inspections.
+Problems: verbs in URLs; reads via `POST` (uncacheable, unsafe to retry by convention); a destructive `GET` (a link prefetcher or crawler can delete data); one "action" endpoint that hides every business rule; `200` for failures; a leaked exception message; sequential ids; offset pages that shift as patients add appointments.
 
 **Good**
 
 ```text
-GET    /v1/projects/NH48-PKG3/inspections?status=submitted&sort=-raisedAt&limit=25&cursor=...
-POST   /v1/projects/NH48-PKG3/inspections        → 201 Created, Location: /v1/inspections/0192f3a0-...
-GET    /v1/inspections/0192f3a0-...              → 200 + ETag, links.submit while Draft
-DELETE /v1/inspections/0192f3a0-...              → 204, or 409 Problem Details if not a draft
-POST   /v1/inspections/0192f3a0-.../submission   → 200, or 409 type .../invalid-transition
+GET    /v1/clinics/BLR-KRM/appointments?status=submitted&sort=-raisedAt&limit=25&cursor=...
+POST   /v1/clinics/BLR-KRM/appointments        → 201 Created, Location: /v1/appointments/0192f3a0-...
+GET    /v1/appointments/0192f3a0-...              → 200 + ETag, links.submit while Draft
+DELETE /v1/appointments/0192f3a0-...              → 204, or 409 Problem Details if not a draft
+POST   /v1/appointments/0192f3a0-.../submission   → 200, or 409 type .../invalid-transition
 ```
 
 **Is it worth it?** For a public or multi-team API, yes, from day one; the cost is mostly discipline, not code. For a throwaway internal tool, take the cheap wins (nouns, correct methods, status codes, `AddProblemDetails`) and skip links and signed cursors.
@@ -714,44 +723,44 @@ Model endpoints in the API design playground (`#/playground/api`). Its linter fl
 
 ## Practical playground
 
-The SQL playground is seeded with inspections for two packages, including three rows with the *same* timestamp. Try these:
+The SQL playground is seeded with appointments for two clinics, including three rows with the *same* timestamp. Try these:
 
-1. Write the offset query for page 2 (`LIMIT 5 OFFSET 5`, newest first). Then insert a new inspection with a newer `raised_at` and run page 2 again — one row from page 1 reappears.
+1. Write the offset query for page 2 (`LIMIT 5 OFFSET 5`, newest first). Then insert a new appointment with a newer `raised_at` and run page 2 again — one row from page 1 reappears.
 2. Write the keyset version using `(raised_at, id) < (..., ...)` with the last row of page 1 as the bookmark, insert a newer row, and confirm page 2 doesn't change.
 3. Run `EXPLAIN` on both after creating the index below and compare the plans.
 
 :::playground type=sql title="Filtering, sorting and keyset pagination"
 ```sql
-CREATE TABLE inspection (
+CREATE TABLE appointment (
   id           int PRIMARY KEY,
-  project_code text NOT NULL,
+  clinic_code text NOT NULL,
   title        text NOT NULL,
   severity     text NOT NULL CHECK (severity IN ('low','medium','high','critical')),
   status       text NOT NULL,
   raised_at    timestamptz NOT NULL
 );
-CREATE INDEX inspection_project_raised ON inspection (project_code, raised_at DESC, id DESC);
-INSERT INTO inspection VALUES
-  (1,  'NH48-PKG3', 'Missing kerb stones at 112+300', 'low',      'approved',  '2026-10-05 08:00:00+00'),
-  (2,  'NH48-PKG3', 'Cracks in RE wall panel',        'high',     'submitted', '2026-10-06 11:30:00+00'),
-  (3,  'NH48-PKG3', 'Drain outlet blocked',           'medium',   'submitted', '2026-10-07 09:15:00+00'),
-  (4,  'NH48-PKG3', 'Honeycombing in pier P4',        'critical', 'submitted', '2026-10-08 14:00:00+00'),
-  (5,  'NH48-PKG3', 'Signboard misaligned',           'low',      'draft',     '2026-10-09 07:45:00+00'),
-  (6,  'NH48-PKG3', 'Bearing pedestal level off',     'high',     'submitted', '2026-10-10 09:00:00+00'),
-  (7,  'NH48-PKG3', 'Crash barrier bolts loose',      'medium',   'submitted', '2026-10-10 09:00:00+00'),
-  (8,  'NH48-PKG3', 'Road marking faded',             'low',      'draft',     '2026-10-10 09:00:00+00'),
-  (9,  'NH48-PKG3', 'Pothole near toll plaza',        'high',     'submitted', '2026-10-11 12:00:00+00'),
-  (10, 'NH48-PKG3', 'Expansion joint debris',         'medium',   'approved',  '2026-10-12 16:20:00+00'),
-  (11, 'NH48-PKG3', 'Streetlight pole tilted',        'low',      'submitted', '2026-10-13 10:10:00+00'),
-  (12, 'NH44-PKG1', 'Culvert silted',                 'medium',   'submitted', '2026-10-09 07:45:00+00'),
-  (13, 'NH44-PKG1', 'Shoulder erosion',               'high',     'draft',     '2026-10-10 09:00:00+00');
+CREATE INDEX appointment_clinic_raised ON appointment (clinic_code, raised_at DESC, id DESC);
+INSERT INTO appointment VALUES
+  (1,  'BLR-KRM', 'Prescription renewal',          'low',      'approved',  '2026-10-05 08:00:00+00'),
+  (2,  'BLR-KRM', 'Chest pain on exertion',        'high',     'submitted', '2026-10-06 11:30:00+00'),
+  (3,  'BLR-KRM', 'Recurring migraine',            'medium',   'submitted', '2026-10-07 09:15:00+00'),
+  (4,  'BLR-KRM', 'Wound bleeding after surgery',  'critical', 'submitted', '2026-10-08 14:00:00+00'),
+  (5,  'BLR-KRM', 'Annual health check-up',        'low',      'draft',     '2026-10-09 07:45:00+00'),
+  (6,  'BLR-KRM', 'High fever for three days',     'high',     'submitted', '2026-10-10 09:00:00+00'),
+  (7,  'BLR-KRM', 'Knee pain after running',       'medium',   'submitted', '2026-10-10 09:00:00+00'),
+  (8,  'BLR-KRM', 'Vaccination booster',           'low',      'draft',     '2026-10-10 09:00:00+00'),
+  (9,  'BLR-KRM', 'Severe back pain',              'high',     'submitted', '2026-10-11 12:00:00+00'),
+  (10, 'BLR-KRM', 'Skin rash spreading',           'medium',   'approved',  '2026-10-12 16:20:00+00'),
+  (11, 'BLR-KRM', 'Diet consultation',             'low',      'submitted', '2026-10-13 10:10:00+00'),
+  (12, 'HYD-MDP', 'Ear infection',                 'medium',   'submitted', '2026-10-09 07:45:00+00'),
+  (13, 'HYD-MDP', 'Sprained ankle',                'high',     'draft',     '2026-10-10 09:00:00+00');
 ```
 :::
 
 ## Exercises
 
 :::exercise id=m10-rest-design-ex1 difficulty=beginner kind=written title="Rescue an RPC-style API in the playground"
-A contractor-billing module exposes these endpoints:
+A hospital-billing module exposes these endpoints:
 
 ```text
 POST /api/getAllBills
@@ -759,7 +768,7 @@ POST /api/getBillById           body: { "billId": 912 }
 POST /api/saveBill              (creates or updates, depending on whether billId is present)
 GET  /api/removeBill?billId=912
 POST /api/approveBill           body: { "billId": 912, "approver": "ravi" }
-POST /api/payBill               body: { "billId": 912, "amount": 1850000 }
+POST /api/payBill               body: { "billId": 912, "amount": 18500 }
 ```
 
 Open the **API design playground** (`#/playground/api`), recreate the API as resource-oriented REST endpoints, and keep editing until the linter shows no errors and no warnings. Then export the OpenAPI YAML and write two sentences on what each change buys clients.
@@ -780,7 +789,7 @@ The linter's `idempotency` rule fires on money-moving `POST`s. Tick "Idempotency
 ::solution
 | Old | New | Success | Notes |
 |---|---|---|---|
-| `POST /api/getAllBills` | `GET /v1/bills?status=pending&contractorId=...&limit=25&cursor=...` | 200 | Safe, cacheable, paginated |
+| `POST /api/getAllBills` | `GET /v1/bills?status=pending&patientId=...&limit=25&cursor=...` | 200 | Safe, cacheable, paginated |
 | `POST /api/getBillById` | `GET /v1/bills/{billId}` | 200 + ETag | 404 if missing |
 | `POST /api/saveBill` (new) | `POST /v1/bills` | 201 + Location | 400/422 validation |
 | `POST /api/saveBill` (existing) | `PATCH /v1/bills/{billId}` with `If-Match` | 200 | 409 if already approved, 412 if stale |
@@ -788,7 +797,7 @@ The linter's `idempotency` rule fires on money-moving `POST`s. Tick "Idempotency
 | `POST /api/approveBill` | `POST /v1/bills/{billId}/approval` | 201 (an approval record) or 200 | 403 if not an approver, 409 if not pending; approver comes from the token, not the body |
 | `POST /api/payBill` | `POST /v1/bills/{billId}/payments` + `Idempotency-Key` | 201 or 202 | 409 if not approved; a retry with the same key returns the original result |
 
-What clients gain: reads become cacheable and safely retryable; the destructive `GET` can no longer be triggered by a crawler; approval and payment each get their own permission, audit trail and error types; and the idempotency key stops duplicate payments of ₹18,50,000 when a mobile client retries.
+What clients gain: reads become cacheable and safely retryable; the destructive `GET` can no longer be triggered by a crawler; approval and payment each get their own permission, audit trail and error types; and the idempotency key stops duplicate payments of ₹18,500 when a mobile client retries.
 ::mistakes
 - Keeping `approver` in the request body — anyone could approve "as ravi". Take identity from the authenticated principal.
 - `PUT /v1/bills/{id}/status` with `{ "status": "paid" }` — it hides the payment business rules in a generic update.
@@ -847,7 +856,7 @@ using Xunit;
 
 public class SortParserTests
 {
-    private static readonly string[] Allowed = { "raisedAt", "severity", "chainage" };
+    private static readonly string[] Allowed = { "raisedAt", "severity", "preferredTime" };
 
     [Fact]
     public void Parses_directions()
@@ -885,10 +894,10 @@ public class SortParserTests
 
     [Fact] public void Duplicate_field_is_rejected() => Assert.False(SortParser.Parse("severity,-severity", Allowed, "-raisedAt").IsValid);
 
-    [Fact] public void Empty_segment_is_rejected() => Assert.False(SortParser.Parse("severity,,chainage", Allowed, "-raisedAt").IsValid);
+    [Fact] public void Empty_segment_is_rejected() => Assert.False(SortParser.Parse("severity,,preferredTime", Allowed, "-raisedAt").IsValid);
 
     [Fact] public void Too_many_fields_are_rejected() =>
-        Assert.False(SortParser.Parse("raisedAt,severity,chainage,raisedAt", Allowed, "-raisedAt").IsValid);
+        Assert.False(SortParser.Parse("raisedAt,severity,preferredTime,raisedAt", Allowed, "-raisedAt").IsValid);
 }
 ```
 ::solution
@@ -942,36 +951,36 @@ In the endpoint, a failed parse becomes `TypedResults.ValidationProblem(new() { 
 :::
 
 :::exercise id=m10-rest-design-ex3 difficulty=intermediate kind=sql ordered=true title="Write the keyset page query"
-The dashboard shows inspections of package `NH48-PKG3`, newest first, ties broken by `id` descending. Page 1 (5 rows) ended at the row with `raised_at = '2026-10-10 09:00:00+00'` and `id = 7`. Write the query for the **next 4 rows**, returning `id`, `title` and `raised_at`.
+The dashboard shows appointments of clinic `BLR-KRM`, newest first, ties broken by `id` descending. Page 1 (5 rows) ended at the row with `raised_at = '2026-10-10 09:00:00+00'` and `id = 7`. Write the query for the **next 4 rows**, returning `id`, `title` and `raised_at`.
 ::setup
 ```sql
-CREATE TABLE inspection (
+CREATE TABLE appointment (
   id           int PRIMARY KEY,
-  project_code text NOT NULL,
+  clinic_code text NOT NULL,
   title        text NOT NULL,
   severity     text NOT NULL,
   raised_at    timestamptz NOT NULL
 );
-INSERT INTO inspection VALUES
-  (1,  'NH48-PKG3', 'Missing kerb stones at 112+300', 'low',      '2026-10-05 08:00:00+00'),
-  (2,  'NH48-PKG3', 'Cracks in RE wall panel',        'high',     '2026-10-06 11:30:00+00'),
-  (3,  'NH48-PKG3', 'Drain outlet blocked',           'medium',   '2026-10-07 09:15:00+00'),
-  (4,  'NH48-PKG3', 'Honeycombing in pier P4',        'critical', '2026-10-08 14:00:00+00'),
-  (5,  'NH48-PKG3', 'Signboard misaligned',           'low',      '2026-10-09 07:45:00+00'),
-  (6,  'NH48-PKG3', 'Bearing pedestal level off',     'high',     '2026-10-10 09:00:00+00'),
-  (7,  'NH48-PKG3', 'Crash barrier bolts loose',      'medium',   '2026-10-10 09:00:00+00'),
-  (8,  'NH48-PKG3', 'Road marking faded',             'low',      '2026-10-10 09:00:00+00'),
-  (9,  'NH48-PKG3', 'Pothole near toll plaza',        'high',     '2026-10-11 12:00:00+00'),
-  (10, 'NH48-PKG3', 'Expansion joint debris',         'medium',   '2026-10-12 16:20:00+00'),
-  (11, 'NH48-PKG3', 'Streetlight pole tilted',        'low',      '2026-10-13 10:10:00+00'),
-  (12, 'NH44-PKG1', 'Culvert silted',                 'medium',   '2026-10-09 07:45:00+00'),
-  (13, 'NH44-PKG1', 'Shoulder erosion',               'high',     '2026-10-10 09:00:00+00');
+INSERT INTO appointment VALUES
+  (1,  'BLR-KRM', 'Prescription renewal',          'low',      '2026-10-05 08:00:00+00'),
+  (2,  'BLR-KRM', 'Chest pain on exertion',        'high',     '2026-10-06 11:30:00+00'),
+  (3,  'BLR-KRM', 'Recurring migraine',            'medium',   '2026-10-07 09:15:00+00'),
+  (4,  'BLR-KRM', 'Wound bleeding after surgery',  'critical', '2026-10-08 14:00:00+00'),
+  (5,  'BLR-KRM', 'Annual health check-up',        'low',      '2026-10-09 07:45:00+00'),
+  (6,  'BLR-KRM', 'High fever for three days',     'high',     '2026-10-10 09:00:00+00'),
+  (7,  'BLR-KRM', 'Knee pain after running',       'medium',   '2026-10-10 09:00:00+00'),
+  (8,  'BLR-KRM', 'Vaccination booster',           'low',      '2026-10-10 09:00:00+00'),
+  (9,  'BLR-KRM', 'Severe back pain',              'high',     '2026-10-11 12:00:00+00'),
+  (10, 'BLR-KRM', 'Skin rash spreading',           'medium',   '2026-10-12 16:20:00+00'),
+  (11, 'BLR-KRM', 'Diet consultation',             'low',      '2026-10-13 10:10:00+00'),
+  (12, 'HYD-MDP', 'Ear infection',                 'medium',   '2026-10-09 07:45:00+00'),
+  (13, 'HYD-MDP', 'Sprained ankle',                'high',     '2026-10-10 09:00:00+00');
 ```
 ::check
 ```sql
 SELECT id, title, raised_at
-FROM inspection
-WHERE project_code = 'NH48-PKG3'
+FROM appointment
+WHERE clinic_code = 'BLR-KRM'
   AND (raised_at, id) < (timestamptz '2026-10-10 09:00:00+00', 7)
 ORDER BY raised_at DESC, id DESC
 LIMIT 4;
@@ -979,7 +988,7 @@ LIMIT 4;
 ::acceptance
 - Returns ids 6, 5, 4, 3 in that order.
 - Row 6 is included (same timestamp as the bookmark, smaller id); row 8 is not (same timestamp, larger id — it was on page 1).
-- Rows from `NH44-PKG1` never appear.
+- Rows from `HYD-MDP` never appear.
 - No `OFFSET`.
 ::hint
 Page 1 was ids 11, 10, 9, 8, 7. Which rows come "after" id 7 in newest-first order?
@@ -988,12 +997,12 @@ Comparing only `raised_at < '2026-10-10 09:00'` loses row 6, which shares the ti
 ::hint
 PostgreSQL compares row values left to right: `(a, b) < (x, y)` means `a < x OR (a = x AND b < y)`.
 ::hint
-`WHERE project_code = ... AND (raised_at, id) < (timestamptz '...', 7) ORDER BY raised_at DESC, id DESC LIMIT 4`
+`WHERE clinic_code = ... AND (raised_at, id) < (timestamptz '...', 7) ORDER BY raised_at DESC, id DESC LIMIT 4`
 ::solution
 ```sql
 SELECT id, title, raised_at
-FROM inspection
-WHERE project_code = 'NH48-PKG3'
+FROM appointment
+WHERE clinic_code = 'BLR-KRM'
   AND (raised_at, id) < (timestamptz '2026-10-10 09:00:00+00', 7)
 ORDER BY raised_at DESC, id DESC
 LIMIT 4;
@@ -1001,12 +1010,12 @@ LIMIT 4;
 
 | id | title |
 |---|---|
-| 6 | Bearing pedestal level off |
-| 5 | Signboard misaligned |
-| 4 | Honeycombing in pier P4 |
-| 3 | Drain outlet blocked |
+| 6 | High fever for three days |
+| 5 | Annual health check-up |
+| 4 | Wound bleeding after surgery |
+| 3 | Recurring migraine |
 
-The row comparison expresses "strictly after the bookmark" in the composite sort order, and an index on `(project_code, raised_at DESC, id DESC)` lets PostgreSQL seek straight to the bookmark instead of reading and discarding earlier rows. In the API, fetch `limit + 1` rows to know whether to return a `nextCursor`.
+The row comparison expresses "strictly after the bookmark" in the composite sort order, and an index on `(clinic_code, raised_at DESC, id DESC)` lets PostgreSQL seek straight to the bookmark instead of reading and discarding earlier rows. In the API, fetch `limit + 1` rows to know whether to return a `nextCursor`.
 ::mistakes
 - `raised_at < bookmark` alone: skips rows that share the bookmark's timestamp.
 - `raised_at <= bookmark`: repeats rows from page 1.
@@ -1014,16 +1023,16 @@ The row comparison expresses "strictly after the bookmark" in the composite sort
 :::
 
 :::exercise id=m10-rest-design-ex4 difficulty=intermediate kind=code title="A keyset pager with opaque cursors"
-Implement newest-first cursor pagination over an in-memory list of defects, with an opaque cursor, and prove it stays correct while new defects arrive.
+Implement newest-first cursor pagination over an in-memory list of a patient's lab reports, with an opaque cursor, and prove it stays correct while new reports arrive.
 ::requirements
 - Order: `RaisedAt` descending, then `Id` descending.
-- `KeysetPager.GetPage(IEnumerable<Defect> all, string? cursor, int limit)` returns `Page(Items, NextCursor)`; `NextCursor` is null on the last page (fetch one extra item to know).
+- `KeysetPager.GetPage(IEnumerable<LabReport> all, string? cursor, int limit)` returns `Page(Items, NextCursor)`; `NextCursor` is null on the last page (fetch one extra item to know).
 - `limit` outside 1..100 throws `ArgumentOutOfRangeException`.
 - `EncodeCursor(DateTimeOffset raisedAt, int id)` returns a base64url string; `DecodeCursor(string)` reverses it and throws `ArgumentException` for anything malformed.
 ::acceptance
-- Walking 7 defects with `limit = 3` returns 3, 3, 1 items, every defect exactly once, in order.
-- When exactly 6 defects exist and `limit = 3`, the second page has `NextCursor == null`.
-- A defect inserted with a newer `RaisedAt` after page 1 was served does not appear on page 2 and causes no duplicates.
+- Walking 7 lab reports with `limit = 3` returns 3, 3, 1 items, every report exactly once, in order.
+- When exactly 6 lab reports exist and `limit = 3`, the second page has `NextCursor == null`.
+- A lab report inserted with a newer `RaisedAt` after page 1 was served does not appear on page 2 and causes no duplicates.
 - A garbage cursor throws `ArgumentException`.
 ::hint
 The cursor is the sort key of the *last item you returned*: `(RaisedAt, Id)`.
@@ -1040,13 +1049,13 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 
-public sealed record Defect(int Id, DateTimeOffset RaisedAt, string Title);
+public sealed record LabReport(int Id, DateTimeOffset RaisedAt, string Title);
 
-public sealed record Page(IReadOnlyList<Defect> Items, string? NextCursor);
+public sealed record Page(IReadOnlyList<LabReport> Items, string? NextCursor);
 
 public static class KeysetPager
 {
-    public static Page GetPage(IEnumerable<Defect> all, string? cursor, int limit) => throw new NotImplementedException();
+    public static Page GetPage(IEnumerable<LabReport> all, string? cursor, int limit) => throw new NotImplementedException();
     public static string EncodeCursor(DateTimeOffset raisedAt, int id) => throw new NotImplementedException();
     public static (DateTimeOffset RaisedAt, int Id) DecodeCursor(string cursor) => throw new NotImplementedException();
 }
@@ -1062,10 +1071,10 @@ public class KeysetPagerTests
 {
     private static readonly DateTimeOffset T = new(2026, 10, 10, 9, 0, 0, TimeSpan.Zero);
 
-    private static List<Defect> Seven() => new()
+    private static List<LabReport> Seven() => new()
     {
-        new Defect(1, T.AddHours(-5), "a"), new Defect(2, T.AddHours(-4), "b"), new Defect(3, T, "c"),
-        new Defect(4, T, "d"), new Defect(5, T, "e"), new Defect(6, T.AddHours(1), "f"), new Defect(7, T.AddHours(2), "g"),
+        new LabReport(1, T.AddHours(-5), "a"), new LabReport(2, T.AddHours(-4), "b"), new LabReport(3, T, "c"),
+        new LabReport(4, T, "d"), new LabReport(5, T, "e"), new LabReport(6, T.AddHours(1), "f"), new LabReport(7, T.AddHours(2), "g"),
     };
 
     [Fact]
@@ -1102,7 +1111,7 @@ public class KeysetPagerTests
     {
         var data = Seven();
         var first = KeysetPager.GetPage(data, null, 3);            // 7, 6, 5
-        data.Add(new Defect(8, T.AddHours(3), "new"));
+        data.Add(new LabReport(8, T.AddHours(3), "new"));
         var second = KeysetPager.GetPage(data, first.NextCursor, 3);
         Assert.Equal(new[] { 4, 3, 2 }, second.Items.Select(d => d.Id).ToArray());
     }
@@ -1127,17 +1136,17 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 
-public sealed record Defect(int Id, DateTimeOffset RaisedAt, string Title);
+public sealed record LabReport(int Id, DateTimeOffset RaisedAt, string Title);
 
-public sealed record Page(IReadOnlyList<Defect> Items, string? NextCursor);
+public sealed record Page(IReadOnlyList<LabReport> Items, string? NextCursor);
 
 public static class KeysetPager
 {
-    public static Page GetPage(IEnumerable<Defect> all, string? cursor, int limit)
+    public static Page GetPage(IEnumerable<LabReport> all, string? cursor, int limit)
     {
         if (limit is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(limit), "limit must be 1..100");
 
-        IEnumerable<Defect> query = all.OrderByDescending(d => d.RaisedAt).ThenByDescending(d => d.Id);
+        IEnumerable<LabReport> query = all.OrderByDescending(d => d.RaisedAt).ThenByDescending(d => d.Id);
         if (cursor is not null)
         {
             var (at, id) = DecodeCursor(cursor);
@@ -1183,68 +1192,68 @@ Add a `prevCursor` for "newer than" navigation, and an HMAC signature so clients
 :::
 
 :::exercise id=m10-rest-design-ex5 difficulty=intermediate kind=written title="Design the approval workflow contract and its error catalogue"
-Extend the inspections API with approval. Rules: only users with the `QualityManager` role may approve or reject; rejection requires remarks of at least 20 characters; an inspection with any *critical* defect still open cannot be approved; a rejected inspection can be reopened by its author, returning it to Draft.
+Extend the appointments API with approval. Rules: only users with the `Doctor` role may approve or reject; rejection requires remarks of at least 20 characters (so the patient learns why); an appointment cannot be approved while the patient has an unpaid no-show fee; a rejected appointment can be reopened by the patient who raised it, returning it to Draft.
 
 In the **API design playground** (`#/playground/api`), add the endpoints, then write the Problem Details catalogue (type URI, status, title, when it happens) that client developers will code against.
 ::acceptance
 - One endpoint per transition in the lifecycle diagram (approval, rejection, reopening) with methods and success codes.
-- Distinguishes 401, 403 (wrong role or not the author), 404, 409 (wrong state; open critical defects) and 400/422 (remarks too short).
+- Distinguishes 401, 403 (wrong role or not the requesting patient), 404, 409 (wrong state; unpaid fees) and 400/422 (remarks too short).
 - At least four problem `type` URIs, each with a stable meaning; none relies on clients parsing `detail`.
 - Says how a UI knows which buttons to show (state-dependent links or an `allowedActions` list).
 - The linter shows no errors.
 ::hint
 Start from the state diagram: every arrow is an endpoint; every missing arrow is a 409.
 ::hint
-Is "open critical defects" the same problem as "wrong state"? A client would show different messages, so give it its own type.
+Is "unpaid fees" the same problem as "wrong state"? A client would show different messages, so give it its own type.
 ::hint
 Remarks too short: is the request malformed (400) or semantically invalid (422)? Pick one convention and say why.
 ::hint
-Example row: `https://api.sitequality.example/problems/open-critical-defects` · 409 · "Inspection has open critical defects" · approval attempted while any critical defect is open; extension `defectIds`.
+Example row: `https://api.citycare.example/problems/outstanding-fees` · 409 · "Patient has unpaid fees" · approval attempted while a no-show fee is unpaid; extension `invoiceIds`.
 ::solution
 **Endpoints**
 
 | Transition | Endpoint | Success | Errors |
 |---|---|---|---|
-| Submitted → Approved | `POST /v1/inspections/{id}/approval` body `{ "remarks"?: string }` | 201 + `Location: /v1/inspections/{id}/approval` | 401, 403, 404, 409 |
-| Submitted → Rejected | `POST /v1/inspections/{id}/rejection` body `{ "remarks": string }` | 201 | 400, 401, 403, 404, 409 |
-| Rejected → Draft | `POST /v1/inspections/{id}/reopening` | 200 | 401, 403, 404, 409 |
-| Read decision | `GET /v1/inspections/{id}/approval` | 200 | 404 if none |
+| Submitted → Approved | `POST /v1/appointments/{id}/approval` body `{ "remarks"?: string }` | 201 + `Location: /v1/appointments/{id}/approval` | 401, 403, 404, 409 |
+| Submitted → Rejected | `POST /v1/appointments/{id}/rejection` body `{ "remarks": string }` | 201 | 400, 401, 403, 404, 409 |
+| Rejected → Draft | `POST /v1/appointments/{id}/reopening` | 200 | 401, 403, 404, 409 |
+| Read decision | `GET /v1/appointments/{id}/approval` | 200 | 404 if none |
 
 **Problem catalogue**
 
-| type (suffix of `https://api.sitequality.example/problems/`) | Status | Title | When |
+| type (suffix of `https://api.citycare.example/problems/`) | Status | Title | When |
 |---|---|---|---|
 | `invalid-transition` | 409 | Action not allowed in current state | e.g. approving a Draft; extension `currentStatus` |
-| `open-critical-defects` | 409 | Inspection has open critical defects | approval while critical defects are open; extension `defectIds` |
-| `insufficient-role` | 403 | You don't have permission for this action | not a `QualityManager` |
-| `not-author` | 403 | Only the author can reopen | reopening by someone else |
-| `concurrent-change` | 409 (or 412 with `If-Match`) | Inspection changed | version mismatch during the transition |
+| `outstanding-fees` | 409 | Patient has unpaid fees | approval while a no-show fee is unpaid; extension `invoiceIds` |
+| `insufficient-role` | 403 | You don't have permission for this action | not a `Doctor` |
+| `not-requester` | 403 | Only the requesting patient can reopen | reopening by someone else |
+| `concurrent-change` | 409 (or 412 with `If-Match`) | Appointment changed | version mismatch during the transition |
 | validation (standard) | 400 | One or more validation errors occurred | `errors.remarks` shorter than 20 characters |
 
-**Buttons**: each inspection representation includes links only for actions the *current user* may take now (`approve`, `reject`, `reopen`). The server evaluates both state and role, so the UI never duplicates the rules; it still handles 409 because state can change between rendering and clicking.
+**Buttons**: each appointment representation includes links only for actions the *current user* may take now (`approve`, `reject`, `reopen`). The server evaluates both state and role, so the UI never duplicates the rules; it still handles 409 because state can change between rendering and clicking.
 
 **400 vs 422**: we use 400 with the standard `errors` dictionary for all input validation, because ASP.NET Core's `ValidationProblem` and most client libraries already handle it; 409 is reserved for "valid request, wrong state".
 ::mistakes
-- A single `PATCH { "status": "approved" }` — permissions per transition and the defect check get buried in a generic update.
+- A single `PATCH { "status": "approved" }` — permissions per transition and the unpaid-fee check get buried in a generic update.
 - One generic `error` type for everything, so the UI can only show "Something went wrong".
 - Showing an Approve button based on the client's own copy of the rules.
 :::
 
 :::exercise id=m10-rest-design-ex6 difficulty=advanced kind=code title="Implement JSON Merge Patch with field rules"
-Support `PATCH /v1/inspections/{id}` with `Content-Type: application/merge-patch+json` (RFC 7396), and reject patches that touch read-only fields or remove required ones.
+Support `PATCH /v1/appointments/{id}` with `Content-Type: application/merge-patch+json` (RFC 7396), and reject patches that touch read-only fields or remove required ones.
 ::requirements
 - `MergePatch.Apply(JsonNode? target, JsonNode? patch)` implements RFC 7396 and returns a **new** node; the inputs are not modified.
   - If the patch is an object: start from the target if it is an object (otherwise an empty object); for each member, a JSON `null` removes the key; any other value is merged recursively.
   - If the patch is not an object (array, string, number, `null`), the result is the patch itself.
 - `MergePatch.Validate(JsonObject patch)` returns a dictionary of field → messages:
-  - `id`, `status`, `raisedAt`, `projectCode` are read-only: "is read-only".
+  - `id`, `status`, `raisedAt`, `clinicCode` are read-only: "is read-only".
   - `title` and `severity` are required: setting them to `null` gives "cannot be removed".
-  - Anything other than those and `chainage` gives "is not a known field".
+  - Anything other than those and `preferredTime` gives "is not a known field".
   - An empty dictionary means the patch is acceptable.
 ::acceptance
 - RFC 7396 examples pass: replace a value, add a key, remove with `null`, nested merge, arrays replaced wholesale.
 - The original target is unchanged after `Apply`.
-- `{ "status": "approved" }` fails validation on `status`; `{ "title": null }` fails on `title`; `{ "chainage": null }` is valid.
+- `{ "status": "approved" }` fails validation on `status`; `{ "title": null }` fails on `title`; `{ "preferredTime": null }` is valid.
 ::hint
 The RFC gives the whole algorithm in eight lines of pseudocode. Translate it literally.
 ::hint
@@ -1317,7 +1326,7 @@ public class MergePatchTests
         Assert.Contains("cannot be removed", errors["title"][0]);
     }
 
-    [Fact] public void Optional_field_can_be_removed() => Assert.Empty(MergePatch.Validate(JsonNode.Parse("{\"chainage\":null}")!.AsObject()));
+    [Fact] public void Optional_field_can_be_removed() => Assert.Empty(MergePatch.Validate(JsonNode.Parse("{\"preferredTime\":null}")!.AsObject()));
 
     [Fact] public void Unknown_field_is_rejected() => Assert.Contains("not a known field", MergePatch.Validate(JsonNode.Parse("{\"colour\":\"red\"}")!.AsObject())["colour"][0]);
 }
@@ -1330,9 +1339,9 @@ using System.Text.Json.Nodes;
 
 public static class MergePatch
 {
-    private static readonly HashSet<string> ReadOnly = new(StringComparer.Ordinal) { "id", "status", "raisedAt", "projectCode" };
+    private static readonly HashSet<string> ReadOnly = new(StringComparer.Ordinal) { "id", "status", "raisedAt", "clinicCode" };
     private static readonly HashSet<string> Required = new(StringComparer.Ordinal) { "title", "severity" };
-    private static readonly HashSet<string> Optional = new(StringComparer.Ordinal) { "chainage" };
+    private static readonly HashSet<string> Optional = new(StringComparer.Ordinal) { "preferredTime" };
 
     public static JsonNode? Apply(JsonNode? target, JsonNode? patch)
     {
@@ -1361,7 +1370,7 @@ public static class MergePatch
 }
 ```
 
-In the endpoint: read the body as `JsonObject`, validate, load the current inspection, serialise it to a `JsonNode`, apply the patch, deserialise into the domain type (which re-runs domain validation such as the chainage format), and save with the version from `If-Match`. Status changes stay on the action endpoints, which is why `status` is read-only here.
+In the endpoint: read the body as `JsonObject`, validate, load the current appointment, serialise it to a `JsonNode`, apply the patch, deserialise into the domain type (which re-runs domain validation such as the preferredTime format), and save with the version from `If-Match`. Status changes stay on the action endpoints, which is why `status` is read-only here.
 ::mistakes
 - Treating a missing key and an explicit `null` the same — in merge patch, only `null` removes.
 - Merging arrays element by element; RFC 7396 replaces them entirely (use JSON Patch, RFC 6902, if clients need fine-grained array edits).
@@ -1370,7 +1379,7 @@ In the endpoint: read the body as `JsonObject`, validate, load the current inspe
 
 ## Automated testing
 
-1. **Parsing and domain rules as unit tests.** `ListQueryParser`, `PageCursor`, `SortParser` and `Inspection.Submit()` are plain C#. Cover every error message clients depend on.
+1. **Parsing and domain rules as unit tests.** `ListQueryParser`, `PageCursor`, `SortParser` and `Appointment.Submit()` are plain C#. Cover every error message clients depend on.
 2. **Contract tests with `WebApplicationFactory`** (in a test project referencing `Microsoft.AspNetCore.Mvc.Testing`) assert the HTTP contract, not the implementation:
 
 ```csharp
@@ -1379,24 +1388,24 @@ public async Task Create_returns_201_with_location_and_problem_details_on_valida
 {
     var client = factory.CreateClient();
 
-    var created = await client.PostAsJsonAsync("/v1/projects/NH48-PKG3/inspections",
-        new { title = "Honeycombing in pier P4", severity = "critical", chainage = "112+450" });
+    var created = await client.PostAsJsonAsync("/v1/clinics/BLR-KRM/appointments",
+        new { title = "Wound bleeding after surgery", severity = "critical", preferredTime = "10:30" });
     Assert.Equal(HttpStatusCode.Created, created.StatusCode);
-    Assert.StartsWith("/v1/inspections/", created.Headers.Location!.OriginalString);
+    Assert.StartsWith("/v1/appointments/", created.Headers.Location!.OriginalString);
 
-    var invalid = await client.PostAsJsonAsync("/v1/projects/NH48-PKG3/inspections", new { title = "", severity = "high", chainage = "km 112" });
+    var invalid = await client.PostAsJsonAsync("/v1/clinics/BLR-KRM/appointments", new { title = "", severity = "high", preferredTime = "10.30am" });
     Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
     Assert.Equal("application/problem+json", invalid.Content.Headers.ContentType!.MediaType);
     var problem = await invalid.Content.ReadFromJsonAsync<HttpValidationProblemDetails>();
     Assert.Contains("title", problem!.Errors.Keys);
-    Assert.Contains("chainage", problem.Errors.Keys);
+    Assert.Contains("preferredTime", problem.Errors.Keys);
 }
 
 [Fact]
 public async Task Submitting_twice_returns_409_invalid_transition()
 {
     var client = factory.CreateClient();
-    var created = await client.PostAsJsonAsync("/v1/projects/NH48-PKG3/inspections", new { title = "Drain blocked", severity = "medium" });
+    var created = await client.PostAsJsonAsync("/v1/clinics/BLR-KRM/appointments", new { title = "Recurring migraine", severity = "medium" });
     var location = created.Headers.Location!.OriginalString;
 
     Assert.Equal(HttpStatusCode.OK, (await client.PostAsync($"{location}/submission", null)).StatusCode);
@@ -1404,18 +1413,18 @@ public async Task Submitting_twice_returns_409_invalid_transition()
 
     Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
     var problem = await second.Content.ReadFromJsonAsync<ProblemDetails>();
-    Assert.Equal("https://api.sitequality.example/problems/invalid-transition", problem!.Type);
+    Assert.Equal("https://api.citycare.example/problems/invalid-transition", problem!.Type);
 }
 ```
 
-3. **Pagination property test.** Seed 1,000 inspections with many identical timestamps, page through with random limits, and assert every id appears exactly once and in order. Insert rows between page requests and assert no duplicates.
+3. **Pagination property test.** Seed 1,000 appointments with many identical timestamps, page through with random limits, and assert every id appears exactly once and in order. Insert rows between page requests and assert no duplicates.
 4. **OpenAPI snapshot.** Generate the OpenAPI document in CI (`Microsoft.AspNetCore.OpenApi`) and diff it against the committed version; an unexpected change is a contract change that needs review ([see versioning](#/lesson/m10-versioning-contracts)).
 
 ## Real-world application
 
 - **Public APIs of payment, cloud and developer platforms** follow these conventions closely: plural resource collections, cursor-based pagination for large lists, consistent error objects, idempotency keys on create. Their public docs are worth reading as examples of contracts written for strangers.
-- **Government and infrastructure platforms** exchange data between agencies, contractors and consultants. A clean resource model (projects, packages, inspections, bills, measurements) and stable error types matter more there than anywhere, because each integration is built once and maintained for years by a different team.
-- **Mobile sync** (field apps that work offline) depends on stable cursor pagination and `ETag`-based conditional requests to download only what changed.
+- **Healthcare platforms** exchange data between clinics, labs, pharmacies and insurers. A clean resource model (clinics, doctors, appointments, lab reports, claims) and stable error types matter more there than anywhere, because each integration is built once and maintained for years by a different team.
+- **Mobile sync** (apps that work offline, such as a doctor's tablet at a rural health camp) depends on stable cursor pagination and `ETag`-based conditional requests to download only what changed.
 - **ASP.NET Core** itself produces RFC-compliant Problem Details through `AddProblemDetails()`, and OpenAPI generation reads `TypedResults` signatures, so following these conventions also makes the framework do more for you.
 
 ## Interview questions
@@ -1484,21 +1493,21 @@ A: An empty list hides the client's mistake and looks like missing data.
 
 :::quiz pass=70
 ::q single
-A mobile client needs to list a project's inspections. Which endpoint is best?
-- [ ] `POST /api/getInspections` with the project in the body
-- [x] `GET /v1/projects/{code}/inspections?limit=25`
-- [ ] `GET /v1/inspections/list?project={code}&all=true`
-- [ ] `GET /v1/getProjectInspections/{code}`
+A mobile client needs to list a clinic's appointments. Which endpoint is best?
+- [ ] `POST /api/getAppointments` with the clinic in the body
+- [x] `GET /v1/clinics/{code}/appointments?limit=25`
+- [ ] `GET /v1/appointments/list?clinic={code}&all=true`
+- [ ] `GET /v1/getClinicAppointments/{code}`
 > A GET on a plural collection scoped by its owner is safe, cacheable and predictable, and the limit keeps responses bounded.
 ::q single
-An approver tries to approve an inspection that is still a Draft. What should the API return?
+A doctor tries to approve an appointment that is still a Draft. What should the API return?
 - [ ] 400 Bad Request
 - [ ] 403 Forbidden
 - [x] 409 Conflict with a Problem Details type such as `.../invalid-transition`
 - [ ] 200 OK with `{ "success": false }`
 > The request is well-formed and the user is allowed to approve in general; the resource's current state forbids it.
 ::q single
-Your list uses `OFFSET`/`LIMIT`. A sync job pages through while engineers add new inspections at the top. What happens?
+Your list uses `OFFSET`/`LIMIT`. A sync job pages through while patients add new appointments at the top. What happens?
 - [ ] Nothing; offsets are stable.
 - [x] Rows shift down, so the job sees some rows twice and may miss others.
 - [ ] The database locks the table.
@@ -1519,7 +1528,7 @@ Which keyset condition returns the rows after the bookmark (t, 7) in newest-firs
 - [ ] `WHERE id > 7`
 > The row comparison means raised_at < t, or raised_at = t and id < 7. The second option wrongly drops older rows whose id is larger than 7.
 ::q single
-A partner's client parses `detail` strings like "Inspection is Approved; only Draft..." to decide what to show. You want to reword the message. What is the underlying design flaw?
+A partner's client parses `detail` strings like "Appointment is Approved; only Draft..." to decide what to show. You want to reword the message. What is the underlying design flaw?
 - [ ] Messages should be in a database.
 - [x] Clients should branch on a stable `type` URI; `detail` is human-readable and may change.
 - [ ] The API should return 500 instead.

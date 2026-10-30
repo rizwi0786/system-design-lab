@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 80
 prerequisites: [m11-nfrs, m11-clarifying-requirements]
-related: [m11-latency-numbers, m11-scaling, m11-cost-estimation, m11-database-architecture, m09-partitioning-sharding, m11-hld-framework]
+related: [m11-latency-numbers, m11-scaling, m11-cost-estimation, m11-database-architecture, m09-partitioning-sharding, m11-hld-framework, m17-scaling-journey]
 tags: [hld, estimation, back-of-the-envelope, rps, storage, bandwidth, powers-of-two]
 patterns: []
 summary: Back-of-the-envelope maths for system design — average and peak requests per second, read/write ratios, bandwidth, storage over time and instance counts — with worked examples, a C# estimator and exercises that have numeric answers.
@@ -125,7 +125,7 @@ These ranges are rules of thumb. If you have a daily traffic curve, use it: peak
 Split traffic into reads (queries that do not change data) and writes (inserts, updates, deletes). The **read/write ratio** shapes the design:
 
 - **Read-heavy (10:1 to 100:1 or more):** news feeds, product catalogues, bill lookups. Caching and read replicas help a lot.
-- **Write-heavy (1:1 or below):** logging, telemetry, IoT sensors, toll events. Caching barely helps; you need efficient write paths, batching, append-only storage and partitioning.
+- **Write-heavy (1:1 or below):** logging, telemetry, IoT sensors, parcel-scan events. Caching barely helps; you need efficient write paths, batching, append-only storage and partitioning.
 - **Balanced, but writes must be correct:** payments, bookings. Writes are few but need transactions.
 
 Also note **write amplification**: one logical write may produce several physical writes (the row, 3 indexes, the write-ahead log, a replica, an audit row, an outbox event).
@@ -173,7 +173,7 @@ The same reasoning applies to databases (queries per second per core, connection
 
 ### When the numbers say "simple"
 
-Most business systems are smaller than they feel. An internal app for 2,000 employees making 200 requests each per working day is 400,000 requests a day: about 12 RPS average and maybe 50 RPS at peak. One pair of small instances and one PostgreSQL server handle that with lots of room. Saying so, with the arithmetic, is a strong answer.
+Most business systems are smaller than they feel. An internal app for 2,000 employees making 200 requests each per working day is 400,000 requests a day: about 12 RPS average and maybe 50 RPS at peak. One pair of small instances and one PostgreSQL server handle that with lots of room. Saying so, with the arithmetic, is a strong answer. [Scaling a real system from 100 to 10 million users](#/lesson/m17-scaling-journey) applies exactly this habit: it re-estimates traffic and storage at each growth stage of a grocery-delivery app and changes the architecture only when the numbers (and measurements) say the current one will break.
 
 ## Visual explanation
 
@@ -237,9 +237,9 @@ Storage (rows):   6 M writes × 300 B         = 1.8 GB/day ≈ 660 GB/year raw
 
 **Conclusion.** About 600 RPS at peak and 1 TB a year. One well-sized PostgreSQL primary with a standby handles this; partition the taps table by month so old months can be archived. Because the ratio is close to 1:1, caching helps only for stations and fares (which change rarely), not for the write-heavy taps.
 
-### Example B — Site-photo storage for highway projects
+### Example B — Patient-photo storage for a skin and dental clinic chain
 
-**Inputs.** 1,500 active construction sites. Supervisors upload 300 photos per site per working day, 2.5 MB each, between 08:00 and 18:00. Photos are kept for the project duration plus 5 years for audit (assume 8 years total). Thumbnails add 5 %. 20 % more sites each year.
+**Inputs.** 1,500 clinics. Staff upload about 300 clinical photos per clinic per working day (roughly 30 patients × 10 photos: before and after treatment, X-ray snapshots), 2.5 MB each, between 08:00 and 18:00, six days a week (about 300 working days a year). Medical records are kept for 8 years (assume this for medico-legal reasons; confirm the actual rule with the client's compliance team). Thumbnails add 5 %. The chain opens 20 % more clinics each year.
 
 ```text
 Photos per day:     1,500 × 300                          = 450,000
@@ -253,11 +253,11 @@ Year 2 added:       355 × 1.2 ≈ 426 TB; year 3: 355 × 1.44 ≈ 511 TB
 Three-year total:   355 + 426 + 511                      ≈ 1.3 PB
 ```
 
-**Conclusion.** The request rate is trivial (40 uploads/s), but storage reaches petabytes within three years and dominates cost. The design follows: photos go directly from the phone to object storage using presigned URLs (the API never touches the bytes), with lifecycle rules that move photos older than 90 days to a cheaper, colder tier. Metadata sits comfortably in PostgreSQL. A good interview answer stops to say: "the hard part here is storage cost, not traffic."
+**Conclusion.** The request rate is trivial (40 uploads/s), but storage reaches petabytes within three years (and 8-year retention means nothing is deleted for a long time), so storage dominates cost. The design follows: photos go directly from the phone to object storage using presigned URLs (the API never touches the bytes), with lifecycle rules that move photos older than 90 days to a cheaper, colder tier. Metadata sits comfortably in PostgreSQL. Because these are health records, the photos must be encrypted at rest, never publicly readable, and served only through short-lived signed URLs after an access check. A good interview answer stops to say: "the hard part here is storage cost, not traffic."
 
-### Example C — Toll-plaza event ingestion
+### Example C — Parcel-scan event ingestion for a courier network
 
-A system like national electronic toll collection. **Inputs (assumptions).** 12 million toll transactions a day across 1,000 plazas. Each event: 1 KB of JSON plus a 100 KB plate image. Peak: festival weekends are 2× a normal day, and the busiest hour holds 10 % of the day's traffic. Events are kept 1 year online, then archived.
+A system like a national parcel courier's tracking backbone. **Inputs (assumptions).** 12 million scan events a day (pickup, hub in, hub out, out for delivery, delivered) from handheld scanners and delivery agents' phones across 1,000 hubs. Each event: 1 KB of JSON plus a 100 KB photo (parcel label or proof of delivery). Peak: festival-sale weeks are 2× a normal day, and the busiest hour holds 10 % of the day's scans. Events are kept 1 year online, then archived. Customer tracking-page reads are served from a separate cached read model and estimated separately; this example sizes the scan-ingestion path.
 
 ```text
 Average events:      12 M ÷ 86,400                    ≈ 139 events/s
@@ -267,10 +267,10 @@ Ingress (JSON):      700 × 1 KB                       = 700 KB/s (small)
 Ingress (images):    700 × 100 KB                     = 70 MB/s ≈ 560 Mbit/s
 Event storage:       12 M × 1 KB                      = 12 GB/day ≈ 4.4 TB/year (× 1.5 indexes ≈ 6.6 TB)
 Image storage:       12 M × 100 KB                    = 1.2 TB/day ≈ 440 TB/year
-Read/write:          writes dominate; reads are disputes, audits and analytics (perhaps 1:20)
+Read/write:          writes dominate; reads on this path are delivery disputes, audits and analytics (perhaps 1:20)
 ```
 
-**Conclusion.** About 700 writes per second at peak: write-heavy, with steady 560 Mbit/s of image ingress. That points to a queue or stream in front of the database to absorb bursts and let plazas buffer during network drops, batched inserts into a time-partitioned table, and images in object storage referenced by key. Analytics should run on a separate copy, not the ingest database.
+**Conclusion.** About 700 writes per second at peak: write-heavy, with steady 560 Mbit/s of image ingress. That points to a queue or stream in front of the database to absorb bursts and let scanners and phones buffer offline during network drops, batched inserts into a time-partitioned table, and images in object storage referenced by key. Analytics should run on a separate copy, not the ingest database.
 
 ## Production-style C# implementation
 
@@ -456,19 +456,19 @@ Estimate the same quantity two ways. Storage from records × size should agree, 
 
 ## Practical playground
 
-The graph below is a first sketch of the toll-plaza ingestion system from Example C, with the client node's `rps` set to the festival peak of 700 events per second. Open it in the HLD canvas and annotate each node with the numbers it must handle: events per second, MB/s of images, storage per year. Then decide: does the database need a queue in front of it? Where do the images go? How many API instances do you need at 1,000 events/s per instance and 65 % utilisation across two zones?
+The graph below is a first sketch of the parcel-scan ingestion system from Example C, with the client node's `rps` set to the festival peak of 700 events per second. Open it in the HLD canvas and annotate each node with the numbers it must handle: events per second, MB/s of images, storage per year. Then decide: does the database need a queue in front of it? Where do the images go? How many API instances do you need at 1,000 events/s per instance and 65 % utilisation across two zones?
 
-:::playground type=hld title="Size the toll-event ingestion pipeline"
+:::playground type=hld title="Size the parcel-scan ingestion pipeline"
 ```json
 {
   "nodes": [
-    { "id": "plaza", "type": "client", "label": "Toll plaza lane controllers (1,000 plazas)", "props": { "rps": 700 } },
+    { "id": "hub", "type": "client", "label": "Hub scanners and courier phones (1,000 hubs)", "props": { "rps": 700 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
     { "id": "api", "type": "app-server", "label": "Ingest API", "props": { "instances": 2 } },
     { "id": "db", "type": "database", "label": "PostgreSQL (events + images)", "props": { "replicas": 0 } }
   ],
   "edges": [
-    { "from": "plaza", "to": "lb", "kind": "sync" },
+    { "from": "hub", "to": "lb", "kind": "sync" },
     { "from": "lb", "to": "api", "kind": "sync" },
     { "from": "api", "to": "db", "kind": "sync", "label": "1 KB event + 100 KB image per row" }
   ]
@@ -620,7 +620,7 @@ Storage is tiny; think about what that means for caching.
 
 (b) 1,200,000 × 0.7 = 840,000 students × 3 × 2 = 5,040,000 calls ÷ 1,800 s = **2,800 RPS** (and the first few minutes will be higher still; design for perhaps 2× that, about 5,600 RPS).
 
-(c) 2,800 ÷ 1.2 ≈ **2,300×** the normal average. No daily peak factor would have predicted that.
+(c) 2,800 ÷ 1.16 ≈ **2,400×** the normal average. No daily peak factor would have predicted that.
 
 (d) 2,800 × 4 KB = 11,200 KB/s ≈ **11.2 MB/s ≈ 90 Mbit/s** (≈ 180 Mbit/s at the 2× design figure).
 
@@ -987,8 +987,8 @@ A simulation that varies the peak minute by minute (from a measured traffic curv
 Add a `CacheDown` flag that recomputes the plan with a 0 % hit ratio and reports how many extra replicas the incident would need.
 :::
 
-:::exercise id=m11-capacity-estimation-ex6 difficulty=advanced kind=hld title="Size the toll-event ingestion pipeline"
-Using Example C's numbers (700 events/s at the festival peak, 1 KB event + 100 KB image, 4.4 TB/year of events and about 440 TB/year of images), redesign the playground graph. Assume an ingest API instance handles 1,000 events/s at 65 % target utilisation, and plazas must keep working for up to 30 minutes of network loss.
+:::exercise id=m11-capacity-estimation-ex6 difficulty=advanced kind=hld title="Size the parcel-scan ingestion pipeline"
+Using Example C's numbers (700 events/s at the festival peak, 1 KB event + 100 KB image, 4.4 TB/year of events and about 440 TB/year of images), redesign the playground graph. Assume an ingest API instance handles 1,000 events/s at 65 % target utilisation, and scanners must keep working for up to 30 minutes of network loss at a hub.
 ::acceptance
 - Images are stored in object storage, not in the database.
 - A queue or stream absorbs bursts between the API and the database; its retention covers at least the 30-minute outage catch-up.
@@ -1000,20 +1000,20 @@ Which path carries 70 MB/s and which carries 0.7 MB/s?
 ::hint
 700 ÷ (1,000 × 0.65) ≈ 1.08 → 2 instances needed; with 2 zones, each zone must hold 2.
 ::hint
-After a 30-minute outage, a plaza uploads its backlog: 30 × 60 × (its share of 700/s). How long can the stream retain events?
+After a 30-minute outage, a hub uploads its backlog: 30 × 60 × (its share of 700/s). How long can the stream retain events?
 ::hint
 Add `object-storage`, `stream` (or `queue`), `worker` for batch inserts, and a `read-replica` or separate analytics store.
 ::starter
 ```json
 {
   "nodes": [
-    { "id": "plaza", "type": "client", "label": "Toll plaza lane controllers (1,000 plazas)", "props": { "rps": 700 } },
+    { "id": "hub", "type": "client", "label": "Hub scanners and courier phones (1,000 hubs)", "props": { "rps": 700 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer" },
     { "id": "api", "type": "app-server", "label": "Ingest API", "props": { "instances": 2 } },
     { "id": "db", "type": "database", "label": "PostgreSQL (events + images)", "props": { "replicas": 0 } }
   ],
   "edges": [
-    { "from": "plaza", "to": "lb", "kind": "sync" },
+    { "from": "hub", "to": "lb", "kind": "sync" },
     { "from": "lb", "to": "api", "kind": "sync" },
     { "from": "api", "to": "db", "kind": "sync", "label": "1 KB event + 100 KB image per row" }
   ]
@@ -1023,20 +1023,20 @@ Add `object-storage`, `stream` (or `queue`), `worker` for batch inserts, and a `
 ```json
 {
   "nodes": [
-    { "id": "plaza", "type": "client", "label": "Lane controllers (local buffer 30+ min)", "props": { "rps": 700 } },
+    { "id": "hub", "type": "client", "label": "Scanners and courier phones (local buffer 30+ min)", "props": { "rps": 700 } },
     { "id": "lb", "type": "load-balancer", "label": "Load balancer", "props": { "multiAz": true } },
     { "id": "api", "type": "app-server", "label": "Ingest API (validates, signs URLs)", "props": { "instances": 4, "multiAz": true } },
-    { "id": "os", "type": "object-storage", "label": "Plate images (~440 TB/year, cold tier after 90 days)" },
-    { "id": "st", "type": "stream", "label": "Toll events stream (7-day retention)" },
+    { "id": "os", "type": "object-storage", "label": "Label and delivery photos (~440 TB/year, cold tier after 90 days)" },
+    { "id": "st", "type": "stream", "label": "Scan events stream (7-day retention)" },
     { "id": "w", "type": "worker", "label": "Batch writer (500 rows per insert)", "props": { "instances": 3 } },
     { "id": "db", "type": "database", "label": "PostgreSQL, events partitioned by day (~6.6 TB/year with indexes)", "props": { "replicas": 1, "multiAz": true } },
     { "id": "an", "type": "read-replica", "label": "Analytics / disputes replica" },
     { "id": "mon", "type": "monitoring", "label": "Lag, backlog, ingest RPS" }
   ],
   "edges": [
-    { "from": "plaza", "to": "lb", "kind": "sync", "label": "events 0.7 MB/s" },
+    { "from": "hub", "to": "lb", "kind": "sync", "label": "events 0.7 MB/s" },
     { "from": "lb", "to": "api", "kind": "sync" },
-    { "from": "plaza", "to": "os", "kind": "sync", "label": "images via presigned URL, 70 MB/s" },
+    { "from": "hub", "to": "os", "kind": "sync", "label": "images via presigned URL, 70 MB/s" },
     { "from": "api", "to": "st", "kind": "async", "label": "append event" },
     { "from": "st", "to": "w", "kind": "async" },
     { "from": "w", "to": "db", "kind": "sync", "label": "batched inserts" },
@@ -1050,14 +1050,14 @@ Add `object-storage`, `stream` (or `queue`), `worker` for batch inserts, and a `
 
 - *API instances:* 700 ÷ (1,000 × 0.65) = 1.08 → 2 needed. With two zones each zone must carry 2 on its own: **4 instances**. Recovery bursts after an outage are absorbed by the stream, not by adding instances.
 - *Bandwidth:* events 700 × 1 KB ≈ 0.7 MB/s through the API; images 700 × 100 KB = 70 MB/s ≈ 560 Mbit/s straight to object storage, never through the API.
-- *Outage catch-up:* if 10 % of plazas (70 events/s) are offline for 30 minutes, they buffer 70 × 1,800 = 126,000 events and upload them on reconnection. At an extra 300 events/s of spare capacity that clears in about 7 minutes. Stream retention of 7 days covers worker outages too.
+- *Outage catch-up:* if 10 % of hubs (70 events/s) are offline for 30 minutes, they buffer 70 × 1,800 = 126,000 events and upload them on reconnection. At an extra 300 events/s of spare capacity that clears in about 7 minutes. Stream retention of 7 days covers worker outages too.
 - *Database:* 12 M rows/day; batched inserts of 500 rows mean about 1.4 insert statements per second at peak instead of 700. Daily partitions make "drop data older than 1 year" a metadata operation. About 6.6 TB/year including indexes.
 - *Images:* about 440 TB/year; a lifecycle rule moves objects older than 90 days to a cold tier, which is the main cost lever.
-- *Analytics* run on a replica so dispute searches cannot slow ingestion.
+- *Analytics* run on a replica so dispute searches ("the app says delivered, but I never got it") cannot slow ingestion.
 ::mistakes
 - Storing images as `bytea` in PostgreSQL, which turns 440 TB/year into database storage, backups and replication traffic.
 - Sizing the API for 700/s and forgetting the zone-loss and catch-up headroom.
-- No local buffering at the plaza, so a network drop loses toll events.
+- No local buffering on the scanner or phone, so a network drop loses scan events.
 :::
 
 ## Automated testing
@@ -1090,8 +1090,8 @@ public void Zone_loss_doubles_instances_with_two_zones() =>
 
 - **Ticketing and railway booking** systems face bursts when booking windows open (for example, Tatkal booking in Indian railways opening at a fixed time). The design problem is the first few minutes, which is why such systems use queues, waiting rooms and rate limits rather than sizing for the daily average.
 - **Exam and results portals** have a few hours a year of extreme load against a tiny, static dataset. Estimation shows the right answer is aggressive caching and CDNs, not bigger databases.
-- **Construction and infrastructure monitoring** platforms (site photos, drone surveys, BIM models) have low request rates and very large storage. Estimates point the design at object storage, lifecycle tiers and upload paths that bypass the API.
-- **Telemetry and toll or IoT ingestion** systems are write-heavy. Estimates point to streams, batching and time-partitioned tables.
+- **Medical-imaging and clinic-record platforms** (patient photos, X-rays, scanned reports) have low request rates and very large, long-retained storage. Estimates point the design at object storage, lifecycle tiers and upload paths that bypass the API.
+- **Telemetry, parcel-tracking and IoT ingestion** systems are write-heavy. Estimates point to streams, batching and time-partitioned tables.
 - **Cloud capacity planning** guidance, such as Azure's Well-Architected performance pillar, recommends the same loop: estimate, load-test, monitor actuals, adjust.
 
 ## Interview questions

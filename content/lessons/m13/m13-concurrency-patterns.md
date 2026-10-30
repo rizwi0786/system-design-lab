@@ -7,7 +7,7 @@ status: reviewed
 template: lesson
 minutes: 100
 prerequisites: [m01-how-programs-run, m03-async-await, m03-background-services]
-related: [m13-backpressure, m06-singleton, m07-immutability, m09-locking, m06-object-pool]
+related: [m13-backpressure, m06-singleton, m07-immutability, m09-locking]
 tags: [concurrency, threads, async, channels, actors, locks, dotnet]
 patterns: [Producer-Consumer, Thread Pool, Actor, Read-Write Lock, Double-Checked Locking, Monitor, Semaphore Throttling, Immutable Shared State, Compare-And-Swap, Future, Fork-Join]
 summary: The core patterns for doing many things at once safely in .NET — producer-consumer with Channels, the thread pool, async/await pitfalls, actors, locks, semaphores, immutable snapshots, Interlocked and CAS, futures and fork-join — with when to use each and how each one fails.
@@ -210,13 +210,13 @@ Without `volatile` (or equivalent barriers), another thread might see a non-null
 
 ### Pattern 10: actor model
 
-**Problem.** Some state has complex rules, many concurrent writers, and operations that must not interleave: a wallet balance, a game room, the progress tracker of one construction project.
+**Problem.** Some state has complex rules, many concurrent writers, and operations that must not interleave: a wallet balance, a game room, the live progress of one delivery route.
 
 **Shape.** An **actor** owns its state privately and has a **mailbox**. Other code never touches the state; it sends messages. The actor processes one message at a time, so its state needs no locks. Replies come back as futures.
 
 **.NET tools.** A hand-rolled actor is a `Channel<Message>` with a single reader loop. Frameworks: **Microsoft Orleans** ("virtual actors" called grains, activated on demand and distributed across a cluster) and **Akka.NET**.
 
-**Trade-offs.** Every interaction is a message, so request-reply costs a queue hop. One actor is a serial bottleneck: a hot actor with 10,000 messages per second can fall behind. Two actors that wait on each other's replies can deadlock. Mailboxes need bounds. Actors are excellent for many small, independent pieces of state (one per wallet, one per project); poor for one global hot object.
+**Trade-offs.** Every interaction is a message, so request-reply costs a queue hop. One actor is a serial bottleneck: a hot actor with 10,000 messages per second can fall behind. Two actors that wait on each other's replies can deadlock. Mailboxes need bounds. Actors are excellent for many small, independent pieces of state (one per wallet, one per route); poor for one global hot object.
 
 ### Pattern 11: futures and promises
 
@@ -230,13 +230,13 @@ Starting two independent calls before awaiting either is the simplest concurrenc
 
 ```csharp
 var summaryTask = actor.AskSummaryAsync(ct);   // both start now
-var weatherTask = weather.ForSiteAsync(code, ct);
+var weatherTask = weather.ForRouteAsync(code, ct);
 await Task.WhenAll(summaryTask, weatherTask);  // total time = the slower one, not the sum
 ```
 
 ### Pattern 12: fork-join
 
-**Problem.** A big job splits into many independent pieces: re-generate 12,000 thumbnails, score 50,000 tenders, call an API for 300 sites.
+**Problem.** A big job splits into many independent pieces: re-generate 12,000 thumbnails, rank 50,000 job applications, call an API for 300 delivery hubs.
 
 **Shape.** **Fork** the pieces into parallel work, **join** by waiting for all, then combine results.
 
@@ -270,7 +270,7 @@ The simplest concurrency pattern is **not sharing**. Keep state local to a reque
 
 ### The photo pipeline's moving parts
 
-Our running example: a construction-monitoring platform receives site progress photos from field engineers on highway projects. Each photo is queued, a thumbnail is generated, the location is geocoded through an external API limited to 4 concurrent calls, and per-project progress (photo count, furthest chainage photographed) is tracked.
+Our running example: a parcel-delivery company receives proof-of-delivery photos from riders' phones. Each photo is queued, a thumbnail is generated, the location is geocoded through an external API limited to 4 concurrent calls, and per-route progress (photo count, furthest distance along the route delivered so far) is tracked.
 
 ```mermaid
 classDiagram
@@ -290,20 +290,20 @@ classDiagram
     class ThrottledGeocoder {
         -SemaphoreSlim slots
     }
-    class ProjectSettingsCache {
+    class RouteSettingsCache {
         -ImmutableDictionary settings
-        +Get(string code) ProjectSettings
-        +Upsert(ProjectSettings s) void
+        +Get(string code) RouteSettings
+        +Upsert(RouteSettings s) void
     }
     class CodecHolder {
         -Lock gate
         -ThumbnailCodec codec
         +Codec ThumbnailCodec
     }
-    class ProjectActorRegistry {
-        +For(string code) ProjectProgressActor
+    class RouteActorRegistry {
+        +For(string code) RouteProgressActor
     }
-    class ProjectProgressActor {
+    class RouteProgressActor {
         -Channel~Message~ mailbox
         +TellAsync(double km, DateTimeOffset at, CancellationToken ct) ValueTask
         +AskSummaryAsync(CancellationToken ct) Task~ProgressSummary~
@@ -315,14 +315,14 @@ classDiagram
     PhotoProcessingService --> PhotoQueue : competing consumers
     PhotoProcessingService --> IGeocoder
     IGeocoder <|.. ThrottledGeocoder
-    PhotoProcessingService --> ProjectSettingsCache : lock-free reads
+    PhotoProcessingService --> RouteSettingsCache : lock-free reads
     PhotoProcessingService --> CodecHolder : double-checked init
-    PhotoProcessingService --> ProjectActorRegistry
-    ProjectActorRegistry o-- ProjectProgressActor : one per project
+    PhotoProcessingService --> RouteActorRegistry
+    RouteActorRegistry o-- RouteProgressActor : one per route
     PhotoProcessingService --> PipelineStats : Interlocked
 ```
 
-How to read it: each class is one pattern. `PhotoQueue` wraps a bounded channel (producer-consumer); `PhotoProcessingService` runs several consumer loops that compete for jobs. `ThrottledGeocoder` implements `IGeocoder` and wraps the real one with a `SemaphoreSlim` of 4 permits (semaphore throttling, as a decorator). `ProjectSettingsCache` holds an immutable dictionary that readers use without locks. `CodecHolder` creates an expensive codec once with double-checked locking. `ProjectActorRegistry` holds one `ProjectProgressActor` per project; each actor owns its counters and processes messages one at a time. `PipelineStats` uses `Interlocked` counters. The arrows show that the service depends on all of them, but none of them depend on each other: each piece of shared state has exactly one protection strategy.
+How to read it: each class is one pattern. `PhotoQueue` wraps a bounded channel (producer-consumer); `PhotoProcessingService` runs several consumer loops that compete for jobs. `ThrottledGeocoder` implements `IGeocoder` and wraps the real one with a `SemaphoreSlim` of 4 permits (semaphore throttling, as a decorator). `RouteSettingsCache` holds an immutable dictionary that readers use without locks. `CodecHolder` creates an expensive codec once with double-checked locking. `RouteActorRegistry` holds one `RouteProgressActor` per route; each actor owns its counters and processes messages one at a time. `PipelineStats` uses `Interlocked` counters. The arrows show that the service depends on all of them, but none of them depend on each other: each piece of shared state has exactly one protection strategy.
 
 ### One photo, end to end
 
@@ -331,26 +331,26 @@ sequenceDiagram
     participant API as POST /photos
     participant Q as PhotoQueue (bounded)
     participant C as Consumer 2 of 4
-    participant S as ProjectSettingsCache
+    participant S as RouteSettingsCache
     participant G as ThrottledGeocoder (4 permits)
-    participant A as Actor NH-48-PKG3
+    participant A as Actor PUN-R12
     participant R as GET /progress
     API->>Q: TryEnqueue(job)
     Q-->>API: true, 202 Accepted
     C->>Q: ReadAllAsync yields job
-    C->>S: Get(NH-48-PKG3), no lock
+    C->>S: Get(PUN-R12), no lock
     S-->>C: settings snapshot
     C->>G: LocalityAsync(lat, lon)
     Note over G: WaitAsync: permit 3 of 4 taken
-    G-->>C: Near Vadodara
+    G-->>C: Near Kothrud, Pune
     Note over G: Release in finally
-    C->>A: TellAsync(km 112.4)
+    C->>A: TellAsync(km 18.4)
     Note over A: mailbox, processed in order
     R->>A: AskSummaryAsync()
-    A-->>R: future completes: 214 photos, km 112.4
+    A-->>R: future completes: 38 photos, km 18.4
 ```
 
-Read it top to bottom. The API never processes the photo itself; it tries to put the job in the bounded queue and returns `202 Accepted` at once (or `503` if the queue is full). One of four consumer loops picks it up. Reading project settings needs no lock because the snapshot is immutable. The geocoding call first waits for one of 4 semaphore permits, so at most 4 calls ever reach the external API, and the permit is released in a `finally` even on failure. The consumer then *tells* the project's actor about the photo; it doesn't wait for the actor to update. Later, a dashboard request *asks* the same actor for a summary. That request is queued in the same mailbox behind the photo message, so the reply always includes it. The reply arrives through a `TaskCompletionSource`: a future.
+Read it top to bottom. The API never processes the photo itself; it tries to put the job in the bounded queue and returns `202 Accepted` at once (or `503` if the queue is full). One of four consumer loops picks it up. Reading route settings needs no lock because the snapshot is immutable. The geocoding call first waits for one of 4 semaphore permits, so at most 4 calls ever reach the external API, and the permit is released in a `finally` even on failure. The consumer then *tells* the route's actor about the photo; it doesn't wait for the actor to update. Later, a dashboard request *asks* the same actor for a summary. That request is queued in the same mailbox behind the photo message, so the reply always includes it. The reply arrives through a `TaskCompletionSource`: a future.
 
 ## Step-by-step example
 
@@ -367,8 +367,8 @@ public class NaivePhotoService
     public void Handle(PhotoJob job)
     {
         var locality = _geocoder.LocalityAsync(job.Latitude, job.Longitude, default).Result; // blocks a pool thread
-        if (!PhotoCounts.ContainsKey(job.ProjectCode)) PhotoCounts[job.ProjectCode] = 0;   // check-then-act race
-        PhotoCounts[job.ProjectCode]++;                                                   // lost updates
+        if (!PhotoCounts.ContainsKey(job.RouteCode)) PhotoCounts[job.RouteCode] = 0;   // check-then-act race
+        PhotoCounts[job.RouteCode]++;                                                   // lost updates
         _processed++;                                                                       // lost updates
     }
 }
@@ -383,9 +383,9 @@ Requests now only enqueue into a bounded channel; four consumer loops process jo
 ### Step 3 — protect each piece of shared state with one strategy
 
 - `_processed` → `Interlocked.Increment`.
-- Per-project counts → an actor per project (or, if all you need is a count, `ConcurrentDictionary.AddOrUpdate`).
+- Per-route counts → an actor per route (or, if all you need is a count, `ConcurrentDictionary.AddOrUpdate`).
 - Geocoder → `SemaphoreSlim(4)` decorator.
-- Project settings → immutable snapshot.
+- Route settings → immutable snapshot.
 
 ### Step 4 — async all the way
 
@@ -393,32 +393,32 @@ Replace `.Result` with `await`. Consumers await I/O, so 4 consumers use far fewe
 
 ### Step 5 — batch work with fork-join
 
-A "reprocess all photos for this package" admin action uses `Parallel.ForEachAsync` with `MaxDegreeOfParallelism = 8`, and each piece returns its result for aggregation after the join.
+A "reprocess all photos for this route" admin action uses `Parallel.ForEachAsync` with `MaxDegreeOfParallelism = 8`, and each piece returns its result for aggregation after the join.
 
 ## Production-style C# implementation
 
 ```text
-SitePhotos.Api/
+DeliveryPhotos.Api/
   Program.cs
   Concurrency/PhotoModels.cs
   Concurrency/PipelineStats.cs
   Concurrency/ThrottledGeocoder.cs
-  Concurrency/ProjectSettingsCache.cs
+  Concurrency/RouteSettingsCache.cs
   Concurrency/CodecHolder.cs
   Concurrency/RateCardTable.cs
-  Concurrency/ProjectProgressActor.cs
+  Concurrency/RouteProgressActor.cs
   Concurrency/PhotoPipeline.cs
   Concurrency/BatchReprocessor.cs
 ```
 
 ```csharp file=Concurrency/PhotoModels.cs
-namespace SitePhotos.Concurrency;
+namespace DeliveryPhotos.Concurrency;
 
-public sealed record PhotoJob(Guid Id, string ProjectCode, string BlobPath, double ChainageKm, double Latitude, double Longitude);
+public sealed record PhotoJob(Guid Id, string RouteCode, string BlobPath, double RouteKm, double Latitude, double Longitude);
 
-public sealed record ProgressSummary(string ProjectCode, int Photos, double FurthestChainageKm, DateTimeOffset? LastPhotoAt);
+public sealed record ProgressSummary(string RouteCode, int Photos, double FurthestRouteKm, DateTimeOffset? LastPhotoAt);
 
-public sealed record ProjectSettings(string ProjectCode, int ThumbnailWidth, bool GeocodeEnabled);
+public sealed record RouteSettings(string RouteCode, int ThumbnailWidth, bool GeocodeEnabled);
 
 public sealed record BatchReport(long Succeeded, long Failed);
 
@@ -432,7 +432,7 @@ public sealed class PipelineOptions
 ```
 
 ```csharp file=Concurrency/PipelineStats.cs
-namespace SitePhotos.Concurrency;
+namespace DeliveryPhotos.Concurrency;
 
 /// <summary>Independent counters: each one is atomic on its own, so Interlocked is enough.</summary>
 public sealed class PipelineStats
@@ -462,7 +462,7 @@ public sealed class PipelineStats
 ```
 
 ```csharp file=Concurrency/ThrottledGeocoder.cs
-namespace SitePhotos.Concurrency;
+namespace DeliveryPhotos.Concurrency;
 
 public interface IGeocoder
 {
@@ -503,36 +503,36 @@ public sealed class ThrottledGeocoder(IGeocoder inner, int maxConcurrency) : IGe
 }
 ```
 
-```csharp file=Concurrency/ProjectSettingsCache.cs
+```csharp file=Concurrency/RouteSettingsCache.cs
 using System.Collections.Immutable;
 
-namespace SitePhotos.Concurrency;
+namespace DeliveryPhotos.Concurrency;
 
 /// <summary>Immutable shared state: readers never lock; writers build a new dictionary and swap it in.</summary>
-public sealed class ProjectSettingsCache
+public sealed class RouteSettingsCache
 {
-    private ImmutableDictionary<string, ProjectSettings> _settings =
-        ImmutableDictionary.Create<string, ProjectSettings>(StringComparer.OrdinalIgnoreCase);
+    private ImmutableDictionary<string, RouteSettings> _settings =
+        ImmutableDictionary.Create<string, RouteSettings>(StringComparer.OrdinalIgnoreCase);
 
-    public ProjectSettings Get(string projectCode) =>
-        Volatile.Read(ref _settings).TryGetValue(projectCode, out var s)
+    public RouteSettings Get(string routeCode) =>
+        Volatile.Read(ref _settings).TryGetValue(routeCode, out var s)
             ? s
-            : new ProjectSettings(projectCode, ThumbnailWidth: 320, GeocodeEnabled: true);
+            : new RouteSettings(routeCode, ThumbnailWidth: 320, GeocodeEnabled: true);
 
     /// <summary>Compare-and-swap update: retried internally if another writer won the race.</summary>
-    public void Upsert(ProjectSettings settings) =>
-        ImmutableInterlocked.AddOrUpdate(ref _settings, settings.ProjectCode, settings, (_, _) => settings);
+    public void Upsert(RouteSettings settings) =>
+        ImmutableInterlocked.AddOrUpdate(ref _settings, settings.RouteCode, settings, (_, _) => settings);
 
     /// <summary>Bulk reload, for example from the database every 5 minutes.</summary>
-    public void ReplaceAll(IEnumerable<ProjectSettings> all) =>
-        Interlocked.Exchange(ref _settings, all.ToImmutableDictionary(s => s.ProjectCode, StringComparer.OrdinalIgnoreCase));
+    public void ReplaceAll(IEnumerable<RouteSettings> all) =>
+        Interlocked.Exchange(ref _settings, all.ToImmutableDictionary(s => s.RouteCode, StringComparer.OrdinalIgnoreCase));
 
     public int Count => Volatile.Read(ref _settings).Count;
 }
 ```
 
 ```csharp file=Concurrency/CodecHolder.cs
-namespace SitePhotos.Concurrency;
+namespace DeliveryPhotos.Concurrency;
 
 /// <summary>Pretend this loads a large native library and colour profiles: expensive, created once.</summary>
 public sealed class ThumbnailCodec
@@ -562,7 +562,7 @@ public sealed class CodecHolder
 ```
 
 ```csharp file=Concurrency/RateCardTable.cs
-namespace SitePhotos.Concurrency;
+namespace DeliveryPhotos.Concurrency;
 
 /// <summary>Read-write lock: billing estimates read rates constantly; finance updates them monthly.
 /// Shown for completeness; an immutable snapshot would also work well here.</summary>
@@ -606,17 +606,17 @@ public sealed class RateCardTable : IDisposable
 }
 ```
 
-```csharp file=Concurrency/ProjectProgressActor.cs
+```csharp file=Concurrency/RouteProgressActor.cs
 using System.Collections.Concurrent;
 using System.Threading.Channels;
 
-namespace SitePhotos.Concurrency;
+namespace DeliveryPhotos.Concurrency;
 
 /// <summary>An actor: private state, a bounded mailbox, one message at a time, replies via futures.</summary>
-public sealed class ProjectProgressActor : IAsyncDisposable
+public sealed class RouteProgressActor : IAsyncDisposable
 {
     private abstract record Message;
-    private sealed record PhotoRecorded(double ChainageKm, DateTimeOffset At) : Message;
+    private sealed record PhotoRecorded(double RouteKm, DateTimeOffset At) : Message;
     private sealed record GetSummary(TaskCompletionSource<ProgressSummary> Reply) : Message;
 
     private readonly Channel<Message> _mailbox = Channel.CreateBounded<Message>(
@@ -628,16 +628,16 @@ public sealed class ProjectProgressActor : IAsyncDisposable
     private double _furthestKm;
     private DateTimeOffset? _lastPhotoAt;
 
-    public ProjectProgressActor(string projectCode)
+    public RouteProgressActor(string routeCode)
     {
-        ProjectCode = projectCode;
+        RouteCode = routeCode;
         _loop = Task.Run(RunAsync);
     }
 
-    public string ProjectCode { get; }
+    public string RouteCode { get; }
 
-    public ValueTask TellAsync(double chainageKm, DateTimeOffset at, CancellationToken ct) =>
-        _mailbox.Writer.WriteAsync(new PhotoRecorded(chainageKm, at), ct);
+    public ValueTask TellAsync(double routeKm, DateTimeOffset at, CancellationToken ct) =>
+        _mailbox.Writer.WriteAsync(new PhotoRecorded(routeKm, at), ct);
 
     public async Task<ProgressSummary> AskSummaryAsync(CancellationToken ct)
     {
@@ -655,11 +655,11 @@ public sealed class ProjectProgressActor : IAsyncDisposable
             {
                 case PhotoRecorded p:
                     _photos++;
-                    _furthestKm = Math.Max(_furthestKm, p.ChainageKm);
+                    _furthestKm = Math.Max(_furthestKm, p.RouteKm);
                     _lastPhotoAt = p.At;
                     break;
                 case GetSummary g:
-                    g.Reply.TrySetResult(new ProgressSummary(ProjectCode, _photos, _furthestKm, _lastPhotoAt));
+                    g.Reply.TrySetResult(new ProgressSummary(RouteCode, _photos, _furthestKm, _lastPhotoAt));
                     break;
             }
         }
@@ -672,13 +672,13 @@ public sealed class ProjectProgressActor : IAsyncDisposable
     }
 }
 
-/// <summary>One actor per project. Lazy prevents GetOrAdd from starting two actors for the same key in a race.</summary>
-public sealed class ProjectActorRegistry : IAsyncDisposable
+/// <summary>One actor per route. Lazy prevents GetOrAdd from starting two actors for the same key in a race.</summary>
+public sealed class RouteActorRegistry : IAsyncDisposable
 {
-    private readonly ConcurrentDictionary<string, Lazy<ProjectProgressActor>> _actors = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, Lazy<RouteProgressActor>> _actors = new(StringComparer.OrdinalIgnoreCase);
 
-    public ProjectProgressActor For(string projectCode) =>
-        _actors.GetOrAdd(projectCode, code => new Lazy<ProjectProgressActor>(() => new ProjectProgressActor(code))).Value;
+    public RouteProgressActor For(string routeCode) =>
+        _actors.GetOrAdd(routeCode, code => new Lazy<RouteProgressActor>(() => new RouteProgressActor(code))).Value;
 
     public async ValueTask DisposeAsync()
     {
@@ -694,7 +694,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace SitePhotos.Concurrency;
+namespace DeliveryPhotos.Concurrency;
 
 /// <summary>The producer side: a bounded channel shared by the API (producer) and the consumers.</summary>
 public sealed class PhotoQueue(IOptions<PipelineOptions> options)
@@ -712,10 +712,10 @@ public sealed class PhotoQueue(IOptions<PipelineOptions> options)
 /// <summary>The consumer side: N competing consumer loops on the thread pool, async all the way.</summary>
 public sealed class PhotoProcessingService(
     PhotoQueue queue,
-    ProjectSettingsCache settings,
+    RouteSettingsCache settings,
     CodecHolder codecs,
     IGeocoder geocoder,
-    ProjectActorRegistry actors,
+    RouteActorRegistry actors,
     PipelineStats stats,
     IOptions<PipelineOptions> options,
     TimeProvider clock,
@@ -731,10 +731,10 @@ public sealed class PhotoProcessingService(
             stats.ObserveQueueLength(queue.Count);
             try
             {
-                var s = settings.Get(job.ProjectCode);
+                var s = settings.Get(job.RouteCode);
                 var thumbnail = codecs.Codec.MakeThumbnail(job.BlobPath, s.ThumbnailWidth);
                 var locality = s.GeocodeEnabled ? await geocoder.LocalityAsync(job.Latitude, job.Longitude, ct) : null;
-                await actors.For(job.ProjectCode).TellAsync(job.ChainageKm, clock.GetUtcNow(), ct);
+                await actors.For(job.RouteCode).TellAsync(job.RouteKm, clock.GetUtcNow(), ct);
                 stats.RecordProcessed();
                 logger.LogDebug("Processed {Job}: {Thumb} {Locality}", job.Id, thumbnail, locality);
             }
@@ -750,10 +750,10 @@ public sealed class PhotoProcessingService(
 ```
 
 ```csharp file=Concurrency/BatchReprocessor.cs
-namespace SitePhotos.Concurrency;
+namespace DeliveryPhotos.Concurrency;
 
 /// <summary>Fork-join: split the batch, process with a parallelism cap, join, then combine.</summary>
-public sealed class BatchReprocessor(CodecHolder codecs, ProjectSettingsCache settings, IGeocoder geocoder)
+public sealed class BatchReprocessor(CodecHolder codecs, RouteSettingsCache settings, IGeocoder geocoder)
 {
     public async Task<BatchReport> ReprocessAsync(IReadOnlyList<PhotoJob> jobs, int maxParallel, CancellationToken ct)
     {
@@ -765,7 +765,7 @@ public sealed class BatchReprocessor(CodecHolder codecs, ProjectSettingsCache se
             {
                 try
                 {
-                    var s = settings.Get(item.job.ProjectCode);
+                    var s = settings.Get(item.job.RouteCode);
                     _ = codecs.Codec.MakeThumbnail(item.job.BlobPath, s.ThumbnailWidth);
                     if (s.GeocodeEnabled) await geocoder.LocalityAsync(item.job.Latitude, item.job.Longitude, token);
                     outcomes[item.index] = true;
@@ -784,7 +784,7 @@ public sealed class BatchReprocessor(CodecHolder codecs, ProjectSettingsCache se
 
 ```csharp file=Program.cs
 using Microsoft.Extensions.Options;
-using SitePhotos.Concurrency;
+using DeliveryPhotos.Concurrency;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -792,10 +792,10 @@ builder.Services.Configure<PipelineOptions>(builder.Configuration.GetSection("Pi
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<PhotoQueue>();
 builder.Services.AddSingleton<PipelineStats>();
-builder.Services.AddSingleton<ProjectSettingsCache>();
+builder.Services.AddSingleton<RouteSettingsCache>();
 builder.Services.AddSingleton<CodecHolder>();
 builder.Services.AddSingleton<RateCardTable>();
-builder.Services.AddSingleton<ProjectActorRegistry>();
+builder.Services.AddSingleton<RouteActorRegistry>();
 builder.Services.AddSingleton<FakeGeocoder>();
 builder.Services.AddSingleton<IGeocoder>(sp => new ThrottledGeocoder(
     sp.GetRequiredService<FakeGeocoder>(),
@@ -810,12 +810,12 @@ app.MapPost("/photos", (PhotoJob job, PhotoQueue queue) =>
         ? Results.Accepted($"/photos/{job.Id}", new { job.Id })
         : Results.Problem("Photo queue is full, retry shortly.", statusCode: StatusCodes.Status503ServiceUnavailable));
 
-app.MapGet("/projects/{code}/progress", async (string code, ProjectActorRegistry actors, CancellationToken ct) =>
+app.MapGet("/routes/{code}/progress", async (string code, RouteActorRegistry actors, CancellationToken ct) =>
     Results.Ok(await actors.For(code).AskSummaryAsync(ct)));
 
 // Futures: start both, await both. Total latency is the slower call, not the sum.
-app.MapGet("/projects/{code}/overview", async (string code, double lat, double lon,
-                                               ProjectActorRegistry actors, IGeocoder geocoder, CancellationToken ct) =>
+app.MapGet("/routes/{code}/overview", async (string code, double lat, double lon,
+                                               RouteActorRegistry actors, IGeocoder geocoder, CancellationToken ct) =>
 {
     var summaryTask = actors.For(code).AskSummaryAsync(ct);
     var localityTask = geocoder.LocalityAsync(lat, lon, ct);
@@ -823,7 +823,7 @@ app.MapGet("/projects/{code}/overview", async (string code, double lat, double l
     return Results.Ok(new { summary = summaryTask.Result, locality = localityTask.Result });   // safe: both completed
 });
 
-app.MapPost("/projects/{code}/reprocess", async (string code, PhotoJob[] jobs, BatchReprocessor reprocessor,
+app.MapPost("/routes/{code}/reprocess", async (string code, PhotoJob[] jobs, BatchReprocessor reprocessor,
                                                  IOptions<PipelineOptions> options, CancellationToken ct) =>
     Results.Ok(await reprocessor.ReprocessAsync(jobs, options.Value.ReprocessParallelism, ct)));
 
@@ -842,7 +842,7 @@ app.Run();
 Notes:
 
 - `summaryTask.Result` after `Task.WhenAll` is not sync-over-async: both tasks are already complete, so `.Result` returns immediately. Using `await summaryTask` is equally fine and avoids the question in code review.
-- `ProjectActorRegistry` wraps actors in `Lazy<T>` because `ConcurrentDictionary.GetOrAdd`'s factory may run more than once in a race. For cheap values that's harmless; for an actor that starts a loop, it would leak one.
+- `RouteActorRegistry` wraps actors in `Lazy<T>` because `ConcurrentDictionary.GetOrAdd`'s factory may run more than once in a race. For cheap values that's harmless; for an actor that starts a loop, it would leak one.
 - `BatchReprocessor` avoids shared counters entirely: each piece writes its own array slot, and the counts are computed after the join.
 
 ## Bad design vs good design
@@ -857,7 +857,7 @@ public async Task HandleAsync(PhotoJob job)
     lock (Gate)   // compile error if you try to await inside; so people do this instead:
     {
         var locality = _geocoder.LocalityAsync(job.Latitude, job.Longitude, default).GetAwaiter().GetResult();
-        _counts[job.ProjectCode] = _counts.GetValueOrDefault(job.ProjectCode) + 1;
+        _counts[job.RouteCode] = _counts.GetValueOrDefault(job.RouteCode) + 1;
         _processed++;
     }
 }
@@ -867,7 +867,7 @@ Correct, but every photo now waits for every other photo's 30 ms network call. T
 
 **Also bad: lock-free everything.** A team replaces all locks with hand-written CAS loops over several fields "for performance". Two counters that must agree (photos and bytes) drift apart, and nobody can explain the code six months later.
 
-**Good:** one protection strategy per piece of state, matched to its access pattern. Counters use `Interlocked`; read-mostly settings use immutable snapshots; per-project state lives in actors; the external API is throttled by a semaphore; work flows through a bounded channel; nothing holds a lock during I/O.
+**Good:** one protection strategy per piece of state, matched to its access pattern. Counters use `Interlocked`; read-mostly settings use immutable snapshots; per-route state lives in actors; the external API is throttled by a semaphore; work flows through a bounded channel; nothing holds a lock during I/O.
 
 :::callout type=tradeoff title="Correctness first, then contention"
 Start with the simplest correct option: a `lock` around a small critical section, or a `ConcurrentDictionary`. Measure. Switch to finer-grained or lock-free patterns only where profiling shows contention. Most "slow because of locks" problems are really "slow because I/O happens inside a lock".
@@ -959,7 +959,7 @@ public static class Program
 ## Exercises
 
 :::exercise id=m13-concurrency-patterns-ex1 difficulty=beginner kind=code title="An atomic quota counter"
-A photo service allows each project a daily upload quota. Implement a counter that is correct under heavy concurrency without using `lock`.
+A photo service allows each delivery route a daily upload quota. Implement a counter that is correct under heavy concurrency without using `lock`.
 ::requirements
 - `QuotaCounter.Value` returns the current count.
 - `Increment()` adds 1 atomically and returns the new value.
@@ -1075,7 +1075,7 @@ public sealed class QuotaCounter
 :::
 
 :::exercise id=m13-concurrency-patterns-ex2 difficulty=beginner kind=code title="Throttle calls with a semaphore"
-An external survey API allows at most N concurrent calls. Implement a runner that processes a list of items concurrently, never exceeding N in flight, and returns results in input order.
+An external address-verification API allows at most N concurrent calls. Implement a runner that processes a list of items concurrently, never exceeding N in flight, and returns results in input order.
 ::requirements
 - `ThrottledRunner(int maxConcurrency)`; values below 1 throw `ArgumentOutOfRangeException`.
 - `Task<IReadOnlyList<TOut>> RunAllAsync<TIn, TOut>(IReadOnlyList<TIn> items, Func<TIn, CancellationToken, Task<TOut>> work, CancellationToken ct = default)`.
@@ -1154,7 +1154,7 @@ public class ThrottledRunnerTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => runner.RunAllAsync(Enumerable.Range(1, 5).ToList(), async (x, ct) =>
         {
             await Task.Delay(1, ct);
-            if (x == 3) throw new InvalidOperationException("site 3 failed");
+            if (x == 3) throw new InvalidOperationException("item 3 failed");
             return x;
         }));
     }
@@ -1227,7 +1227,7 @@ public sealed class ThrottledRunner
 :::
 
 :::exercise id=m13-concurrency-patterns-ex3 difficulty=intermediate kind=code title="A wallet actor"
-Implement a contractor's advance-payment wallet as an actor. All state changes happen in one message loop, so no locks are needed and concurrent withdrawals can never overdraw.
+Implement a delivery rider's earnings wallet as an actor. All state changes happen in one message loop, so no locks are needed and concurrent withdrawals can never overdraw.
 ::requirements
 - `WalletActor(decimal openingBalance)` starts its loop.
 - `Task DepositAsync(decimal amount)`, `Task<bool> TryWithdrawAsync(decimal amount)` (false if insufficient funds), `Task<decimal> GetBalanceAsync()`.
@@ -1397,7 +1397,7 @@ A `lock` around a decimal balance is simpler and faster for a single in-process 
 :::
 
 :::exercise id=m13-concurrency-patterns-ex4 difficulty=intermediate kind=code title="AsyncLazy that does not cache failures"
-Loading the national highway chainage reference data takes about 2 seconds. Build an `AsyncLazy<T>` that runs the loader once even when 50 requests arrive together, but retries on the next call if the load failed.
+Loading the pincode-to-delivery-zone reference data takes about 2 seconds. Build an `AsyncLazy<T>` that runs the loader once even when 50 requests arrive together, but retries on the next call if the load failed.
 ::requirements
 - `AsyncLazy<T>(Func<Task<T>> factory)`.
 - `Task<T> GetValueAsync()`: concurrent callers share one in-progress load. A successful result is cached forever.
@@ -1526,29 +1526,29 @@ The lock is held only while *starting* the load: `RunFactoryAsync` runs synchron
 :::
 
 :::exercise id=m13-concurrency-patterns-ex5 difficulty=intermediate kind=written title="Find the concurrency bugs"
-This endpoint is from a tender-management service. It works in development and fails intermittently in production under about 300 requests per second. Find at least five concurrency bugs, explain the failure each causes, and give the fix.
+This endpoint is from a job-portal service that ranks applicants. It works in development and fails intermittently in production under about 300 requests per second. Find at least five concurrency bugs, explain the failure each causes, and give the fix.
 
 ```csharp
-public class TenderController(AppDbContext db, IEmailSender email, IScoringApi scoring) : ControllerBase
+public class JobRankingController(AppDbContext db, IEmailSender email, IScoringApi scoring) : ControllerBase
 {
     private static readonly Dictionary<int, decimal> ScoreCache = new();
     private static int _requests;
 
-    [HttpPost("tenders/{id}/score")]
+    [HttpPost("jobs/{id}/score")]
     public IActionResult Score(int id)
     {
         _requests++;
         if (!ScoreCache.ContainsKey(id))
             ScoreCache[id] = scoring.ScoreAsync(id).Result;
 
-        var bids = db.Bids.Where(b => b.TenderId == id).ToList();
-        Parallel.ForEach(bids, async bid =>
+        var applications = db.Applications.Where(a => a.JobId == id).ToList();
+        Parallel.ForEach(applications, async application =>
         {
-            bid.Rank = await scoring.RankAsync(bid.Id);
+            application.Rank = await scoring.RankAsync(application.Id);
         });
         db.SaveChanges();
 
-        Task.Run(() => email.SendAsync($"Tender {id} scored"));
+        Task.Run(() => email.SendAsync($"Job {id} applicants ranked"));
         return Ok(ScoreCache[id]);
     }
 }
@@ -1569,20 +1569,20 @@ What does `Parallel.ForEach` do with a lambda that returns `void`?
 ::hint
 What happens to the `Task` returned by `Task.Run` here, and to its exceptions?
 ::solution
-1. **`static Dictionary` written concurrently.** `Dictionary` is not thread-safe for writes; concurrent inserts can corrupt it (wrong results, exceptions, or in older runtimes infinite loops). The `ContainsKey` then assign is also a check-then-act race, so two requests may both score the same tender. **Fix:** `ConcurrentDictionary<int, Lazy<Task<decimal>>>` or, better, `HybridCache`/`IMemoryCache` with `GetOrCreateAsync`, so concurrent requests share one scoring call.
+1. **`static Dictionary` written concurrently.** `Dictionary` is not thread-safe for writes; concurrent inserts can corrupt it (wrong results, exceptions, or in older runtimes infinite loops). The `ContainsKey` then assign is also a check-then-act race, so two requests may both score the same job. **Fix:** `ConcurrentDictionary<int, Lazy<Task<decimal>>>` or, better, `HybridCache`/`IMemoryCache` with `GetOrCreateAsync`, so concurrent requests share one scoring call.
 2. **`_requests++` on a static field.** Lost updates under concurrency. **Fix:** `Interlocked.Increment(ref _requests)`, or better, a metrics counter (`System.Diagnostics.Metrics.Counter<long>`).
 3. **`.Result` on `ScoreAsync`.** Blocks a thread-pool thread for the whole remote call. At 300 requests per second with a 200 ms scoring call, about 60 threads are blocked at any moment; bursts exhaust the pool and latency explodes. **Fix:** make the action `async Task<IActionResult>` and `await`.
-4. **`Parallel.ForEach` with an `async` lambda.** The lambda becomes `async void`: `Parallel.ForEach` returns as soon as each lambda hits its first `await`, so `SaveChanges` runs before ranks are set, exceptions crash the process, and if `RankAsync` touched `db` it would use a `DbContext` concurrently (not supported). **Fix:** `await Parallel.ForEachAsync(bids, new ParallelOptions { MaxDegreeOfParallelism = 4 }, async (bid, ct) => bid.Rank = await scoring.RankAsync(bid.Id, ct));` then `await db.SaveChangesAsync()`. (Only the rank calls run in parallel; the `DbContext` is used once, afterwards.)
+4. **`Parallel.ForEach` with an `async` lambda.** The lambda becomes `async void`: `Parallel.ForEach` returns as soon as each lambda hits its first `await`, so `SaveChanges` runs before ranks are set, exceptions crash the process, and if `RankAsync` touched `db` it would use a `DbContext` concurrently (not supported). **Fix:** `await Parallel.ForEachAsync(applications, new ParallelOptions { MaxDegreeOfParallelism = 4 }, async (application, ct) => application.Rank = await scoring.RankAsync(application.Id, ct));` then `await db.SaveChangesAsync()`. (Only the rank calls run in parallel; the `DbContext` is used once, afterwards.)
 5. **Fire-and-forget `Task.Run`.** The returned task is ignored, so a failing email is never logged or retried; if `IEmailSender` is scoped, it may be disposed when the request ends while the email is still sending. **Fix:** write an "email requested" message to a background channel or outbox processed by a hosted service.
 
 Also worth noting: no `CancellationToken` is passed anywhere, so work continues after clients disconnect; and the static cache never expires.
 ::mistakes
 - Fixing the `Dictionary` with `lock` but still calling `.Result` inside the lock, which blocks every request behind one remote call.
-- Replacing `Parallel.ForEach` with unthrottled `Task.WhenAll` over thousands of bids.
+- Replacing `Parallel.ForEach` with unthrottled `Task.WhenAll` over thousands of applications.
 :::
 
 :::exercise id=m13-concurrency-patterns-ex6 difficulty=advanced kind=code title="Single-flight request coalescing"
-When the cache entry for a popular project dashboard expires, hundreds of requests try to rebuild it at once (a cache stampede). Implement single-flight: concurrent callers with the same key share one execution of the work; callers with different keys run independently.
+When the cache entry for a popular route dashboard expires, hundreds of requests try to rebuild it at once (a cache stampede). Implement single-flight: concurrent callers with the same key share one execution of the work; callers with different keys run independently.
 ::requirements
 - `SingleFlight<TKey, TValue>` where `TKey : notnull`.
 - `Task<TValue> DoAsync(TKey key, Func<Task<TValue>> work)`:
@@ -1641,7 +1641,7 @@ public class SingleFlightTests
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Func<Task<int>> work = async () => { Interlocked.Increment(ref calls); await release.Task; return 99; };
 
-        var tasks = Enumerable.Range(0, 100).Select(_ => Task.Run(() => sf.DoAsync("dash:NH-48", work))).ToArray();
+        var tasks = Enumerable.Range(0, 100).Select(_ => Task.Run(() => sf.DoAsync("dash:PUN-R12", work))).ToArray();
         await Task.Delay(50);
         Assert.Equal(1, sf.InFlightCount);
         release.SetResult();
@@ -1757,13 +1757,13 @@ Concurrency code needs tests that create contention on purpose, and tests that r
 [Fact]
 public async Task Settings_reads_never_see_partial_updates()
 {
-    var cache = new ProjectSettingsCache();
+    var cache = new RouteSettingsCache();
     using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
     var writer = Task.Run(() =>
     {
         var i = 0;
         while (!cts.IsCancellationRequested)
-            cache.ReplaceAll(Enumerable.Range(0, 50).Select(n => new ProjectSettings($"P{n}", 320 + (i++ % 2) * 320, true)));
+            cache.ReplaceAll(Enumerable.Range(0, 50).Select(n => new RouteSettings($"R{n}", 320 + (i++ % 2) * 320, true)));
     });
     var reader = Task.Run(() =>
     {
@@ -1780,8 +1780,8 @@ public async Task Settings_reads_never_see_partial_updates()
 - **`System.Threading.Channels`** underpins producer-consumer designs across .NET, from background job pipelines to SignalR streaming.
 - **Microsoft Orleans** implements the virtual-actor model and has been used publicly in large online services; each grain processes one request at a time by default.
 - **`ConcurrentDictionary`, `ImmutableDictionary` and `FrozenDictionary`** cover most shared-state needs: concurrent writes, copy-on-write snapshots, and read-optimised lookups respectively.
-- **Batch jobs** (thumbnail regeneration, tender scoring, BOQ recalculation for hundreds of work packages) are fork-join with a parallelism cap, often `Parallel.ForEachAsync` with 4–16 concurrent operations against a database or API.
-- **Site-monitoring platforms** ingesting readings from thousands of sensors typically combine all of these: a bounded channel per ingestion stage, a semaphore around the external weather or map API, an actor (or row lock) per structure for alarm state, and immutable snapshots of thresholds.
+- **Batch jobs** (thumbnail regeneration, job-application ranking, price recalculation for thousands of products) are fork-join with a parallelism cap, often `Parallel.ForEachAsync` with 4–16 concurrent operations against a database or API.
+- **Parcel-tracking platforms** ingesting location pings from thousands of riders typically combine all of these: a bounded channel per ingestion stage, a semaphore around the external map API, an actor (or row lock) per shipment for its delivery state, and immutable snapshots of delivery-zone rules.
 
 ## Interview questions
 
@@ -1873,15 +1873,15 @@ A service must call a mapping API that allows at most 4 concurrent requests, and
 - [ ] `Interlocked.Increment`
 > A semaphore gives N permits and works across `await`. `lock` allows one holder and cannot contain `await`.
 ::q multi
-Which are correct ways to share project settings that are read on every request and reloaded every 5 minutes? (Select all that apply.)
+Which are correct ways to share route settings that are read on every request and reloaded every 5 minutes? (Select all that apply.)
 - [x] Build a new `FrozenDictionary` on reload and swap the reference with `Interlocked.Exchange`.
 - [x] Keep an `ImmutableDictionary` and update it with `ImmutableInterlocked.AddOrUpdate`.
 - [ ] Mutate a shared `Dictionary` in place while requests read it.
 - [x] Protect a `Dictionary` with a `lock` on every read and write.
 > Immutable snapshots give lock-free reads; a lock is also correct (just more contention). Mutating a plain `Dictionary` during reads is unsafe.
 ::q single
-What is wrong with `Parallel.ForEach(bids, async bid => bid.Rank = await scoring.RankAsync(bid.Id));` followed by `db.SaveChanges();`?
-- [ ] Nothing; it ranks bids in parallel.
+What is wrong with `Parallel.ForEach(applications, async a => a.Rank = await scoring.RankAsync(a.Id));` followed by `db.SaveChanges();`?
+- [ ] Nothing; it ranks applications in parallel.
 - [x] The lambda is `async void`, so the loop returns before ranks are set and `SaveChanges` saves stale data; exceptions are lost.
 - [ ] `Parallel.ForEach` cannot iterate lists.
 - [ ] It deadlocks immediately.
@@ -1901,7 +1901,7 @@ A popular dashboard's cache entry expires and 300 requests rebuild it at once, e
 - [ ] Double-checked locking around `DbContext`
 > Single-flight makes concurrent callers for the same key share one execution, so the query runs once.
 ::q single
-Which design is the best fit for the state of each of 20,000 active bridge-inspection workflows, each with complex rules and frequent concurrent updates, running across several servers?
+Which design is the best fit for the state of each of 20,000 active parcel-delivery workflows, each with complex rules and frequent concurrent updates, running across several servers?
 - [ ] One global `lock` in each server.
 - [ ] A static `Dictionary` per server.
 - [x] One actor per workflow (for example an Orleans grain), backed by durable storage.

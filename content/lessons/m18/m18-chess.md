@@ -7,9 +7,9 @@ status: reviewed
 template: lld-case
 minutes: 100
 prerequisites: [m01-oop-pillars, m04-lsp, m06-template-method, m07-immutability]
-related: [m06-flyweight, m06-factory-method, m06-command, m06-memento, m18-tic-tac-toe, m18-card-games]
+related: [m06-factory-method, m06-command, m18-tic-tac-toe, m18-card-games]
 tags: [lld-case, games, rules-engine, polymorphism, immutability]
-patterns: [Template Method, Flyweight, Factory Method, Memento, Strategy]
+patterns: [Template Method, Factory Method, Strategy]
 summary: Model a chess game whose move validation covers every piece and correctly refuses any move that leaves your own king in check, with checkmate and stalemate detection built on top.
 references:
   - title: Wikipedia — Rules of chess
@@ -86,7 +86,7 @@ Checkmate is "you're in check and no move gets you out". Stalemate is "you're *n
 - **Correctness over speed.** This is a rules referee for a game server or UI, not a chess-playing engine. Validating one move in well under a millisecond is plenty (an estimate; a few hundred allocations of a 64-slot array per move).
 - **Testability.** Any position can be set up in one line of FEN.
 - **Extensibility.** Adding castling should not require touching every piece class.
-- **Thread safety by construction.** Boards are immutable, so a board can be shared by many readers, such as spectators and an analysis service, without locks.
+- **Thread safety by construction.** Boards are immutable, so a board can be shared by many readers, such as spectators and an analysis service, without locks. `Game` is mutable and has a single writer per game; the hosting service serialises moves for one game and rejects moves made against an out-of-date position (see "Concurrency in an online game").
 
 ### Clarifying questions
 
@@ -216,7 +216,7 @@ How to read it:
 
 ### Flyweight pieces through a factory
 
-A piece has no mutable state and no position. So `PieceFactory` keeps exactly **12 objects** (6 types × 2 colours) and returns the same instance every time. A board is 64 references into that pool. When `Apply` creates a new board, it copies 64 references (about 512 bytes on a 64-bit runtime) and allocates no new pieces. This is the [Flyweight](#/lesson/m06-flyweight) pattern, and it's also what makes immutable boards cheap.
+A piece has no mutable state and no position. So `PieceFactory` keeps exactly **12 objects** (6 types × 2 colours) and returns the same instance every time. A board is 64 references into that pool. When `Apply` creates a new board, it copies 64 references (about 512 bytes on a 64-bit runtime) and allocates no new pieces. This is the Flyweight pattern, and it's also what makes immutable boards cheap.
 
 ### Immutable board, "try it and see" legality
 
@@ -249,7 +249,16 @@ After every move, `Game` computes `inCheck` and `hasAnyLegalMove` for the side t
 
 ### Undo with snapshots (Memento)
 
-Because boards are immutable, an undo entry is just `(Board, SideToMove, Status)`. Push one before each move, pop to undo. No reverse-move logic is needed, and there are no bugs from "un-capturing" a piece. This is [Memento](#/lesson/m06-memento) at nearly zero cost. The same snapshot list doubles as the input for threefold-repetition detection later.
+Because boards are immutable, an undo entry is just `(Board, SideToMove, Status)`. Push one before each move, pop to undo. No reverse-move logic is needed, and there are no bugs from "un-capturing" a piece. This is Memento at nearly zero cost. The same snapshot list doubles as the input for threefold-repetition detection later.
+
+### Concurrency in an online game
+
+Immutable boards make *reading* safe from any thread, but `Game` itself is a small mutable object: `Play` reads `Board` and `SideToMove`, validates, then replaces them. That is a check-then-act sequence. On a game server two requests for the same game can arrive together: a player double-taps, or the app retries a move whose reply was lost. Run both at once and both validate against the same position, and the second can be applied to a board it was never checked against.
+
+Two rules fix it, and neither belongs inside the pieces or the validator:
+
+1. **One writer per game.** The hosting service runs moves for one game one at a time: a lock or `SemaphoreSlim` per game in a single process, a `Channel<T>` per game, or an actor. Different games still run in parallel, and the stateless `MoveValidator` is shared by all of them.
+2. **Moves carry the position they were made on.** The client sends `expectedPly` (how many half-moves it has seen). `Play(move, expectedPly)` refuses the move with `StalePosition` if the game has moved on. A retried "e2e4" after the first one succeeded now arrives with ply 0 when the game is at ply 1, and is refused instead of being re-validated as a Black move. If moves are persisted, the same check becomes `UPDATE game SET ply = ply + 1, ... WHERE id = $1 AND ply = $2`.
 
 ### Results, not exceptions, for bad moves
 
@@ -637,7 +646,7 @@ using ChessKit.Domain;
 
 namespace ChessKit.Rules;
 
-public enum MoveError { None, BadNotation, GameOver, NoPieceOnSquare, NotYourPiece, NotAPieceMove, LeavesKingInCheck }
+public enum MoveError { None, BadNotation, GameOver, NoPieceOnSquare, NotYourPiece, NotAPieceMove, LeavesKingInCheck, StalePosition }
 
 /// <summary>Stateless rules service: one instance can serve every game.</summary>
 public sealed class MoveValidator
@@ -703,6 +712,16 @@ public sealed class Game
     public bool IsOver => Status is GameStatus.Checkmate or GameStatus.Stalemate;
     public PieceColor? Winner => Status == GameStatus.Checkmate ? SideToMove.Opponent : null;
     public IReadOnlyList<Move> History => _history;
+
+    /// <summary>Number of half-moves played so far. Clients send it back as "the position I was looking at".</summary>
+    public int Ply => _history.Count;
+
+    /// <summary>
+    /// Optimistic concurrency for online play: the move is only applied if nobody has moved since the client
+    /// last saw the board. A double-clicked or retried move arrives with an old ply and is refused, not replayed.
+    /// </summary>
+    public MoveResult Play(Move move, int expectedPly) =>
+        expectedPly == Ply ? Play(move) : new MoveResult(MoveError.StalePosition, Status);
 
     public MoveResult Play(string uci) =>
         Move.TryParse(uci, out var move) ? Play(move) : new MoveResult(MoveError.BadNotation, Status);
@@ -864,6 +883,17 @@ public sealed class ChessRulesTests
         Assert.True(g.Undo());
         Assert.Equal(Board.StandardPlacement, g.Board.ToFen());
         Assert.False(g.Undo());
+    }
+
+    [Fact]
+    public void Retried_move_against_an_old_position_is_refused()
+    {
+        var g = new Game();
+        var e4 = Move.TryParse("e2e4", out var m) ? m : default;
+        Assert.True(g.Play(e4, expectedPly: 0).IsSuccess);
+        Assert.Equal(MoveError.StalePosition, g.Play(e4, expectedPly: 0).Error);   // the retry
+        Assert.Equal(1, g.Ply);
+        Assert.Equal(PieceColor.Black, g.SideToMove);
     }
 
     [Theory]

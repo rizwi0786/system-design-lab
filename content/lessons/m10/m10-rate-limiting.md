@@ -166,7 +166,7 @@ The queue flavour fits when the *downstream* demands a steady pace: an SMS gatew
 
 ### Responding to a limited request
 
-Refuse with **429 Too Many Requests** (RFC 6585), not 503, which means the service is down for everyone. Add **`Retry-After`** (RFC 9110) in seconds, computed from the algorithm: time until the next token, or until the window ends. Many APIs also send `X-RateLimit-Limit/Remaining/Reset`; the IETF `RateLimit-Policy` and `RateLimit` fields are still a draft as of this writing. Put a Problem Details body (`application/problem+json`) on top. A well-behaved client waits at least `Retry-After` plus random jitter; otherwise every refused client returns in the same second (a thundering herd). The [timeouts and retries lesson](#/lesson/m10-timeouts-retries) covers the client side.
+Refuse with **429 Too Many Requests** (RFC 6585), not 503, which means the service is down for everyone. Watch out: ASP.NET Core's rate limiter rejects with **503 by default**, so always set `RejectionStatusCode = 429`. Add **`Retry-After`** (RFC 9110) in seconds, computed from the algorithm: time until the next token, or until the window ends. Many APIs also send the de facto `X-RateLimit-Limit/Remaining/Reset` headers. The IETF draft standardises two structured fields instead, `RateLimit-Policy: "default";q=600;w=60` (the rule: 600 per 60 s) and `RateLimit: "default";r=12;t=40` (12 remaining, resets in 40 s); it is still a draft as of this writing and earlier drafts used different names, so document whichever headers you send. Put a Problem Details body (`application/problem+json`) on top. A well-behaved client waits at least `Retry-After` plus random jitter; otherwise every refused client returns in the same second (a thundering herd). The [timeouts and retries lesson](#/lesson/m10-timeouts-retries) covers the client side.
 
 ### Distributed limiting
 
@@ -219,7 +219,7 @@ sequenceDiagram
     C->>A: GET /v1/gstin/27ABCDE1234F1Z5 (X-Api-Key k-42)
     A->>R: EVAL token_bucket(k-42, cap=20, rate=10/s)
     R-->>A: allowed, 0 tokens left
-    A-->>C: 200 OK (RateLimit-Remaining 0)
+    A-->>C: 200 OK (X-RateLimit-Remaining 0)
     C->>A: GET /v1/gstin/09XYZAB5678C1Z2
     A->>R: EVAL token_bucket(k-42)
     R-->>A: refused, next token in 100 ms
@@ -294,7 +294,7 @@ public interface IRateLimitAlgorithm
 }
 ```
 
-`Remaining` feeds the `RateLimit-Remaining` header; `RetryAfter` feeds `Retry-After`. Every algorithm is a singleton holding per-key state, so each must lock that state.
+`Remaining` feeds the `X-RateLimit-Remaining` header; `RetryAfter` feeds `Retry-After`. Every algorithm is a singleton holding per-key state, so each must lock that state.
 
 ### Fixed window
 
@@ -623,7 +623,7 @@ public sealed class AlgorithmRateLimitMiddleware(RequestDelegate next, IRateLimi
     {
         var key = PartitionKeyResolver.Resolve(context, plans);
         var decision = algorithm.TryAcquire(key);
-        context.Response.Headers["RateLimit-Remaining"] = decision.Remaining.ToString(CultureInfo.InvariantCulture);
+        context.Response.Headers["X-RateLimit-Remaining"] = decision.Remaining.ToString(CultureInfo.InvariantCulture);
 
         if (decision.Allowed)
         {
@@ -719,6 +719,9 @@ builder.Services.AddRateLimiter(options =>
 
 var app = builder.Build();
 
+// WebApplication adds UseRouting at the start of the pipeline, so endpoint policies (RequireRateLimiting) are
+// visible here. If you call UseRouting() yourself, UseRateLimiter() must come after it; if partition keys read
+// HttpContext.User, it must also come after UseAuthentication().
 app.UseRateLimiter();
 
 // v2 endpoints demonstrate the hand-rolled middleware with a sliding window counter.
@@ -739,16 +742,21 @@ What to notice:
 - **`QueueLimit = 0`** for the per-caller bucket. Queuing at the API holds a connection and a request slot open while the client waits. For HTTP APIs, refusing with a good `Retry-After` is usually kinder to your server than queuing. The export endpoint is the exception: a short queue smooths small spikes in slow work.
 - **`CreateChained`** applies both limiters; a request must pass the per-caller bucket *and* the whole-service concurrency cap.
 - **Plan in the partition key.** The built-in partitioned limiter creates a limiter the first time it sees a key and reuses it. If the key were just the API key, an upgraded customer would keep their old bucket until it went idle.
+- **`RejectionStatusCode = 429`.** Without it the middleware answers 503, which tells clients and dashboards the service is down.
+- **The built-in token bucket refills in steps.** It adds `TokensPerPeriod` once per `ReplenishmentPeriod`, not continuously like the hand-rolled `TokenBucket`. With a 1-second period, a Pro caller who empties the bucket waits up to a full second and then gets 10 tokens at once. For smoother refill, use a shorter period and proportionally fewer tokens (100 ms and 1 token for a 10/s plan).
 - **`DisableRateLimiting()`** on health checks, so a load balancer's probes are never throttled into marking the instance unhealthy.
 - **The built-in limiter is per instance.** With 3 instances the effective per-key limit is up to 3× unless routing is sticky. For exact cross-instance limits, implement the same rules against Redis (a Lua script) or let a gateway do it.
 
 A Redis token bucket, for reference (not compiled here, because the Redis client is not available offline):
 
 ```csharp
-// KEYS[1] = bucket key; ARGV = capacity, refill/sec, now (ms), cost
+// KEYS[1] = bucket key; ARGV = capacity, refill/sec, cost. Time comes from Redis itself (TIME), so the
+// app instances' clocks can disagree without corrupting the bucket.
 const string Lua = """
 local b = redis.call('HMGET', KEYS[1], 'tokens', 'ts')
-local cap, rate, now, cost = tonumber(ARGV[1]), tonumber(ARGV[2]), tonumber(ARGV[3]), tonumber(ARGV[4])
+local t = redis.call('TIME')
+local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+local cap, rate, cost = tonumber(ARGV[1]), tonumber(ARGV[2]), tonumber(ARGV[3])
 local tokens = tonumber(b[1]) or cap
 local ts = tonumber(b[2]) or now
 tokens = math.min(cap, tokens + math.max(0, now - ts) / 1000 * rate)
@@ -759,10 +767,10 @@ redis.call('PEXPIRE', KEYS[1], math.ceil(cap / rate * 1000) + 1000)
 return { allowed and 1 or 0, tostring(tokens) }
 """;
 var result = (RedisResult[])(await db.ScriptEvaluateAsync(Lua, new RedisKey[] { $"rl:{key}" },
-    new RedisValue[] { 50, 10, nowMs, 1 }))!;
+    new RedisValue[] { 50, 10, 1 }))!;
 ```
 
-The script runs atomically inside Redis, so instances cannot race. `PEXPIRE` deletes buckets idle long enough to be full again (a full bucket and a missing one mean the same), so idle keys cost no memory.
+The script runs atomically inside Redis, so instances cannot race. It touches a single key, so it also works on Redis Cluster. `PEXPIRE` deletes buckets idle long enough to be full again (a full bucket and a missing one mean the same), so idle keys cost no memory.
 
 ## Bad design vs good design
 
@@ -1166,7 +1174,7 @@ Weighted cost lets one rule cover cheap and expensive calls: a single GSTIN look
 - Forgetting the capacity cap, so a key that was idle for a day gets a burst of 400,000.
 - Allowing `cost > capacity`, which can never succeed: the caller is refused forever with a misleading `Retry-After`.
 ::extensions
-Return the time until the bucket is full as a `Reset` value, and emit `RateLimit-Policy: 10;w=2` style headers.
+Return the time until the bucket is full as a `Reset` value, and emit the IETF draft's structured headers, for example `RateLimit-Policy: "burst";q=10;w=2` and `RateLimit: "burst";r=3;t=1`.
 :::
 
 :::exercise id=m10-rate-limiting-ex4 difficulty=intermediate kind=hld title="Rate limiting for a multi-instance public API"
@@ -1516,7 +1524,7 @@ public void Sliding_window_counter_weights_previous_window()
 
 - **Public APIs** commonly describe their limits as token buckets or per-second/per-minute rates and return 429 with `Retry-After`. GitHub's REST API, for example, documents primary and secondary rate limits with `x-ratelimit-*` headers.
 - **Cloud gateways** such as Azure API Management offer `rate-limit-by-key` and `quota-by-key` policies, which map directly onto the "token bucket for bursts, fixed window for quotas" split in this lesson. Nginx's `limit_req` is a leaky bucket with an optional burst queue.
-- **Filing-deadline portals** (tax returns, tender submissions) use per-user limits so one automated filer cannot crowd out thousands of humans, plus a queue in front of the slow back office.
+- **Deadline-day portals** (income-tax returns, college admission forms, exam results) use per-user limits so one automated filer cannot crowd out thousands of humans, plus a queue in front of the slow back office.
 - **SMS and email senders** run leaky-bucket queues on their side to stay under the provider's per-account throughput.
 
 ## Interview questions
@@ -1558,7 +1566,7 @@ When a downstream needs a smooth, steady rate and the work can wait: an SMS gate
 - A rate limit counts arrivals; a **concurrency limit** counts work in flight. Slow endpoints need the latter.
 - Refuse with **429 and `Retry-After`**; clients wait with jitter.
 - Across instances: local (limit ÷ N), sticky routing, or a shared atomic counter in Redis. Choose **fail-open** for fairness and **fail-closed** for security.
-- In ASP.NET Core, use `AddRateLimiter` with `PartitionedRateLimiter`, `QueueLimit = 0` for most HTTP limits, `CreateChained` for layered limits, and `DisableRateLimiting` on health checks.
+- In ASP.NET Core, use `AddRateLimiter` with `RejectionStatusCode = 429` (the default is 503), `PartitionedRateLimiter`, `QueueLimit = 0` for most HTTP limits, `CreateChained` for layered limits, and `DisableRateLimiting` on health checks. Put `UseRateLimiter` after routing and authentication when policies or keys depend on them.
 
 **Terminology:** partition key, token bucket, refill rate, burst capacity, fixed window, sliding log, sliding window counter, leaky bucket (meter and queue), concurrency limit, 429, Retry-After, fail open, fail closed, CGNAT, oversubscription.
 
@@ -1577,6 +1585,8 @@ Q: Why is per-IP limiting weak in India?
 A: Mobile carriers use CGNAT, so thousands of users share one IPv4 address; offices share one too. Use authenticated keys where possible and generous per-IP limits.
 Q: Fail open or fail closed when the limiter store is down?
 A: Fail open (with a local fallback limit) for fairness limits; fail closed for security limits like OTP and login.
+Q: What status does ASP.NET Core's rate limiter return by default, and what should you set?
+A: 503 Service Unavailable. Set RejectionStatusCode = 429 and add Retry-After from the lease's MetadataName.RetryAfter in OnRejected.
 Q: Rate limit vs concurrency limit?
 A: A rate limit counts arrivals per time; a concurrency limit counts requests in progress. Slow endpoints need a concurrency limit.
 :::
@@ -1633,6 +1643,13 @@ A PDF-export endpoint takes about 4 seconds per request. It is protected by a ra
 - [ ] Switch to a sliding log.
 - [ ] Add Retry-After headers.
 > Little's law: in-flight = arrival rate × duration. Expensive, slow work needs a concurrency limit, which ASP.NET Core provides with AddConcurrencyLimiter.
+::q single
+Your partition key uses the `sub` claim, falling back to the client IP. In production every logged-in user from one office is throttled together, as if anonymous. The pipeline is `app.UseRateLimiter(); app.UseAuthentication(); app.UseAuthorization();`. What is wrong?
+- [ ] The token bucket capacity is too small.
+- [x] The limiter runs before authentication, so `HttpContext.User` is still empty and every request falls back to the shared office IP.
+- [ ] `RequireRateLimiting` was not called on the endpoints.
+- [ ] Sliding windows should be used for logged-in users.
+> Middleware runs in order. Move `UseRateLimiter()` after `UseAuthentication()` (and after `UseRouting()` if you call it explicitly) so the partition key can see the user and the endpoint's policy.
 :::
 
 ## Completion criteria

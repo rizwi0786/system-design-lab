@@ -480,6 +480,7 @@ Design notes:
 - **Metrics, not logs.** Logging every hit at 10,000 RPS would cost more than the cache saves. Counters are cheap and can be scraped by OpenTelemetry.
 - **Key normalisation.** Different spellings of the same key silently halve your hit ratio. Normalise once, in one place.
 - **Negative results are not cached here.** A missing SKU goes to the database every time. That is a deliberate simplification; [Cache stampede, penetration and hot keys](#/lesson/m12-cache-failures) shows why and how to cache "not found".
+- **Built-in alternatives.** `MemoryCacheOptions.TrackStatistics = true` makes `IMemoryCache.GetCurrentStatistics()` report hits, misses and entry count without your own counters (the custom class here adds per-cache tags and an OpenTelemetry gauge). For new code that needs both a local and a shared cache, `HybridCache` (`Microsoft.Extensions.Caching.Hybrid`, .NET 9 and later) combines an in-process L1 with an `IDistributedCache` L2 such as Redis and lets only one caller per key run the database query on a miss.
 - **This is cache-aside.** The application code checks the cache and fills it. [Cache-aside, read-through, write-through and write-behind](#/lesson/m12-cache-patterns) compares it with the alternatives.
 
 ## Bad design vs good design
@@ -1075,7 +1076,7 @@ public async Task Second_read_does_not_touch_the_database()
 - **PostgreSQL shared buffers and the OS page cache.** The database itself caches 8 KB pages. A query that is "slow the first time, fast after" is often just a cold buffer cache.
 - **CDNs.** A video platform or a news site serves popular objects from edge locations near users. Zipf-shaped popularity is why a CDN with a fraction of the origin's storage can serve most bytes.
 - **Product catalogues and menus.** Systems like food-delivery apps cache restaurant menus and images heavily because a few thousand popular restaurants in a city get most of the views.
-- **Government and infrastructure portals.** A highway project dashboard that shows chainage-wise progress to hundreds of officials is read far more than it is written; caching the computed progress per project for a minute takes heavy aggregation queries off the database.
+- **Results and status pages.** An exam-results portal on result day, or a college's live admissions dashboard viewed by thousands of parents, is read far more than it is written; caching the computed result or seat-count summary for a minute takes heavy aggregation queries off the database at exactly the moment traffic peaks.
 
 ## Interview questions
 

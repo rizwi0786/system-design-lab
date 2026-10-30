@@ -10,7 +10,7 @@ saved designs) is kept in your browser, and you can export a full backup file an
 
 | Area | What you get |
 |---|---|
-| Curriculum | 20 modules, 311 lessons — all written, each passing the content validator, C# compile/test checks and Mermaid parsing. |
+| Curriculum | 20 modules, 312 lessons — all written, each passing the content validator, C# compile/test checks and Mermaid parsing. |
 | Lesson format | Objectives → beginner explanation → first principles → Mermaid diagrams → step-by-step example → compilable C# → bad vs good design → playground → 5+ exercises with progressive hints and hidden solutions → tests → real-world use → interview Q&A → flashcards → quiz → completion criteria |
 | Playgrounds | C# editor (Monaco) with "download as .NET project"; SQL on real PostgreSQL in your browser (PGlite); HLD architecture canvas with rule-based review; LLD class designer (generates Mermaid + C#); 10 distributed-systems simulators; API contract designer with lint and breaking-change detection; architecture decision simulator |
 | Learning engine | Completion only after passing the quiz and finishing 2 exercises; mastery score; weak-topic detection; prerequisite-aware recommendations; spaced-repetition flashcards; mock exams and timed mock interviews |

@@ -86,7 +86,7 @@ Either way the symptom is the same: a log full of identical statements that diff
 ### The four tools, and what each costs
 
 1. **Eager loading with `Include`**: one SQL statement with `LEFT JOIN`s. Simple, but each extra collection multiplies rows (the **cartesian explosion**). Restaurants × items × reviews = items·reviews rows per restaurant.
-2. **Split queries with `AsSplitQuery`**: EF Core runs one statement per collection, each with the same `WHERE`, and stitches the results in memory. No explosion, but 2–3 round trips and no single consistent snapshot unless you wrap them in a transaction.
+2. **Split queries with `AsSplitQuery`**: EF Core runs one statement per collection, each with the same `WHERE`, and stitches the results in memory. No explosion, but 2–3 round trips and no single consistent snapshot unless you wrap them in a Repeatable Read transaction (at the default Read Committed level, every statement takes a fresh snapshot even inside a transaction).
 3. **Projection with `Select`**: ask for exactly the columns and aggregates the screen needs (`new RestaurantCard(r.Id, r.Name, r.Items.Count(), r.Reviews.Average(...))`). EF Core translates to SQL subqueries or `LATERAL` joins. Smallest result set, no change tracking, but you cannot update the result.
 4. **Batching by hand**: load the list, collect ids, run `WHERE restaurant_id = ANY($1)`. Works with any data access layer, and it is what EF Core's split query does under the hood.
 
@@ -149,7 +149,7 @@ sequenceDiagram
     EF-->>S: 50 Restaurant objects with Items and Reviews filled
 ```
 
-Three statements, each repeating the outer `WHERE` so the database does the filtering, and each ordered by the parent key so EF Core can merge them in a single pass. Note what this costs: three round trips instead of one, and the three statements see three different snapshots unless you open a transaction first. If a review is inserted between statement 1 and 3, you get a review for a restaurant you already loaded (harmless here) or, in other shapes, a child whose parent is missing. Single-query mode (one `LEFT JOIN`) avoids that at the price of the cartesian explosion.
+Three statements, each repeating the outer `WHERE` so the database does the filtering, and each ordered by the parent key so EF Core can merge them in a single pass. Note what this costs: three round trips instead of one, and the three statements see three different snapshots unless you run them in a `REPEATABLE READ` transaction (a Read Committed transaction is not enough: it still takes a new snapshot per statement). If a review is inserted between statement 1 and 3, you get a review for a restaurant you already loaded (harmless here) or, in other shapes, a child whose parent is missing. Single-query mode (one `LEFT JOIN`) avoids that at the price of the cartesian explosion.
 
 ## Step-by-step example
 
@@ -1130,7 +1130,7 @@ Edge cases worth a test: an empty city (zero statements after the first), a rest
 
 - **E-commerce order history** is the classic case: orders → lines → product names. A projection with `Count()` and `Sum()` replaces hundreds of statements per page.
 - **GraphQL servers** face N+1 structurally, because each resolver runs independently. The standard fix is a DataLoader that collects keys during one tick and issues a single `ANY($1)` query, which is exactly the `BatchedMenuLoader` above.
-- **Project-management dashboards** for infrastructure programmes (hundreds of work packages, each with milestones and RFIs) are often built as "load packages, then loop". Moving the milestone counts into a `LATERAL` or a materialised view turns a 6-second page into tens of milliseconds, in our experience; measure your own.
+- **Project-management SaaS dashboards** (Jira-style boards with hundreds of projects, each with open and overdue issues) are often built as "load projects, then loop". Moving the issue counts into a projection, a `LATERAL` join or a periodically refreshed summary table typically turns a multi-second page into tens of milliseconds; measure your own.
 - **Background exporters** that load whole entity graphs run out of memory first and slow down second. Streaming projections fix both.
 - **Multi-tenant SaaS**: an N+1 that is tolerable for a tenant with 30 rows is an outage for the tenant with 30,000. Statement budgets per request catch it at the small tenant.
 
@@ -1148,7 +1148,7 @@ Enable logging for `Microsoft.EntityFrameworkCore.Database.Command` and look for
 ::q intermediate
 When would you use `AsSplitQuery()` instead of a single query with multiple `Include`s?
 ::a
-When a query includes two or more collection navigations. In single-query mode EF Core joins them all, so rows multiply (items × reviews per parent): the cartesian explosion. Split mode runs one statement per collection and stitches results by key: fewer bytes but 2–3 round trips, and the statements see different snapshots unless wrapped in a transaction. One collection include is fine in single mode. For read-only screens a projection often beats both.
+When a query includes two or more collection navigations. In single-query mode EF Core joins them all, so rows multiply (items × reviews per parent): the cartesian explosion. Split mode runs one statement per collection and stitches results by key: fewer bytes but 2–3 round trips, and the statements see different snapshots unless wrapped in a Repeatable Read transaction. One collection include is fine in single mode. For read-only screens a projection often beats both.
 ::q intermediate
 What does `AsNoTracking()` do, and when should you not use it?
 ::a
@@ -1160,7 +1160,7 @@ Compiled queries: when are they worth it, and what are their limits?
 ::q advanced
 A tenant with 50,000 projects reports a 40-second dashboard. Logs show 150,001 statements. Walk through your fix and how you stop it recurring.
 ::a
-First confirm the shape: one list statement followed by two repeated statements per project (milestone count, open RFIs). Replace the loop with a single projection that computes both aggregates via correlated subqueries or a `LATERAL` join, and page the dashboard (keyset pagination) so no request touches 50,000 parents. Check that `milestones(project_id)` and `rfis(project_id, status)` are indexed; the projection is only fast if each subquery is an index probe. If the aggregates are expensive, precompute them into columns updated by triggers or a scheduled job. Then prevent recurrence: a scoped statement budget wired to a `DbCommandInterceptor` that throws in development and emits a metric in production, an integration test with a 100-project fixture asserting a constant statement count, and a code-review rule that no query may run inside a loop over query results.
+First confirm the shape: one list statement followed by two repeated statements per project (open-issue count, overdue-issue count). Replace the loop with a single projection that computes both aggregates via correlated subqueries or a `LATERAL` join, and page the dashboard (keyset pagination) so no request touches 50,000 parents. Check that `issues(project_id, status)` and `issues(project_id, due_on)` are indexed; the projection is only fast if each subquery is an index probe. If the aggregates are expensive, precompute them into columns updated by triggers or a scheduled job. Then prevent recurrence: a scoped statement budget wired to a `DbCommandInterceptor` that throws in development and emits a metric in production, an integration test with a 100-project fixture asserting a constant statement count, and a code-review rule that no query may run inside a loop over query results.
 :::
 
 ## Summary and revision
@@ -1184,7 +1184,7 @@ A: Fixed per-statement cost (round trip, parse, plan, snapshot) multiplied by N,
 Q: What is the cartesian explosion?
 A: In a single query with two or more collection includes, rows multiply (items × reviews per parent), so far more bytes are moved than the useful data.
 Q: What does AsSplitQuery() trade for avoiding the explosion?
-A: Extra round trips (one per collection) and separate snapshots unless wrapped in a transaction.
+A: Extra round trips (one per collection) and separate snapshots unless wrapped in a Repeatable Read transaction.
 Q: When is a projection the best choice?
 A: Read-only screens that need a subset of columns or aggregates; one statement, no tracking, smallest payload.
 Q: What does AsNoTracking() save?
@@ -1201,10 +1201,10 @@ A: Count statements per request with an interceptor and assert the count is cons
 
 :::quiz pass=70
 ::q single
-A page lists 80 tenders and, for each, shows the number of bids. Logs show 81 statements. Database CPU is at 15 %, yet the page takes 300 ms. What is the main cause?
+A job portal page lists 80 job postings and, for each, shows the number of applications. Logs show 81 statements. Database CPU is at 15 %, yet the page takes 300 ms. What is the main cause?
 - [ ] The database is under-provisioned.
 - [x] Per-statement fixed cost (round trips, parsing, planning) multiplied by 80.
-- [ ] The bids table lacks a primary key.
+- [ ] The applications table lacks a primary key.
 - [ ] The JSON serialiser is slow.
 > Low CPU with many statements is the N+1 signature. Each statement costs latency, not database work.
 ::q single
@@ -1220,7 +1220,7 @@ Which statements about `AsSplitQuery()` are true? (Select all that apply.)
 - [x] It avoids the cartesian explosion of multiple collection joins.
 - [ ] It guarantees all statements see the same snapshot.
 - [x] It can be made the default for a context and overridden per query with `AsSingleQuery()`.
-> Split queries run in separate statements and, without an explicit transaction, each sees its own snapshot.
+> Split queries run in separate statements and, unless they share a Repeatable Read transaction, each sees its own snapshot.
 ::q single
 An order with 8 lines, 3 payments and 2 shipments is loaded with three `Include`s in single-query mode. How many rows does PostgreSQL return?
 - [ ] 13

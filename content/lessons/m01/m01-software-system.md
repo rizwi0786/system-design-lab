@@ -444,10 +444,12 @@ using Opd.Api.Tokens;
 
 namespace Opd.Api.Boundary;
 
-/// <summary>The input contract. Everything arriving here is untrusted until Validate() says otherwise.</summary>
-public sealed record IssueTokenRequest(string? Department, string? PatientName, string? Phone)
+/// <summary>The input contract. Everything arriving here is untrusted until Validate() says otherwise.
+/// 'partial' lets the regex source generator write the matching code at compile time.</summary>
+public sealed partial record IssueTokenRequest(string? Department, string? PatientName, string? Phone)
 {
-    private static readonly Regex IndianMobile = new("^[6-9][0-9]{9}$", RegexOptions.Compiled);
+    [GeneratedRegex("^[6-9][0-9]{9}$")]
+    private static partial Regex IndianMobile();
 
     public (Department? Dept, string Name, string Phone, Dictionary<string, string[]> Errors) Validate()
     {
@@ -461,7 +463,7 @@ public sealed record IssueTokenRequest(string? Department, string? PatientName, 
 
         var phone = (Phone ?? "").Replace(" ", "").Replace("-", "");
         if (phone.StartsWith("+91")) phone = phone[3..];
-        if (!IndianMobile.IsMatch(phone)) errors["phone"] = ["Phone must be a 10-digit Indian mobile number."];
+        if (!IndianMobile().IsMatch(phone)) errors["phone"] = ["Phone must be a 10-digit Indian mobile number."];
 
         return (dept, name, phone, errors);
     }
@@ -536,7 +538,7 @@ What to notice:
 - **Outputs are shaped for each actor.** The hall display gets `DisplayTokenView` with only a first name; it never sees phone numbers. Exposing less data is a simple and strong privacy measure.
 - **The external system cannot break the core flow.** `NotifySafelyAsync` catches SMS failures and logs them. The token is still issued.
 - **Each part can be replaced.** A real SMS adapter, or a PostgreSQL store, is a new class plus one changed line in `Program.cs`.
-- **Known limit.** Token numbering uses a `Lock` in one process. With two servers behind a load balancer, both could issue "ORTHO-015". At that point the database must hand out numbers (a sequence or a unique constraint). For one server in one hospital, the simple version is enough.
+- **Known limit.** Token numbering uses a `Lock` in one process. With two servers behind a load balancer, both could issue "ORTHO-015". At that point the database must hand out numbers (a sequence or a unique constraint). The in-memory store also never resets: a real store would key numbers by date, so ORTHO-001 starts again each morning, and a scheduled job (the "time" actor) would close the day's queue. For one server in one hospital, restarted nightly, the simple version is enough.
 
 ## Bad design vs good design
 
@@ -1383,7 +1385,7 @@ What this test protects: the rule "an external failure must not break the core f
 
 - **UPI payments** are a system of systems: your payments app, your bank, the receiver's bank and the central switch each sit inside their own boundary and talk through strict message contracts. Each assumes the others can time out, which is why "payment pending" states and automatic reversals exist.
 - **Railway reservation**: a booking system with many actors (passengers, agents, ticket checkers, other systems like payment gateways) and very strict input rules. Its peak (the Tatkal window) shapes the whole design.
-- **Infrastructure project dashboards**: a highway monitoring system takes inputs from site engineers' mobile apps, drone surveys and contractors' bills, processes them into progress percentages, and outputs reports for the client. Each external data source is a boundary crossing that needs validation.
+- **Food delivery**: a delivery platform takes inputs from customers' apps, restaurants' order tablets, riders' GPS pings and the payment gateway, processes them into orders, assignments and ETAs, and outputs notifications, live maps and payouts. Each external source (a restaurant tablet, a rider's phone on a weak network, a payment callback that arrives twice) is a boundary crossing that needs validation and a plan for failure.
 - **Any ASP.NET Core app**: the HTTP endpoint is the input boundary, the request and response records are the contracts, services in DI are components, and `HttpClient` calls go to external systems. The structure in this lesson is the default shape of most business web APIs.
 
 ## Interview questions

@@ -24,7 +24,7 @@ references:
     url: https://www.postgresql.org/docs/17/using-explain.html
 ---
 
-When you tap a metro smart card on a reader and see "Balance ₹142" half a second later, a chain of about ten hand-offs has happened between the reader and a database row. The same chain runs for every API call your apps will ever serve. This lesson walks through it once, slowly, with numbers, so that later lessons on middleware, dependency injection and databases have a map to hang on.
+When you open your city's metro app, tap "Check balance" on your linked travel card and see "Balance ₹142" a moment later, a chain of about ten hand-offs has happened between your phone and a database row. The same chain runs for every API call your apps will ever serve. This lesson walks through it once, slowly, with numbers, so that later lessons on middleware, dependency injection and databases have a map to hang on.
 
 ## Learning objectives
 
@@ -68,7 +68,7 @@ We will follow one request: `GET https://api.metro.example/cards/MC-1001/balance
 
 ### Stage 0 — before any byte reaches your app
 
-The client (a browser, a mobile app, a card reader) has to find the server and open a secure connection:
+The client (a browser, a mobile app, a recharge kiosk) has to find the server and open a secure connection:
 
 - **DNS**: translate `api.metro.example` into an IP address. Often cached; a cold lookup is typically 10–50 ms (estimate).
 - **TCP handshake**: three packets between client and server. One round trip. Delhi to a Mumbai data centre is roughly 20–30 ms round trip; Delhi to Singapore roughly 60–80 ms (estimates for typical fibre paths).
@@ -123,7 +123,7 @@ Routing uses a precomputed tree (a DFA) and is microseconds per request even wit
 
 The endpoint is the lambda or controller action. The framework:
 
-1. **Binds parameters**: `cardId` from the route, query strings, headers, and the JSON body (deserialized with `System.Text.JSON`) into your method's parameters.
+1. **Binds parameters**: `cardId` from the route, query strings, headers, and the JSON body (deserialized with `System.Text.Json`) into your method's parameters.
 2. **Resolves services** from `context.RequestServices`: the `CardBalanceService` parameter is created by the DI container ([Dependency injection](#/lesson/m03-dependency-injection)).
 3. **Calls your method**.
 4. **Converts the return value** into a response: an object becomes JSON with status 200; `Results.NotFound()` becomes 404.
@@ -180,7 +180,7 @@ Two conclusions beginners find surprising. First, the server often spends only 2
 ### Failure modes along the path
 
 - **Connection refused / timeout** before Kestrel: the app is not running, the port is wrong, a firewall. No log line in your app at all; look at the orchestrator.
-- **400 Bad Request from Kestrel itself**: malformed HTTP, headers over the size limit (default 32 KB), body over `MaxRequestBodySize` (30 MB default).
+- **4xx straight from Kestrel**: `400` for malformed HTTP, `431 Request Header Fields Too Large` when headers exceed `MaxRequestHeadersTotalSize` (32 KB by default), `413 Content Too Large` when the body exceeds `MaxRequestBodySize` (30,000,000 bytes, about 28.6 MB, by default). Your endpoint never runs, so your own logs may show nothing.
 - **401 / 403**: authentication or authorization middleware short-circuited. Your endpoint never ran.
 - **404**: no route matched. Check the template, the HTTP method, and whether `MapControllers` was called.
 - **500**: an exception reached the exception handler. Check the log; the correlation id in the response helps find it.
@@ -192,7 +192,7 @@ Two conclusions beginners find surprising. First, the server often spends only 2
 
 ```mermaid
 flowchart LR
-    C["Client<br/>browser / app / reader"] -->|"HTTPS request"| K["Kestrel<br/>bytes → HttpContext"]
+    C["Client<br/>browser / app / kiosk"] -->|"HTTPS request"| K["Kestrel<br/>bytes → HttpContext"]
     K --> M["Middleware pipeline<br/>exceptions, timing, auth"]
     M --> R["Routing<br/>match template, bind params"]
     R --> E["Endpoint<br/>MapGet lambda / action"]
@@ -240,7 +240,7 @@ sequenceDiagram
     KE-->>CL: HTTP/1.1 200 OK (≈12 ms network)
 ```
 
-Each numbered arrow is a hand-off. Arrows 1 and 19 are the network legs the client pays for. Arrows 8–10 are the database leg where the server spends most of its own time. Everything else together is well under a millisecond. When you read a slow trace in production, your first question should be: "what are the equivalents of arrows 8–10 in this request, and how many of them are there?" An endpoint that loops over 50 cards and calls `FindAsync` 50 times does arrows 8–10 fifty times, turning 3 ms into 150 ms. That is the N+1 problem.
+Each numbered arrow is a hand-off. Arrows 1 and 17 are the network legs the client pays for. Arrows 8 and 9 are the database leg where the server spends most of its own time. Everything else together is well under a millisecond. When you read a slow trace in production, your first question should be: "what are the equivalents of arrows 8 and 9 in this request, and how many of them are there?" An endpoint that loops over 50 cards and calls `FindAsync` 50 times does arrows 8 and 9 fifty times, turning 3 ms into 150 ms. That is the N+1 problem.
 
 ## Step-by-step example
 
@@ -408,15 +408,12 @@ var builder = WebApplication.CreateBuilder(args);
 // Phase 1: what exists.
 builder.Services.AddSingleton<ICardRepository, InMemoryCardRepository>(); // swap for NpgsqlCardRepository in production
 builder.Services.AddScoped<CardBalanceService>();
+builder.Services.AddProblemDetails();   // RFC 9457 error bodies for exceptions and empty error responses
 
 var app = builder.Build();
 
 // Phase 2: what happens to a request, in order.
-app.UseExceptionHandler(errorApp => errorApp.Run(ctx =>
-{
-    ctx.Response.StatusCode = StatusCodes.Status500InternalServerError;
-    return ctx.Response.WriteAsJsonAsync(new { error = "Unexpected error. Please retry." });
-}));
+app.UseExceptionHandler();              // catches anything thrown downstream; writes a 500 ProblemDetails, no stack trace
 app.UseServerTiming();
 
 // Stage 3 + 4: route template, parameter binding, service resolution, result conversion.
@@ -425,8 +422,8 @@ app.MapGet("/cards/{cardId}/balance", async (string cardId, CardBalanceService s
     var result = await service.GetBalanceAsync(cardId, ct);
     return result.Outcome switch
     {
-        BalanceOutcome.NotFound => Results.NotFound(new { error = $"Card {cardId} not found" }),
-        BalanceOutcome.Blocked => Results.Conflict(new { error = $"Card {cardId} is blocked" }),
+        BalanceOutcome.NotFound => Results.Problem(title: $"Card {cardId} not found", statusCode: StatusCodes.Status404NotFound),
+        BalanceOutcome.Blocked => Results.Problem(title: $"Card {cardId} is blocked", statusCode: StatusCodes.Status409Conflict),
         _ => Results.Ok(new { cardId = result.CardId, balance = result.BalanceRupees, lowBalance = result.LowBalance }),
     };
 });
@@ -436,7 +433,7 @@ app.Run();
 
 ### The PostgreSQL repository
 
-The production repository replaces the in-memory one with one registration line. It is shown as a snippet because it needs the Npgsql package:
+The production repository replaces the in-memory one with one registration line. It is shown as a snippet because it needs the `Npgsql` and `Npgsql.DependencyInjection` packages:
 
 ```csharp
 public sealed class NpgsqlCardRepository(NpgsqlDataSource dataSource) : ICardRepository
@@ -723,7 +720,7 @@ public sealed class RequestLogMiddleware
 }
 ```
 
-The `finally` is what makes the second test pass: the exception still travels up to the exception handler, but the request is logged with whatever status code was set (500 will be set later by the handler, which is why production loggers often sit *inside* the exception handler rather than outside it).
+The `finally` is what makes the second test pass: the exception still travels up to the exception handler, and the request is logged with whatever status code was set at the moment of the throw. Placement decides what that is. If this middleware sits *inside* (after) `UseExceptionHandler`, it records 200, because the handler sets 500 only later, on the way out. If it sits *outside* (before) the handler, it records the final 500 the client actually received. Production request loggers usually sit outside for that reason, or set 500 explicitly in a `catch` before rethrowing.
 ::mistakes
 - Recording before `await _next(context)`: the status code is still the default 200.
 - Catching the exception and returning normally, which hides the failure from the exception handler.
@@ -776,7 +773,7 @@ Owner matters because it tells you where to look when the stage misbehaves: a 40
 Implement `CardTopUpService.TopUpAsync`. The rules: unknown card → `NotFound`; blocked card → `Blocked`; amount outside ₹10–₹2,000 → `InvalidAmount`; otherwise add the amount (converted to paise) via the repository and return `Ok` with the new balance in rupees.
 ::requirements
 - Rupees to paise: multiply by 100 and round to a `long`.
-- Validate the amount **before** touching the repository for a blocked or missing card? No: check the card first so a blocked card reports `Blocked` even for a bad amount. Order: find card → blocked? → amount valid? → update.
+- Check the card first, so a blocked card reports `Blocked` even when the amount is also bad. Order: find card → blocked? → amount valid? → update.
 - Use the repository's `UpdateBalanceAsync` and return the new balance it reports.
 ::acceptance
 - Unknown card returns `TopUpOutcome.NotFound` and the repository update is not called.
@@ -1002,10 +999,11 @@ GROUP BY card_id;
 :::
 
 :::exercise id=m03-request-lifecycle-ex5 difficulty=advanced kind=code title="Correlation id across the whole request"
-When a user reports "my top-up failed at 6:42 pm", you need to find *that* request in the logs. Implement `CorrelationIdMiddleware`: reuse the incoming `X-Correlation-ID` header if present and non-empty, otherwise generate one; store it in `HttpContext.Items["CorrelationId"]`; set it on the response **before** calling the next middleware so it is present even if downstream throws.
+When a user reports "my top-up failed at 6:42 pm", you need to find *that* request in the logs. Implement `CorrelationIdMiddleware`: reuse the incoming `X-Correlation-ID` header if present and non-empty, otherwise generate one; store it in `HttpContext.Items["CorrelationId"]`; set it on the response **before** calling the next middleware so it is present even if downstream throws, and re-apply it in `Response.OnStarting` so it survives an exception handler that clears the response.
 ::requirements
 - Generated ids: `Guid.NewGuid().ToString("N")` (32 hex chars).
 - The response header must be present even when downstream throws; the exception must still propagate.
+- `UseExceptionHandler` calls `Response.Clear()` (status, headers and body) before writing its error response. Register an `OnStarting` callback that sets the header again, so the error response carries it too.
 - Expose the id via `HttpContext.Items["CorrelationId"]` so loggers and services can read it.
 ::acceptance
 - Incoming header `abc-123` → response header `abc-123` and `Items["CorrelationId"] == "abc-123"`.
@@ -1022,6 +1020,8 @@ Set the response header *before* `await _next(context)`. Headers are writable un
 var incoming = context.Request.Headers[HeaderName].ToString();
 var id = string.IsNullOrWhiteSpace(incoming) ? Guid.NewGuid().ToString("N") : incoming;
 ```
+::hint
+For the error path, add `context.Response.OnStarting(() => { context.Response.Headers[HeaderName] = id; return Task.CompletedTask; });` before calling `_next`.
 ::starter
 ```csharp file=CorrelationIdMiddleware.cs
 using System;
@@ -1108,14 +1108,23 @@ public sealed class CorrelationIdMiddleware
         context.Items[ItemKey] = id;
         context.Response.Headers[HeaderName] = id;   // before next: headers are still writable
 
+        // An exception handler further down calls Response.Clear(), which wipes headers.
+        // OnStarting runs just before the (error or normal) response is sent, so the id is put back.
+        context.Response.OnStarting(() =>
+        {
+            context.Response.Headers[HeaderName] = id;
+            return Task.CompletedTask;
+        });
+
         return _next(context);
     }
 }
 ```
 
-In production, also push the id into the logging scope (`logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = id })`) so every log line in this request carries it. Place this middleware **first**, before even the exception handler, so error responses carry the id too. With distributed tracing (OpenTelemetry) the `traceparent` header plays the same role across services.
+In production, also push the id into the logging scope (`logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = id })`) so every log line in this request carries it. Place this middleware **first**, before even the exception handler, so the exception handler's logs can read the id from `Items`; the `OnStarting` callback is what makes the error *response* carry it. (A `DefaultHttpContext` in a unit test never fires `OnStarting`, which is why the header is also set directly.) With distributed tracing (OpenTelemetry) the W3C `traceparent` header plays the same role across services, and `Activity.Current?.TraceId` is often used as the correlation id.
 ::mistakes
 - Setting the header after `await _next(context)`, which throws if the body has started and is missing when downstream throws.
+- Setting it only once before `next` and assuming error responses keep it: `UseExceptionHandler` clears response headers before writing the error.
 - Trusting an unbounded incoming header. In production cap its length (e.g. 64 chars) to avoid log injection.
 :::
 
@@ -1182,7 +1191,7 @@ Correlate first: pull the slow requests by correlation id and look for what they
 ::q advanced
 How would you design the pipeline so that error responses still include the correlation id and the server timing?
 ::a
-Order matters. Put the correlation id middleware first so it sets the header before anything else runs and before any exception. Put the exception handler second so it catches everything downstream and produces a ProblemDetails body; because the correlation middleware already set the response header, the error response carries it. Timing middleware goes after the exception handler if you want to measure successful and failed requests alike with `OnStarting`, since the exception handler resets the response and starts a new one; `OnStarting` callbacks registered earlier still fire when that new response starts. Finally, the exception handler should log with the correlation id from `HttpContext.Items` so the log line and the response the user saw can be matched.
+Order matters, and so does one detail of the exception handler: when it catches an exception it calls `Response.Clear()`, which wipes the status, the headers and any buffered body, then writes a ProblemDetails response. So a header set directly before `next` is lost on the error path. Put the correlation id middleware first: it stores the id in `HttpContext.Items` before anything can fail and sets the header in a `Response.OnStarting` callback. Put the exception handler second so it catches everything downstream. `OnStarting` callbacks are not removed by `Clear()`, so they fire when the error response starts, and both the correlation id and the `Server-Timing` header (also written in `OnStarting`) appear on successful and failed requests alike. If the response had already started streaming when the exception happened, the handler cannot replace it at all; it can only log and abort the connection. Finally, the exception handler should log with the correlation id from `HttpContext.Items` so the log line and the response the user saw can be matched.
 :::
 
 ## Summary and revision

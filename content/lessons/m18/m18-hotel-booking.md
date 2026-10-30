@@ -271,7 +271,7 @@ stateDiagram-v2
     [*] --> Held : Hold room for 10 min
     Held --> Confirmed : Confirm with payment before expiry
     Held --> Expired : Hold timer runs out
-    Held --> Cancelled : Guest abandons
+    Held --> Cancelled : Guest cancels before paying
     Confirmed --> Cancelled : Cancel with policy penalty
     Confirmed --> CheckedIn : Check in on arrival day
     Confirmed --> NoShow : Night audit after arrival day
@@ -528,6 +528,8 @@ public sealed class Booking
     public void Confirm(string paymentReference, DateTimeOffset now)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(paymentReference);
+        // A retried confirm with the same payment (lost response, double webhook) is a no-op, not an error.
+        if (Status == BookingStatus.Confirmed && PaymentReference == paymentReference) return;
         Require(BookingStatus.Held, "confirm");
         if (now >= HoldExpiresAt) throw new BookingRuleException("The hold has expired. Please search again.");
         PaymentReference = paymentReference;
@@ -725,6 +727,10 @@ public sealed class BookingService(
 ```
 
 Notice the ordering inside `Hold`: build (and validate) the booking first, *then* allocate inventory. If validation threw after allocation, we would leak a room. Every inventory change in the service sits next to a booking state change, inside the same lock.
+
+Two retry cases a reviewer will check. `Confirm` is idempotent: payment webhooks and mobile retries often arrive twice, so a second confirm with the *same* payment reference returns quietly instead of failing with 409. `Cancel` is safe to retry in the other direction: a second cancel throws before touching inventory, so a room is never released twice. And when a payment succeeds but `Confirm` is refused because the hold expired, the payment must be voided or refunded automatically; never let a guest pay for a booking that does not exist.
+
+One honest limit: the `Lock` in `BookingService` protects a single process. With two API instances, the same guarantee must come from the database (the conditional `UPDATE` above, run in the same transaction that inserts or updates the booking row).
 
 ### In-memory infrastructure, worker and wiring
 
@@ -1047,7 +1053,7 @@ Problems:
 
 ### When is the simple design fine?
 
-A homestay with **two rooms and one owner** taking bookings by phone doesn't need holds, decorators or a background worker. A table of bookings with half-open `DateOnly` ranges and a unique-constraint-style check inside a transaction is enough. The full design pays off once you have online payment (holds), many room types (counts) and pricing rules that marketing changes (decorators).
+A homestay with **two rooms and one owner** taking bookings by phone doesn't need holds, decorators or a background worker. A table of bookings with half-open `daterange` values and a PostgreSQL exclusion constraint (alternative 1 below) is enough. Note that a plain "SELECT to check, then INSERT" inside a transaction is *not* enough at the default isolation level: two transactions can both see the room as free. The full design pays off once you have online payment (holds), many room types (counts) and pricing rules that marketing changes (decorators).
 
 ## Alternative designs
 

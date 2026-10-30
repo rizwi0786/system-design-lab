@@ -43,22 +43,22 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Picture a site office on a highway project where one person, Ramesh, does everything. He checks the measurements engineers send in, calculates the bill amounts, works out tax, deducts retention money, prints the bill, emails the contractor, files a copy, and answers every phone call about any of it.
+Picture the payments desk of a small food-delivery company, where one person, Ramesh, does everything. Every Monday he checks last week's order reports for each restaurant, adds up the sales, works out GST, deducts the platform's commission and tax, recovers instalments of any cash advance the restaurant took, prints the payout statement, emails the restaurant owner, files a copy, and answers every phone call about any of it.
 
-At first this works. Ramesh knows everything. But as the project grows:
+At first this works. Ramesh knows everything. But as the company grows from 50 restaurants to 5,000:
 
-- When the tax rule changes, someone has to explain it to Ramesh, who is also busy printing bills.
-- When Ramesh is on leave, nothing moves.
+- When a tax rule changes, someone has to explain it to Ramesh, who is also busy printing statements.
+- When Ramesh is on leave, no restaurant gets paid.
 - A mistake in printing can somehow change a tax figure, because it's all in Ramesh's head and on Ramesh's desk.
-- Two engineers can't hand him work at the same time without getting in each other's way.
+- Two colleagues can't hand him work at the same time without getting in each other's way.
 
-The fix isn't to fire Ramesh and hire a whole new team overnight (a rewrite). That would stop all billing for weeks. Instead, you:
+The fix isn't to fire Ramesh and hire a whole new team overnight (a rewrite). That would stop all payouts for weeks. Instead, you:
 
 1. **Watch what he does for a week** and write down every output, so you'll know if anything changes. (Characterization tests.)
 2. **Notice which papers he uses for which job.** Tax work uses the rate sheet and the gross amount. Printing uses the letterhead and the template. Those are separate jobs. (Grouping methods by fields.)
-3. **Move one job at a time to a new desk**, with Ramesh still the person contractors talk to. He just passes the tax work to the tax desk now. (Extract Class behind a facade.)
-4. **Check after every move** that the bills look exactly the same.
-5. When all jobs have their own desks, contractors can go straight to the right desk, and Ramesh's role becomes "coordinator". (Retire or slim the facade.)
+3. **Move one job at a time to a new desk**, with Ramesh still the person restaurants talk to. He just passes the tax work to the tax desk now. (Extract Class behind a facade.)
+4. **Check after every move** that the payout statements look exactly the same.
+5. When all jobs have their own desks, restaurants can go straight to the right desk, and Ramesh's role becomes "coordinator". (Retire or slim the facade.)
 
 A large class is Ramesh. Refactoring it is moving jobs to new desks, one at a time, checking the output after each move.
 
@@ -75,14 +75,14 @@ Size alone isn't the problem. A 600-line class implementing one clear algorithm 
 | **Constructor parameters** | More than about 6–7 injected dependencies, from unrelated areas (repository, SMTP, PDF engine, tax rules, clock, feature flags…). |
 | **Method name prefixes** | `ValidateX`, `ValidateY`, `RenderX`, `RenderY`, `EmailX`. Prefixes are often class names waiting to happen. |
 | **Section comments** | `// ===== GST =====`, `// ===== PDF =====`. Each banner marks a candidate class. |
-| **Long parameter lists and data clumps** | The same three or four parameters (`fromDate, toDate, projectId`) travel together through many methods. |
+| **Long parameter lists and data clumps** | The same three or four parameters (`fromDate, toDate, restaurantId`) travel together through many methods. |
 | **Size metrics** | Lines of code, number of methods, cyclomatic complexity, class coupling. Visual Studio's code metrics report these, as do other static analysis tools. Useful for ranking, not for deciding. |
 
-A powerful combination is **hotspot analysis**: rank files by "how often they change" × "how complex they are". A complex class nobody touches is low priority. A complex class touched in most sprints is where refactoring pays back fastest. Adam Tornhill's book *Your Code as a Crime Scene* describes this technique in depth.
+A powerful combination is **hotspot analysis**: rank files by "how often they change" × "how complex they are". A complex class nobody touches is low priority. A complex class touched in most sprints is where refactoring pays back fastest. You can get a first ranking from version control alone: `git log --since=12.month --format= --name-only | sort | uniq -c | sort -rn | head -20` lists the most-changed files of the last year. Adam Tornhill's book *Your Code as a Crime Scene* describes this technique in depth.
 
 ### Why large classes hurt
 
-1. **Change risk.** Every change happens next to unrelated code that shares fields. Changing the retention calculation can break PDF rendering if both read a mutable `_currentBill` field.
+1. **Change risk.** Every change happens next to unrelated code that shares fields. Changing the commission calculation can break PDF rendering if both read a mutable `_currentStatement` field.
 2. **Testing cost.** To test the tax calculation, you must construct the class, which needs 15 dependencies, most irrelevant to tax.
 3. **Team throughput.** Several developers working on different features all edit the same file. Merge conflicts and code-review load grow with team size.
 4. **Comprehension.** Nobody can hold 2,000 lines in their head, so people add code instead of reusing what exists. The class grows faster.
@@ -98,7 +98,7 @@ A powerful combination is **hotspot analysis**: rank files by "how often they ch
 
 LCOM4 = 1 means one cohesive class. LCOM4 = 4 means the class is really four classes that happen to share a file. Each component is a candidate for Extract Class. You'll write this analysis in exercise 5.
 
-Field usage isn't the whole story. Also ask **who requests changes** to each part (the SRP's "actor"). Tax rules change when Finance or the law changes. Bill layout changes when the client wants a new format. Measurement validation changes when site engineers find new kinds of mistakes. Different actors → different classes.
+Field usage isn't the whole story. Also ask **who requests changes** to each part (the SRP's "actor"). Tax rules change when Finance or the law changes. Statement layout changes when the partner team wants a new format. Sales-data validation changes when operations finds new kinds of bad order data. Commission terms change when the sales team signs a new kind of restaurant agreement. Different actors → different classes.
 
 ### The safety net: characterization tests
 
@@ -122,7 +122,7 @@ Martin Fowler's catalogue names the moves. The ones you'll use most on a large c
 | **Introduce Parameter Object** | Group parameters that travel together into a record | `(DateOnly from, DateOnly to)` everywhere |
 | **Extract Class** | Move a cluster of fields and the methods that use them into a new class | A field cluster with its own methods |
 | **Move Method / Move Field** | Put a method in the class whose data it uses most | Feature Envy: a method that mostly reads another object's fields |
-| **Replace Conditional with Polymorphism** | Replace a `switch` on a type code with strategy classes | `switch (contractType)` repeated in several methods |
+| **Replace Conditional with Polymorphism** | Replace a `switch` on a type code with strategy classes | `switch (partnerType)` repeated in several methods |
 | **Hide Delegate / Facade** | Keep the old public API, delegate to the new classes | Many callers you can't change at once |
 | **Inline Class** | Merge a class that does too little back into its user | You over-split |
 
@@ -167,14 +167,14 @@ Steps should be minutes long, not days. If a step takes a day, it was several st
 
 ```mermaid
 classDiagram
-    class RaBillProcessor {
+    class PayoutProcessor {
         <<facade>>
-        +Process(RaBillRequest request) RaBillResult
+        +ProcessAsync(PayoutRequest request) PayoutResult
     }
-    class RaBillCalculator {
-        +Compute(lines, advanceOutstanding) RaBillComputation
+    class PayoutCalculator {
+        +Compute(lines, advanceOutstanding) PayoutComputation
     }
-    class MeasurementValidator {
+    class SalesLineValidator {
         +Validate(lines) IReadOnlyList~string~
     }
     class DeductionCalculator {
@@ -183,53 +183,53 @@ classDiagram
     class GstCalculator {
         +GstOn(decimal taxable) decimal
     }
-    class IBillRenderer {
+    class IStatementRenderer {
         <<interface>>
-        +Render(RaBillComputation c) byte[]
+        +Render(PayoutComputation c) byte[]
     }
-    class IBillRepository {
+    class IPayoutRepository {
         <<interface>>
-        +Save(RaBillRecord r)
+        +Save(PayoutRecord r)
     }
-    class IBillNotifier {
+    class IPayoutNotifier {
         <<interface>>
-        +NotifyAsync(string contractorEmail, RaBillComputation c)
+        +NotifyAsync(string restaurantEmail, PayoutComputation c)
     }
-    RaBillProcessor --> MeasurementValidator
-    RaBillProcessor --> RaBillCalculator
-    RaBillProcessor --> IBillRenderer
-    RaBillProcessor --> IBillRepository
-    RaBillProcessor --> IBillNotifier
-    RaBillCalculator --> DeductionCalculator
-    RaBillCalculator --> GstCalculator
+    PayoutProcessor --> SalesLineValidator
+    PayoutProcessor --> PayoutCalculator
+    PayoutProcessor --> IStatementRenderer
+    PayoutProcessor --> IPayoutRepository
+    PayoutProcessor --> IPayoutNotifier
+    PayoutCalculator --> DeductionCalculator
+    PayoutCalculator --> GstCalculator
 ```
 
-The old `RaBillProcessor` kept its name and its public `Process` method, so none of its 14 callers changed. Inside, it now only coordinates. Calculation is a pure sub-tree (`RaBillCalculator` with `DeductionCalculator` and `GstCalculator`) that needs no infrastructure to test. Rendering, saving and notifying are behind interfaces because they talk to the outside world. Each box has one kind of reason to change: Finance rules, measurement rules, document layout, storage, messaging.
+The old `PayoutProcessor` kept its name and its public `ProcessAsync` method, so none of its 14 callers changed. Inside, it now only coordinates. Calculation is a pure sub-tree (`PayoutCalculator` with `DeductionCalculator` and `GstCalculator`) that needs no infrastructure to test. Rendering, saving and notifying are behind interfaces because they talk to the outside world. Each box has one kind of reason to change: Finance and tax rules, sales-data rules, statement layout, storage, messaging.
 
 ### Sequence: the facade delegating
 
 ```mermaid
 sequenceDiagram
     participant Caller as Existing caller (unchanged)
-    participant F as RaBillProcessor (facade)
-    participant V as MeasurementValidator
-    participant C as RaBillCalculator
-    participant R as IBillRenderer
-    participant Repo as IBillRepository
-    participant N as IBillNotifier
-    Caller->>F: Process(request)
+    participant F as PayoutProcessor (facade)
+    participant V as SalesLineValidator
+    participant C as PayoutCalculator
+    participant R as IStatementRenderer
+    participant Repo as IPayoutRepository
+    participant N as IPayoutNotifier
+    Caller->>F: ProcessAsync(request)
     F->>V: Validate(lines)
     V-->>F: no errors
     F->>C: Compute(lines, advanceOutstanding)
-    C-->>F: RaBillComputation
+    C-->>F: PayoutComputation
     F->>R: Render(computation)
     R-->>F: PDF bytes
     F->>Repo: Save(record)
     F->>N: NotifyAsync(email, computation)
-    F-->>Caller: RaBillResult
+    F-->>Caller: PayoutResult
 ```
 
-The caller's view is identical to before the refactoring. That's what lets you do this work incrementally in a live system: each extracted class goes in behind the facade in its own commit, and characterization tests run against `Process` the whole time. Later, a new caller that only needs a quote (no PDF, no email) can call `RaBillCalculator` directly.
+The caller's view is identical to before the refactoring. That's what lets you do this work incrementally in a live system: each extracted class goes in behind the facade in its own commit, and characterization tests run against `ProcessAsync` the whole time. Later, a new caller that only needs a quote (no PDF, no email) can call `PayoutCalculator` directly.
 
 ### The refactoring loop
 
@@ -256,27 +256,28 @@ The key edge is "no → undo". If a move breaks tests, don't debug a half-done r
 An abridged extract of the original (the real one is about 2,100 lines):
 
 ```csharp
-public class RaBillProcessor
+public class PayoutProcessor
 {
     private readonly IDbConnection _db; private readonly SmtpClient _smtp; private readonly PdfEngine _pdf;
-    private decimal _gstRate = 0.18m, _retentionPct = 0.05m, _tdsPct = 0.02m, _advanceRecoveryPct = 0.10m;
+    private decimal _gstRate = 0.05m, _commissionPct = 0.20m, _tdsPct = 0.01m, _advanceRecoveryPct = 0.10m;
     private string _logoPath = "", _templatePath = "";
-    private RaBill? _current;                       // shared mutable state used by 30 methods
+    private PayoutStatement? _current;              // shared mutable state used by 30 methods
 
-    public RaBillResult Process(RaBillRequest req)
+    public async Task<PayoutResult> ProcessAsync(PayoutRequest req)
     {
-        _current = LoadBill(req.BillId);
-        // ===== validate measurements =====
+        _current = LoadStatement(req.StatementNumber);
+        // ===== validate sales lines =====
         foreach (var l in req.Lines) { if (l.Quantity <= 0) throw new Exception("bad qty " + l.ItemCode); /* 40 more lines */ }
         // ===== amounts =====
-        decimal gross = 0; foreach (var l in req.Lines) gross += Math.Round(l.Quantity * l.Rate, 2);
-        var gst = Math.Round(gross * _gstRate, 2);
-        var retention = Math.Round(gross * _retentionPct, 2);
-        var tds = Math.Round(gross * _tdsPct, 2);
-        var recovery = Math.Min(req.AdvanceOutstanding, Math.Round(gross * _advanceRecoveryPct, 2));
-        var net = gross + gst - retention - tds - recovery;
+        decimal gross = 0; foreach (var l in req.Lines) gross += Math.Round(l.Quantity * l.Price, 2, MidpointRounding.AwayFromZero);
+        var gst = Math.Round(gross * _gstRate, 2, MidpointRounding.AwayFromZero);
+        var commission = Math.Round(gross * _commissionPct, 2, MidpointRounding.AwayFromZero);
+        var tds = Math.Round(gross * _tdsPct, 2, MidpointRounding.AwayFromZero);
+        var recovery = Math.Round(gross * _advanceRecoveryPct, 2, MidpointRounding.AwayFromZero);
+        if (req.AdvanceOutstanding < recovery) recovery = req.AdvanceOutstanding < 0 ? 0 : req.AdvanceOutstanding;
+        var net = gross + gst - commission - tds - recovery;
         // ===== pdf =====  (120 lines)   ===== save =====  (60 lines)   ===== email =====  (45 lines)
-        return new RaBillResult(/* ... */);
+        return new PayoutResult(/* ... */);
     }
     // ... 60 more methods
 }
@@ -284,15 +285,15 @@ public class RaBillProcessor
 
 ### Step 2 — characterization tests first
 
-Run `Process` against 20 real past bills (anonymised) and a few thousand generated ones. Record gross, GST, each deduction and net payable. Store them. Every following step must reproduce them exactly. The playground below shows this technique.
+Run `ProcessAsync` against 20 real past payout statements (anonymised) and a few thousand generated ones. Record gross, GST, each deduction and net payable. Store them. Every following step must reproduce them exactly. The playground below shows this technique.
 
 ### Step 3 — extract methods to make clusters visible
 
-Turn each banner into a method: `ValidateMeasurements`, `ComputeGross`, `ComputeDeductions`, `RenderPdf`, `SaveBill`, `EmailContractor`. Replace temps with queries where they block extraction. Now the field usage is visible: `ComputeDeductions` uses only `_retentionPct`, `_tdsPct` and `_advanceRecoveryPct`. Commit.
+Turn each banner into a method: `ValidateSalesLines`, `ComputeGross`, `ComputeDeductions`, `RenderPdf`, `SaveStatement`, `EmailRestaurant`. Replace temps with queries where they block extraction. Now the field usage is visible: `ComputeDeductions` uses only `_commissionPct`, `_tdsPct` and `_advanceRecoveryPct`. Commit.
 
 ### Step 4 — extract classes, one cluster at a time
 
-Move `ComputeDeductions` and its three fields into `DeductionCalculator`. The old method becomes a one-line delegation. Run tests, commit. Then GST, then the calculator that composes them, then rendering behind `IBillRenderer`, and so on. Each extraction is its own commit, and each is easy to review because no logic changed.
+Move `ComputeDeductions` and its three fields into `DeductionCalculator`. The old method becomes a one-line delegation. Run tests, commit. Then GST, then the calculator that composes them, then rendering behind `IStatementRenderer`, and so on. Each extraction is its own commit, and each is easy to review because no logic changed.
 
 ### Step 5 — remove shared mutable state
 
@@ -301,197 +302,200 @@ Move `ComputeDeductions` and its three fields into `DeductionCalculator`. The ol
 ## Production-style C# implementation
 
 ```text
-Contracts.Billing/
+FoodDelivery.Payouts/
   Program.cs
-  Billing/Model.cs                 records: lines, request, computation, record
-  Billing/MeasurementValidator.cs
-  Billing/Calculators.cs           GST, deductions, RA bill calculator (pure)
-  Billing/Ports.cs                 renderer, repository, notifier + simple adapters
-  Billing/RaBillProcessor.cs       the facade, same public API as before
+  Payouts/Model.cs                 records: lines, request, computation, record
+  Payouts/SalesLineValidator.cs
+  Payouts/Calculators.cs           GST, deductions, payout calculator (pure)
+  Payouts/Ports.cs                 renderer, repository, notifier + simple adapters
+  Payouts/PayoutProcessor.cs       the facade, same public API as before
 ```
 
-```csharp file=Billing/Model.cs
-namespace Contracts.Billing;
+```csharp file=Payouts/Model.cs
+namespace FoodDelivery.Payouts;
 
-/// <summary>One measured item from the measurement book: e.g. "Earthwork in embankment", 1,250.5 m³ at ₹285.</summary>
-public sealed record MeasurementLine(string ItemCode, string Description, decimal Quantity, string Unit, decimal Rate)
+/// <summary>One menu item's sales for the week: e.g. "Chicken biryani", 1,250 plates at ₹285.</summary>
+public sealed record SalesLine(string ItemCode, string Description, decimal Quantity, string Unit, decimal Price)
 {
-    public decimal Amount => Math.Round(Quantity * Rate, 2, MidpointRounding.AwayFromZero);
+    public decimal Amount => Math.Round(Quantity * Price, 2, MidpointRounding.AwayFromZero);
 }
 
-public sealed record RaBillRequest(int BillNumber, string ContractorEmail, IReadOnlyList<MeasurementLine> Lines,
+public sealed record PayoutRequest(int StatementNumber, string RestaurantEmail, IReadOnlyList<SalesLine> Lines,
                                    decimal AdvanceOutstanding);
 
-public sealed record Deductions(decimal Retention, decimal Tds, decimal AdvanceRecovery)
+public sealed record Deductions(decimal Commission, decimal Tds, decimal AdvanceRecovery)
 {
-    public decimal Total => Retention + Tds + AdvanceRecovery;
+    public decimal Total => Commission + Tds + AdvanceRecovery;
 }
 
-public sealed record RaBillComputation(decimal Gross, decimal Gst, Deductions Deductions)
+public sealed record PayoutComputation(decimal Gross, decimal Gst, Deductions Deductions)
 {
     public decimal NetPayable => Gross + Gst - Deductions.Total;
 }
 
-public sealed record RaBillRecord(int BillNumber, RaBillComputation Computation, byte[] Document);
+public sealed record PayoutRecord(int StatementNumber, PayoutComputation Computation, byte[] Document);
 
-public sealed record RaBillResult(bool Accepted, IReadOnlyList<string> Errors, RaBillComputation? Computation);
+public sealed record PayoutResult(bool Accepted, IReadOnlyList<string> Errors, PayoutComputation? Computation);
 ```
 
-```csharp file=Billing/MeasurementValidator.cs
-namespace Contracts.Billing;
+```csharp file=Payouts/SalesLineValidator.cs
+namespace FoodDelivery.Payouts;
 
-/// <summary>Changes when site engineers find new kinds of measurement mistakes.</summary>
-public sealed class MeasurementValidator
+/// <summary>Changes when operations finds new kinds of bad order data.</summary>
+public sealed class SalesLineValidator
 {
-    private static readonly HashSet<string> KnownUnits = new(StringComparer.OrdinalIgnoreCase) { "m", "m2", "m3", "t", "kg", "nos", "rmt" };
+    private static readonly HashSet<string> KnownUnits = new(StringComparer.OrdinalIgnoreCase) { "plate", "bowl", "piece", "box", "kg", "litre", "combo" };
 
-    public IReadOnlyList<string> Validate(IReadOnlyList<MeasurementLine> lines)
+    public IReadOnlyList<string> Validate(IReadOnlyList<SalesLine> lines)
     {
         var errors = new List<string>();
-        if (lines.Count == 0) errors.Add("A bill needs at least one measurement line.");
+        if (lines.Count == 0) errors.Add("A payout statement needs at least one sales line.");
         foreach (var l in lines)
         {
             if (l.Quantity <= 0) errors.Add($"{l.ItemCode}: quantity must be positive.");
-            if (l.Rate <= 0) errors.Add($"{l.ItemCode}: rate must be positive.");
+            if (l.Price <= 0) errors.Add($"{l.ItemCode}: price must be positive.");
             if (!KnownUnits.Contains(l.Unit)) errors.Add($"{l.ItemCode}: unknown unit '{l.Unit}'.");
         }
         foreach (var dup in lines.GroupBy(l => l.ItemCode).Where(g => g.Count() > 1))
-            errors.Add($"{dup.Key}: appears {dup.Count()} times; combine the measurements.");
+            errors.Add($"{dup.Key}: appears {dup.Count()} times; combine the lines.");
         return errors;
     }
 }
 ```
 
-```csharp file=Billing/Calculators.cs
+```csharp file=Payouts/Calculators.cs
 using Microsoft.Extensions.Options;
 
-namespace Contracts.Billing;
+namespace FoodDelivery.Payouts;
 
-/// <summary>Rates are illustrative. Real contracts and tax law define their own; keep them in configuration.</summary>
-public sealed class BillingRates
+/// <summary>
+/// Rates are illustrative. Commission comes from each restaurant's agreement, and GST/TDS treatment from
+/// current tax law (which changes); keep them in configuration, never as constants in code.
+/// </summary>
+public sealed class PayoutRates
 {
-    public decimal GstRate { get; set; } = 0.18m;
-    public decimal RetentionRate { get; set; } = 0.05m;
-    public decimal TdsRate { get; set; } = 0.02m;
+    public decimal GstRate { get; set; } = 0.05m;
+    public decimal CommissionRate { get; set; } = 0.20m;
+    public decimal TdsRate { get; set; } = 0.01m;
     public decimal AdvanceRecoveryRate { get; set; } = 0.10m;
 }
 
 /// <summary>Changes when tax rules change.</summary>
-public sealed class GstCalculator(IOptions<BillingRates> rates)
+public sealed class GstCalculator(IOptions<PayoutRates> rates)
 {
     public decimal GstOn(decimal taxable) => Round(taxable * rates.Value.GstRate);
     internal static decimal Round(decimal v) => Math.Round(v, 2, MidpointRounding.AwayFromZero);
 }
 
-/// <summary>Changes when contract deduction clauses change.</summary>
-public sealed class DeductionCalculator(IOptions<BillingRates> rates)
+/// <summary>Changes when commission terms or deduction rules in the restaurant agreement change.</summary>
+public sealed class DeductionCalculator(IOptions<PayoutRates> rates)
 {
     public Deductions Calculate(decimal gross, decimal advanceOutstanding)
     {
         var r = rates.Value;
-        var retention = GstCalculator.Round(gross * r.RetentionRate);
+        var commission = GstCalculator.Round(gross * r.CommissionRate);
         var tds = GstCalculator.Round(gross * r.TdsRate);                  // on the value excluding GST
         var recovery = Math.Min(Math.Max(advanceOutstanding, 0m), GstCalculator.Round(gross * r.AdvanceRecoveryRate));
-        return new Deductions(retention, tds, recovery);
+        return new Deductions(commission, tds, recovery);
     }
 }
 
 /// <summary>Pure composition of the money rules. No I/O, so tests need no doubles.</summary>
-public sealed class RaBillCalculator(GstCalculator gst, DeductionCalculator deductions)
+public sealed class PayoutCalculator(GstCalculator gst, DeductionCalculator deductions)
 {
-    public RaBillComputation Compute(IReadOnlyList<MeasurementLine> lines, decimal advanceOutstanding)
+    public PayoutComputation Compute(IReadOnlyList<SalesLine> lines, decimal advanceOutstanding)
     {
         var gross = lines.Sum(l => l.Amount);
-        return new RaBillComputation(gross, gst.GstOn(gross), deductions.Calculate(gross, advanceOutstanding));
+        return new PayoutComputation(gross, gst.GstOn(gross), deductions.Calculate(gross, advanceOutstanding));
     }
 }
 ```
 
-```csharp file=Billing/Ports.cs
+```csharp file=Payouts/Ports.cs
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
 using Microsoft.Extensions.Logging;
 
-namespace Contracts.Billing;
+namespace FoodDelivery.Payouts;
 
-public interface IBillRenderer { byte[] Render(int billNumber, RaBillComputation computation); }
-public interface IBillRepository { void Save(RaBillRecord record); }
-public interface IBillNotifier { Task NotifyAsync(string contractorEmail, int billNumber, RaBillComputation computation, CancellationToken ct); }
+public interface IStatementRenderer { byte[] Render(int statementNumber, PayoutComputation computation); }
+public interface IPayoutRepository { void Save(PayoutRecord record); }
+public interface IPayoutNotifier { Task NotifyAsync(string restaurantEmail, int statementNumber, PayoutComputation computation, CancellationToken ct); }
 
 /// <summary>Placeholder renderer: plain text. A PDF adapter would implement the same interface.</summary>
-public sealed class TextBillRenderer : IBillRenderer
+public sealed class TextStatementRenderer : IStatementRenderer
 {
     private static readonly CultureInfo India = CultureInfo.GetCultureInfo("en-IN");
-    public byte[] Render(int billNumber, RaBillComputation c) => Encoding.UTF8.GetBytes(string.Create(India,
-        $"RA Bill {billNumber}\nGross {c.Gross:N2}\nGST {c.Gst:N2}\nRetention {c.Deductions.Retention:N2}\n" +
+    public byte[] Render(int statementNumber, PayoutComputation c) => Encoding.UTF8.GetBytes(string.Create(India,
+        $"Payout statement {statementNumber}\nGross sales {c.Gross:N2}\nGST {c.Gst:N2}\nCommission {c.Deductions.Commission:N2}\n" +
         $"TDS {c.Deductions.Tds:N2}\nAdvance recovery {c.Deductions.AdvanceRecovery:N2}\nNet payable {c.NetPayable:N2}\n"));
 }
 
-public sealed class InMemoryBillRepository : IBillRepository
+public sealed class InMemoryPayoutRepository : IPayoutRepository
 {
-    private readonly ConcurrentDictionary<int, RaBillRecord> _bills = new();
-    public void Save(RaBillRecord record) => _bills[record.BillNumber] = record;
-    public RaBillRecord? Find(int billNumber) => _bills.TryGetValue(billNumber, out var r) ? r : null;
+    private readonly ConcurrentDictionary<int, PayoutRecord> _statements = new();
+    public void Save(PayoutRecord record) => _statements[record.StatementNumber] = record;
+    public PayoutRecord? Find(int statementNumber) => _statements.TryGetValue(statementNumber, out var r) ? r : null;
 }
 
-public sealed class LoggingBillNotifier(ILogger<LoggingBillNotifier> logger) : IBillNotifier
+public sealed class LoggingPayoutNotifier(ILogger<LoggingPayoutNotifier> logger) : IPayoutNotifier
 {
-    public Task NotifyAsync(string contractorEmail, int billNumber, RaBillComputation c, CancellationToken ct)
+    public Task NotifyAsync(string restaurantEmail, int statementNumber, PayoutComputation c, CancellationToken ct)
     {
-        logger.LogInformation("RA bill {Bill} ready for {Email}: net {Net}", billNumber, contractorEmail, c.NetPayable);
+        logger.LogInformation("Payout statement {Statement} ready for {Email}: net {Net}", statementNumber, restaurantEmail, c.NetPayable);
         return Task.CompletedTask;
     }
 }
 ```
 
-```csharp file=Billing/RaBillProcessor.cs
-namespace Contracts.Billing;
+```csharp file=Payouts/PayoutProcessor.cs
+namespace FoodDelivery.Payouts;
 
 /// <summary>Facade: same public API the 14 existing callers use. It only coordinates now.</summary>
-public sealed class RaBillProcessor(MeasurementValidator validator, RaBillCalculator calculator, IBillRenderer renderer,
-                                    IBillRepository repository, IBillNotifier notifier)
+public sealed class PayoutProcessor(SalesLineValidator validator, PayoutCalculator calculator, IStatementRenderer renderer,
+                                    IPayoutRepository repository, IPayoutNotifier notifier)
 {
-    public async Task<RaBillResult> ProcessAsync(RaBillRequest request, CancellationToken ct = default)
+    public async Task<PayoutResult> ProcessAsync(PayoutRequest request, CancellationToken ct = default)
     {
         var errors = validator.Validate(request.Lines);
-        if (errors.Count > 0) return new RaBillResult(false, errors, null);
+        if (errors.Count > 0) return new PayoutResult(false, errors, null);
 
         var computation = calculator.Compute(request.Lines, request.AdvanceOutstanding);
-        var document = renderer.Render(request.BillNumber, computation);
-        repository.Save(new RaBillRecord(request.BillNumber, computation, document));
-        await notifier.NotifyAsync(request.ContractorEmail, request.BillNumber, computation, ct);
-        return new RaBillResult(true, [], computation);
+        var document = renderer.Render(request.StatementNumber, computation);
+        repository.Save(new PayoutRecord(request.StatementNumber, computation, document));
+        await notifier.NotifyAsync(request.RestaurantEmail, request.StatementNumber, computation, ct);
+        return new PayoutResult(true, [], computation);
     }
 }
 ```
 
 ```csharp file=Program.cs
-using Contracts.Billing;
+using FoodDelivery.Payouts;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.Configure<BillingRates>(builder.Configuration.GetSection("BillingRates"));
-builder.Services.AddSingleton<MeasurementValidator>();
+builder.Services.Configure<PayoutRates>(builder.Configuration.GetSection("PayoutRates"));
+builder.Services.AddSingleton<SalesLineValidator>();
 builder.Services.AddSingleton<GstCalculator>();
 builder.Services.AddSingleton<DeductionCalculator>();
-builder.Services.AddSingleton<RaBillCalculator>();
-builder.Services.AddSingleton<IBillRenderer, TextBillRenderer>();
-builder.Services.AddSingleton<IBillRepository, InMemoryBillRepository>();
-builder.Services.AddSingleton<IBillNotifier, LoggingBillNotifier>();
-builder.Services.AddScoped<RaBillProcessor>();
+builder.Services.AddSingleton<PayoutCalculator>();
+builder.Services.AddSingleton<IStatementRenderer, TextStatementRenderer>();
+builder.Services.AddSingleton<IPayoutRepository, InMemoryPayoutRepository>();
+builder.Services.AddSingleton<IPayoutNotifier, LoggingPayoutNotifier>();
+builder.Services.AddScoped<PayoutProcessor>();
 
 var app = builder.Build();
 
 // Existing endpoint: unchanged contract.
-app.MapPost("/ra-bills", async (RaBillRequest req, RaBillProcessor processor, CancellationToken ct) =>
+app.MapPost("/payouts", async (PayoutRequest req, PayoutProcessor processor, CancellationToken ct) =>
 {
     var result = await processor.ProcessAsync(req, ct);
     return result.Accepted ? Results.Ok(result.Computation) : Results.BadRequest(result.Errors);
 });
 
-// New endpoint made cheap by the split: a quote with no PDF, no save, no email.
-app.MapPost("/ra-bills/quote", (RaBillRequest req, MeasurementValidator v, RaBillCalculator calc) =>
+// New endpoint made cheap by the split: a preview with no PDF, no save, no email.
+app.MapPost("/payouts/preview", (PayoutRequest req, SalesLineValidator v, PayoutCalculator calc) =>
     v.Validate(req.Lines) is { Count: > 0 } errors
         ? Results.BadRequest(errors)
         : Results.Ok(calc.Compute(req.Lines, req.AdvanceOutstanding)));
@@ -499,15 +503,17 @@ app.MapPost("/ra-bills/quote", (RaBillRequest req, MeasurementValidator v, RaBil
 app.Run();
 ```
 
-The second endpoint shows the payoff. Before the split, a "quote" meant calling the god class with a flag like `dryRun: true` and hoping every side effect checked it. Now it's three lines that reuse the pure calculator.
+The second endpoint shows the payoff: restaurant owners asked to see "what will I get this Monday?" mid-week. Before the split, a preview meant calling the god class with a flag like `dryRun: true` and hoping every side effect checked it. Now it's three lines that reuse the pure calculator.
+
+A senior reviewer would also point out what the facade does *not* fix yet: if the email fails after `Save`, a retry of the same request saves again and emails again. That was true of the legacy class too, and a pure refactoring must keep it. Fix it afterwards, in its own change: make `ProcessAsync` idempotent on `StatementNumber` and send the notification from an outbox (see [Transactional outbox](#/lesson/m12-outbox)). Refactoring first makes that change a small edit in one class instead of surgery on 2,000 lines.
 
 ## Bad design vs good design
 
-**Bad refactoring #1, the big-bang rewrite.** "We'll write `RaBillProcessorV2` from scratch in two sprints." Three months later, V2 handles 80 % of cases, the old class has gained six new features nobody ported, and both are in production. The rewrite lost the undocumented rules the old code encoded, such as a special rounding for one state's contracts that a client had demanded years ago.
+**Bad refactoring #1, the big-bang rewrite.** "We'll write `PayoutProcessorV2` from scratch in two sprints." Three months later, V2 handles 80 % of cases, the old class has gained six new features nobody ported, and both are in production. The rewrite lost the undocumented rules the old code encoded, such as a special rounding for one restaurant chain's agreement that their finance team had demanded years ago.
 
-**Bad refactoring #2, splitting by technical layer.** The 2,000-line class becomes `RaBillHelper`, `RaBillUtils`, `RaBillManager` and `RaBillCommon`, each 500 lines. Every feature still touches all four, the fields are now passed around in a `context` object, and the "one reason to change" problem is unchanged. File size went down; cohesion didn't go up.
+**Bad refactoring #2, splitting by technical layer.** The 2,000-line class becomes `PayoutHelper`, `PayoutUtils`, `PayoutManager` and `PayoutCommon`, each 500 lines. Every feature still touches all four, the fields are now passed around in a `context` object, and the "one reason to change" problem is unchanged. File size went down; cohesion didn't go up.
 
-**Bad refactoring #3, too fine.** Every line becomes a class: `RetentionCalculator`, `TdsCalculator`, `AdvanceRecoveryCalculator`, `NetPayableCalculator`, each with an interface and a DI registration. Understanding one bill now means opening 12 files that call each other in a chain. The fix is **Inline Class** until each class has a meaningful responsibility, as in `DeductionCalculator` above.
+**Bad refactoring #3, too fine.** Every line becomes a class: `CommissionCalculator`, `TdsCalculator`, `AdvanceRecoveryCalculator`, `NetPayableCalculator`, each with an interface and a DI registration. Understanding one payout now means opening 12 files that call each other in a chain. The fix is **Inline Class** until each class has a meaningful responsibility, as in `DeductionCalculator` above.
 
 **Good**: the version above. Split along reasons to change (validation, money rules, rendering, storage, messaging), keep the old API as a facade, keep the money rules pure, and move in small commits with characterization tests.
 
@@ -519,7 +525,7 @@ A pull request that moves 400 lines *and* fixes a rounding bug is almost impossi
 
 ## Practical playground
 
-This is a golden-master check. `LegacyCalculator` is the original tangled code; `RefactoredCalculator` is the new one. The program runs both over 5,000 generated bills with a fixed random seed and counts differences. Try introducing a "small" change in the refactored version (round TDS with `ToEven` instead of `AwayFromZero`) and see how quickly the golden master catches it.
+This is a golden-master check. `LegacyCalculator` is the original tangled code; `RefactoredCalculator` is the new one. The program runs both over 5,000 generated weekly payouts with a fixed random seed and counts differences. Try introducing a "small" change in the refactored version (round TDS with `ToEven` instead of `AwayFromZero`) and see how quickly the golden master catches it.
 
 :::playground type=csharp title="Golden master: old vs new"
 ```csharp file=Program.cs
@@ -527,7 +533,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public sealed record Line(decimal Qty, decimal Rate);
+public sealed record Line(decimal Qty, decimal Price);
 
 public static class LegacyCalculator
 {
@@ -535,23 +541,23 @@ public static class LegacyCalculator
     public static (decimal Gross, decimal Net) Compute(List<Line> lines, decimal adv)
     {
         decimal g = 0;
-        foreach (var l in lines) g += Math.Round(l.Qty * l.Rate, 2, MidpointRounding.AwayFromZero);
-        var gst = Math.Round(g * 0.18m, 2, MidpointRounding.AwayFromZero);
-        var ret = Math.Round(g * 0.05m, 2, MidpointRounding.AwayFromZero);
-        var tds = Math.Round(g * 0.02m, 2, MidpointRounding.AwayFromZero);
+        foreach (var l in lines) g += Math.Round(l.Qty * l.Price, 2, MidpointRounding.AwayFromZero);
+        var gst = Math.Round(g * 0.05m, 2, MidpointRounding.AwayFromZero);
+        var com = Math.Round(g * 0.20m, 2, MidpointRounding.AwayFromZero);
+        var tds = Math.Round(g * 0.01m, 2, MidpointRounding.AwayFromZero);
         var rec = Math.Round(g * 0.10m, 2, MidpointRounding.AwayFromZero);
         if (adv < rec) rec = adv < 0 ? 0 : adv;
-        return (g, g + gst - ret - tds - rec);
+        return (g, g + gst - com - tds - rec);
     }
 }
 
 public static class RefactoredCalculator
 {
     private static decimal R(decimal v) => Math.Round(v, 2, MidpointRounding.AwayFromZero);
-    public static decimal Gross(IEnumerable<Line> lines) => lines.Sum(l => R(l.Qty * l.Rate));
-    public static decimal Gst(decimal gross) => R(gross * 0.18m);
+    public static decimal Gross(IEnumerable<Line> lines) => lines.Sum(l => R(l.Qty * l.Price));
+    public static decimal Gst(decimal gross) => R(gross * 0.05m);
     public static decimal Deductions(decimal gross, decimal adv) =>
-        R(gross * 0.05m) + R(gross * 0.02m) + Math.Min(Math.Max(adv, 0m), R(gross * 0.10m));
+        R(gross * 0.20m) + R(gross * 0.01m) + Math.Min(Math.Max(adv, 0m), R(gross * 0.10m));
     public static (decimal Gross, decimal Net) Compute(List<Line> lines, decimal adv)
     {
         var g = Gross(lines);
@@ -563,14 +569,14 @@ public static class Program
 {
     public static void Main()
     {
-        var rng = new Random(20260401);   // fixed seed: the same "random" bills every run
+        var rng = new Random(20260401);   // fixed seed: the same "random" payouts every run
         int cases = 5000, mismatches = 0;
         for (var i = 0; i < cases; i++)
         {
             var lines = Enumerable.Range(0, rng.Next(1, 12))
-                .Select(_ => new Line(Math.Round((decimal)rng.NextDouble() * 2000m, 3), Math.Round((decimal)rng.NextDouble() * 900m + 10m, 2)))
+                .Select(_ => new Line(rng.Next(1, 400), Math.Round((decimal)rng.NextDouble() * 900m + 10m, 2)))   // plates sold, price ₹10–910
                 .ToList();
-            var adv = rng.Next(0, 4) == 0 ? -1m : Math.Round((decimal)rng.NextDouble() * 500_000m, 2);
+            var adv = rng.Next(0, 4) == 0 ? -1m : Math.Round((decimal)rng.NextDouble() * 200_000m, 2);
             var a = LegacyCalculator.Compute(lines, adv);
             var b = RefactoredCalculator.Compute(lines, adv);
             if (a != b)
@@ -578,7 +584,7 @@ public static class Program
                 if (++mismatches <= 3) Console.WriteLine($"Mismatch #{mismatches}: legacy {a}, refactored {b}");
             }
         }
-        Console.WriteLine($"{cases} bills compared, {mismatches} mismatches.");
+        Console.WriteLine($"{cases} payouts compared, {mismatches} mismatches.");
     }
 }
 ```
@@ -587,18 +593,19 @@ public static class Program
 ## Exercises
 
 :::exercise id=m07-refactoring-large-classes-ex1 difficulty=beginner kind=code title="Extract methods from a net-payable calculation"
-`NetPayable.Calculate` is one long method with temps. Extract three public static methods, `Retention(gross)`, `Tds(gross)` and `AdvanceRecovery(gross, outstanding)`, and make `Calculate` use them. Behaviour must not change.
+`NetPayable.Calculate` works out what a restaurant receives from one week's food sales (before GST). It is one long method with temps. Extract three public static methods, `Commission(gross)`, `Tds(gross)` and `AdvanceRecovery(gross, outstanding)`, and make `Calculate` use them. Behaviour must not change.
 ::requirements
-- Retention = 5 % of gross; TDS = 2 % of gross; advance recovery = 10 % of gross, but never more than the outstanding advance and never negative.
+- Commission = 20 % of gross; TDS = 1 % of gross; advance recovery = 10 % of gross, but never more than the outstanding advance and never negative.
 - Every amount is rounded to 2 decimals, midpoint away from zero, exactly as the original does.
-- `Calculate(gross, outstanding)` = gross − retention − TDS − recovery.
+- `Calculate(gross, outstanding)` = gross − commission − TDS − recovery.
 ::acceptance
-- `Retention(1_00_000)` = 5,000; `Tds(1_00_000)` = 2,000.
+- `Commission(1_00_000)` = 20,000; `Tds(1_00_000)` = 1,000.
+- `Tds(0.50)` = 0.01 (0.005 rounds away from zero, not to even).
 - `AdvanceRecovery(1_00_000, 4_000)` = 4,000 (capped by outstanding); `AdvanceRecovery(1_00_000, 50_000)` = 10,000.
 - A negative outstanding gives recovery 0.
 - `Calculate` returns the same values as the original for all test inputs.
 ::hint
-Start with the block that computes retention. Select it, Extract Method, and give it the gross as its only input.
+Start with the block that computes the commission. Select it, Extract Method, and give it the gross as its only input.
 ::hint
 The `rec` temp is assigned twice in the original. Fold both assignments into one expression inside `AdvanceRecovery` before extracting.
 ::hint
@@ -613,18 +620,18 @@ public static class NetPayable
 {
     public static decimal Calculate(decimal gross, decimal outstanding)
     {
-        // retention
-        var ret = Math.Round(gross * 0.05m, 2, MidpointRounding.AwayFromZero);
+        // commission
+        var com = Math.Round(gross * 0.20m, 2, MidpointRounding.AwayFromZero);
         // tds
-        var tds = Math.Round(gross * 0.02m, 2, MidpointRounding.AwayFromZero);
+        var tds = Math.Round(gross * 0.01m, 2, MidpointRounding.AwayFromZero);
         // advance recovery
         var rec = Math.Round(gross * 0.10m, 2, MidpointRounding.AwayFromZero);
         if (outstanding < rec) rec = outstanding;
         if (rec < 0) rec = 0;
-        return gross - ret - tds - rec;
+        return gross - com - tds - rec;
     }
 
-    public static decimal Retention(decimal gross) => throw new NotImplementedException();
+    public static decimal Commission(decimal gross) => throw new NotImplementedException();
     public static decimal Tds(decimal gross) => throw new NotImplementedException();
     public static decimal AdvanceRecovery(decimal gross, decimal outstanding) => throw new NotImplementedException();
 }
@@ -635,17 +642,17 @@ using Xunit;
 
 public class NetPayableTests
 {
-    [Fact] public void Retention_is_five_percent() => Assert.Equal(5000m, NetPayable.Retention(100000m));
-    [Fact] public void Tds_is_two_percent() => Assert.Equal(2000m, NetPayable.Tds(100000m));
+    [Fact] public void Commission_is_twenty_percent() => Assert.Equal(20000m, NetPayable.Commission(100000m));
+    [Fact] public void Tds_is_one_percent() => Assert.Equal(1000m, NetPayable.Tds(100000m));
     [Fact] public void Recovery_capped_by_outstanding() => Assert.Equal(4000m, NetPayable.AdvanceRecovery(100000m, 4000m));
     [Fact] public void Recovery_ten_percent() => Assert.Equal(10000m, NetPayable.AdvanceRecovery(100000m, 50000m));
     [Fact] public void Negative_outstanding_is_zero() => Assert.Equal(0m, NetPayable.AdvanceRecovery(100000m, -10m));
-    [Fact] public void Rounds_away_from_zero() => Assert.Equal(0.03m, NetPayable.Retention(0.5m));
+    [Fact] public void Rounds_away_from_zero() => Assert.Equal(0.01m, NetPayable.Tds(0.5m));
 
     [Theory]
-    [InlineData(100000, 50000, 83000)]
-    [InlineData(100000, 4000, 89000)]
-    [InlineData(123456.78, 0, 114814.80)]
+    [InlineData(100000, 50000, 69000)]
+    [InlineData(100000, 4000, 75000)]
+    [InlineData(123456.78, 0, 97530.85)]
     [InlineData(0, 1000, 0)]
     public void Calculate_unchanged(decimal gross, decimal outstanding, decimal expected) =>
         Assert.Equal(expected, NetPayable.Calculate(gross, outstanding));
@@ -658,10 +665,10 @@ using System;
 public static class NetPayable
 {
     public static decimal Calculate(decimal gross, decimal outstanding) =>
-        gross - Retention(gross) - Tds(gross) - AdvanceRecovery(gross, outstanding);
+        gross - Commission(gross) - Tds(gross) - AdvanceRecovery(gross, outstanding);
 
-    public static decimal Retention(decimal gross) => R(gross * 0.05m);
-    public static decimal Tds(decimal gross) => R(gross * 0.02m);
+    public static decimal Commission(decimal gross) => R(gross * 0.20m);
+    public static decimal Tds(decimal gross) => R(gross * 0.01m);
     public static decimal AdvanceRecovery(decimal gross, decimal outstanding) =>
         Math.Min(Math.Max(outstanding, 0m), R(gross * 0.10m));
 
@@ -669,25 +676,25 @@ public static class NetPayable
 }
 ```
 
-The comments in the original (`// retention`, `// tds`) were method names in disguise. Once the methods exist, the comments aren't needed.
+The comments in the original (`// commission`, `// tds`) were method names in disguise. Once the methods exist, the comments aren't needed.
 
-Check the third theory row by hand, the way you would when writing a characterization test: retention = 123,456.78 × 0.05 = 6,172.839 → 6,172.84; TDS = 2,469.1356 → 2,469.14; recovery = 0 because nothing is outstanding. Net = 123,456.78 − 6,172.84 − 2,469.14 = 114,814.80. The expected values in such a test should always come from running the *original* code, not from your own arithmetic: if the two disagree, the original's behaviour is what you must preserve (or deliberately change in a separate commit).
+Check the third theory row by hand, the way you would when writing a characterization test: commission = 123,456.78 × 0.20 = 24,691.356 → 24,691.36; TDS = 1,234.5678 → 1,234.57; recovery = 0 because nothing is outstanding. Net = 123,456.78 − 24,691.36 − 1,234.57 = 97,530.85. The expected values in such a test should always come from running the *original* code, not from your own arithmetic: if the two disagree, the original's behaviour is what you must preserve (or deliberately change in a separate commit).
 ::mistakes
 - Changing the rounding mode while extracting ("ToEven is the default anyway"). That's a behaviour change.
 - Leaving the old inline code in place and *also* adding the new methods, so two copies drift apart.
 - Extracting with `ref` parameters because the temp `rec` is reassigned. Fold the logic into one expression first.
 :::
 
-:::exercise id=m07-refactoring-large-classes-ex2 difficulty=beginner kind=code title="Introduce a BillPeriod parameter object"
-Many methods in the billing class take `(DateOnly from, DateOnly to)`, and each one re-checks that `from <= to`. Introduce a `BillPeriod` record that validates once, and use it in `MeasurementFilter.InPeriod`.
+:::exercise id=m07-refactoring-large-classes-ex2 difficulty=beginner kind=code title="Introduce a PayoutPeriod parameter object"
+Many methods in the payout class take `(DateOnly from, DateOnly to)` (monthly reports, GST summaries, refund look-ups), and each one re-checks that `from <= to`. Introduce a `PayoutPeriod` record that validates once, and use it in `OrderFilter.InPeriod`.
 ::requirements
-- `BillPeriod(DateOnly From, DateOnly To)` throws `ArgumentException` when `To` is before `From`.
+- `PayoutPeriod(DateOnly From, DateOnly To)` throws `ArgumentException` when `To` is before `From`.
 - `Contains(DateOnly d)` is inclusive at both ends.
 - `Days` returns the number of calendar days, inclusive (1 March to 31 March is 31 days).
-- `BillPeriod.ForMonth(int year, int month)` creates a full-month period.
-- `MeasurementFilter.InPeriod(entries, period)` returns entries whose `MeasuredOn` is inside the period, in input order.
+- `PayoutPeriod.ForMonth(int year, int month)` creates a full-month period.
+- `OrderFilter.InPeriod(entries, period)` returns entries whose `DeliveredOn` is inside the period, in input order.
 ::acceptance
-- `new BillPeriod(Mar 10, Mar 1)` throws.
+- `new PayoutPeriod(Mar 10, Mar 1)` throws.
 - `ForMonth(2028, 2).Days` = 29 (leap year), `ForMonth(2026, 2).Days` = 28.
 - `Contains` is true on both boundary dates and false one day outside.
 - The filter keeps order and excludes out-of-period entries.
@@ -697,7 +704,7 @@ Data that travels together and is validated together is one concept. Give it a n
 Validate in the constructor, once. The starter already uses a non-positional record with an explicit constructor and get-only properties, so the values can't be changed after validation.
 ::hint
 ```csharp
-public BillPeriod(DateOnly from, DateOnly to)
+public PayoutPeriod(DateOnly from, DateOnly to)
 {
     if (to < from) throw new ArgumentException("End is before start.", nameof(to));
     From = from; To = to;
@@ -706,46 +713,46 @@ public BillPeriod(DateOnly from, DateOnly to)
 ::hint
 `Days => To.DayNumber - From.DayNumber + 1`; `ForMonth => new(new DateOnly(y, m, 1), new DateOnly(y, m, DateTime.DaysInMonth(y, m)))`.
 ::starter
-```csharp file=BillPeriod.cs
+```csharp file=PayoutPeriod.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public sealed record MeasurementEntry(string ItemCode, decimal Quantity, DateOnly MeasuredOn);
+public sealed record OrderEntry(string OrderId, decimal Amount, DateOnly DeliveredOn);
 
-public sealed record BillPeriod
+public sealed record PayoutPeriod
 {
-    public BillPeriod(DateOnly from, DateOnly to) => throw new NotImplementedException();
+    public PayoutPeriod(DateOnly from, DateOnly to) => throw new NotImplementedException();
     public DateOnly From { get; }
     public DateOnly To { get; }
     public int Days => throw new NotImplementedException();
     public bool Contains(DateOnly date) => throw new NotImplementedException();
-    public static BillPeriod ForMonth(int year, int month) => throw new NotImplementedException();
+    public static PayoutPeriod ForMonth(int year, int month) => throw new NotImplementedException();
 }
 
-public static class MeasurementFilter
+public static class OrderFilter
 {
-    public static IReadOnlyList<MeasurementEntry> InPeriod(IEnumerable<MeasurementEntry> entries, BillPeriod period) =>
+    public static IReadOnlyList<OrderEntry> InPeriod(IEnumerable<OrderEntry> entries, PayoutPeriod period) =>
         throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=BillPeriodTests.cs
+```csharp file=PayoutPeriodTests.cs
 using System;
 using System.Linq;
 using Xunit;
 
-public class BillPeriodTests
+public class PayoutPeriodTests
 {
-    [Fact] public void Reversed_dates_throw() => Assert.Throws<ArgumentException>(() => new BillPeriod(new DateOnly(2026, 3, 10), new DateOnly(2026, 3, 1)));
-    [Fact] public void Leap_february() => Assert.Equal(29, BillPeriod.ForMonth(2028, 2).Days);
-    [Fact] public void Normal_february() => Assert.Equal(28, BillPeriod.ForMonth(2026, 2).Days);
-    [Fact] public void Single_day_period() => Assert.Equal(1, new BillPeriod(new DateOnly(2026, 3, 5), new DateOnly(2026, 3, 5)).Days);
+    [Fact] public void Reversed_dates_throw() => Assert.Throws<ArgumentException>(() => new PayoutPeriod(new DateOnly(2026, 3, 10), new DateOnly(2026, 3, 1)));
+    [Fact] public void Leap_february() => Assert.Equal(29, PayoutPeriod.ForMonth(2028, 2).Days);
+    [Fact] public void Normal_february() => Assert.Equal(28, PayoutPeriod.ForMonth(2026, 2).Days);
+    [Fact] public void Single_day_period() => Assert.Equal(1, new PayoutPeriod(new DateOnly(2026, 3, 5), new DateOnly(2026, 3, 5)).Days);
 
     [Fact]
     public void Contains_is_inclusive()
     {
-        var p = BillPeriod.ForMonth(2026, 3);
+        var p = PayoutPeriod.ForMonth(2026, 3);
         Assert.True(p.Contains(new DateOnly(2026, 3, 1)));
         Assert.True(p.Contains(new DateOnly(2026, 3, 31)));
         Assert.False(p.Contains(new DateOnly(2026, 2, 28)));
@@ -757,28 +764,28 @@ public class BillPeriodTests
     {
         var entries = new[]
         {
-            new MeasurementEntry("EW-01", 120m, new DateOnly(2026, 3, 30)),
-            new MeasurementEntry("GSB-02", 40m, new DateOnly(2026, 2, 27)),
-            new MeasurementEntry("WMM-03", 55m, new DateOnly(2026, 3, 2)),
+            new OrderEntry("ORD-1001", 450m, new DateOnly(2026, 3, 30)),
+            new OrderEntry("ORD-1002", 320m, new DateOnly(2026, 2, 27)),
+            new OrderEntry("ORD-1003", 780m, new DateOnly(2026, 3, 2)),
         };
-        var result = MeasurementFilter.InPeriod(entries, BillPeriod.ForMonth(2026, 3));
-        Assert.Equal(new[] { "EW-01", "WMM-03" }, result.Select(e => e.ItemCode).ToArray());
+        var result = OrderFilter.InPeriod(entries, PayoutPeriod.ForMonth(2026, 3));
+        Assert.Equal(new[] { "ORD-1001", "ORD-1003" }, result.Select(e => e.OrderId).ToArray());
     }
 
-    [Fact] public void Value_equality() => Assert.Equal(BillPeriod.ForMonth(2026, 3), new BillPeriod(new DateOnly(2026, 3, 1), new DateOnly(2026, 3, 31)));
+    [Fact] public void Value_equality() => Assert.Equal(PayoutPeriod.ForMonth(2026, 3), new PayoutPeriod(new DateOnly(2026, 3, 1), new DateOnly(2026, 3, 31)));
 }
 ```
 ::solution
-```csharp file=BillPeriod.cs
+```csharp file=PayoutPeriod.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public sealed record MeasurementEntry(string ItemCode, decimal Quantity, DateOnly MeasuredOn);
+public sealed record OrderEntry(string OrderId, decimal Amount, DateOnly DeliveredOn);
 
-public sealed record BillPeriod
+public sealed record PayoutPeriod
 {
-    public BillPeriod(DateOnly from, DateOnly to)
+    public PayoutPeriod(DateOnly from, DateOnly to)
     {
         if (to < from) throw new ArgumentException($"Period end {to} is before start {from}.", nameof(to));
         From = from;
@@ -790,32 +797,32 @@ public sealed record BillPeriod
     public int Days => To.DayNumber - From.DayNumber + 1;
     public bool Contains(DateOnly date) => date >= From && date <= To;
 
-    public static BillPeriod ForMonth(int year, int month) =>
+    public static PayoutPeriod ForMonth(int year, int month) =>
         new(new DateOnly(year, month, 1), new DateOnly(year, month, DateTime.DaysInMonth(year, month)));
 }
 
-public static class MeasurementFilter
+public static class OrderFilter
 {
-    public static IReadOnlyList<MeasurementEntry> InPeriod(IEnumerable<MeasurementEntry> entries, BillPeriod period) =>
-        entries.Where(e => period.Contains(e.MeasuredOn)).ToList();
+    public static IReadOnlyList<OrderEntry> InPeriod(IEnumerable<OrderEntry> entries, PayoutPeriod period) =>
+        entries.Where(e => period.Contains(e.DeliveredOn)).ToList();
 }
 ```
 
-The validation that used to be repeated in many methods now happens once, in the constructor. Every method that takes a `BillPeriod` can trust it. This is how a parameter object often becomes the seed of a real domain concept: next, "Is this period overlapping a previous bill?" will want to live on `BillPeriod` too.
+The validation that used to be repeated in many methods now happens once, in the constructor. Every method that takes a `PayoutPeriod` can trust it. This is how a parameter object often becomes the seed of a real domain concept: next, "Does this period overlap a payout we already made?" will want to live on `PayoutPeriod` too.
 ::mistakes
 - Making `From` and `To` settable, so a valid period can be made invalid later.
-- An exclusive end date in `Contains`, which drops the last day's measurements from every bill.
+- An exclusive end date in `Contains`, which drops the last day's orders from every payout.
 - Introducing the record but keeping the old `(from, to)` overloads forever. Migrate callers, then delete them.
 :::
 
 :::exercise id=m07-refactoring-large-classes-ex3 difficulty=intermediate kind=code title="Extract Class behind a facade"
-`ContractorAccount` mixes three responsibilities: contact details, bank details and advance balance. Extract `BankDetails` (with IFSC validation and a masked account number) and `ContactDetails`, while keeping the old `ContractorAccount` members working so existing callers don't change.
+`RestaurantAccount` (a restaurant partner on a food-delivery platform) mixes three responsibilities: contact details, bank details and advance balance. Extract `BankDetails` (with IFSC validation and a masked account number) and `ContactDetails`, while keeping the old `RestaurantAccount` members working so existing callers don't change.
 ::requirements
 - `BankDetails(string ifsc, string accountNumber)`: IFSC is normalised to upper case and must match 4 letters, `0`, then 6 letters or digits (e.g. `SBIN0001234`). Account number is 9–18 digits. Invalid input throws `ArgumentException`.
 - `BankDetails.Masked` shows only the last 4 digits: `XXXXXX7890` (same length as the original).
 - `ContactDetails(string name, string email)` trims both; email must contain `@`.
-- `ContractorAccount` exposes `Bank` and `Contact` properties **and** keeps the old members `Ifsc`, `AccountNumber`, `Email`, `Name`, `MaskedAccount` and `UpdateBank(ifsc, account)`, delegating to the new classes.
-- Advance logic (`AdvanceOutstanding`, `RecoverAdvance`) stays in `ContractorAccount`.
+- `RestaurantAccount` exposes `Bank` and `Contact` properties **and** keeps the old members `Ifsc`, `AccountNumber`, `Email`, `Name`, `MaskedAccount` and `UpdateBank(ifsc, account)`, delegating to the new classes.
+- Advance logic (`AdvanceOutstanding`, `RecoverAdvance`) stays in `RestaurantAccount`.
 ::acceptance
 - `new BankDetails("sbin0001234", "123456789012").Ifsc == "SBIN0001234"`.
 - Invalid IFSC `SBIN1001234` or account `12AB` throws.
@@ -825,13 +832,13 @@ The validation that used to be repeated in many methods now happens once, in the
 ::hint
 Look at which fields each method uses. `_ifsc` and `_accountNumber` are used only by bank-related methods: that's the first cluster.
 ::hint
-Create `BankDetails` as an immutable class or record with the validation in its constructor. Then replace the two fields in `ContractorAccount` with one `BankDetails` field.
+Create `BankDetails` as an immutable class or record with the validation in its constructor. Then replace the two fields in `RestaurantAccount` with one `BankDetails` field.
 ::hint
 `UpdateBank` builds a *new* `BankDetails` first and only assigns it if construction succeeded. That gives you "unchanged on failure" for free.
 ::hint
 Old members become one-liners: `public string Ifsc => Bank.Ifsc;`. Mark them `[Obsolete("Use Bank.Ifsc")]` later, once callers can migrate.
 ::starter
-```csharp file=ContractorAccount.cs
+```csharp file=RestaurantAccount.cs
 using System;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -852,7 +859,7 @@ public sealed class ContactDetails
 }
 
 /// <summary>The original large class. Today it validates bank and contact data inline.</summary>
-public sealed class ContractorAccount
+public sealed class RestaurantAccount
 {
     private string _name;
     private string _email;
@@ -860,7 +867,7 @@ public sealed class ContractorAccount
     private string _accountNumber;
     private decimal _advanceOutstanding;
 
-    public ContractorAccount(string name, string email, string ifsc, string accountNumber, decimal advance)
+    public RestaurantAccount(string name, string email, string ifsc, string accountNumber, decimal advance)
     {
         _name = name.Trim();
         _email = email.Trim();
@@ -889,27 +896,27 @@ public sealed class ContractorAccount
 }
 ```
 ::tests
-```csharp file=ContractorAccountTests.cs
+```csharp file=RestaurantAccountTests.cs
 using System;
 using Xunit;
 
-public class ContractorAccountTests
+public class RestaurantAccountTests
 {
-    private static ContractorAccount Make() => new(" Shree Infra Pvt Ltd ", " accounts@shreeinfra.example ", "sbin0001234", "1234567890", 500000m);
+    private static RestaurantAccount Make() => new(" Spice Route Kitchen ", " accounts@spiceroute.example ", "sbin0001234", "1234567890", 150000m);
 
     [Fact] public void Ifsc_normalised() => Assert.Equal("SBIN0001234", new BankDetails("sbin0001234", "123456789012").Ifsc);
     [Fact] public void Bad_ifsc_throws() => Assert.Throws<ArgumentException>(() => new BankDetails("SBIN1001234", "123456789"));
     [Fact] public void Bad_account_throws() => Assert.Throws<ArgumentException>(() => new BankDetails("SBIN0001234", "12AB"));
     [Fact] public void Masked() => Assert.Equal("XXXXXX7890", new BankDetails("HDFC0000123", "1234567890").Masked);
-    [Fact] public void Contact_trims() => Assert.Equal("Shree Infra Pvt Ltd", new ContactDetails(" Shree Infra Pvt Ltd ", "a@b.example").Name);
+    [Fact] public void Contact_trims() => Assert.Equal("Spice Route Kitchen", new ContactDetails(" Spice Route Kitchen ", "a@b.example").Name);
     [Fact] public void Bad_email_throws() => Assert.Throws<ArgumentException>(() => new ContactDetails("X", "not-an-email"));
 
     [Fact]
     public void Old_members_still_work()
     {
         var a = Make();
-        Assert.Equal("Shree Infra Pvt Ltd", a.Name);
-        Assert.Equal("accounts@shreeinfra.example", a.Email);
+        Assert.Equal("Spice Route Kitchen", a.Name);
+        Assert.Equal("accounts@spiceroute.example", a.Email);
         Assert.Equal("SBIN0001234", a.Ifsc);
         Assert.Equal("1234567890", a.AccountNumber);
         Assert.Equal("XXXXXX7890", a.MaskedAccount);
@@ -932,14 +939,14 @@ public class ContractorAccountTests
     public void Advance_logic_unchanged()
     {
         var a = Make();
-        Assert.Equal(200000m, a.RecoverAdvance(200000m));
-        Assert.Equal(300000m, a.RecoverAdvance(999999m));
+        Assert.Equal(100000m, a.RecoverAdvance(100000m));
+        Assert.Equal(50000m, a.RecoverAdvance(999999m));
         Assert.Equal(0m, a.AdvanceOutstanding);
     }
 }
 ```
 ::solution
-```csharp file=ContractorAccount.cs
+```csharp file=RestaurantAccount.cs
 using System;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -980,11 +987,11 @@ public sealed class ContactDetails
     public string Email { get; }
 }
 
-public sealed class ContractorAccount
+public sealed class RestaurantAccount
 {
     private decimal _advanceOutstanding;
 
-    public ContractorAccount(string name, string email, string ifsc, string accountNumber, decimal advance)
+    public RestaurantAccount(string name, string email, string ifsc, string accountNumber, decimal advance)
     {
         Contact = new ContactDetails(name, email);
         Bank = new BankDetails(ifsc, accountNumber);
@@ -1021,31 +1028,31 @@ Two things improved beyond structure. Validation now exists (the original happil
 - Moving the advance logic too. It has nothing to do with bank or contact details; extraction is per cluster, not "move everything".
 :::
 
-:::exercise id=m07-refactoring-large-classes-ex4 difficulty=intermediate kind=design title="Plan the split of a TenderManager god class"
-An e-procurement module has a `TenderManager` with 1,800 lines, 31 fields and these public methods (grouped here for you, but scattered in the file):
+:::exercise id=m07-refactoring-large-classes-ex4 difficulty=intermediate kind=design title="Plan the split of a RestaurantPartnerManager god class"
+The restaurant-partner module of a food-delivery platform has a `RestaurantPartnerManager` with 1,800 lines, 31 fields and these public methods (grouped here for you, but scattered in the file):
 
-`RegisterBidder`, `VerifyBidderDocuments`, `BlacklistBidder`, `PublishTender`, `IssueCorrigendum`, `ExtendDeadline`, `RecordEmdPayment` (earnest money deposit), `RefundEmd`, `ForfeitEmd`, `OpenTechnicalBids`, `ScoreTechnicalBid`, `OpenFinancialBids`, `DetermineL1` (lowest bidder), `SendBidderSms`, `SendBidderEmail`, `GenerateComparativeStatementPdf`, `WriteAuditLog`.
+`RegisterRestaurant`, `VerifyFssaiLicence` (food-safety licence), `SuspendRestaurant`, `PublishMenu`, `UpdateItemPrice`, `MarkItemOutOfStock`, `DisburseCashAdvance`, `RecordAdvanceRepayment`, `WriteOffAdvance`, `RecordRating`, `ComputeAverageRating`, `ComputeSearchRankScore`, `PickFeaturedRestaurants`, `SendPartnerSms`, `SendPartnerEmail`, `GenerateMonthlyStatementPdf`, `WriteAuditLog`.
 
 Design the target classes in the LLD designer and describe the order in which you would extract them.
 ::acceptance
 - Each new class has one clear reason to change and a short responsibility statement.
-- `TenderManager` remains as a thin facade (or is replaced by a small set of application services) so callers keep working during migration.
+- `RestaurantPartnerManager` remains as a thin facade (or is replaced by a small set of application services) so callers keep working during migration.
 - Notifications, PDF generation and audit logging are behind interfaces.
 - The extraction order starts with the lowest-risk, highest-value cluster and says why.
 - No class is named `Helper`, `Utils` or `Manager2`.
 ::hint
-Group the methods by the *data* they touch: bidder records, tender notice and dates, EMD money, bids and scores, outbound messages, documents, audit.
+Group the methods by the *data* they touch: restaurant records and licences, menus and prices, advance money, ratings and ranking, outbound messages, documents, audit.
 ::hint
-Who asks for changes? Procurement officers (tender lifecycle), finance (EMD), evaluation committee (scoring rules), IT/compliance (audit), communications (SMS/email wording).
+Who asks for changes? The partner-onboarding team (registration, licences, suspension), the catalogue team (menus), finance (cash advances), the search and ranking team (scores, featured lists), communications (SMS/email wording), compliance (audit).
 ::hint
 Start extraction where the code is most isolated and most often changed. Notifications and PDF generation are usually the easiest first moves because they only *read* data.
 ::hint
-Money and evaluation rules deserve pure classes (easy to test with characterization tests). Lifecycle rules (published → corrigendum → closed → opened) may become a state machine later.
+Money and ranking rules deserve pure classes (easy to test with characterization tests). Restaurant status rules (pending → verified → live → suspended) may become a state machine later.
 ::starter
 ```json file=design.json
 {
   "classes": [
-    { "id": "TM", "name": "TenderManager", "kind": "class", "fields": ["-31 fields"], "methods": ["+RegisterBidder()", "+PublishTender()", "+RecordEmdPayment()", "+OpenTechnicalBids()", "+DetermineL1()", "+SendBidderSms()", "+GenerateComparativeStatementPdf()", "+WriteAuditLog()"], "responsibility": "Everything" }
+    { "id": "RPM", "name": "RestaurantPartnerManager", "kind": "class", "fields": ["-31 fields"], "methods": ["+RegisterRestaurant()", "+PublishMenu()", "+DisburseCashAdvance()", "+RecordRating()", "+ComputeSearchRankScore()", "+SendPartnerSms()", "+GenerateMonthlyStatementPdf()", "+WriteAuditLog()"], "responsibility": "Everything" }
   ],
   "relations": []
 }
@@ -1054,47 +1061,46 @@ Money and evaluation rules deserve pure classes (easy to test with characterizat
 ```json file=design.json
 {
   "classes": [
-    { "id": "TM", "name": "TenderManager", "kind": "class", "fields": [], "methods": ["+(old public API, delegating)"], "responsibility": "Facade during migration; deleted when callers move" },
-    { "id": "Reg", "name": "BidderRegistry", "kind": "class", "fields": [], "methods": ["+Register(BidderApplication a)", "+VerifyDocuments(BidderId id)", "+Blacklist(BidderId id, string reason)"], "responsibility": "Bidder records and eligibility" },
-    { "id": "Life", "name": "TenderLifecycle", "kind": "class", "fields": [], "methods": ["+Publish(TenderId id)", "+IssueCorrigendum(TenderId id, Corrigendum c)", "+ExtendDeadline(TenderId id, DateTimeOffset d)"], "responsibility": "Tender notice, dates and status transitions" },
-    { "id": "Emd", "name": "EmdLedger", "kind": "class", "fields": [], "methods": ["+RecordPayment(BidId b, Money m)", "+Refund(BidId b)", "+Forfeit(BidId b, string reason)"], "responsibility": "Earnest money: finance rules" },
-    { "id": "Eval", "name": "BidEvaluation", "kind": "class", "fields": [], "methods": ["+OpenTechnical(TenderId id)", "+Score(BidId b, TechnicalScore s)", "+OpenFinancial(TenderId id)", "+DetermineL1(TenderId id) BidId"], "responsibility": "Evaluation committee rules" },
-    { "id": "L1", "name": "L1Selector", "kind": "class", "fields": [], "methods": ["+Select(IReadOnlyList~FinancialBid~ bids) BidId"], "responsibility": "Pure: lowest evaluated price, tie-break rules" },
-    { "id": "Notif", "name": "IBidderNotifier", "kind": "interface", "fields": [], "methods": ["+Task NotifyAsync(BidderId id, BidderMessage m)"], "responsibility": "SMS and email behind one port" },
-    { "id": "Doc", "name": "IComparativeStatementRenderer", "kind": "interface", "fields": [], "methods": ["+byte[] Render(ComparativeStatement s)"] },
+    { "id": "RPM", "name": "RestaurantPartnerManager", "kind": "class", "fields": [], "methods": ["+(old public API, delegating)"], "responsibility": "Facade during migration; deleted when callers move" },
+    { "id": "Reg", "name": "PartnerRegistry", "kind": "class", "fields": [], "methods": ["+Register(PartnerApplication a)", "+VerifyLicence(RestaurantId id, FssaiLicence l)", "+Suspend(RestaurantId id, string reason)"], "responsibility": "Restaurant records, licences and eligibility" },
+    { "id": "Menu", "name": "MenuCatalog", "kind": "class", "fields": [], "methods": ["+Publish(RestaurantId id, Menu m)", "+UpdatePrice(MenuItemId id, Money price)", "+MarkOutOfStock(MenuItemId id)"], "responsibility": "Menus, prices and availability" },
+    { "id": "Adv", "name": "AdvanceLedger", "kind": "class", "fields": [], "methods": ["+Disburse(RestaurantId id, Money m)", "+RecordRepayment(RestaurantId id, Money m)", "+WriteOff(RestaurantId id, string reason)"], "responsibility": "Cash advances: finance rules" },
+    { "id": "Rate", "name": "RatingBook", "kind": "class", "fields": [], "methods": ["+Record(RestaurantId id, Rating r)", "+Average(RestaurantId id) decimal"], "responsibility": "Customer ratings" },
+    { "id": "Rank", "name": "RankingPolicy", "kind": "class", "fields": [], "methods": ["+Score(RankingInputs i) decimal", "+PickFeatured(IReadOnlyList~RankingInputs~ all, int count) IReadOnlyList~RestaurantId~"], "responsibility": "Pure: search score and featured-list rules" },
+    { "id": "Notif", "name": "IPartnerNotifier", "kind": "interface", "fields": [], "methods": ["+Task NotifyAsync(RestaurantId id, PartnerMessage m)"], "responsibility": "SMS and email behind one port" },
+    { "id": "Doc", "name": "IStatementDocumentRenderer", "kind": "interface", "fields": [], "methods": ["+byte[] Render(MonthlyStatement s)"] },
     { "id": "Audit", "name": "IAuditTrail", "kind": "interface", "fields": [], "methods": ["+Task RecordAsync(AuditEntry e)"], "responsibility": "Compliance: append-only log" }
   ],
   "relations": [
-    { "from": "TM", "to": "Reg", "kind": "dependency" },
-    { "from": "TM", "to": "Life", "kind": "dependency" },
-    { "from": "TM", "to": "Emd", "kind": "dependency" },
-    { "from": "TM", "to": "Eval", "kind": "dependency" },
-    { "from": "Eval", "to": "L1", "kind": "dependency" },
-    { "from": "Eval", "to": "Doc", "kind": "dependency" },
+    { "from": "RPM", "to": "Reg", "kind": "dependency" },
+    { "from": "RPM", "to": "Menu", "kind": "dependency" },
+    { "from": "RPM", "to": "Adv", "kind": "dependency" },
+    { "from": "RPM", "to": "Rate", "kind": "dependency" },
+    { "from": "RPM", "to": "Rank", "kind": "dependency" },
+    { "from": "RPM", "to": "Doc", "kind": "dependency" },
     { "from": "Reg", "to": "Audit", "kind": "dependency" },
-    { "from": "Life", "to": "Audit", "kind": "dependency" },
-    { "from": "Emd", "to": "Audit", "kind": "dependency" },
-    { "from": "Eval", "to": "Audit", "kind": "dependency" },
-    { "from": "Life", "to": "Notif", "kind": "dependency" },
-    { "from": "Eval", "to": "Notif", "kind": "dependency" }
+    { "from": "Menu", "to": "Audit", "kind": "dependency" },
+    { "from": "Adv", "to": "Audit", "kind": "dependency" },
+    { "from": "Reg", "to": "Notif", "kind": "dependency" },
+    { "from": "Adv", "to": "Notif", "kind": "dependency" }
   ]
 }
 ```
 
 **Extraction order and reasons:**
 
-1. **`IBidderNotifier`** (SMS + email). Read-only, isolated, changes often (wording, providers). Lowest risk; immediately removes SMTP and SMS dependencies from the god class's constructor.
-2. **`IComparativeStatementRenderer`**. Also read-only. Characterization test: compare generated PDFs' text content for a set of past tenders.
+1. **`IPartnerNotifier`** (SMS + email). Read-only, isolated, changes often (wording, providers). Lowest risk; immediately removes SMTP and SMS dependencies from the god class's constructor.
+2. **`IStatementDocumentRenderer`**. Also read-only. Characterization test: compare the text content of generated PDFs for a set of past months.
 3. **`IAuditTrail`**. Cross-cutting; extracting it early means later extractions can call it directly.
-4. **`L1Selector`** (pure). Highest business risk if wrong, so extract early *with* a golden-master test over every past tender's bids. Pure code makes this cheap.
-5. **`EmdLedger`**. Money; needs transactions. Extract once audit is in place.
-6. **`BidEvaluation`**, **`TenderLifecycle`**, **`BidderRegistry`**. These share the most state, so they come last, once the easy pieces are gone and the remaining field clusters are obvious.
+4. **`RankingPolicy`** (pure). It decides which restaurants customers see first, so mistakes cost partners real orders. Extract it early *with* a golden-master test over last month's ranking inputs. Pure code makes this cheap.
+5. **`AdvanceLedger`**. Money; needs transactions. Extract once audit is in place.
+6. **`RatingBook`**, **`MenuCatalog`**, **`PartnerRegistry`**. These share the most state (the restaurant row, its status flags), so they come last, once the easy pieces are gone and the remaining field clusters are obvious.
 
-After step 6, new callers use the specific classes. `TenderManager` methods get `[Obsolete]`, and the facade is deleted when the last caller moves.
+After step 6, new callers use the specific classes. `RestaurantPartnerManager` methods get `[Obsolete]`, and the facade is deleted when the last caller moves.
 ::mistakes
-- Starting with the hardest, most tangled cluster (bid evaluation) because it's "the core". You'll be stuck for weeks with nothing merged.
-- Extracting `TenderValidationHelper` and `TenderUtils`: technical groupings that every feature still has to touch.
-- Making notifications part of `BidderRegistry` because "bidders receive them". They change for different reasons and have different dependencies.
+- Starting with the hardest, most tangled cluster (registration and status) because it's "the core". You'll be stuck for weeks with nothing merged.
+- Extracting `PartnerValidationHelper` and `PartnerUtils`: technical groupings that every feature still has to touch.
+- Making notifications part of `PartnerRegistry` because "restaurants receive them". They change for different reasons and have different dependencies.
 :::
 
 :::exercise id=m07-refactoring-large-classes-ex5 difficulty=advanced kind=code title="Suggest Extract Class candidates with LCOM4"
@@ -1254,23 +1260,23 @@ Three layers of tests support a large-class refactoring.
 **1. Characterization tests on the facade.** Written before you start, run after every move.
 
 ```csharp
-public class RaBillProcessorCharacterizationTests
+public class PayoutProcessorCharacterizationTests
 {
-    // Values captured by running the ORIGINAL class on anonymised past bills.
+    // Values captured by running the ORIGINAL class on anonymised past payout statements.
     [Theory]
-    [InlineData(17, 1_250.5, 285.00, 0, 356_392.50, 64_150.65, 17_819.63, 7_127.85, 0.00)]
-    [InlineData(18, 840.0, 1_120.00, 50_000, 940_800.00, 169_344.00, 47_040.00, 18_816.00, 50_000.00)]
-    public async Task Matches_original(int bill, decimal qty, decimal rate, decimal advance,
-        decimal gross, decimal gst, decimal retention, decimal tds, decimal recovery)
+    [InlineData(17, 1_250, 285.00, 0, 356_250.00, 17_812.50, 71_250.00, 3_562.50, 0.00)]
+    [InlineData(18, 840, 349.00, 20_000, 293_160.00, 14_658.00, 58_632.00, 2_931.60, 20_000.00)]
+    public async Task Matches_original(int statement, decimal qty, decimal price, decimal advance,
+        decimal gross, decimal gst, decimal commission, decimal tds, decimal recovery)
     {
         var processor = TestHost.CreateProcessor();
-        var result = await processor.ProcessAsync(new RaBillRequest(bill, "a@b.example",
-            new[] { new MeasurementLine("EW-01", "Earthwork", qty, "m3", rate) }, advance));
+        var result = await processor.ProcessAsync(new PayoutRequest(statement, "a@b.example",
+            new[] { new SalesLine("BIR-CHK", "Chicken biryani", qty, "plate", price) }, advance));
 
         var c = result.Computation!;
         Assert.Equal(gross, c.Gross);
         Assert.Equal(gst, c.Gst);
-        Assert.Equal(retention, c.Deductions.Retention);
+        Assert.Equal(commission, c.Deductions.Commission);
         Assert.Equal(tds, c.Deductions.Tds);
         Assert.Equal(recovery, c.Deductions.AdvanceRecovery);
     }
@@ -1279,11 +1285,11 @@ public class RaBillProcessorCharacterizationTests
 
 **2. Golden master over many inputs**, as in the playground: thousands of generated cases with a fixed seed, comparing old and new. Keep the old implementation in the test project until the refactoring is finished, then delete it and keep the recorded outputs as a snapshot file.
 
-**3. Focused unit tests on each extracted class.** These are the long-term tests. `DeductionCalculator` gets boundary tests (outstanding advance exactly equal to 10 %, negative outstanding, zero gross). `MeasurementValidator` gets one test per rule. They need no doubles, because the classes are pure.
+**3. Focused unit tests on each extracted class.** These are the long-term tests. `DeductionCalculator` gets boundary tests (outstanding advance exactly equal to 10 %, negative outstanding, zero gross). `SalesLineValidator` gets one test per rule. They need no doubles, because the classes are pure.
 
 Practical tips:
 
-- Commit after every green run. If a move goes wrong, `git reset --hard` to the last green commit is faster than debugging.
+- Commit after every green run. If a move goes wrong, discarding it (`git restore .` back to the last green commit) is faster than debugging.
 - Use your IDE's automated refactorings (Extract Method, Move to new file, Rename) rather than hand edits; they don't make typos.
 - Watch for tests that start needing *more* setup after a move. That usually means a method was moved to the wrong class (Feature Envy).
 - Approval-testing libraries (such as Verify for .NET) automate the "record output, compare later" workflow, including for documents and JSON.
@@ -1294,7 +1300,7 @@ Practical tips:
 - **ASP.NET MVC controllers** with 40 actions and 20 dependencies are large classes too. Moving to one handler per use case (vertical slices) or minimal API endpoint groups is Extract Class at the controller level. See [Vertical slice architecture](#/lesson/m02-vertical-slice).
 - **Game engines and UI code** split large "GameManager" or "MainForm" classes into components (input, physics, rendering) for the same reasons.
 - **Open-source projects** often document large refactorings as a series of small pull requests, each with "no behaviour change" in the description, which is the commit discipline from this lesson applied at community scale.
-- **Infrastructure project platforms** (progress tracking, measurement books, RA billing) are prime candidates: the rules come from contracts, change per client, and are easiest to keep correct when each rule set is a small, pure, well-tested class.
+- **Marketplace and food-delivery payout systems** (restaurant settlements, seller payouts, driver earnings) are prime candidates: the rules come from partner agreements and tax law, change per partner and per budget, and are easiest to keep correct when each rule set is a small, pure, well-tested class.
 
 ## Interview questions
 
@@ -1350,7 +1356,7 @@ A: Callers keep working and tests keep targeting the same API while the internal
 Q: Sprout Class — what and when?
 A: Write new behaviour in a new, tested class and call it from the legacy class with one line; use it when you must add a feature before refactoring is done.
 Q: What is a data clump, and which refactoring fixes it?
-A: Parameters that always travel together (from, to, projectId); Introduce Parameter Object.
+A: Parameters that always travel together (from, to, restaurantId); Introduce Parameter Object.
 Q: Name two bad ways to split a god class.
 A: By technical layer (Helper/Utils/Manager) and into tiny classes per line of logic that ping-pong calls.
 Q: Why separate refactoring commits from behaviour-change commits?
@@ -1368,7 +1374,7 @@ Two classes are candidates for refactoring: A is 2,500 lines and hasn't changed 
 - [ ] Neither; size doesn't matter.
 > Hotspot thinking: complexity × change frequency. A stable class costs little even if it's large.
 ::q single
-You're about to restructure a billing class that has no tests. What should you do first?
+You're about to restructure a payout class that has no tests. What should you do first?
 - [ ] Extract classes carefully and test manually afterwards.
 - [x] Write characterization tests that capture current outputs for realistic inputs.
 - [ ] Rewrite it with tests from the start.
@@ -1389,21 +1395,21 @@ A teammate's PR moves the GST code into `GstCalculator` and also changes the rou
 - [ ] Ask them to also move TDS in the same PR.
 > Mixed commits hide behaviour changes inside large diffs. Money rounding especially needs its own review.
 ::q single
-After extraction, a method in `InvoiceRenderer` reads seven properties of `RaBillComputation` and computes the net amount itself. What smell is this, and what's the fix?
+After extraction, a method in `StatementRenderer` reads seven properties of `PayoutComputation` and computes the net amount itself. What smell is this, and what's the fix?
 - [ ] Data clump; Introduce Parameter Object.
-- [x] Feature Envy; move the net-amount logic onto `RaBillComputation`.
+- [x] Feature Envy; move the net-amount logic onto `PayoutComputation`.
 - [ ] Large class; Extract Class.
 - [ ] Shotgun surgery; Inline Class.
 > The method uses another object's data more than its own. Move the behaviour to where the data lives, as `NetPayable` is in the implementation.
 ::q single
-You must add a new "priority bill" rule this week, but the refactoring of the large class isn't finished. Best approach?
+You must add a new "half commission for a restaurant's first month" rule this week, but the refactoring of the large class isn't finished. Best approach?
 - [ ] Add 50 more lines to the large class; refactor later.
 - [x] Sprout Class: write and test the rule in a new class, and call it from the large class with one line.
 - [ ] Pause the feature until refactoring is done.
 - [ ] Copy the large class and modify the copy.
 > Sprout Class delivers the feature with tests and stops the large class from growing.
 ::q single
-A 1,800-line class becomes `TenderHelper`, `TenderUtils`, `TenderCommon` and `TenderManager`, each about 450 lines. Every feature still changes all four. What went wrong?
+A 1,800-line class becomes `PartnerHelper`, `PartnerUtils`, `PartnerCommon` and `PartnerManager`, each about 450 lines. Every feature still changes all four. What went wrong?
 - [ ] Nothing; the files are smaller.
 - [x] It was split by technical grouping, not by responsibility, so cohesion didn't improve.
 - [ ] It needs more files.

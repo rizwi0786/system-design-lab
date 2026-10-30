@@ -77,8 +77,8 @@ This is the "two generals" problem in miniature. No amount of client cleverness 
 
 | Part | What it is | Who owns it |
 |---|---|---|
-| **Key** | A unique string the client generates per *intent*, usually a UUID v4. Sent as the `Idempotency-Key` header. | Client |
-| **Scope** | The key is unique per client, not globally. Two merchants may both send key `abc`; they must not collide. The server prefixes the key with the authenticated client ID. | Server |
+| **Key** | A unique string the client generates per *intent*, usually a UUID v4. Sent as the `Idempotency-Key` header. The IETF draft defines the value as a Structured Field string, so the canonical form is quoted: `Idempotency-Key: "8e03978e-40d5-43e8-bc93-6894a57f9324"`. | Client |
+| **Scope** | The key is unique per client, not globally. Two merchants may both send key `abc`; they must not collide. The server prefixes the key with the *authenticated* client ID, never with an ID from a header the caller controls. | Server |
 | **Fingerprint** | A hash of the request (method, path, body, client). Lets the server detect a reused key with a different payload. | Server |
 | **Claim record** | A row or cache entry saying "key X is in progress" or "key X completed with this response". Written *before* the work starts. | Server |
 | **Stored response** | The status code and body of the first successful attempt, replayed on retries. | Server |
@@ -95,7 +95,7 @@ The word *intent* matters. A client should create one key when the user taps "Pa
 
 ### The three awkward paths
 
-**Concurrent duplicates.** The client's first request is slow; its retry arrives while step 4 is still running on another instance. The retry's insert fails because the record exists in `InProgress`. The correct answer is not to wait on the first attempt (that ties up a thread and can deadlock across instances) and not to do the work again. Return `409 Conflict` with `Retry-After: 1`, and let the client try again in a second, by which time the original has completed and the response can be replayed.
+**Concurrent duplicates.** The client's first request is slow; its retry arrives while step 4 is still running on another instance. The retry's insert fails because the record exists in `InProgress`. The correct answer is not to wait on the first attempt (that ties up a thread and can deadlock across instances) and not to do the work again. Return `409 Conflict` with `Retry-After: 1`, and let the client try again in a second, by which time the original has completed and the response can be replayed. These status codes are the ones the IETF `Idempotency-Key` draft recommends: `400` when a required key is missing, `409` while the first request is still being processed, and `422` when a key is reused with a different payload (next paragraph). Use them, and document them, so client libraries can react without guessing.
 
 **Fingerprint mismatch.** Key `K` arrives with amount 2,499, then again with amount 24,990. Same key, different body. This is almost always a client bug (a key reused across intents). Return `422 Unprocessable Content` with a problem-details body saying the key was used with a different payload. Never process the second request, and never replay the first response for it: that would silently tell the client "your ₹24,990 payment succeeded" when ₹2,499 moved.
 
@@ -405,7 +405,10 @@ public sealed class IdempotencyFilter(
         var http = context.HttpContext;
         var o = options.Value;
 
-        var rawKey = http.Request.Headers[o.HeaderName].ToString();
+        var rawKey = http.Request.Headers[o.HeaderName].ToString().Trim();
+        // The IETF draft defines the value as a Structured Field string ("..."); many clients still send a bare
+        // token. Accept both and compare the unquoted value.
+        if (rawKey.Length >= 2 && rawKey[0] == '"' && rawKey[^1] == '"') rawKey = rawKey[1..^1];
         if (string.IsNullOrWhiteSpace(rawKey))
         {
             if (!o.Required) return await next(context);
@@ -416,10 +419,9 @@ public sealed class IdempotencyFilter(
             return Results.Problem(detail: $"'{o.HeaderName}' must be at most {o.MaxKeyLength} characters.",
                                    statusCode: StatusCodes.Status400BadRequest);
 
-        // Scope the key to the caller so two clients can never collide.
-        var clientId = http.User.Identity?.Name
-                       ?? http.Request.Headers["X-Client-Id"].ToString();
-        if (string.IsNullOrEmpty(clientId)) clientId = "anonymous";
+        // Scope the key to the authenticated caller so two clients can never collide. Never take the scope from a
+        // header the caller controls: anyone could then claim another client's key and read its stored response.
+        var clientId = http.User.Identity is { IsAuthenticated: true, Name: { Length: > 0 } name } ? name : "anonymous";
         var scopedKey = $"{clientId}:{rawKey}";
 
         var body = await ReadBodyAsync(http.Request, http.RequestAborted);
@@ -594,7 +596,14 @@ const string claimSql = """
 // If RETURNING yields a row we are Claimed. Otherwise SELECT the existing row and compare fingerprint/state.
 ```
 
-Run the claim, the `payments` insert and the completion update inside one transaction, and the record can never say "completed" without the payment row existing. A small `BackgroundService` runs `DELETE FROM idempotency_keys WHERE expires_at < now() LIMIT ...` in batches every few minutes (PostgreSQL has no `LIMIT` on `DELETE`, so delete by a sub-select of keys).
+Run the claim, the `payments` insert and the completion update inside one transaction, and the record can never say "completed" without the payment row existing. A small `BackgroundService` purges expired keys in batches every few minutes. PostgreSQL has no `LIMIT` on `DELETE`, so limit a sub-select instead, which keeps each transaction (and its locks and WAL) small:
+
+```sql
+DELETE FROM idempotency_keys
+WHERE scoped_key IN (SELECT scoped_key FROM idempotency_keys WHERE expires_at < now() LIMIT 5000);
+```
+
+At very high volume, partitioning the table by day and dropping old partitions is cheaper still.
 
 ### The Redis variant
 
@@ -1211,7 +1220,7 @@ public class IdempotencyFilterTests
         ctx.Request.Method = "POST";
         ctx.Request.Path = "/payments";
         if (key is not null) ctx.Request.Headers["Idempotency-Key"] = key;
-        ctx.Request.Headers["X-Client-Id"] = "m17";
+        ctx.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Name, "m17")], authenticationType: "test"));
         ctx.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(body));   // MemoryStream is seekable, like a buffered body
         return ctx;
     }
@@ -1258,7 +1267,8 @@ public class IdempotencyFilterTests
 - **Cloud provider APIs** expose a client-token parameter on resource-creation calls so that infrastructure tooling can retry safely during provisioning.
 - **Webhook receivers** dedupe on the event ID the sender includes, which is the receiving side of the same idea; see [Webhooks](#/lesson/m10-webhooks).
 - **Message consumers** use an inbox table keyed by message ID for exactly the same reason; see [Idempotent consumers](#/lesson/m12-idempotent-consumers). The HTTP version in this lesson and the queue version in that one are one pattern in two costumes.
-- **Infrastructure project platforms** that record contractor bills or measurement-book entries face the same duplicate-submission problem when site engineers work on patchy networks. A key per submission, stored with the entry, prevents a bill being booked twice.
+- **Food-delivery and ride-hailing apps** face the same duplicate-submission problem when a rider taps "Place order" or "Book ride" on a patchy network inside a lift or a metro tunnel. A key per tap, persisted on the phone and stored with the order, prevents two biryanis and two cabs.
+
 
 ## Interview questions
 

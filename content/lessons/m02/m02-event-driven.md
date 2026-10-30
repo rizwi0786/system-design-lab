@@ -1328,7 +1328,7 @@ public async Task Out_of_order_events_keep_the_newest_version()
 
 - **E-commerce order flows.** "Order placed" triggers payment capture, inventory reservation, invoice generation (with GST details), warehouse picking and customer notifications, each owned by a different team. Large retailers use event logs so analytics and fraud detection can subscribe without touching the order service.
 - **Payments and UPI-style systems.** Payment status changes ("payment succeeded") are published so that merchants, ledgers and notification systems react independently. The authorisation itself (is this payment allowed?) stays a synchronous request, because the payer is waiting.
-- **Infrastructure projects.** A construction-management platform can publish `InspectionFailed` or `MeasurementApproved` from site apps. Billing, quality dashboards and contractor notifications react on their own, and site teams with poor connectivity are not blocked by back-office systems.
+- **Food delivery and ride-hailing.** A delivery app publishes `OrderPickedUp` and `OrderDelivered` from the rider's phone. Customer tracking, restaurant payouts, rider incentives and ratings prompts react on their own, and a rider in a patchy-signal area is not blocked by slow back-office systems.
 - **Change data capture** tools stream database changes as events, which is a way to make an existing system event-driven without changing its code. See [Change data capture](#/lesson/m16-cdc).
 
 ## Interview questions

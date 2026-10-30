@@ -10,7 +10,7 @@ prerequisites: [m05-c4-model, m05-class-diagrams, m05-sequence-diagrams]
 related: [m05-c4-model, m05-reading-diagrams, m05-diagrams-to-code, m05-component-diagrams, m05-deployment-diagrams, m02-adr, m11-object-storage]
 tags: [c4, architecture-diagrams, mermaid, documentation, hld, lld]
 patterns: []
-summary: A complete worked C4 example for a realistic construction progress-reporting system. Build the system context, container, component and code views one zoom at a time as Mermaid flowcharts, explain every box and arrow, and see how the lowest view becomes real ASP.NET Core code.
+summary: A complete worked C4 example for a realistic field-sales reporting system (shop visits, orders and shelf photos). Build the system context, container, component and code views one zoom at a time as Mermaid flowcharts, explain every box and arrow, and see how the lowest view becomes real ASP.NET Core code.
 references:
   - title: The C4 model for visualising software architecture (Simon Brown)
     url: https://c4model.com/
@@ -50,18 +50,18 @@ Imagine you are explaining Delhi Metro to three people. A tourist needs the **ne
 
 C4 is the same idea for software. The **context view** is the network map: our system as one box, the people who use it and the other systems it talks to. The **container view** opens that box: the apps, APIs, databases and queues inside. The **component view** opens one of those containers: the main parts inside one API. The **code view** opens one component: its classes.
 
-### Our worked example: SiteDiary
+### Our worked example: BeatBook
 
-A mid-sized engineering consultancy supervises highway and bridge projects across several states. Today, site engineers send daily progress as photos and spreadsheets on WhatsApp. Project managers copy numbers into Excel, and the client's engineer asks every week, "Is chainage 12+400 to 13+000 really finished?" Nobody trusts the numbers.
+A packaged-foods company (biscuits, snacks, juices) sells through thousands of neighbourhood shops (kirana stores) across several states. Each **sales rep** walks a fixed route of about 25 shops a day, called a **beat**. Today, reps send orders and shelf photos on WhatsApp. Area sales managers copy numbers into Excel, and the regional sales head asks every week, "Did anyone actually visit the shops on the Whitefield beat, or were these orders phoned in?" Nobody trusts the numbers.
 
-The company builds **SiteDiary**:
+The company builds **BeatBook**:
 
-- **Site engineers** fill a **daily progress report (DPR)** on a phone: work done against **bill of quantities (BOQ)** items (for example, "Item 4.02 — Dense Bituminous Macadam, 380 cubic metres"), weather, labour and machinery, plus geo-tagged photos. Connectivity at many sites is poor, so the app must work **offline**.
-- **Project managers** review each report and **approve** it or **return** it with a reason.
-- The **client's engineer** (the authority's representative) sees approved progress on a dashboard and downloads the **monthly progress report** PDF.
-- Approved quantities flow to the company's **ERP** for billing. Reminders go out over **WhatsApp and SMS**. Staff sign in with **Microsoft Entra ID**.
+- **Sales reps** fill a **daily beat report** on a phone: for each shop visited, the order taken against **SKU** items (a stock-keeping unit is one sellable product, for example "SKU-4021 — Glucose biscuits 250 g, 36 packs"), stock seen on the shelf, competitor offers, plus geo-tagged shelf photos. Mobile signal in many small towns and market lanes is poor, so the app must work **offline**.
+- **Area sales managers** review each report and **approve** it or **return** it with a reason.
+- The **distributor** (the independent wholesaler who delivers stock to those shops) sees approved orders for its shops on a dashboard and downloads the **monthly sales statement** PDF.
+- Approved orders flow to the company's **ERP** for invoicing. Reminders go out over **WhatsApp and SMS**. Staff and distributors sign in with **Microsoft Entra ID** (distributors as external guest users).
 
-Rough size (estimates for planning, not measurements): 40 active projects × 25 engineers ≈ 1,000 reports per day, each with about 15 photos of about 3 MB. That is roughly 15,000 photos and 45 GB of uploads per day, mostly between 5 p.m. and 8 p.m. when engineers return to the camp office. Keep these numbers in mind: they drive several decisions on the container view.
+Rough size (estimates for planning, not measurements): 40 areas × 25 reps ≈ 1,000 reports per day, each with about 15 photos (shelves and displays from the day's shops) of about 3 MB. That is roughly 15,000 photos and 45 GB of uploads per day, mostly between 6 p.m. and 9 p.m. when reps finish their beat and reach Wi-Fi at home or at the distributor's office. Keep these numbers in mind: they drive several decisions on the container view.
 
 ## First-principles explanation
 
@@ -71,9 +71,9 @@ A C4 diagram set is a **hierarchy**. Each view zooms into **one** element of the
 
 | View | Zooms into | Shows | Main reader |
 |---|---|---|---|
-| System context | (nothing, it is the top) | SiteDiary as one box, people, external systems | Everyone, including the client and management |
-| Container | the SiteDiary box | Apps, APIs, workers, databases, queues, and how they talk | Architects, developers, operations, security |
-| Component | one container (the Progress API) | The main parts inside it and their responsibilities | Developers of that container |
+| System context | (nothing, it is the top) | BeatBook as one box, people, external systems | Everyone, including distributors and management |
+| Container | the BeatBook box | Apps, APIs, workers, databases, queues, and how they talk | Architects, developers, operations, security |
+| Component | one container (the Sales API) | The main parts inside it and their responsibilities | Developers of that container |
 | Code | one component (Approval workflow) | Classes, interfaces and their relationships | Developers changing that component |
 
 The rule that makes the set work: **an element keeps the same name, description and colour on every view where it appears.** If the context view says "Company ERP" and the container view says "SAP connector", the reader can no longer move between them. Teams that use a modelling tool such as Structurizr get this for free because views are generated from one model. Teams that hand-write Mermaid, like we do here, must keep it by discipline and review (and, as you'll see in the exercises, a little automation).
@@ -91,7 +91,7 @@ Mermaid has a dedicated `C4Context` syntax, which the previous lesson used. It i
 | Database or file store | Cylinder | `id[("Name<br/>[Container: technology]<br/>description")]` | `store` |
 | Queue or message broker | Subroutine (double-sided box) | `id[["Name<br/>[Container: technology]<br/>description"]]` | `queue` |
 | Component | Rectangle, lighter | `id["Name<br/>[Component: technology]<br/>description"]` | `component` |
-| Boundary | Subgraph | `subgraph b["SiteDiary"] ... end` | dashed style |
+| Boundary | Subgraph | `subgraph b["BeatBook"] ... end` | dashed style |
 | Synchronous call | Solid arrow | `a -->|"intent<br/>[protocol]"| b` | |
 | Asynchronous message | Dotted arrow | `a -.->|"intent<br/>[protocol]"| b` | |
 
@@ -101,16 +101,16 @@ Three small details matter. **Quote every label** that contains brackets, colons
 
 A view is useful only if it answers questions its reader actually has. Before drawing, write them down:
 
-- **Context:** Who uses SiteDiary? What does it depend on that we don't control? Where does data leave the company?
+- **Context:** Who uses BeatBook? What does it depend on that we don't control? Where does data leave the company?
 - **Container:** What do we deploy? Which technology does each part use? Who calls whom, synchronously or asynchronously, over which protocol? Where is data stored?
-- **Component:** What are the main parts of the Progress API? Which part owns approval rules? Which parts touch the database or the ERP?
+- **Component:** What are the main parts of the Sales API? Which part owns approval rules? Which parts touch the database or the ERP?
 - **Code:** Which classes implement approval? Where is the "author cannot approve their own report" rule? What do I need to fake in a unit test?
 
 If a box or arrow doesn't help answer any of these, it probably belongs on a different view, or nowhere.
 
 ### When to stop zooming
 
-Most systems need the context and container views, always. A component view is worth it for a container that is **complex, risky or changed often**. A code view is worth it only for a component where the class structure itself is the hard part, and it should ideally be **generated** from the code rather than hand-drawn, because it goes stale in weeks. In SiteDiary we draw one component view (the Progress API, because it holds the business rules) and one code view (the approval workflow, because auditors ask about it). We deliberately do **not** draw component views for the photo worker (two message handlers) or the web portal (a React app whose structure follows its routes).
+Most systems need the context and container views, always. A component view is worth it for a container that is **complex, risky or changed often**. A code view is worth it only for a component where the class structure itself is the hard part, and it should ideally be **generated** from the code rather than hand-drawn, because it goes stale in weeks. In BeatBook we draw one component view (the Sales API, because it holds the business rules) and one code view (the approval workflow, because auditors ask about it). We deliberately do **not** draw component views for the photo worker (two message handlers) or the web portal (a React app whose structure follows its routes).
 
 ### Static views and dynamic views
 
@@ -122,56 +122,56 @@ The four core views are **static**: they show structure, not order. To explain h
 
 ```mermaid
 flowchart TB
-    eng(["Site engineer<br/>[Person]<br/>Records daily progress, quantities and photos at the site"]):::person
-    pm(["Project manager<br/>[Person]<br/>Reviews, approves or returns daily reports"]):::person
-    ce(["Client's engineer<br/>[Person]<br/>Authority's representative who monitors progress"]):::person
-    sd["SiteDiary<br/>[Software System]<br/>Daily progress reports, quantities, photos and monthly reports for road and bridge projects"]:::system
-    idp["Microsoft Entra ID<br/>[External System]<br/>Staff and client sign-in"]:::external
-    erp["Company ERP<br/>[External System]<br/>Master BOQ items, contract rates and billing"]:::external
+    rep(["Sales rep<br/>[Person]<br/>Records shop visits, orders and shelf photos on the beat"]):::person
+    asm(["Area sales manager<br/>[Person]<br/>Reviews, approves or returns daily reports"]):::person
+    dist(["Distributor<br/>[Person]<br/>Wholesaler who delivers approved orders to shops"]):::person
+    bb["BeatBook<br/>[Software System]<br/>Daily beat reports, orders, shelf photos and monthly distributor statements"]:::system
+    idp["Microsoft Entra ID<br/>[External System]<br/>Staff and distributor sign-in"]:::external
+    erp["Company ERP<br/>[External System]<br/>SKU catalogue, price lists and invoicing"]:::external
     msg["Messaging gateway<br/>[External System]<br/>Delivers WhatsApp and SMS messages"]:::external
-    eng -->|"Submits daily reports and photos using"| sd
-    pm -->|"Reviews and approves reports using"| sd
-    ce -->|"Views progress and downloads monthly reports from"| sd
-    sd -->|"Signs users in using"| idp
-    sd -->|"Reads BOQ items from and sends approved quantities to"| erp
-    sd -->|"Sends report reminders and approval alerts using"| msg
+    rep -->|"Submits beat reports and photos using"| bb
+    asm -->|"Reviews and approves reports using"| bb
+    dist -->|"Views approved orders and downloads monthly statements from"| bb
+    bb -->|"Signs users in using"| idp
+    bb -->|"Reads the SKU catalogue from and sends approved orders to"| erp
+    bb -->|"Sends report reminders and approval alerts using"| msg
     classDef person fill:#0b3d6e,color:#ffffff,stroke:#062a4d
     classDef system fill:#1565c0,color:#ffffff,stroke:#0d47a1
     classDef external fill:#8a8a8a,color:#ffffff,stroke:#5f5f5f
 ```
 
-Read it top to bottom. **Three people** (roles, not named individuals) use SiteDiary, and each description says what they want, not which screen they click. **Three external systems** sit outside our control. Each arrow is labelled with **intent**, phrased so the sentence reads naturally: "Site engineer submits daily reports and photos using SiteDiary".
+Read it top to bottom. **Three people** (roles, not named individuals) use BeatBook, and each description says what they want, not which screen they click. **Three external systems** sit outside our control. Each arrow is labelled with **intent**, phrased so the sentence reads naturally: "Sales rep submits beat reports and photos using BeatBook".
 
 Notice what this view already lets us discuss with a non-technical audience:
 
-- **The ERP arrow carries money.** Approved quantities become bills. The client will want to know that only *approved* quantities flow, and the finance team will want to know what happens if the ERP is down.
+- **The ERP arrow carries money.** Approved orders become invoices to distributors, and they drive the reps' monthly incentives. Distributors will want to know that only *approved* orders flow, and the finance team will want to know what happens if the ERP is down.
 - **Personal data leaves the company** through the messaging gateway (phone numbers). That is a privacy discussion under India's DPDP Act, and it starts here, not on page 40 of a design document.
 - **There is no "database" or "server" box.** Technology is deliberately absent. If a reviewer asks "is it on Azure?", the answer is "see the container view".
 
-One arrow is missing on purpose: the client's engineer doesn't talk to the ERP. If someone draws that arrow, ask whether it's a real requirement (it would change the security boundary) or a guess.
+One arrow is missing on purpose: distributors never reach the company ERP directly; they see orders only through BeatBook. If someone draws that arrow, ask whether it's a real requirement (it would change the security boundary) or a guess.
 
-### Level 2 — Container view of SiteDiary
+### Level 2 — Container view of BeatBook
 
 ```mermaid
 flowchart TB
-    eng(["Site engineer<br/>[Person]"]):::person
-    pm(["Project manager<br/>[Person]"]):::person
-    ce(["Client's engineer<br/>[Person]"]):::person
-    subgraph sdb["SiteDiary [Software System]"]
-        app["Field app<br/>[Container: .NET MAUI, SQLite]<br/>Offline-first DPR entry and photo capture"]:::container
+    rep(["Sales rep<br/>[Person]"]):::person
+    asm(["Area sales manager<br/>[Person]"]):::person
+    dist(["Distributor<br/>[Person]"]):::person
+    subgraph bbb["BeatBook [Software System]"]
+        app["Field app<br/>[Container: .NET MAUI, SQLite]<br/>Offline-first beat report entry and photo capture"]:::container
         portal["Web portal<br/>[Container: React SPA]<br/>Review queue, dashboards, report downloads"]:::container
-        api["Progress API<br/>[Container: ASP.NET Core 10]<br/>Reports, approvals, sync, BOQ lookups"]:::container
-        worker["Media worker<br/>[Container: .NET 10 worker service]<br/>Thumbnails, photo geo-checks, monthly PDFs"]:::container
-        db[("Progress database<br/>[Container: PostgreSQL 17 with PostGIS]<br/>Reports, quantities, approvals, outbox")]:::store
+        api["Sales API<br/>[Container: ASP.NET Core 10]<br/>Reports, approvals, sync, SKU lookups"]:::container
+        worker["Media worker<br/>[Container: .NET 10 worker service]<br/>Thumbnails, photo geo-checks, monthly statement PDFs"]:::container
+        db[("Sales database<br/>[Container: PostgreSQL 17 with PostGIS]<br/>Reports, order lines, shops, approvals, outbox")]:::store
         blob[("Photo store<br/>[Container: Azure Blob Storage]<br/>Original photos, thumbnails, PDFs")]:::store
         bus[["Message broker<br/>[Container: Azure Service Bus]<br/>Report and photo events"]]:::queue
     end
     idp["Microsoft Entra ID<br/>[External System]"]:::external
     erp["Company ERP<br/>[External System]"]:::external
     msg["Messaging gateway<br/>[External System]"]:::external
-    eng -->|"Uses"| app
-    pm -->|"Uses"| portal
-    ce -->|"Uses"| portal
+    rep -->|"Uses"| app
+    asm -->|"Uses"| portal
+    dist -->|"Uses"| portal
     app -->|"Syncs drafts and submits reports<br/>[JSON over HTTPS]"| api
     app -->|"Uploads photos directly with a short-lived URL<br/>[HTTPS PUT]"| blob
     portal -->|"Reads review queue, approves reports<br/>[JSON over HTTPS]"| api
@@ -182,54 +182,54 @@ flowchart TB
     worker -->|"Reads originals, writes thumbnails and PDFs<br/>[HTTPS]"| blob
     worker -->|"Records photo checks and report files<br/>[SQL over TLS]"| db
     api -->|"Validates tokens from<br/>[OpenID Connect]"| idp
-    api -->|"Fetches BOQ items, posts approved quantities<br/>[JSON over HTTPS]"| erp
+    api -->|"Fetches SKUs and prices, posts approved orders<br/>[JSON over HTTPS]"| erp
     worker -->|"Sends reminders and alerts<br/>[JSON over HTTPS]"| msg
     classDef person fill:#0b3d6e,color:#ffffff,stroke:#062a4d
     classDef container fill:#1e88e5,color:#ffffff,stroke:#1565c0
     classDef store fill:#1e88e5,color:#ffffff,stroke:#1565c0
     classDef queue fill:#1e88e5,color:#ffffff,stroke:#1565c0
     classDef external fill:#8a8a8a,color:#ffffff,stroke:#5f5f5f
-    style sdb fill:none,stroke:#1565c0,stroke-dasharray:6 4
+    style bbb fill:none,stroke:#1565c0,stroke-dasharray:6 4
 ```
 
-The dashed subgraph is the **boundary** of the SiteDiary box from level 1. Everything inside it is something we build or run and deploy separately. Outside, the same three people and three external systems appear with the **same names**; their descriptions are shortened because the reader has already seen level 1.
+The dashed subgraph is the **boundary** of the BeatBook box from level 1. Everything inside it is something we build or run and deploy separately. Outside, the same three people and three external systems appear with the **same names**; their descriptions are shortened because the reader has already seen level 1.
 
 Walk through each container and the reason it exists:
 
-- **Field app** (.NET MAUI with a local SQLite database). It is a separate container because it runs on the engineer's phone, not on our servers. The local database is *inside* this container; it is not a separate box because it is not deployed or run separately. Offline-first is a big decision visible only here: drafts live on the phone and **sync** when there is signal.
+- **Field app** (.NET MAUI with a local SQLite database). It is a separate container because it runs on the rep's phone, not on our servers. The local database is *inside* this container; it is not a separate box because it is not deployed or run separately. Offline-first is a big decision visible only here: drafts live on the phone and **sync** when there is signal.
 - **Web portal** (React single-page app). Static files served from a CDN or the API host; it calls the API from the browser.
-- **Progress API** (ASP.NET Core 10). The only container that writes business data. Every rule about reports and approvals lives here, which is why it gets a component view.
-- **Media worker** (.NET 10 worker service). Slow, bursty work: making thumbnails, checking that each photo's GPS position is inside the project corridor, generating monthly PDFs. Keeping it out of the API means a 6 p.m. upload burst doesn't slow down the review screen.
-- **Progress database** (PostgreSQL 17 with PostGIS). The source of truth. PostGIS stores the project alignment so "is this photo within 200 m of chainage 12+400?" is one query.
+- **Sales API** (ASP.NET Core 10). The only container that writes business data. Every rule about reports and approvals lives here, which is why it gets a component view.
+- **Media worker** (.NET 10 worker service). Slow, bursty work: making thumbnails, checking that each photo's GPS position is close to the shop it claims to show, generating monthly distributor statements. Keeping it out of the API means a 7 p.m. upload burst doesn't slow down the review screen.
+- **Sales database** (PostgreSQL 17 with PostGIS). The source of truth. PostGIS stores each shop's location, so "was this photo taken within 100 m of shop BLR-0421?" is one indexed query. That check is what makes the regional head trust visit reports again.
 - **Photo store** (Azure Blob Storage). A container even though it is a managed service, because we own and configure it and it holds our data.
 - **Message broker** (Azure Service Bus). Decouples the API from slow work.
 
 Now the arrows, because that is where most design decisions hide:
 
-- **The field app uploads photos straight to blob storage**, not through the API. Remember the estimate: about 45 GB per day, concentrated in three evening hours. That is roughly 45 GB ÷ 3 h ≈ 15 GB per hour, or about 4 MB/s on average and several times that at peak. Pushing those bytes through the API would tie up API instances doing nothing but copying. Instead, the API issues a **short-lived upload URL** (a shared access signature, the **Valet Key pattern**) and the app uploads directly. On the diagram that is two arrows: "issues upload URLs for" from the API and "uploads photos directly" from the app.
+- **The field app uploads photos straight to blob storage**, not through the API. Remember the estimate: about 45 GB per day, concentrated in three evening hours. That is roughly 45 GB ÷ 3 h ≈ 15 GB per hour, or about 4 MB/s on average and several times that at peak. Pushing those bytes through the API would tie up API instances doing nothing but copying. Instead, the API issues a **short-lived upload URL** (a shared access signature, the **Valet Key pattern**) and the app uploads directly. Scope each URL to one blob name, write-only, valid for minutes, and prefer a user-delegation SAS (signed with an Entra ID identity) over one signed with the storage account key, which can't be revoked without rotating the key. On the diagram that is two arrows: "issues upload URLs for" from the API and "uploads photos directly" from the app.
 - **Dotted arrows are asynchronous.** The API never calls the worker. It writes an event into an **outbox table** in the same database transaction as the business change, and publishes it to the broker afterwards. The worker picks it up whenever it can. If the worker is down for an hour, users notice only that thumbnails appear late.
 - **Every arrow that crosses the boundary has a protocol.** OpenID Connect to Entra ID, JSON over HTTPS to the ERP and the gateway. A security reviewer reads exactly these arrows.
 - **People connect to apps, never to the API.** "Uses" is fine for a person-to-app arrow; between containers it is too vague, so each of those says what is exchanged.
 
 What's *not* on this view: Azure regions, App Service plans, Kubernetes, load balancers, the CDN. They belong on a **deployment diagram**. Putting them here would double the number of boxes without answering any container-level question.
 
-### Level 3 — Component view of the Progress API
+### Level 3 — Component view of the Sales API
 
 ```mermaid
 flowchart TB
     app["Field app<br/>[Container: .NET MAUI]"]:::container
     portal["Web portal<br/>[Container: React SPA]"]:::container
-    subgraph apib["Progress API [Container: ASP.NET Core 10]"]
+    subgraph apib["Sales API [Container: ASP.NET Core 10]"]
         sync["Sync endpoints<br/>[Component: Minimal API]<br/>Receives draft batches, resolves conflicts"]:::component
         reports["Report endpoints<br/>[Component: Minimal API]<br/>Submit, list and read daily reports"]:::component
         approval["Approval workflow<br/>[Component: C# domain and service]<br/>Approve or return, enforces approval rules"]:::component
-        boq["BOQ catalogue<br/>[Component: C# service with cache]<br/>Valid BOQ items and units per project"]:::component
+        cat["SKU catalogue<br/>[Component: C# service with cache]<br/>Active SKUs, pack sizes and prices per territory"]:::component
         media["Media access<br/>[Component: C# service]<br/>Issues short-lived upload and download URLs"]:::component
         store["Report store<br/>[Component: C# repository]<br/>Loads and saves reports with outbox rows"]:::component
         outbox["Outbox publisher<br/>[Component: BackgroundService]<br/>Publishes stored events to the broker"]:::component
-        erpc["ERP client<br/>[Component: typed HttpClient]<br/>BOQ lookups and quantity postings"]:::component
+        erpc["ERP client<br/>[Component: typed HttpClient]<br/>SKU lookups and order postings"]:::component
     end
-    db[("Progress database<br/>[Container: PostgreSQL 17]")]:::store
+    db[("Sales database<br/>[Container: PostgreSQL 17]")]:::store
     blob[("Photo store<br/>[Container: Azure Blob Storage]")]:::store
     bus[["Message broker<br/>[Container: Azure Service Bus]"]]:::queue
     erp["Company ERP<br/>[External System]"]:::external
@@ -237,11 +237,11 @@ flowchart TB
     app -->|"Requests photo upload URLs<br/>[JSON over HTTPS]"| media
     portal -->|"Lists and reads reports<br/>[JSON over HTTPS]"| reports
     portal -->|"Approves or returns reports<br/>[JSON over HTTPS]"| approval
-    sync -->|"Validates quantities against"| boq
+    sync -->|"Validates order lines against"| cat
     sync -->|"Saves drafts using"| store
     reports -->|"Saves submissions using"| store
     approval -->|"Loads and saves reports using"| store
-    boq -->|"Fetches BOQ items using"| erpc
+    cat -->|"Fetches SKUs and prices using"| erpc
     media -->|"Signs URLs for<br/>[Azure SDK]"| blob
     store -->|"Reads and writes<br/>[SQL]"| db
     outbox -->|"Reads pending events<br/>[SQL]"| db
@@ -255,14 +255,14 @@ flowchart TB
     style apib fill:none,stroke:#1e88e5,stroke-dasharray:6 4
 ```
 
-We zoomed into **one** container. Its neighbours from level 2 appear outside the boundary, but only those that the Progress API actually talks to. The worker isn't here, because the API never calls it directly. Arrows between components have **no protocol**, because they are in-process method calls; arrows that leave the container keep their protocol.
+We zoomed into **one** container. Its neighbours from level 2 appear outside the boundary, but only those that the Sales API actually talks to. The worker isn't here, because the API never calls it directly. Arrows between components have **no protocol**, because they are in-process method calls; arrows that leave the container keep their protocol.
 
 What this view lets the API team decide and discuss:
 
 - **Approval rules live in exactly one component.** The portal calls the approval workflow; nothing else changes a report's status to Approved. If a developer adds an "auto-approve on Sundays" shortcut in the sync endpoints, the diagram makes it obviously wrong.
 - **Only the report store touches the database for business data**, and the outbox publisher reads pending events. That is a small, checkable rule ("no other component uses `NpgsqlConnection`"), and we will check it with code later.
 - **The ERP is behind one client component.** When the ERP vendor changes their API, one component changes.
-- **The BOQ catalogue has a cache.** Engineers validate quantities against BOQ items thousands of times a day, while the ERP's BOQ changes a few times a month. The description says "with cache"; how long items are cached is a detail for the code.
+- **The SKU catalogue has a cache.** Order lines are validated against SKUs tens of thousands of times a day (1,000 reps × 25 shops × several lines each), while the ERP's price list changes a few times a month. The description says "with cache"; how long items are cached is a detail for the code.
 
 A frequent mistake here is drawing every class as a component. "ReportDto", "DateHelper" and "ReportValidator" are not components. A component is a **group of code with one clear responsibility behind an interface**, the kind of thing you could hand to one developer as "you own this".
 
@@ -308,7 +308,7 @@ classDiagram
     class StandardApprovalPolicy
     class DailyReport {
         +Guid Id
-        +string ProjectCode
+        +string TerritoryCode
         +DateOnly ReportDate
         +Guid AuthorId
         +ReportStatus Status
@@ -328,10 +328,10 @@ classDiagram
         +FindAsync(Guid id, CancellationToken ct) Task~DailyReport~
         +SaveAsync(DailyReport report, IReadOnlyList~OutboxMessage~ events, CancellationToken ct) Task
     }
-    class QuantityEntry {
+    class OrderLine {
         <<record>>
-        +string BoqItemCode
-        +decimal Quantity
+        +string SkuCode
+        +int Quantity
         +string Unit
     }
     ApprovalService --> IApprovalPolicy
@@ -339,30 +339,30 @@ classDiagram
     ApprovalService ..> DailyReport : changes
     StandardApprovalPolicy ..|> IApprovalPolicy
     DailyReport --> ReportStatus
-    DailyReport "1" *-- "1..*" QuantityEntry : quantities
+    DailyReport "1" *-- "1..*" OrderLine : order lines
 ```
 
-Read the two together. The **policy is an interface**, so the rule "who may approve" can change per client contract without touching the service. The **store is an interface**, so unit tests use an in-memory store and production uses PostgreSQL. `DailyReport` **owns** its quantity entries (composition, filled diamond): they are created through the report and saved with it. The status enum shows the state machine's states; the transitions themselves would be a [state machine diagram](#/lesson/m05-state-diagrams).
+Read the two together. The **policy is an interface**, so the rule "who may approve" can change per region or sales channel without touching the service. The **store is an interface**, so unit tests use an in-memory store and production uses PostgreSQL. `DailyReport` **owns** its order lines (composition, filled diamond): they are created through the report and saved with it. The status enum shows the state machine's states; the transitions themselves would be a [state machine diagram](#/lesson/m05-state-diagrams).
 
 Should you hand-draw this view? Usually not. The production code in the next section *is* the code view; a generator or your IDE can draw it on demand. We drew it here to show how the zoom ends.
 
-### Dynamic view — a project manager approves a report
+### Dynamic view — a area sales manager approves a report
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor PM as Project manager
+    actor ASM as Area sales manager
     participant Portal as Web portal
     participant AW as Approval workflow
     participant Store as Report store
-    participant DB as Progress database
+    participant DB as Sales database
     participant OP as Outbox publisher
     participant Bus as Message broker
     participant MW as Media worker
-    PM->>Portal: Approve DPR for 14 Oct, Package 3
+    ASM->>Portal: Approve beat report for 14 Oct, BLR-EAST-07
     Portal->>AW: POST /reports/7f3a/approve
     AW->>Store: FindAsync report 7f3a
-    Store->>DB: SELECT report and quantities
+    Store->>DB: SELECT report and order lines
     DB-->>Store: Report in Submitted state
     Store-->>AW: DailyReport
     AW->>AW: Policy check and report.Approve
@@ -383,11 +383,11 @@ Here is the order we actually followed to produce the views above, with the ques
 
 ### Step 1 — write the one-sentence scope
 
-"SiteDiary records daily progress, quantities and photos for road and bridge projects, and produces approved progress for billing and the client." This decides the boundary: the ERP does billing, so it's outside; the field app captures progress, so it's inside.
+"BeatBook records sales reps' shop visits, orders and shelf photos, and produces approved orders for invoicing and distributor statements." This decides the boundary: the ERP does invoicing, so it's outside; the field app captures visits, so it's inside.
 
 ### Step 2 — draw level 1 from conversations, not code
 
-List roles from interviews: site engineer, project manager, client's engineer. List external systems from `appsettings.json` and the integration list: Entra ID, ERP, messaging gateway. Label every arrow with intent. Show it to the product owner and the client's representative and ask "what's missing?" In our case the first draft missed the client's engineer entirely, because the team thought of the client as "someone who gets a PDF by email".
+List roles from interviews: sales rep, area sales manager, distributor. List external systems from `appsettings.json` and the integration list: Entra ID, ERP, messaging gateway. Label every arrow with intent. Show it to the product owner and a couple of distributors and ask "what's missing?" In our case the first draft missed the distributor entirely, because the team thought of distributors as "someone who gets a PDF by email".
 
 ### Step 3 — draw level 2 from the deployment pipeline
 
@@ -399,11 +399,11 @@ Take the busiest flows and estimate them. Photos: about 45 GB a day, mostly in t
 
 ### Step 5 — choose which containers deserve level 3
 
-Ask for each container: is it complex, risky or changed every sprint? The Progress API: yes on all three. The media worker: two handlers, no. The portal: a React app whose structure follows its routes, no. Draw one component view.
+Ask for each container: is it complex, risky or changed every sprint? The Sales API: yes on all three. The media worker: two handlers, no. The portal: a React app whose structure follows its routes, no. Draw one component view.
 
 ### Step 6 — draw level 3 from the code's folders and DI registrations
 
-The `Program.cs` DI registrations and the folder structure usually reveal the components: `Features/Sync`, `Features/Reports`, `Approvals`, `Boq`, `Media`, `Persistence`, `Integrations/Erp`. Group classes by responsibility, name each group, and draw who calls whom. If two components call each other in a circle, you have found a design problem before writing a line of new code.
+The `Program.cs` DI registrations and the folder structure usually reveal the components: `Features/Sync`, `Features/Reports`, `Approvals`, `Catalogue`, `Media`, `Persistence`, `Integrations/Erp`. Group classes by responsibility, name each group, and draw who calls whom. If two components call each other in a circle, you have found a design problem before writing a line of new code.
 
 ### Step 7 — generate level 4 on demand, and keep everything in the repository
 
@@ -411,10 +411,10 @@ Commit the views as Markdown files under `docs/architecture/` next to the code, 
 
 ## Production-style C# implementation
 
-The code view is only honest if it matches real code. Below is the approval workflow component as it would appear in the Progress API: the domain object, the policy, the ports (interfaces), the application service, in-memory adapters for local runs and tests, an outbox publisher background service, and the endpoint. Every type on the level 4 view exists here with the same name, except `PostgresReportStore`, which would use Npgsql and is replaced by an in-memory store so the example compiles without packages.
+The code view is only honest if it matches real code. Below is the approval workflow component as it would appear in the Sales API: the domain object, the policy, the ports (interfaces), the application service, in-memory adapters for local runs and tests, an outbox publisher background service, and the endpoint. Every type on the level 4 view exists here with the same name, except `PostgresReportStore`, which would use Npgsql and is replaced by an in-memory store so the example compiles without packages.
 
 ```text
-SiteDiary.Api/
+BeatBook.Api/
   Program.cs
   Approvals/Domain/DailyReport.cs
   Approvals/Domain/ApprovalPolicy.cs
@@ -425,44 +425,44 @@ SiteDiary.Api/
 ```
 
 ```csharp file=Approvals/Domain/DailyReport.cs
-namespace SiteDiary.Api.Approvals.Domain;
+namespace BeatBook.Api.Approvals.Domain;
 
 public enum ReportStatus { Draft, Submitted, Approved, Returned }
 
-public sealed record QuantityEntry(string BoqItemCode, decimal Quantity, string Unit);
+public sealed record OrderLine(string SkuCode, int Quantity, string Unit);
 
-/// <summary>Aggregate root: one engineer's daily progress report for one project.</summary>
+/// <summary>Aggregate root: one sales rep's daily beat report for one territory.</summary>
 public sealed class DailyReport
 {
-    private readonly List<QuantityEntry> _quantities = new();
+    private readonly List<OrderLine> _orderLines = new();
     private readonly List<string> _photoKeys = new();
 
-    public DailyReport(Guid id, string projectCode, DateOnly reportDate, Guid authorId)
+    public DailyReport(Guid id, string territoryCode, DateOnly reportDate, Guid authorId)
     {
-        if (string.IsNullOrWhiteSpace(projectCode))
-            throw new ArgumentException("Project code is required.", nameof(projectCode));
+        if (string.IsNullOrWhiteSpace(territoryCode))
+            throw new ArgumentException("Territory code is required.", nameof(territoryCode));
         Id = id;
-        ProjectCode = projectCode;
+        TerritoryCode = territoryCode;
         ReportDate = reportDate;
         AuthorId = authorId;
     }
 
     public Guid Id { get; }
-    public string ProjectCode { get; }
+    public string TerritoryCode { get; }
     public DateOnly ReportDate { get; }
     public Guid AuthorId { get; }
     public ReportStatus Status { get; private set; } = ReportStatus.Draft;
     public string? ReturnReason { get; private set; }
     public Guid? DecidedBy { get; private set; }
     public DateTimeOffset? DecidedAt { get; private set; }
-    public IReadOnlyList<QuantityEntry> Quantities => _quantities;
+    public IReadOnlyList<OrderLine> OrderLines => _orderLines;
     public IReadOnlyList<string> PhotoKeys => _photoKeys;
 
-    public void AddQuantity(string boqItemCode, decimal quantity, string unit)
+    public void AddOrderLine(string skuCode, int quantity, string unit)
     {
         EnsureEditable();
         if (quantity <= 0) throw new ArgumentOutOfRangeException(nameof(quantity), "Quantity must be positive.");
-        _quantities.Add(new QuantityEntry(boqItemCode, quantity, unit));
+        _orderLines.Add(new OrderLine(skuCode, quantity, unit));
     }
 
     public void AttachPhoto(string objectKey)
@@ -474,8 +474,8 @@ public sealed class DailyReport
     public void Submit()
     {
         EnsureEditable();
-        if (_quantities.Count == 0)
-            throw new InvalidOperationException("A report needs at least one quantity entry.");
+        if (_orderLines.Count == 0)
+            throw new InvalidOperationException("A report needs at least one order line.");
         Status = ReportStatus.Submitted;
         ReturnReason = null;
     }
@@ -510,9 +510,9 @@ public sealed class DailyReport
 ```
 
 ```csharp file=Approvals/Domain/ApprovalPolicy.cs
-namespace SiteDiary.Api.Approvals.Domain;
+namespace BeatBook.Api.Approvals.Domain;
 
-public sealed record Reviewer(Guid Id, string Role, IReadOnlySet<string> ProjectCodes);
+public sealed record Reviewer(Guid Id, string Role, IReadOnlySet<string> TerritoryCodes);
 
 public sealed record ApprovalCheck(bool Allowed, string? Reason)
 {
@@ -525,30 +525,30 @@ public interface IApprovalPolicy
     ApprovalCheck CanApprove(DailyReport report, Reviewer reviewer);
 }
 
-/// <summary>The default rules most contracts use. A client-specific policy can replace it via DI.</summary>
+/// <summary>The default rules most regions use. A region-specific policy can replace it via DI.</summary>
 public sealed class StandardApprovalPolicy : IApprovalPolicy
 {
-    public const string ProjectManagerRole = "ProjectManager";
+    public const string AreaSalesManagerRole = "AreaSalesManager";
 
     public ApprovalCheck CanApprove(DailyReport report, Reviewer reviewer)
     {
         if (reviewer.Id == report.AuthorId)
             return ApprovalCheck.Deny("Authors cannot approve their own report.");
-        if (reviewer.Role != ProjectManagerRole)
-            return ApprovalCheck.Deny("Only project managers approve daily reports.");
-        if (!reviewer.ProjectCodes.Contains(report.ProjectCode))
-            return ApprovalCheck.Deny($"Reviewer is not assigned to project {report.ProjectCode}.");
+        if (reviewer.Role != AreaSalesManagerRole)
+            return ApprovalCheck.Deny("Only area sales managers approve beat reports.");
+        if (!reviewer.TerritoryCodes.Contains(report.TerritoryCode))
+            return ApprovalCheck.Deny($"Reviewer is not assigned to territory {report.TerritoryCode}.");
         if (report.PhotoKeys.Count == 0)
-            return ApprovalCheck.Deny("At least one site photo is required before approval.");
+            return ApprovalCheck.Deny("At least one shelf photo is required before approval.");
         return ApprovalCheck.Ok;
     }
 }
 ```
 
 ```csharp file=Approvals/Application/Ports.cs
-using SiteDiary.Api.Approvals.Domain;
+using BeatBook.Api.Approvals.Domain;
 
-namespace SiteDiary.Api.Approvals.Application;
+namespace BeatBook.Api.Approvals.Application;
 
 public sealed record OutboxMessage(Guid Id, string Type, string PayloadJson, DateTimeOffset CreatedAt);
 
@@ -574,9 +574,9 @@ public interface IMessagePublisher
 
 ```csharp file=Approvals/Application/ApprovalService.cs
 using System.Text.Json;
-using SiteDiary.Api.Approvals.Domain;
+using BeatBook.Api.Approvals.Domain;
 
-namespace SiteDiary.Api.Approvals.Application;
+namespace BeatBook.Api.Approvals.Application;
 
 public enum ApprovalResultKind { Approved, NotFound, Forbidden, Conflict }
 
@@ -601,10 +601,10 @@ public sealed class ApprovalService(IReportStore store, IApprovalPolicy policy, 
         var payload = JsonSerializer.Serialize(new
         {
             report.Id,
-            report.ProjectCode,
+            report.TerritoryCode,
             ReportDate = report.ReportDate.ToString("yyyy-MM-dd"),
             ApprovedBy = reviewer.Id,
-            Quantities = report.Quantities,
+            report.OrderLines,
         });
         var evt = new OutboxMessage(Guid.NewGuid(), "DailyReportApproved", payload, now);
 
@@ -617,10 +617,10 @@ public sealed class ApprovalService(IReportStore store, IApprovalPolicy policy, 
 
 ```csharp file=Approvals/Infrastructure/InMemoryAdapters.cs
 using System.Collections.Concurrent;
-using SiteDiary.Api.Approvals.Application;
-using SiteDiary.Api.Approvals.Domain;
+using BeatBook.Api.Approvals.Application;
+using BeatBook.Api.Approvals.Domain;
 
-namespace SiteDiary.Api.Approvals.Infrastructure;
+namespace BeatBook.Api.Approvals.Infrastructure;
 
 /// <summary>Stands in for PostgresReportStore in local runs and tests.</summary>
 public sealed class InMemoryReportStore : IReportStore, IOutboxReader
@@ -661,9 +661,9 @@ public sealed class LoggingMessagePublisher(ILogger<LoggingMessagePublisher> log
 ```
 
 ```csharp file=Approvals/Infrastructure/OutboxPublisher.cs
-using SiteDiary.Api.Approvals.Application;
+using BeatBook.Api.Approvals.Application;
 
-namespace SiteDiary.Api.Approvals.Infrastructure;
+namespace BeatBook.Api.Approvals.Infrastructure;
 
 /// <summary>The "Outbox publisher" component from the level 3 view.</summary>
 public sealed class OutboxPublisher(IOutboxReader outbox, IMessagePublisher publisher, ILogger<OutboxPublisher> logger)
@@ -682,6 +682,7 @@ public sealed class OutboxPublisher(IOutboxReader outbox, IMessagePublisher publ
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // A real store marks rows published only after success, so a failure here means a retry, not a loss.
+                // (The in-memory reader dequeues first, so this demo can drop a message; PostgreSQL rows would not.)
                 logger.LogWarning(ex, "Outbox publish failed; will retry on the next tick.");
             }
         }
@@ -690,9 +691,9 @@ public sealed class OutboxPublisher(IOutboxReader outbox, IMessagePublisher publ
 ```
 
 ```csharp file=Program.cs
-using SiteDiary.Api.Approvals.Application;
-using SiteDiary.Api.Approvals.Domain;
-using SiteDiary.Api.Approvals.Infrastructure;
+using BeatBook.Api.Approvals.Application;
+using BeatBook.Api.Approvals.Domain;
+using BeatBook.Api.Approvals.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -707,18 +708,18 @@ builder.Services.AddHostedService<OutboxPublisher>();
 
 var app = builder.Build();
 
-// Demo data: one submitted report on project NH-48-PKG3.
-var engineerId = Guid.Parse("aaaaaaaa-0000-0000-0000-000000000001");
+// Demo data: one submitted report for territory BLR-EAST-07.
+var repId = Guid.Parse("aaaaaaaa-0000-0000-0000-000000000001");
 var managerId = Guid.Parse("bbbbbbbb-0000-0000-0000-000000000002");
-var demo = new DailyReport(Guid.Parse("7f3a0000-0000-0000-0000-000000000000"), "NH-48-PKG3", new DateOnly(2026, 10, 14), engineerId);
-demo.AddQuantity("4.02", 380m, "cum");
-demo.AttachPhoto("nh48-pkg3/2026-10-14/ch12400.jpg");
+var demo = new DailyReport(Guid.Parse("7f3a0000-0000-0000-0000-000000000000"), "BLR-EAST-07", new DateOnly(2026, 10, 14), repId);
+demo.AddOrderLine("SKU-4021", 36, "pack");
+demo.AttachPhoto("blr-east-07/2026-10-14/shop-0421.jpg");
 demo.Submit();
 await app.Services.GetRequiredService<IReportStore>().SaveAsync(demo, Array.Empty<OutboxMessage>(), CancellationToken.None);
 
 var reviewers = new Dictionary<Guid, Reviewer>
 {
-    [managerId] = new(managerId, StandardApprovalPolicy.ProjectManagerRole, new HashSet<string> { "NH-48-PKG3" }),
+    [managerId] = new(managerId, StandardApprovalPolicy.AreaSalesManagerRole, new HashSet<string> { "BLR-EAST-07" }),
 };
 
 app.MapPost("/reports/{id:guid}/approve", async (Guid id, ApproveRequest body, ApprovalService service, CancellationToken ct) =>
@@ -741,14 +742,16 @@ public sealed record ApproveRequest(Guid ReviewerId);
 
 Trace the diagrams into this code:
 
-- **Level 4 → types.** Every box on the code view is a type here. The dotted "implements" arrows are `: IApprovalPolicy` and `: IReportStore`. The composition diamond from `DailyReport` to `QuantityEntry` is the private `_quantities` list that only `AddQuantity` can fill.
+- **Level 4 → types.** Every box on the code view is a type here. The dotted "implements" arrows are `: IApprovalPolicy` and `: IReportStore`. The composition diamond from `DailyReport` to `OrderLine` is the private `_orderLines` list that only `AddOrderLine` can fill.
 - **Level 3 → folders and DI.** "Approval workflow" is `Approvals/Domain` plus `ApprovalService`. "Report store" is `IReportStore` and its implementations. "Outbox publisher" is the `BackgroundService`. The arrows "loads and saves using" become constructor parameters. In a real API, the reviewer would come from the Entra ID token's claims, not a request body; the demo keeps it simple.
 - **Level 2 → process boundaries.** The `IMessagePublisher` port is where the API's code stops and the broker container starts. Swapping `LoggingMessagePublisher` for a Service Bus publisher changes no domain code.
 - **Dynamic view → method order.** `ApproveAsync` does what steps 3 to 10 of the sequence diagram say, in the same order.
 
+Two things the in-memory store hides, and a real `PostgresReportStore` must handle. **Concurrent approvals**: two managers clicking Approve at the same moment both load a Submitted report; `SaveAsync` should update with `WHERE id = @id AND version = @expected` (or use PostgreSQL's `xmin` system column) and turn "0 rows updated" into a `Conflict`. **Duplicate events**: the outbox gives *at-least-once* delivery, because the publisher can crash after publishing but before marking the row done. The media worker must therefore be idempotent, for example by recording the event id it has already handled.
+
 ## Bad design vs good design
 
-Here is a "single diagram" that a team might put in a project kickoff deck for SiteDiary:
+Here is a "single diagram" that a team might put in a kickoff deck for BeatBook:
 
 ```mermaid
 flowchart LR
@@ -776,16 +779,16 @@ Everything on it is roughly true, and almost nothing is useful. "Users" hides th
 | Open questions drawn as boxes | Open questions in an ADR or a note, not in the architecture |
 
 :::callout type=tradeoff title="Hand-written Mermaid or a model?"
-We hand-wrote four Mermaid flowcharts. That is fine for one system with one team: it renders everywhere and anyone can edit it in a pull request. The cost is consistency: renaming "Progress API" means editing four files. When you have several systems, or several teams editing the same picture, move to a model-first tool (Structurizr DSL, or the small C# model from the previous lesson) and generate the views.
+We hand-wrote four Mermaid flowcharts. That is fine for one system with one team: it renders everywhere and anyone can edit it in a pull request. The cost is consistency: renaming "Sales API" means editing four files. When you have several systems, or several teams editing the same picture, move to a model-first tool (Structurizr DSL, or the small C# model from the previous lesson) and generate the views.
 :::
 
 :::callout type=mistake title="Zooming into everything at once"
-A "component view of SiteDiary" that opens the API, the worker and the portal on one page is three diagrams glued together. Zoom into one container per component view.
+A "component view of BeatBook" that opens the API, the worker and the portal on one page is three diagrams glued together. Zoom into one container per component view.
 :::
 
 ## Practical playground
 
-The HLD playground below holds a **partial** SiteDiary container view. It renders the graph and can compare it with a reference design, which is the "one model, many views" idea in action. (The LLD playground does the same for class models, so you can rebuild the level 4 view there and compare it with the code above.)
+The HLD playground below holds a **partial** BeatBook container view. It renders the graph and can compare it with a reference design, which is the "one model, many views" idea in action. (The LLD playground does the same for class models, so you can rebuild the level 4 view there and compare it with the code above.)
 
 1. Add the **Photo store** as `object-storage` and connect both the field app (direct upload) and the media worker to it. Decide which edges are `sync` and which `async`.
 2. Add the **Message broker** as a `queue` between the API and the worker. Remove the direct API → worker edge. Why is it wrong?
@@ -793,15 +796,15 @@ The HLD playground below holds a **partial** SiteDiary container view. It render
 4. Set the client `rps` to a value that matches the estimate in this lesson (1,000 reports plus sync calls over the evening peak) and justify your number in a note.
 5. Compare with the level 2 diagram above. List every difference and decide whether yours or ours is better.
 
-:::playground type=hld title="SiteDiary container view (partial)"
+:::playground type=hld title="BeatBook container view (partial)"
 ```json
 {
   "nodes": [
     { "id": "app", "type": "client", "label": "Field app (.NET MAUI, offline-first)", "props": { "rps": 20 } },
     { "id": "portal", "type": "client", "label": "Web portal (React SPA)" },
-    { "id": "api", "type": "app-server", "label": "Progress API (ASP.NET Core 10)", "props": { "instances": 2 } },
+    { "id": "api", "type": "app-server", "label": "Sales API (ASP.NET Core 10)", "props": { "instances": 2 } },
     { "id": "worker", "type": "worker", "label": "Media worker (.NET 10)", "props": { "instances": 1 } },
-    { "id": "db", "type": "database", "label": "Progress database (PostgreSQL 17 + PostGIS)", "props": { "replicas": 0 } }
+    { "id": "db", "type": "database", "label": "Sales database (PostgreSQL 17 + PostGIS)", "props": { "replicas": 0 } }
   ],
   "edges": [
     { "from": "app", "to": "api", "kind": "sync", "label": "sync drafts, submit reports" },
@@ -816,11 +819,11 @@ The HLD playground below holds a **partial** SiteDiary container view. It render
 ## Exercises
 
 :::exercise id=m05-c4-views-ex1 difficulty=beginner kind=written title="Which view answers the question?"
-For each question about SiteDiary, name the **one view** that best answers it (system context, container, component, code, dynamic, or deployment) and say in one line why.
+For each question about BeatBook, name the **one view** that best answers it (system context, container, component, code, dynamic, or deployment) and say in one line why.
 
-1. "Does SiteDiary send any personal data outside the company?"
+1. "Does BeatBook send any personal data outside the company?"
 2. "Which technology does the offline storage on the phone use?"
-3. "Where is the rule that an engineer can't approve their own report?"
+3. "Where is the rule that nobody can approve their own report?"
 4. "Is the media worker called synchronously by the API?"
 5. "Which classes do I need to fake to unit-test approval?"
 6. "Does the portal respond to the manager before or after the PDF is regenerated?"
@@ -832,7 +835,7 @@ For each question about SiteDiary, name the **one view** that best answers it (s
 - Question 7 is placed on a deployment diagram, not the container view.
 - Question 6 is answered with the dynamic view.
 ::hint
-Start with the audience: is the question one a client, an architect, an API developer or an operations engineer would ask?
+Start with the audience: is the question one a distributor, an architect, an API developer or an operations engineer would ask?
 ::hint
 Technology appears from level 2 down. Classes appear only at level 4.
 ::hint
@@ -871,7 +874,7 @@ Write a checker that flags elements that don't belong on a view.
   - On a Container view, a `Container` whose parent isn't the focus is still a container, but from another system: it should be drawn as its software system instead, so the same message applies.
 ::acceptance
 - A component on a context view is reported as not belonging.
-- A container from another system on SiteDiary's container view is reported with its parent.
+- A container from another system on BeatBook's container view is reported with its parent.
 - Neighbouring containers on a component view are allowed whatever their parent.
 - A clean view returns an empty list.
 ::hint
@@ -928,8 +931,8 @@ public class ViewRulesTests
     {
         var msgs = ViewRules.Check(ViewLevel.SystemContext, null, new List<ViewElement>
         {
-            new("eng", ElementKind.Person, null),
-            new("sd", ElementKind.SoftwareSystem, null),
+            new("rep", ElementKind.Person, null),
+            new("bb", ElementKind.SoftwareSystem, null),
             new("approval", ElementKind.Component, "api"),
         });
         Assert.Equal(new[] { "approval: Component does not belong on a SystemContext view" }, msgs);
@@ -938,13 +941,13 @@ public class ViewRulesTests
     [Fact]
     public void Foreign_container_on_container_view_is_reported()
     {
-        var msgs = ViewRules.Check(ViewLevel.Container, "sd", new List<ViewElement>
+        var msgs = ViewRules.Check(ViewLevel.Container, "bb", new List<ViewElement>
         {
-            new("api", ElementKind.Container, "sd"),
+            new("api", ElementKind.Container, "bb"),
             new("erpdb", ElementKind.Container, "erp"),
             new("erp", ElementKind.SoftwareSystem, null),
         });
-        Assert.Equal(new[] { "erpdb: Container belongs to 'erp', not 'sd'" }, msgs);
+        Assert.Equal(new[] { "erpdb: Container belongs to 'erp', not 'bb'" }, msgs);
     }
 
     [Fact]
@@ -952,7 +955,7 @@ public class ViewRulesTests
     {
         var msgs = ViewRules.Check(ViewLevel.Component, "api", new List<ViewElement>
         {
-            new("db", ElementKind.Container, "sd"),
+            new("db", ElementKind.Container, "bb"),
             new("approval", ElementKind.Component, "api"),
             new("store", ElementKind.Component, "api"),
         });
@@ -1206,9 +1209,9 @@ public class C4FlowchartTests
 {
     private static readonly List<C4Node> Nodes = new()
     {
-        new("eng", "Site engineer", NodeKind.Person, null, "Records progress"),
-        new("api", "Progress API", NodeKind.Container, "ASP.NET Core 10", "Reports and approvals"),
-        new("db", "Progress database", NodeKind.Database, "PostgreSQL 17", "Source of truth"),
+        new("rep", "Sales rep", NodeKind.Person, null, "Records shop visits"),
+        new("api", "Sales API", NodeKind.Container, "ASP.NET Core 10", "Reports and approvals"),
+        new("db", "Sales database", NodeKind.Database, "PostgreSQL 17", "Source of truth"),
         new("bus", "Message broker", NodeKind.Queue, "Azure Service Bus", "Events"),
     };
 
@@ -1217,17 +1220,17 @@ public class C4FlowchartTests
     {
         var text = C4Flowchart.Write(Nodes, new List<C4Edge>
         {
-            new("eng", "api", "Submits reports to", "JSON over HTTPS", false),
+            new("rep", "api", "Submits reports to", "JSON over HTTPS", false),
             new("api", "db", "Reads and writes", "SQL", false),
             new("api", "bus", "Publishes events", null, true),
         });
         var lines = text.Split('\n');
         Assert.Equal("flowchart TB", lines[0]);
-        Assert.Equal("    eng([\"Site engineer<br/>[Person]<br/>Records progress\"]):::person", lines[1]);
-        Assert.Equal("    api[\"Progress API<br/>[Container: ASP.NET Core 10]<br/>Reports and approvals\"]:::container", lines[2]);
-        Assert.Equal("    db[(\"Progress database<br/>[Container: PostgreSQL 17]<br/>Source of truth\")]:::store", lines[3]);
+        Assert.Equal("    rep([\"Sales rep<br/>[Person]<br/>Records shop visits\"]):::person", lines[1]);
+        Assert.Equal("    api[\"Sales API<br/>[Container: ASP.NET Core 10]<br/>Reports and approvals\"]:::container", lines[2]);
+        Assert.Equal("    db[(\"Sales database<br/>[Container: PostgreSQL 17]<br/>Source of truth\")]:::store", lines[3]);
         Assert.Equal("    bus[[\"Message broker<br/>[Container: Azure Service Bus]<br/>Events\"]]:::queue", lines[4]);
-        Assert.Equal("    eng -->|\"Submits reports to<br/>[JSON over HTTPS]\"| api", lines[5]);
+        Assert.Equal("    rep -->|\"Submits reports to<br/>[JSON over HTTPS]\"| api", lines[5]);
         Assert.Equal("    api -->|\"Reads and writes<br/>[SQL]\"| db", lines[6]);
         Assert.Equal("    api -.->|\"Publishes events\"| bus", lines[7]);
         Assert.Equal("    classDef person fill:#0b3d6e,color:#ffffff", lines[8]);
@@ -1244,11 +1247,11 @@ public class C4FlowchartTests
         {
             new("erp", "Company ERP", NodeKind.ExternalSystem, null, "Billing"),
             new("msg", "Messaging gateway", NodeKind.ExternalSystem, null, "SMS"),
-            new("sd", "SiteDiary", NodeKind.System, null, "Progress"),
+            new("bb", "BeatBook", NodeKind.System, null, "Shop visits"),
         };
         var lines = C4Flowchart.Write(nodes, new List<C4Edge>()).Split('\n');
         Assert.Equal("    erp[\"Company ERP<br/>[External System]<br/>Billing\"]:::external", lines[1]);
-        Assert.Equal("    sd[\"SiteDiary<br/>[Software System]<br/>Progress\"]:::system", lines[3]);
+        Assert.Equal("    bb[\"BeatBook<br/>[Software System]<br/>Shop visits\"]:::system", lines[3]);
         Assert.Equal("    classDef external fill:#8a8a8a,color:#ffffff", lines[4]);
         Assert.Equal("    classDef system fill:#1565c0,color:#ffffff", lines[5]);
         Assert.Equal(6, lines.Length);
@@ -1360,14 +1363,14 @@ public static class C4Flowchart
 The component view says which components may call which. Write a conformance checker that compares the view's arrows with real type-to-type dependencies (which a build step could extract with Roslyn or reflection).
 ::requirements
 - `ComponentMap(string Component, IReadOnlyList<string> NamespacePrefixes)`.
-- `TypeDependency(string FromType, string ToType)`, using full type names such as `SiteDiary.Api.Approvals.ApprovalService`.
+- `TypeDependency(string FromType, string ToType)`, using full type names such as `BeatBook.Api.Approvals.ApprovalService`.
 - `Conformance.Check(IReadOnlyList<ComponentMap> components, IReadOnlyList<(string From, string To)> diagramEdges, IReadOnlyList<TypeDependency> dependencies)` returns messages in three groups, in this order:
   1. **Unmapped types**: a type belongs to the component whose prefix matches it with the **longest** prefix; a prefix matches if the type equals it or starts with `prefix + "."`. For each type with no match, `"unmapped type {type}"`, once per type, in first-seen order (scan dependencies in order, `FromType` before `ToType`).
   2. **Undocumented dependencies**: for each dependency between two **different** mapped components whose pair is not a diagram edge, `"undocumented: {fromComponent} -> {toComponent} ({FromType} uses {ToType})"`, once per component pair (first example only), in first-seen order. Dependencies inside one component are ignored.
   3. **Stale arrows**: for each diagram edge, in order, with no dependency in the code, `"stale: {from} -> {to} is on the diagram but not in the code"`.
 ::acceptance
-- `SiteDiary.Api.Approvals.Domain.DailyReport` maps to the component with prefix `SiteDiary.Api.Approvals.Domain`, not the shorter `SiteDiary.Api.Approvals`.
-- `SiteDiary.Api.ApprovalsExtra.X` does not match prefix `SiteDiary.Api.Approvals`.
+- `BeatBook.Api.Approvals.Domain.DailyReport` maps to the component with prefix `BeatBook.Api.Approvals.Domain`, not the shorter `BeatBook.Api.Approvals`.
+- `BeatBook.Api.ApprovalsExtra.X` does not match prefix `BeatBook.Api.Approvals`.
 - A sync endpoint using the ERP client directly is reported as undocumented, once.
 - A diagram arrow with no code behind it is reported as stale.
 - Unmapped types are reported once each.
@@ -1418,18 +1421,18 @@ public class ConformanceTests
 {
     private static readonly List<ComponentMap> Map = new()
     {
-        new("Approval workflow", new[] { "SiteDiary.Api.Approvals" }),
-        new("Report store", new[] { "SiteDiary.Api.Approvals.Persistence", "SiteDiary.Api.Persistence" }),
-        new("Sync endpoints", new[] { "SiteDiary.Api.Sync" }),
-        new("ERP client", new[] { "SiteDiary.Api.Integrations.Erp" }),
-        new("BOQ catalogue", new[] { "SiteDiary.Api.Boq" }),
+        new("Approval workflow", new[] { "BeatBook.Api.Approvals" }),
+        new("Report store", new[] { "BeatBook.Api.Approvals.Persistence", "BeatBook.Api.Persistence" }),
+        new("Sync endpoints", new[] { "BeatBook.Api.Sync" }),
+        new("ERP client", new[] { "BeatBook.Api.Integrations.Erp" }),
+        new("SKU catalogue", new[] { "BeatBook.Api.Catalogue" }),
     };
 
     private static readonly List<(string, string)> Edges = new()
     {
         ("Approval workflow", "Report store"),
-        ("Sync endpoints", "BOQ catalogue"),
-        ("BOQ catalogue", "ERP client"),
+        ("Sync endpoints", "SKU catalogue"),
+        ("SKU catalogue", "ERP client"),
     };
 
     [Fact]
@@ -1437,10 +1440,10 @@ public class ConformanceTests
     {
         var deps = new List<TypeDependency>
         {
-            new("SiteDiary.Api.Approvals.ApprovalService", "SiteDiary.Api.Approvals.Persistence.ReportStore"),
-            new("SiteDiary.Api.Approvals.ApprovalService", "SiteDiary.Api.Approvals.Domain.DailyReport"),
-            new("SiteDiary.Api.Sync.SyncEndpoints", "SiteDiary.Api.Boq.BoqCatalogue"),
-            new("SiteDiary.Api.Boq.BoqCatalogue", "SiteDiary.Api.Integrations.Erp.ErpClient"),
+            new("BeatBook.Api.Approvals.ApprovalService", "BeatBook.Api.Approvals.Persistence.ReportStore"),
+            new("BeatBook.Api.Approvals.ApprovalService", "BeatBook.Api.Approvals.Domain.DailyReport"),
+            new("BeatBook.Api.Sync.SyncEndpoints", "BeatBook.Api.Catalogue.SkuCatalogue"),
+            new("BeatBook.Api.Catalogue.SkuCatalogue", "BeatBook.Api.Integrations.Erp.ErpClient"),
         };
         Assert.Empty(Conformance.Check(Map, Edges, deps));
     }
@@ -1451,7 +1454,7 @@ public class ConformanceTests
         // Persistence is inside Approvals by namespace but belongs to Report store; the edge is documented.
         var deps = new List<TypeDependency>
         {
-            new("SiteDiary.Api.Approvals.ApprovalService", "SiteDiary.Api.Approvals.Persistence.ReportStore"),
+            new("BeatBook.Api.Approvals.ApprovalService", "BeatBook.Api.Approvals.Persistence.ReportStore"),
         };
         var msgs = Conformance.Check(Map, Edges, deps);
         Assert.DoesNotContain(msgs, m => m.StartsWith("undocumented"));
@@ -1462,15 +1465,15 @@ public class ConformanceTests
     {
         var deps = new List<TypeDependency>
         {
-            new("SiteDiary.Api.Sync.SyncEndpoints", "SiteDiary.Api.Integrations.Erp.ErpClient"),
-            new("SiteDiary.Api.Sync.ConflictResolver", "SiteDiary.Api.Integrations.Erp.ErpRates"),
-            new("SiteDiary.Api.Sync.SyncEndpoints", "SiteDiary.Api.Boq.BoqCatalogue"),
-            new("SiteDiary.Api.Boq.BoqCatalogue", "SiteDiary.Api.Integrations.Erp.ErpClient"),
-            new("SiteDiary.Api.Approvals.ApprovalService", "SiteDiary.Api.Persistence.ReportStore"),
+            new("BeatBook.Api.Sync.SyncEndpoints", "BeatBook.Api.Integrations.Erp.ErpClient"),
+            new("BeatBook.Api.Sync.ConflictResolver", "BeatBook.Api.Integrations.Erp.ErpPrices"),
+            new("BeatBook.Api.Sync.SyncEndpoints", "BeatBook.Api.Catalogue.SkuCatalogue"),
+            new("BeatBook.Api.Catalogue.SkuCatalogue", "BeatBook.Api.Integrations.Erp.ErpClient"),
+            new("BeatBook.Api.Approvals.ApprovalService", "BeatBook.Api.Persistence.ReportStore"),
         };
         Assert.Equal(new[]
         {
-            "undocumented: Sync endpoints -> ERP client (SiteDiary.Api.Sync.SyncEndpoints uses SiteDiary.Api.Integrations.Erp.ErpClient)",
+            "undocumented: Sync endpoints -> ERP client (BeatBook.Api.Sync.SyncEndpoints uses BeatBook.Api.Integrations.Erp.ErpClient)",
         }, Conformance.Check(Map, Edges, deps));
     }
 
@@ -1479,17 +1482,17 @@ public class ConformanceTests
     {
         var deps = new List<TypeDependency>
         {
-            new("SiteDiary.Api.ApprovalsExtra.Helper", "SiteDiary.Api.Approvals.ApprovalService"),
-            new("SiteDiary.Api.Approvals.ApprovalService", "SiteDiary.Api.Approvals.Persistence.ReportStore"),
-            new("SiteDiary.Api.Sync.SyncEndpoints", "Shared.Clock"),
-            new("SiteDiary.Api.ApprovalsExtra.Helper", "Shared.Clock"),
+            new("BeatBook.Api.ApprovalsExtra.Helper", "BeatBook.Api.Approvals.ApprovalService"),
+            new("BeatBook.Api.Approvals.ApprovalService", "BeatBook.Api.Approvals.Persistence.ReportStore"),
+            new("BeatBook.Api.Sync.SyncEndpoints", "Shared.Clock"),
+            new("BeatBook.Api.ApprovalsExtra.Helper", "Shared.Clock"),
         };
         Assert.Equal(new[]
         {
-            "unmapped type SiteDiary.Api.ApprovalsExtra.Helper",
+            "unmapped type BeatBook.Api.ApprovalsExtra.Helper",
             "unmapped type Shared.Clock",
-            "stale: Sync endpoints -> BOQ catalogue is on the diagram but not in the code",
-            "stale: BOQ catalogue -> ERP client is on the diagram but not in the code",
+            "stale: Sync endpoints -> SKU catalogue is on the diagram but not in the code",
+            "stale: SKU catalogue -> ERP client is on the diagram but not in the code",
         }, Conformance.Check(Map, Edges, deps));
     }
 }
@@ -1593,15 +1596,15 @@ public class ApprovalViewContractTests
     public async Task Author_cannot_approve_own_report()
     {
         var author = Guid.NewGuid();
-        var report = new DailyReport(Guid.NewGuid(), "NH-48-PKG3", new DateOnly(2026, 10, 14), author);
-        report.AddQuantity("4.02", 380m, "cum");
+        var report = new DailyReport(Guid.NewGuid(), "BLR-EAST-07", new DateOnly(2026, 10, 14), author);
+        report.AddOrderLine("SKU-4021", 36, "pack");
         report.AttachPhoto("p1.jpg");
         report.Submit();
         var store = new InMemoryReportStore();
         await store.SaveAsync(report, Array.Empty<OutboxMessage>(), CancellationToken.None);
         var service = new ApprovalService(store, new StandardApprovalPolicy(), new FixedClock(DateTimeOffset.UnixEpoch));
 
-        var self = new Reviewer(author, StandardApprovalPolicy.ProjectManagerRole, new HashSet<string> { "NH-48-PKG3" });
+        var self = new Reviewer(author, StandardApprovalPolicy.AreaSalesManagerRole, new HashSet<string> { "BLR-EAST-07" });
         var outcome = await service.ApproveAsync(report.Id, self, CancellationToken.None);
 
         Assert.Equal(ApprovalResultKind.Forbidden, outcome.Kind);
@@ -1624,8 +1627,8 @@ The comment on each test names the view and the element it protects, so a failur
 
 ## Real-world application
 
-- **Bid documents and client reviews.** Infrastructure consultancies often include a solution architecture in technical bids for e-governance and project-monitoring portals. A clean context and container view, with a one-paragraph explanation each, reads better to an evaluation committee than one dense slide.
-- **Security reviews.** Auditors want the container view with every boundary-crossing arrow labelled with protocol and authentication. The SiteDiary view answers "where do photos go, and who can read them?" without a meeting.
+- **Proposals and client reviews.** IT services firms include a solution architecture in proposals for retail, banking and e-governance clients. A clean context and container view, with a one-paragraph explanation each, reads better to an evaluation committee than one dense slide.
+- **Security reviews.** Auditors want the container view with every boundary-crossing arrow labelled with protocol and authentication. The BeatBook view answers "where do photos go, and who can read them?" without a meeting.
 - **Onboarding.** New developers read context → container → the component view for the container they'll work on, in about 20 minutes, before opening the solution.
 - **Incident response.** During an outage, the container view tells the on-call engineer that a Service Bus problem delays thumbnails and PDFs but not approvals. That shapes the status message to users.
 - **Interviews.** In system design interviews, candidates who draw a context box first and then zoom in once come across as structured. You don't need to say "C4", but the habit shows.
@@ -1645,7 +1648,7 @@ A container is something that runs or stores data **separately**. The SQLite fil
 ::q intermediate
 How do you show synchronous and asynchronous communication on C4 views, and why does it matter?
 ::a
-Solid arrows for synchronous request/response, dotted arrows for asynchronous messages, and the protocol in the label (`JSON over HTTPS`, `AMQP`). It matters because it changes failure behaviour: if a synchronous dependency is down, the caller fails; if an asynchronous consumer is down, work waits in the queue. A reader of the SiteDiary view can see immediately that a worker outage delays thumbnails but doesn't block approvals. Also, the API never calls the worker; both talk to the broker, so there must be no direct API → worker arrow.
+Solid arrows for synchronous request/response, dotted arrows for asynchronous messages, and the protocol in the label (`JSON over HTTPS`, `AMQP`). It matters because it changes failure behaviour: if a synchronous dependency is down, the caller fails; if an asynchronous consumer is down, work waits in the queue. A reader of the BeatBook view can see immediately that a worker outage delays thumbnails but doesn't block approvals. Also, the API never calls the worker; both talk to the broker, so there must be no direct API → worker arrow.
 ::q intermediate
 Your component view has 25 components. What do you do?
 ::a
@@ -1655,7 +1658,7 @@ How do you stop C4 diagrams drifting from the code over two years?
 ::a
 Combine ownership, placement and automation. Keep diagrams as code (Mermaid or a Structurizr model) in the repository, changed in the same pull request as the code, with a PR template checkbox. Generate the lowest level (code) instead of drawing it. Parse diagrams in CI so broken ones fail the build. Add conformance tests: map components to namespaces and fail when the code has a dependency the component view doesn't show, or when the view has an arrow the code no longer has. For several systems, move to one model with generated views so names stay consistent. And review the diagrams in architecture review meetings, so someone looks at them on purpose.
 ::q advanced
-A client asks for "one architecture diagram" for a tender. How do you answer, and what do you give them?
+A client asks for "one architecture diagram" for a proposal they are evaluating. How do you answer, and what do you give them?
 ::a
 I'd explain that one diagram for every reader ends up useful to none, then give them what they actually need: a **context** view (who uses the system, which external systems such as payment gateways, identity providers and their existing ERP it connects to) and a **container** view (major deployable parts with technology, data stores and protocols), each with a title, a legend and a short paragraph. If they need hosting and security information, a **deployment** view with network zones. I'd keep component views internal unless they evaluate design depth. The one-diagram request is usually about readability, so a short, consistent set with the same names and colours meets the real need better than a single crowded slide.
 :::
@@ -1668,7 +1671,7 @@ I'd explain that one diagram for every reader ends up useful to none, then give 
 - Elements keep the **same name, description and colour** on every view. That is what makes the set navigable.
 - Mermaid flowcharts express C4 well: stadium for people, rectangles for systems and containers, cylinders for stores, subroutine boxes for queues, subgraphs for boundaries, dotted arrows for async, `classDef` for a consistent palette, and the element type in brackets in every label.
 - **Context** answers who and what outside; **container** answers what we deploy and how parts talk; **component** answers where responsibilities and rules live; **code** answers which types implement them.
-- Numbers drive arrows: SiteDiary's ~45 GB/day of photos is why uploads bypass the API.
+- Numbers drive arrows: BeatBook's ~45 GB/day of photos is why uploads bypass the API.
 - Draw component views only for complex, risky or busy containers. Generate code views.
 - Add a **dynamic view** (sequence diagram) for important flows; its participants come from the static views.
 - Prevent drift with diagrams as code, CI parsing, and conformance tests between the component view and the code.
@@ -1682,7 +1685,7 @@ Q: In a Mermaid flowchart, which shapes represent a person, a database and a que
 A: Person: stadium `(["..."])`. Database: cylinder `[("...")]`. Queue: subroutine box `[["..."]]`.
 Q: Why put the element type in brackets inside each label?
 A: Colour and shape alone fail for colour-blind readers and black-and-white printouts; the text makes the type unambiguous.
-Q: Why does SiteDiary's field app upload photos directly to blob storage?
+Q: Why does BeatBook's field app upload photos directly to blob storage?
 A: About 45 GB/day of photos would tie up API instances copying bytes. The API issues short-lived signed URLs (Valet Key pattern) instead.
 Q: Why do arrows between components inside one container usually have no protocol?
 A: They are in-process method calls. Arrows that leave the container keep their protocol.
@@ -1698,16 +1701,16 @@ A: An arrow on a diagram that no longer has any dependency behind it in the code
 
 :::quiz pass=70
 ::q single
-A teammate's SiteDiary container view shows "Azure App Service (P1v3, 2 instances)" as a box between the portal and the API. What's the best feedback?
+A teammate's BeatBook container view shows "Azure App Service (P1v3, 2 instances)" as a box between the portal and the API. What's the best feedback?
 - [ ] Fine, more detail is always better.
 - [x] That's deployment infrastructure; move it to a deployment view and keep the container view about deployable units and protocols.
 - [ ] Replace it with a component box.
 - [ ] Put it on the context view instead.
 > Hosting plans and instance counts are deployment concerns. The container view shows what runs and how it talks, not where it is hosted.
 ::q single
-On SiteDiary's component view, which neighbours should appear outside the Progress API boundary?
+On BeatBook's component view, which neighbours should appear outside the Sales API boundary?
 - [ ] All containers from the container view, for completeness.
-- [x] Only the containers and external systems the Progress API interacts with.
+- [x] Only the containers and external systems the Sales API interacts with.
 - [ ] None; component views show only components.
 - [ ] Only people.
 > Neighbours are included when they have a relationship with the focus container; the media worker doesn't, so it's left out.
@@ -1726,14 +1729,14 @@ Which are valid reasons to draw a component view for a container? Select all tha
 - [x] Auditors ask where specific rules are enforced.
 > Component views pay off for complex, risky or busy containers. Drawing every level for every container creates diagrams nobody maintains.
 ::q single
-On the context view, the arrow from SiteDiary to the ERP reads "Reads BOQ items from and sends approved quantities to". Why is that better than "Integrates with"?
+On the context view, the arrow from BeatBook to the ERP reads "Reads the SKU catalogue from and sends approved orders to". Why is that better than "Integrates with"?
 - [ ] It's shorter.
-- [x] It states what flows in each direction, which shows that approved quantities (money) leave SiteDiary.
+- [x] It states what flows in each direction, which shows that approved orders (money) leave BeatBook.
 - [ ] C4 forbids the word "integrates".
 - [ ] It includes the protocol.
 > Intent labels expose business-relevant flows. The protocol belongs on the container view.
 ::q single
-A sequence diagram for "approve report" uses a participant named "Backend". The container view calls it "Progress API". What's the problem?
+A sequence diagram for "approve report" uses a participant named "Backend". The container view calls it "Sales API". What's the problem?
 - [ ] None, they're the same thing.
 - [x] Readers can't map the dynamic view onto the static views; participants should use the same names as elements.
 - [ ] Sequence diagrams must not show containers.
@@ -1743,7 +1746,7 @@ A sequence diagram for "approve report" uses a participant named "Backend". The 
 Exercise 5's checker reports `undocumented: Sync endpoints -> ERP client`. What are the correct responses?
 - [ ] Always delete the arrow from the diagram.
 - [ ] Ignore it; diagrams are approximate.
-- [x] Either remove the shortcut in code (go through the BOQ catalogue) or, if the dependency is intended, add the arrow to the component view on purpose.
+- [x] Either remove the shortcut in code (go through the SKU catalogue) or, if the dependency is intended, add the arrow to the component view on purpose.
 - [ ] Disable the check.
 > The point of the check is a conscious decision: fix the code or update the design, never silently drift.
 :::

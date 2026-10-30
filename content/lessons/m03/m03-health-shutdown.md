@@ -47,21 +47,21 @@ Helpful but optional: [Load balancing algorithms](#/lesson/m11-load-balancing) e
 
 ## Explain it like I'm a beginner
 
-Picture a toll plaza on an expressway with ten lanes. Above each lane is a light.
+Picture a busy parcel delivery hub with ten counters where customers drop off and collect parcels. Above each counter is a light.
 
-- A **green light** means "send cars here". That is **readiness**: the lane is open, the barrier works, the card reader is online.
-- The **operator in the booth** being awake is **liveness**. If the operator has fainted, no amount of waiting helps; someone must replace them.
-- When the plaza opens in the morning, a lane spends ten minutes booting its card reader. During that time the light stays red, and nobody calls an ambulance for the operator. That is **startup** health: "still getting ready, do not judge me yet".
+- A **green light** means "send customers here". That is **readiness**: the counter is open, the label printer works, the parcel-tracking scanner is online.
+- The **clerk at the counter** being awake and responding is **liveness**. If the clerk has frozen and answers nobody, no amount of waiting helps; someone must replace them.
+- When the hub opens in the morning, a counter spends ten minutes logging its scanner into the tracking system and downloading the day's delivery routes. During that time the light stays red, and nobody calls the manager to replace the clerk. That is **startup** health: "still getting ready, do not judge me yet".
 
-Now the shift changes and lane 4 must close. A careless supervisor just shuts the barrier, and the three cars already in the lane are stuck (failed requests). A good supervisor does it in order:
+Now the shift changes and counter 4 must close. A careless supervisor just pulls the shutter down, and the three customers already standing at the counter are left holding their parcels (failed requests). A good supervisor does it in order:
 
-1. Switch the light to red, so no new cars enter (readiness fails).
-2. Wait a few seconds, because drivers already approaching may not have noticed the light change (drain delay).
-3. Let the cars already in the lane pay and leave (finish in-flight requests).
-4. If one driver is arguing for ten minutes, stop waiting after a fixed time (shutdown timeout).
-5. Close the lane (the process exits).
+1. Switch the light to red, so no new customers join that line (readiness fails).
+2. Wait a few seconds, because customers already walking towards the counter may not have noticed the light change (drain delay).
+3. Serve the customers already in the line until their parcels are booked or handed over (finish in-flight requests).
+4. If one customer is disputing a lost-parcel claim for ten minutes, stop waiting after a fixed time and send them to another counter (shutdown timeout).
+5. Close the counter (the process exits).
 
-That five-step routine is **graceful shutdown**. The signal that starts it, on Linux and in containers, is called **SIGTERM**: a polite "please stop". If you ignore it for too long, the platform sends **SIGKILL**, which is the barrier slamming shut with no warning.
+That five-step routine is **graceful shutdown**. The signal that starts it, on Linux and in containers, is called **SIGTERM**: a polite "please stop". If you ignore it for too long, the platform sends **SIGKILL**, which is the shutter slamming down with no warning.
 
 ## First-principles explanation
 
@@ -115,7 +115,7 @@ Both are implemented with a tiny singleton holding a flag (`StartupGate`, `Drain
 On Linux and in containers the platform sends **SIGTERM**. On Windows it is a console Ctrl+C, a service stop or IIS recycling. In all cases the .NET Generic Host translates the signal into the same sequence (shown in the sequence diagram below):
 
 1. `IHostApplicationLifetime.ApplicationStopping` fires. Anything registered on it runs.
-2. The host calls `StopAsync`, which is bounded by `HostOptions.ShutdownTimeout` (**30 seconds by default** since .NET 6; it was 5 s before). Everything below must finish within that budget.
+2. The host calls `StopAsync`, which is bounded by `HostOptions.ShutdownTimeout` (**30 seconds by default** in current .NET, including .NET 10; very old versions used 5 s, so do not trust blog posts that quote that number). Everything below must finish within that budget.
 3. Every `IHostedLifecycleService` gets `StoppingAsync`. This is the hook (added in .NET 8) where a drain delay fits, because Kestrel is still serving at this point.
 4. Hosted services get `StopAsync` in reverse registration order. For the web server, that means Kestrel **stops accepting new connections**, closes idle keep-alive connections, and **waits for in-flight requests** to complete. For each `BackgroundService`, the stopping token is cancelled and the host waits for `ExecuteAsync` to return.
 5. If the timeout expires first, Kestrel aborts remaining connections and the host stops waiting for workers.
@@ -127,9 +127,11 @@ The platform has its own clock running in parallel. **Kubernetes** waits `termin
 
 When Kubernetes terminates a pod, two things happen *at the same time*: the kubelet sends SIGTERM to the container, and the control plane removes the pod from the Service's endpoints, which then has to propagate to every node's proxy and to any external load balancer. Propagation takes from under a second to several seconds (an estimate; it varies by cluster and load balancer).
 
+Note that inside Kubernetes this removal starts because the pod is *terminating*, not because a readiness probe failed: the endpoint is marked not-ready as soon as deletion begins. Failing readiness on SIGTERM still matters for anything that probes the app itself (an external cloud load balancer, NGINX or YARP active health checks, platforms other than Kubernetes), and it is cheap, so do both.
+
 If the application stops accepting connections immediately on SIGTERM, every request routed to it during that propagation window is refused. The fix is to **keep serving for a few seconds after SIGTERM** while readiness reports Unhealthy, then let Kestrel stop. Two ways:
 
-- A `preStop` hook that sleeps (for example 5 s) before SIGTERM is sent. Simple, but the container image must contain a `sleep` binary (minimal "chiseled" images do not), unless your Kubernetes version supports the built-in sleep action for `preStop`.
+- A `preStop` hook that sleeps (for example 5 s) before SIGTERM is sent. Simple, but the container image must contain a `sleep` binary (minimal "chiseled" images do not), unless you use the built-in `sleep` action (`lifecycle.preStop.sleep.seconds`, on by default since Kubernetes 1.30). Either way, the preStop time counts against `terminationGracePeriodSeconds`.
 - A **drain delay inside the application**, implemented in `IHostedLifecycleService.StoppingAsync`. Works on any platform and in any image. This lesson implements this one.
 
 ### Fitting the timers together
@@ -138,7 +140,7 @@ Use concrete numbers and write them down. A sensible starting point (estimates; 
 
 | Timer | Value | Why |
 |---|---|---|
-| Readiness probe period | 5 s, failure threshold 1 | Fast removal on shutdown |
+| Readiness probe period | 5 s, failure threshold 1 or 2 | Fast removal by probing load balancers; 2 tolerates one slow probe |
 | Drain delay (in app) | 5 s | Covers endpoint propagation |
 | Longest normal request | ≤ 15 s | Reports and exports beyond that go to background jobs |
 | `HostOptions.ShutdownTimeout` | 25 s | Drain delay 5 s + up to 20 s for in-flight requests and workers |
@@ -854,7 +856,7 @@ For the employee API running in Kubernetes behind a load balancer, decide for ea
 3. Redis (used only as a cache) is down; the API falls back to the database.
 4. The process is deadlocked: the thread pool is exhausted and no request completes.
 5. The instance has received SIGTERM.
-6. The instance is still loading 50,000 department and site records into memory after start.
+6. The instance is still loading 50,000 department and office-location records into memory after start.
 7. The SMS gateway used for leave notifications returns errors.
 8. Free disk space on the container's temp volume is 2 %.
 ::acceptance
@@ -1653,7 +1655,7 @@ internal static class Data
         FullName = name, Email = email, Department = dept, MonthlySalary = 50_000m, JoinedOn = new DateOnly(2026, 1, 5),
     };
 
-    public static CreateEmployeeRequest Create(string email = "priya@rodic.example", DateOnly? joined = null) => new()
+    public static CreateEmployeeRequest Create(string email = "priya@example.com", DateOnly? joined = null) => new()
     {
         FullName = "Priya Nair", Email = email, Department = "Design", MonthlySalary = 85_000m,
         JoinedOn = joined ?? new DateOnly(2026, 10, 1),
@@ -1673,7 +1675,7 @@ public class RepositoryContractTests
     [Fact]
     public async Task Returns_copies_not_shared_instances()
     {
-        var e = Data.Emp("Arjun Mehta", "arjun@rodic.example", "Finance");
+        var e = Data.Emp("Arjun Mehta", "arjun@example.com", "Finance");
         await _repo.AddAsync(e, Ct);
         var first = await _repo.GetAsync(e.Id, Ct);
         first!.Department = "Hacked";
@@ -1683,15 +1685,15 @@ public class RepositoryContractTests
     [Fact]
     public async Task Email_lookup_ignores_case()
     {
-        await _repo.AddAsync(Data.Emp("Sara Khan", "sara@rodic.example", "Legal"), Ct);
-        Assert.NotNull(await _repo.GetByEmailAsync("SARA@Rodic.Example", Ct));
-        Assert.Null(await _repo.GetByEmailAsync("nobody@rodic.example", Ct));
+        await _repo.AddAsync(Data.Emp("Sara Khan", "sara@example.com", "Legal"), Ct);
+        Assert.NotNull(await _repo.GetByEmailAsync("SARA@Example.Com", Ct));
+        Assert.Null(await _repo.GetByEmailAsync("nobody@example.com", Ct));
     }
 
     [Fact]
     public async Task Update_requires_matching_version()
     {
-        var e = Data.Emp("Kavya Iyer", "kavya@rodic.example", "Finance");
+        var e = Data.Emp("Kavya Iyer", "kavya@example.com", "Finance");
         await _repo.AddAsync(e, Ct);
         var copy = (await _repo.GetAsync(e.Id, Ct))!;
         copy.MonthlySalary = 60_000m;
@@ -1704,7 +1706,7 @@ public class RepositoryContractTests
     [Fact]
     public async Task Delete_removes_once()
     {
-        var e = Data.Emp("Rohit Verma", "rohit@rodic.example", "Ops");
+        var e = Data.Emp("Rohit Verma", "rohit@example.com", "Ops");
         await _repo.AddAsync(e, Ct);
         Assert.True(await _repo.DeleteAsync(e.Id, Ct));
         Assert.False(await _repo.DeleteAsync(e.Id, Ct));
@@ -1715,8 +1717,8 @@ public class RepositoryContractTests
     public async Task List_filters_orders_and_pages()
     {
         foreach (var n in new[] { "Esha", "Bala", "Dev", "Asha", "Chetan" })
-            await _repo.AddAsync(Data.Emp(n, $"{n.ToLowerInvariant()}@rodic.example", "Finance"), Ct);
-        await _repo.AddAsync(Data.Emp("Zoya", "zoya@rodic.example", "Legal"), Ct);
+            await _repo.AddAsync(Data.Emp(n, $"{n.ToLowerInvariant()}@example.com", "Finance"), Ct);
+        await _repo.AddAsync(Data.Emp("Zoya", "zoya@example.com", "Legal"), Ct);
 
         var (items, total) = await _repo.ListAsync(new EmployeeQuery("finance", Page: 2, PageSize: 2), Ct);
         Assert.Equal(5, total);
@@ -1739,8 +1741,8 @@ public class EmployeeServiceTests
     [Fact]
     public async Task Create_normalises_email_and_starts_at_version_1()
     {
-        var created = await _svc.CreateAsync(Data.Create("  Priya@Rodic.Example "), Ct);
-        Assert.Equal("priya@rodic.example", created.Email);
+        var created = await _svc.CreateAsync(Data.Create("  Priya@Example.Com "), Ct);
+        Assert.Equal("priya@example.com", created.Email);
         Assert.Equal(1, created.Version);
         Assert.Equal(created.Id, (await _svc.GetAsync(created.Id, Ct)).Id);
     }
@@ -1749,7 +1751,7 @@ public class EmployeeServiceTests
     public async Task Duplicate_email_is_conflict()
     {
         await _svc.CreateAsync(Data.Create(), Ct);
-        await Assert.ThrowsAsync<ConflictException>(() => _svc.CreateAsync(Data.Create("PRIYA@rodic.example"), Ct));
+        await Assert.ThrowsAsync<ConflictException>(() => _svc.CreateAsync(Data.Create("PRIYA@example.com"), Ct));
     }
 
     [Fact]
@@ -2391,7 +2393,7 @@ public class EmployeeApiTests(WebApplicationFactory<Program> factory) : IClassFi
     {
         var client = Client();
         var created = await client.PostAsJsonAsync("/api/employees",
-            new { fullName = "Arjun Mehta", email = "arjun@rodic.example", department = "Finance", monthlySalary = 72000, joinedOn = "2026-10-01" });
+            new { fullName = "Arjun Mehta", email = "arjun@example.com", department = "Finance", monthlySalary = 72000, joinedOn = "2026-10-01" });
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         var location = created.Headers.Location!;
 
@@ -2501,7 +2503,7 @@ Unit tests cannot prove that SIGTERM reaches the process or that the timers fit.
 
 - **Rolling deployments in Kubernetes, Azure Container Apps and App Service** all depend on readiness to decide when a new instance receives traffic and on graceful shutdown to retire the old one. Teams that skip either see a burst of 502/503 errors on every deploy and often blame the platform.
 - **Payment and booking systems** treat shutdown as a correctness issue, not just availability: a request that debited an account must finish and record its result, which is why their workers use durable queues and idempotent handlers so that interrupted work can be retried safely.
-- **Infrastructure project platforms** that sync data from field devices at many sites often run long-lived connections (SSE or WebSockets for live dashboards). Linking those loops to `ApplicationStopping` lets clients reconnect to another instance instead of waiting for a timeout.
+- **Parcel delivery and shipment-tracking apps** push live "where is my parcel" updates from delivery riders' phones to customers' screens over long-lived connections (SSE or WebSockets). Linking those loops to `ApplicationStopping` lets each tracking page reconnect to another instance within a second or two instead of freezing until a timeout, and the rider app keeps buffering location pings until it reconnects.
 - **Government portals on result or filing days** scale out and in rapidly. Startup probes with realistic warm-up (cache priming) keep new instances out of rotation until they can actually handle peak traffic.
 - **Load balancers and API gateways** (cloud load balancers, NGINX, YARP) use their own active health checks against the readiness endpoint. Matching their interval and failure threshold to the drain delay is what makes removal happen before the instance stops.
 
@@ -2555,7 +2557,7 @@ A: Only that the process is alive and responsive. Never external dependencies, o
 Q: What HTTP status does ASP.NET Core return for Degraded by default?
 A: 200, so traffic keeps flowing. Unhealthy returns 503. Change it with HealthCheckOptions.ResultStatusCodes.
 Q: What is the default HostOptions.ShutdownTimeout in modern .NET?
-A: 30 seconds (since .NET 6; it was 5 seconds before).
+A: 30 seconds (very old versions used 5 seconds). It also bounds StoppingAsync and StoppedAsync hooks.
 Q: Kubernetes default terminationGracePeriodSeconds and docker stop default?
 A: 30 seconds for Kubernetes, 10 seconds for docker stop. After that, SIGKILL.
 Q: Why add a drain delay after SIGTERM?

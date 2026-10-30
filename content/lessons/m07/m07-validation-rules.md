@@ -1490,7 +1490,7 @@ public class CreateRefundRequestValidatorTests
 
 - **Payment gateways** validate request shape at the API (amount format, currency, idempotency key), then apply business rules such as refund limits and windows inside the payment model. Most publish stable error codes so merchants can react programmatically.
 - **Indian SMS and WhatsApp messaging** has regulatory rules (registered sender ids and templates, opt-in for WhatsApp business messages). Notification platforms implement these as per-channel rules, separate from request validation.
-- **Government grievance and tender portals** commonly combine form validation (mandatory fields, file type and size) with business rules (submission deadlines, eligibility criteria, one bid per bidder) that must also apply to bulk uploads and back-office corrections.
+- **Job portals and college admission sites** commonly combine form validation (mandatory fields, file type and size) with business rules (application deadlines, eligibility criteria, one application per candidate per opening) that must also apply to bulk uploads and back-office corrections.
 - **ASP.NET Core** itself returns RFC 9457 Problem Details for validation errors (`Results.ValidationProblem`), and from .NET 10 minimal APIs can validate Data Annotations automatically with `AddValidation()`.
 
 ## Interview questions

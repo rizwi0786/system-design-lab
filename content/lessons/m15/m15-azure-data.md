@@ -24,13 +24,13 @@ references:
     url: https://learn.microsoft.com/entra/identity/managed-identities-azure-resources/overview
 ---
 
-A road-inspection app lets engineers upload photos and measurement sheets from 1,200 km of state highways. Today it runs on one VM: PostgreSQL on the same disk as the photos, a cron job that emails reports, and a Redis container nobody remembers starting. Moving to Azure, the team could install all of this again on VMs. Or it could rent each piece as a **managed service** and stop patching, backing up and failing over four different systems by hand. This lesson is about what each managed service really gives you, what it costs in money and in constraints, and what is still your job.
+**WheelDeal** is a used-car marketplace. When someone wants to sell a car, an inspector visits their home, works through a 200-point checklist and takes about 40 photos, and buyers later see an inspection report with those photos. About 1,200 cars are inspected every day. Today it runs on one VM: PostgreSQL on the same disk as the photos, a cron job that emails the reports, and a Redis container nobody remembers starting. Moving to Azure, the team could install all of this again on VMs. Or it could rent each piece as a **managed service** and stop patching, backing up and failing over four different systems by hand. This lesson is about what each managed service really gives you, what it costs in money and in constraints, and what is still your job.
 
 ## Learning objectives
 
 By the end of this lesson you will be able to:
 
-1. Explain what Azure Database for PostgreSQL flexible server, Azure Cache for Redis (and its successor Azure Managed Redis), Azure Service Bus and Azure Blob Storage each manage for you.
+1. Explain what Azure Database for PostgreSQL flexible server, Azure Managed Redis (and the Azure Cache for Redis service it replaces), Azure Service Bus and Azure Blob Storage each manage for you.
 2. Choose a tier for each service from availability, feature and cost needs.
 3. Describe how high availability and failover work for each, and what your app sees during a failover.
 4. Connect from ASP.NET Core without passwords using managed identity, and explain why tokens must be refreshed.
@@ -87,19 +87,19 @@ Storage is provisioned separately (with optional auto-grow) and IOPS scale with 
 
 A managed Redis. Use it for caching, sessions, rate-limit counters, distributed locks with fencing, and short-lived coordination.
 
-| Tier (Azure Cache for Redis) | What you get |
+| Tier (Azure Cache for Redis, existing estates) | What you get |
 |---|---|
 | Basic | One node, no replica, no SLA. Dev and test only. |
 | Standard | Primary plus replica with automatic failover, SLA. |
 | Premium | Standard plus clustering (sharding), persistence (RDB/AOF), virtual network injection, zone redundancy, geo-replication. |
 | Enterprise, Enterprise Flash | Redis Enterprise features and modules (search, JSON, time series), active geo-replication. |
 
-Microsoft now offers **Azure Managed Redis** as the successor service (tiers named Memory Optimized, Balanced, Compute Optimized and Flash Optimized) and has announced retirement dates for Azure Cache for Redis tiers. For a new project, read the current guidance on Microsoft Learn before choosing; the concepts in this lesson apply to both.
+Microsoft now offers **Azure Managed Redis** (built on Redis Enterprise, with tiers named Memory Optimized, Balanced, Compute Optimized and Flash Optimized) as the successor service, and has announced the retirement of Azure Cache for Redis, including dates after which new caches can no longer be created. **For a new project, start on Azure Managed Redis**; treat the Azure Cache for Redis tiers above as what you will meet in existing systems and migrate from. Check the current retirement timeline on Microsoft Learn rather than relying on dates in a course. The design concepts below apply to both.
 
 What matters for design:
 
 - **Redis is not your source of truth.** Even with persistence, design every key so it can be rebuilt from PostgreSQL. Cache-aside with TTLs ([Cache-aside, read-through, write-through and write-behind](#/lesson/m12-cache-patterns)).
-- **Failover blips.** On Standard and above, patching and failures trigger a failover to the replica. Connections drop for seconds; writes in flight may be lost because replication is asynchronous. Clients must reconnect (StackExchange.Redis does) and callers must tolerate a cache miss or a timeout.
+- **Failover blips.** With high availability on (Standard and above in Azure Cache for Redis; the default in Azure Managed Redis), patching and failures trigger a failover to the replica. Connections drop for seconds; writes in flight may be lost because replication is asynchronous. Clients must reconnect (StackExchange.Redis does) and callers must tolerate a cache miss or a timeout.
 - **Memory is the limit.** Pick an eviction policy (`allkeys-lru` or `volatile-lru` for caches), alert on memory and evictions, and don't store 5 MB values.
 - **TLS only.** Managed Redis enforces TLS by default; local Redis usually doesn't. Make TLS a configuration setting, not a code change.
 
@@ -111,7 +111,7 @@ A managed message broker for commands and events between services.
 - **Topics and subscriptions**: publish once, each subscription gets a copy, with optional filters (for example `region = 'south'`).
 - **Peek-lock** (the default receive mode): the receiver gets the message plus a **lock** (default 1 minute, maximum 5 minutes, renewable). It must **complete** the message to remove it; **abandon** releases it for redelivery; if the lock expires, it is redelivered. Each delivery increases the **delivery count**; when it exceeds **max delivery count** (default 10) the message moves to the **dead-letter queue (DLQ)** with a reason. That is at-least-once delivery, so consumers must be idempotent ([Idempotent consumers and inbox deduplication](#/lesson/m12-idempotent-consumers)).
 - **Duplicate detection**: the broker drops a message whose `MessageId` was seen within a configured window, which protects against a producer retrying a send.
-- **Sessions**: ordered, one-at-a-time processing per session id (for example per project id), giving FIFO where you need it.
+- **Sessions**: ordered, one-at-a-time processing per session id (for example per car listing id), giving FIFO where you need it.
 - **Scheduled messages and deferral**: deliver at a time, or set aside and fetch later by sequence number.
 - **Transactions**: complete one message and send another atomically, within the same namespace.
 
@@ -160,13 +160,14 @@ Key mechanics:
 - The app requests a token for a **scope**, such as `https://ossrdbms-aad.database.windows.net/.default` for PostgreSQL or `https://storage.azure.com/.default` for Storage.
 - Tokens **expire** (typically after about an hour). SDKs refresh them automatically; for PostgreSQL, the token is used as the connection **password**, so your connection pool must fetch a fresh token for new physical connections.
 - In development, the same code uses your developer login (`DefaultAzureCredential` tries environment, workload identity, managed identity, Visual Studio and Azure CLI credentials in order), or you switch to a local password-based setup.
+- In production, Microsoft's own guidance is to prefer a **specific** credential (`ManagedIdentityCredential`, or a `ChainedTokenCredential` you control) over `DefaultAzureCredential`: probing several sources slows startup and can silently pick up an unexpected identity from an environment variable.
 
 ### Local equivalents, all free
 
 | Azure service | Local stand-in in Docker | Differences to remember |
 |---|---|---|
 | PostgreSQL flexible server | `postgres:17` (add `postgis/postgis` if needed) | No Entra auth, no HA, no built-in PgBouncer unless you add a container |
-| Azure Cache for Redis / Managed Redis | `redis:7` or `valkey/valkey` | No TLS by default, no failover unless you run Sentinel |
+| Azure Managed Redis / Cache for Redis | `redis:8` or `valkey/valkey` | No TLS by default, no failover unless you run Sentinel |
 | Service Bus | The official **Azure Service Bus emulator** container (uses a SQL Server container for storage), configured from a JSON file | Local development only, no ARM management, limits differ from the cloud |
 | Blob Storage | **Azurite** (`mcr.microsoft.com/azure-storage/azurite`), blob endpoint on port 10000 | Development account key, no tiers or lifecycle rules enforced like the cloud |
 
@@ -177,7 +178,7 @@ services:
     environment: { POSTGRES_PASSWORD: dev-only, POSTGRES_DB: inspections }
     ports: ["5432:5432"]
   cache:
-    image: redis:7
+    image: redis:8
     ports: ["6379:6379"]
   storage:
     image: mcr.microsoft.com/azure-storage/azurite
@@ -195,7 +196,7 @@ A small internal tool doesn't need four services. PostgreSQL alone can hold a jo
 
 ## Visual explanation
 
-### Architecture: the inspection platform's data tier
+### Architecture: WheelDeal's inspection data tier
 
 ```mermaid
 flowchart LR
@@ -206,7 +207,7 @@ flowchart LR
     API -->|"token for PostgreSQL, via PgBouncer"| PG[("PostgreSQL flexible server, zone-redundant HA")]
     PG -->|"sync replication"| SB2[("Standby, zone 2")]
     PG -.->|"async replication"| RR[("Read replica, paired region")]
-    API -->|"cache-aside, TTL 5 min"| Redis["Redis Standard (primary + replica)"]
+    API -->|"cache-aside, TTL 5 min"| Redis["Azure Managed Redis (HA: primary + replica)"]
     API -->|"user delegation SAS for direct upload"| Blob["Blob Storage, ZRS, versioning + soft delete"]
     API -->|"send ReportRequested"| Q["Service Bus queue (Standard)"]
     Q -->|"peek-lock"| Worker
@@ -222,7 +223,7 @@ How to read it: every arrow from the compute box is authenticated with the apps'
 
 ```mermaid
 sequenceDiagram
-    participant Phone as Engineer's phone
+    participant Phone as Inspector's phone
     participant API as Inspection API
     participant MI as Managed identity endpoint
     participant Blob as Blob Storage
@@ -258,16 +259,16 @@ The phone uploads directly to storage with a single-blob SAS, so the API handles
 
 | Data | Volume (estimate) | Needs | Service and tier |
 |---|---|---|---|
-| Inspections, defects, users | 30 GB, 150 writes/s peak | Transactions, PostGIS, PITR, zone failure tolerance | PostgreSQL flexible server, General Purpose, zone-redundant HA |
-| Lookup lists, dashboard aggregates | 2 GB | Fast reads, rebuildable | Redis Standard |
+| Inspections, checklist results, cars, users | 30 GB, 150 writes/s peak | Transactions, PostGIS, PITR, zone failure tolerance | PostgreSQL flexible server, General Purpose, zone-redundant HA |
+| Make and model lists, listing-page aggregates | 2 GB | Fast reads, rebuildable | Azure Managed Redis (small Balanced tier, HA on) |
 | Report requests | 40,000 per day | Retries, DLQ, duplicate detection | Service Bus Standard queue |
-| Photos | 1,200 sites × 40 photos/day × 4 MB ≈ 190 GB/day | Cheap, durable, direct upload, 7-year retention | Blob Storage, ZRS, lifecycle tiers |
+| Photos | 1,200 inspections/day × 40 photos × 4 MB ≈ 190 GB/day | Cheap, durable, direct upload, 7-year retention (disputes and regulatory records) | Blob Storage, ZRS, lifecycle tiers |
 
-Photos dominate storage: 190 GB/day × 365 ≈ 70 TB per year. Tiering is not optional at this size: after 30 days almost nobody opens a photo.
+Photos dominate storage: 190 GB/day × 365 ≈ 70 TB per year. Tiering is not optional at this size: once a car is sold (usually within 30 days) almost nobody opens its photos.
 
 ### Step 2 — decide redundancy and HA from the failure you must survive
 
-The department's requirement is "a zone outage must not lose submitted inspections". So: PostgreSQL zone-redundant HA (synchronous), Blob ZRS, Service Bus with zone redundancy where the tier supports it. For a regional disaster, the RPO of a few minutes is acceptable: a PostgreSQL read replica in the paired region and GZRS (or object replication) for photos.
+The business requirement is "a zone outage must not lose submitted inspections" (an inspector cannot go back to the seller's house to redo it). So: PostgreSQL zone-redundant HA (synchronous), Blob ZRS, Service Bus with zone redundancy where the tier supports it. For a regional disaster, the RPO of a few minutes is acceptable: a PostgreSQL read replica in the paired region and GZRS (or object replication) for photos.
 
 ### Step 3 — make everything passwordless
 
@@ -605,6 +606,8 @@ app.MapPost("/inspections/{id:long}/photos", async (long id, string fileName, IP
 app.MapPost("/inspections/{id:long}/photos/complete", async (long id, string blobName, int version,
     IPhotoStore store, IMessageSender sender, IOptions<MessagingOptions> messaging, CancellationToken ct) =>
 {
+    // The blob name comes from the client: make sure it belongs to this inspection before trusting it.
+    if (!blobName.StartsWith($"inspections/{id}/", StringComparison.Ordinal)) return Results.BadRequest("Blob does not belong to this inspection.");
     if (!await store.ExistsAsync(blobName, ct)) return Results.BadRequest("Upload not found.");
     // In production: insert the photo row and an outbox row in one PostgreSQL transaction,
     // and let an outbox relay send this message. Sent directly here to keep the sample small.
@@ -647,15 +650,15 @@ Design notes:
 
 ```text
 - PostgreSQL Burstable B2s in production "because it's managed", no HA, 7-day backups, never restored
-- Redis Basic tier holding user sessions and the only copy of draft inspection forms
+- Redis Basic tier holding user sessions and the only copy of half-filled inspection checklists
 - Service Bus queue consumer uses receive-and-delete, so a crash loses the message
 - Photos uploaded through the API into a Hot-tier LRS account, no versioning, kept forever
 - Connection strings with account keys in appsettings.json, committed to Git
 ```
 
-What goes wrong: Burstable credits run out at month-end and queries slow tenfold. Basic Redis restarts during patching and engineers lose half-filled forms. A worker crash silently drops reports. Storage reaches 70 TB of Hot LRS in a year, paying top price for photos nobody opens, with no protection from an accidental container delete. A leaked key gives full access to every blob.
+What goes wrong: Burstable credits run out at month-end and queries slow tenfold. Basic Redis restarts during patching and inspectors lose half-filled checklists while standing next to the car. A worker crash silently drops reports. Storage reaches 70 TB of Hot LRS in a year, paying top price for photos nobody opens, with no protection from an accidental container delete. A leaked key gives full access to every blob.
 
-**Good**: General Purpose PostgreSQL with zone-redundant HA, PgBouncer and tested PITR; Redis Standard used only for rebuildable data; Service Bus peek-lock with idempotent consumers, duplicate detection and DLQ monitoring; direct-to-blob uploads with SAS, ZRS, versioning, soft delete and lifecycle tiering; managed identity everywhere and shared keys disabled.
+**Good**: General Purpose PostgreSQL with zone-redundant HA, PgBouncer and tested PITR; Redis with HA (Azure Managed Redis, or Standard on an existing Cache for Redis) used only for rebuildable data; Service Bus peek-lock with idempotent consumers, duplicate detection and DLQ monitoring; direct-to-blob uploads with SAS, ZRS, versioning, soft delete and lifecycle tiering; managed identity everywhere and shared keys disabled.
 
 :::callout type=warning title="Redundancy is not backup"
 ZRS, GRS and HA replicas copy deletes, overwrites and corrupt writes as faithfully as good data. Soft delete, versioning, immutability and point-in-time restore are what let you undo a mistake.
@@ -667,7 +670,7 @@ Standard Service Bus and lower Redis tiers share capacity and are cheaper. Premi
 
 ## Practical playground
 
-The canvas shows the inspection platform lifted onto one VM's worth of services: the API writes photos to the database and uses one Redis for everything. Improve it:
+The canvas shows WheelDeal's inspection platform lifted onto one VM's worth of services: the API writes photos to the database and uses one Redis for everything. Improve it:
 
 1. Move photos to object storage with direct uploads. What does the API return to the phone?
 2. Add a queue between the API and a report worker, and a dead-letter path.
@@ -675,11 +678,11 @@ The canvas shows the inspection platform lifted onto one VM's worth of services:
 4. Decide which data in Redis is safe to lose, and move anything that isn't.
 5. Add a read replica only if you can name the reads it serves.
 
-:::playground type=hld title="Give the inspection platform a managed data tier"
+:::playground type=hld title="Give WheelDeal's inspection platform a managed data tier"
 ```json
 {
   "nodes": [
-    { "id": "phones", "type": "client", "label": "Engineers' phones", "props": { "rps": 150 } },
+    { "id": "phones", "type": "client", "label": "Inspectors' phones", "props": { "rps": 150 } },
     { "id": "api", "type": "app-server", "label": "Inspection API", "props": { "instances": 2 } },
     { "id": "pg", "type": "database", "label": "PostgreSQL (photos stored as bytea)", "props": { "replicas": 0 } },
     { "id": "redis", "type": "cache", "label": "Redis Basic: sessions, drafts, cache", "props": { "ttlSeconds": 0 } }
@@ -785,9 +788,9 @@ Add `averageReadsPerMonth` and an estimated monthly cost per tier (rates as inpu
 For each need, name the service and tier (or configuration) you'd choose, and one thing that is still your responsibility.
 
 1. A GST e-invoice reconciliation job must process each invoice message exactly once in effect, even if the worker crashes mid-way.
-2. A dashboard needs sub-millisecond reads of project league tables that are recomputed every 5 minutes.
-3. Site photos must survive an availability-zone outage and an accidental `DELETE` of a container by an administrator.
-4. A tender database must not lose any committed bid if a zone fails, and must restore to any second in the last 30 days.
+2. A fantasy-cricket app needs sub-millisecond reads of contest leaderboards that are recomputed every 5 minutes.
+3. Car inspection photos must survive an availability-zone outage and an accidental `DELETE` of a container by an administrator.
+4. An online auction site's database must not lose any committed bid if a zone fails, and must restore to any second in the last 30 days.
 5. A dev environment for four developers should cost as little as possible.
 ::acceptance
 - Each answer names a concrete tier or setting, not just a service.
@@ -802,10 +805,10 @@ Which feature protects against a zone, and which against a person?
 For PostgreSQL, HA and PITR solve different problems. You need both here.
 ::solution
 1. **Service Bus Standard queue, peek-lock, duplicate detection on, max delivery count 10.** Your job: an idempotent handler (record processed invoice ids in PostgreSQL in the same transaction as the effect), completing the message only after commit, and alerting on DLQ depth.
-2. **Redis Standard (or Azure Managed Redis), cache-aside with a 5-minute TTL**, recomputed by a scheduled job. Your job: treat Redis as rebuildable, handle failover blips by falling back to PostgreSQL, and alert on evictions.
+2. **Azure Managed Redis with HA (or Azure Cache for Redis Standard on an existing estate), cache-aside with a 5-minute TTL**, recomputed by a scheduled job. Your job: treat Redis as rebuildable, handle failover blips by falling back to PostgreSQL, and alert on evictions.
 3. **Blob Storage with ZRS** for the zone, plus **container soft delete, blob soft delete and versioning** for the human mistake (and an immutability policy if regulation demands it). Your job: set retention periods, use least-privilege roles, and test restoring a deleted container.
 4. **PostgreSQL flexible server, General Purpose, zone-redundant HA, backup retention 30–35 days** (geo-redundant backup if regional DR matters). Your job: test PITR restores, handle reconnects in the app, and size `max_connections` and PgBouncer.
-5. **Docker Compose locally** (postgres:17, redis:7, Azurite, the Service Bus emulator), plus at most one shared Burstable PostgreSQL server that is stopped out of hours. Your job: keep configuration identical in shape to production so nothing works only in dev.
+5. **Docker Compose locally** (postgres:17, redis:8, Azurite, the Service Bus emulator), plus at most one shared Burstable PostgreSQL server that is stopped out of hours. Your job: keep configuration identical in shape to production so nothing works only in dev.
 ::mistakes
 - Saying "Service Bus guarantees exactly-once processing".
 - Using GRS alone as protection against deletes.
@@ -1120,14 +1123,14 @@ ORDER BY gb_to_move DESC, container;
 - Using integer division and losing the decimals.
 :::
 
-:::exercise id=m15-azure-data-ex5 difficulty=advanced kind=hld title="Design the data tier for a state e-procurement portal"
-A state e-procurement portal publishes 3,000 tenders a month. During the final hour before a big tender closes, about 4,000 bidders upload documents (average 25 MB each) and submit bids. Requirements: no submitted bid may be lost even in a zone failure; bid documents must be immutable for 10 years; officers must see a submission receipt within 5 seconds; email and SMS notifications can lag by minutes; and the team must be able to develop and test without an Azure subscription.
+:::exercise id=m15-azure-data-ex5 difficulty=advanced kind=hld title="Design the data tier for a university admissions portal"
+A state university's admissions portal runs admissions for 3,000 programmes across its affiliated colleges. During the final hour before the main application deadline, about 4,000 applicants upload documents (mark sheets, certificates, a portfolio; average 25 MB each) and submit their applications. Requirements: no submitted application may be lost even in a zone failure; application documents must be immutable for 10 years; applicants must see a submission receipt within 5 seconds; email and SMS notifications can lag by minutes; and the team must be able to develop and test without an Azure subscription.
 
 Design the data tier: services, tiers, redundancy, HA, how uploads flow, how notifications flow, and the local development setup. Include capacity arithmetic for the closing hour.
 ::acceptance
 - Upload volume and rate for the closing hour are calculated.
 - Documents bypass the API using SAS, with immutability and versioning.
-- PostgreSQL configuration meets "no committed bid lost in a zone failure".
+- PostgreSQL configuration meets "no committed application lost in a zone failure".
 - Notifications use a queue with retries, DLQ and idempotent consumers.
 - Redis use (if any) is limited to rebuildable data.
 - A Docker-based local setup is described.
@@ -1143,13 +1146,13 @@ Think about what the API stores in the database for each document: name, size, S
 ```json
 {
   "nodes": [
-    { "id": "bidders", "type": "client", "label": "Bidders", "props": { "rps": 400 } },
-    { "id": "api", "type": "app-server", "label": "Tender API", "props": { "instances": 4 } },
+    { "id": "applicants", "type": "client", "label": "Applicants", "props": { "rps": 400 } },
+    { "id": "api", "type": "app-server", "label": "Admissions API", "props": { "instances": 4 } },
     { "id": "pg", "type": "database", "label": "PostgreSQL", "props": { "replicas": 0 } },
-    { "id": "files", "type": "object-storage", "label": "Bid documents" }
+    { "id": "files", "type": "object-storage", "label": "Application documents" }
   ],
   "edges": [
-    { "from": "bidders", "to": "api", "kind": "sync", "label": "upload 25 MB documents" },
+    { "from": "applicants", "to": "api", "kind": "sync", "label": "upload 25 MB documents" },
     { "from": "api", "to": "files", "kind": "sync" },
     { "from": "api", "to": "pg", "kind": "sync" }
   ]
@@ -1159,23 +1162,23 @@ Think about what the API stores in the database for each document: name, size, S
 ```json
 {
   "nodes": [
-    { "id": "bidders", "type": "client", "label": "Bidders", "props": { "rps": 400 } },
-    { "id": "api", "type": "app-server", "label": "Tender API (managed identity)", "props": { "instances": 4, "multiAz": true } },
+    { "id": "applicants", "type": "client", "label": "Applicants", "props": { "rps": 400 } },
+    { "id": "api", "type": "app-server", "label": "Admissions API (managed identity)", "props": { "instances": 4, "multiAz": true } },
     { "id": "files", "type": "object-storage", "label": "Blob Storage GZRS: versioning, 10-year immutability policy, direct SAS uploads", "props": { "multiAz": true } },
     { "id": "pg", "type": "database", "label": "PostgreSQL flexible server, General Purpose, zone-redundant HA, PITR 35 days", "props": { "replicas": 1, "multiAz": true } },
     { "id": "bouncer", "type": "app-server", "label": "Built-in PgBouncer" },
     { "id": "relay", "type": "worker", "label": "Outbox relay", "props": { "instances": 1 } },
-    { "id": "bus", "type": "queue", "label": "Service Bus Premium: topic bid-submitted, duplicate detection" },
+    { "id": "bus", "type": "queue", "label": "Service Bus Premium: topic application-submitted, duplicate detection" },
     { "id": "notify", "type": "worker", "label": "Email and SMS workers (idempotent, DLQ alerts)", "props": { "instances": 2 } },
-    { "id": "cache", "type": "cache", "label": "Redis: tender listings cache only", "props": { "ttlSeconds": 60 } },
+    { "id": "cache", "type": "cache", "label": "Redis: programme listings cache only", "props": { "ttlSeconds": 60 } },
     { "id": "mon", "type": "monitoring", "label": "Upload errors, DLQ depth, PG failover events" }
   ],
   "edges": [
-    { "from": "bidders", "to": "api", "kind": "sync", "label": "request SAS, submit bid" },
-    { "from": "bidders", "to": "files", "kind": "sync", "label": "PUT documents with SAS" },
+    { "from": "applicants", "to": "api", "kind": "sync", "label": "request SAS, submit application" },
+    { "from": "applicants", "to": "files", "kind": "sync", "label": "PUT documents with SAS" },
     { "from": "api", "to": "files", "kind": "sync", "label": "verify size, hash, version id" },
     { "from": "api", "to": "bouncer", "kind": "sync" },
-    { "from": "bouncer", "to": "pg", "kind": "sync", "label": "bid + outbox in one transaction" },
+    { "from": "bouncer", "to": "pg", "kind": "sync", "label": "application + outbox in one transaction" },
     { "from": "api", "to": "cache", "kind": "sync" },
     { "from": "relay", "to": "pg", "kind": "sync", "label": "read outbox" },
     { "from": "relay", "to": "bus", "kind": "async" },
@@ -1186,22 +1189,22 @@ Think about what the API stores in the database for each document: name, size, S
 }
 ```
 
-**Capacity.** 4,000 bidders × 25 MB = 100,000 MB ≈ **100 GB** in the hour. Average: 100,000 MB ÷ 3,600 s ≈ 28 MB/s. If half arrives in the last 10 minutes: 50,000 MB ÷ 600 s ≈ **83 MB/s**, around 670 Mbit/s. Pushed through 4 API instances that is a lot of memory, threads and egress. Uploaded directly to Blob Storage with SAS, it is well within what a storage account handles (check the current scalability targets), and the API only handles small JSON calls.
+**Capacity.** 4,000 applicants × 25 MB = 100,000 MB ≈ **100 GB** in the hour. Average: 100,000 MB ÷ 3,600 s ≈ 28 MB/s. If half arrives in the last 10 minutes: 50,000 MB ÷ 600 s ≈ **83 MB/s**, around 670 Mbit/s. Pushed through 4 API instances that is a lot of memory, threads and egress. Uploaded directly to Blob Storage with SAS, it is well within what a storage account handles (check the current scalability targets), and the API only handles small JSON calls.
 
-**Upload flow.** The API issues one SAS per document (write-only, 15 minutes, one blob name). The bidder uploads directly. The bidder's client computes SHA-256 and the API verifies the blob's size and content hash, records the blob **version id**, and only then accepts the bid. The container has versioning on and a **time-based immutability policy** (10 years, locked), so neither the department nor an attacker can alter or delete a submitted document.
+**Upload flow.** The API issues one SAS per document (write-only, 15 minutes, one blob name). The applicant's browser uploads directly, computing SHA-256 as it goes, and the API verifies the blob's size and content hash, records the blob **version id**, and only then accepts the application. The container has versioning on and a **time-based immutability policy** (10 years, locked), so neither university staff nor an attacker can alter or delete a submitted document.
 
-**Bid submission.** The bid row, document references and an outbox row are written in **one transaction** on PostgreSQL with **zone-redundant HA**: the commit is acknowledged only after the standby in another zone has it, so a zone failure loses nothing committed. The receipt (bid id, timestamp, document hashes) is returned immediately, well within 5 seconds, because it depends only on PostgreSQL and the hash check. PgBouncer keeps connections under control when the API scales out.
+**Application submission.** The application row, document references and an outbox row are written in **one transaction** on PostgreSQL with **zone-redundant HA**: the commit is acknowledged only after the standby in another zone has it, so a zone failure loses nothing committed. The receipt (application number, timestamp, document hashes) is returned immediately, well within 5 seconds, because it depends only on PostgreSQL and the hash check. PgBouncer keeps connections under control when the API scales out.
 
-**Notifications.** The outbox relay publishes `BidSubmitted` with `MessageId = bid-{id}` to a Service Bus topic (duplicate detection on). Email and SMS subscriptions are processed by idempotent workers with peek-lock; failures retry and finally dead-letter, and DLQ depth pages someone. Premium is justified by the closing-hour burst and private networking; Standard would work for a smaller state.
+**Notifications.** The outbox relay publishes `ApplicationSubmitted` with `MessageId = application-{id}` to a Service Bus topic (duplicate detection on). Email and SMS subscriptions are processed by idempotent workers with peek-lock; failures retry and finally dead-letter, and DLQ depth pages someone. Premium is justified by the closing-hour burst and private networking; Standard would work for a smaller university.
 
-**Redis.** Only for tender listing pages (60-second TTL). Never for bids or sessions that matter.
+**Redis.** Only for programme listing pages (60-second TTL). Never for applications or sessions that matter.
 
-**Local development.** Docker Compose with `postgres:17`, Azurite (SAS uploads work against it), the Service Bus emulator with a `Config.json` declaring the topic and subscriptions, and `redis:7`. The same code runs with `Storage:Mode = Local` and password auth. Integration tests in CI use the same Compose file.
+**Local development.** Docker Compose with `postgres:17`, Azurite (SAS uploads work against it), the Service Bus emulator with a `Config.json` declaring the topic and subscriptions, and `redis:8`. The same code runs with `Storage:Mode = Local` and password auth. Integration tests in CI use the same Compose file.
 ::mistakes
 - Uploading 100 GB through the API instances.
 - Relying on application code to "not delete" documents instead of an immutability policy.
-- Making the bid receipt wait for email delivery.
-- Using Redis to hold submitted bids "for speed".
+- Making the application receipt wait for email delivery.
+- Using Redis to hold submitted applications "for speed".
 :::
 
 ## Automated testing
@@ -1241,7 +1244,7 @@ public async Task Token_is_refreshed_five_minutes_before_expiry()
 - **Redis as a cache in front of PostgreSQL** is standard in read-heavy portals: dashboards, listing pages and session-like data that can be rebuilt.
 - **Service Bus** is often the backbone for enterprise integration on Azure, for example ERP-to-portal messages, payment notifications and document-processing pipelines, where dead-lettering and duplicate detection matter more than raw throughput.
 - **Blob Storage with lifecycle policies** holds large media archives (drone imagery, CCTV, scanned documents), where tiering often decides whether the storage bill is affordable.
-- **Regulated sectors** (government tenders, finance, healthcare) rely on immutability policies and Entra-based access with audit logs rather than shared keys.
+- **Regulated sectors** (government records, finance, healthcare, education) rely on immutability policies and Entra-based access with audit logs rather than shared keys.
 
 ## Interview questions
 
@@ -1278,7 +1281,7 @@ Break the bill down: capacity per tier, transactions, data retrieval, egress, ge
 
 - Managed services take over servers, patching, replication and backups, not your design, your retries or your restore tests.
 - PostgreSQL flexible server: pick Burstable only for non-production; zone-redundant HA for no-loss zone failover; read replicas for reads and DR; PITR 7–35 days; built-in PgBouncer.
-- Redis: cache and rebuildable data only; Standard or higher for an SLA; handle failover blips; Azure Managed Redis is the successor to check for new projects.
+- Redis: cache and rebuildable data only; Standard or higher for an SLA; handle failover blips; Azure Managed Redis is the successor and the default for new projects.
 - Service Bus: peek-lock, delivery count, DLQ, duplicate detection, sessions; at-least-once means idempotent consumers; Premium for dedicated capacity and private networking.
 - Blob Storage: tiers trade storage price against access price and minimum stay; redundancy (LRS to GZRS) is not backup; use SAS for direct uploads and lifecycle rules for cost.
 - Managed identity removes secrets; tokens expire, so pools must refresh them.
@@ -1302,7 +1305,7 @@ A: No. The delete is replicated. Use soft delete, versioning or immutability pol
 Q: Why refresh Entra tokens for PostgreSQL connections?
 A: The token is the password and expires after about an hour, so new physical connections need a fresh one.
 Q: Local stand-ins for the four services?
-A: postgres:17, redis:7 (or Valkey), the Azure Service Bus emulator, and Azurite for Blob Storage.
+A: postgres:17, redis:8 (or Valkey), the Azure Service Bus emulator, and Azurite for Blob Storage.
 :::
 
 ## Knowledge check
@@ -1323,7 +1326,7 @@ A worker's handler takes 90 seconds, the queue's lock duration is 60 seconds. Wh
 - [ ] Nothing, locks are only advisory.
 > Keep handlers shorter than the lock, renew the lock (SDK processors can auto-renew), and make handlers idempotent.
 ::q multi
-Which protect site photos from an administrator accidentally deleting the container? (Select all that apply.)
+Which protect car inspection photos from an administrator accidentally deleting the container? (Select all that apply.)
 - [x] Container soft delete.
 - [ ] GZRS redundancy.
 - [x] Blob versioning and soft delete.
@@ -1331,7 +1334,7 @@ Which protect site photos from an administrator accidentally deleting the contai
 - [ ] Moving photos to the Cool tier.
 > Redundancy copies the delete. Soft delete, versioning and immutability keep recoverable or undeletable copies.
 ::q single
-Engineers upload 4 MB photos through the API, which then writes them to Blob Storage. What is the better design?
+Inspectors upload 4 MB photos through the API, which then writes them to Blob Storage. What is the better design?
 - [ ] Increase API instance count.
 - [x] Return a short-lived, single-blob SAS so the phone uploads directly, then confirm with a small API call.
 - [ ] Store photos in Redis first.
@@ -1352,7 +1355,7 @@ Which statement about running these services locally is true?
 - [ ] Managed identity works locally inside Docker by default.
 > Local stand-ins cover the APIs, not every cloud behaviour. Auth and endpoints switch through configuration.
 ::q single
-Your Redis Standard cache fails over during patching. What should the API do?
+Your Redis cache (with HA) fails over during patching. What should the API do?
 - [ ] Return 500 until Redis is back.
 - [x] Use a short timeout, fall back to PostgreSQL for reads, and let the client reconnect.
 - [ ] Mark itself not live so it gets restarted.
@@ -1367,5 +1370,5 @@ You have finished this lesson when you can:
 - [ ] Score at least 70 % on the knowledge check.
 - [ ] Complete exercises 1 and 3 with all tests passing.
 - [ ] Write the lifecycle query in exercise 4 and explain the rule it justifies.
-- [ ] Defend the e-procurement data tier in exercise 5, including capacity arithmetic.
+- [ ] Defend the admissions-portal data tier in exercise 5, including capacity arithmetic.
 - [ ] Run PostgreSQL, Redis, Azurite and the Service Bus emulator locally and point the app at them by configuration only.

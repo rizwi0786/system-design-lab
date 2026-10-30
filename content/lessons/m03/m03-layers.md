@@ -350,12 +350,16 @@ public sealed class BillPaymentService(
     TimeProvider clock,
     ILogger<BillPaymentService> logger)
 {
+    /// <summary>Due dates are printed in Indian Standard Time, so "today" must be the IST date, not the UTC date.
+    /// India has no daylight saving, so a fixed offset is exact.</summary>
+    private static readonly TimeSpan UtilityOffset = TimeSpan.FromHours(5.5);
+
     public async Task<PaymentOutcome> PayAsync(Guid billId, decimal amount, CancellationToken ct = default)
     {
         var bill = await bills.GetByIdAsync(billId, ct);
         if (bill is null) return PaymentOutcome.NotFound;
 
-        var today = DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
+        var today = DateOnly.FromDateTime(clock.GetUtcNow().ToOffset(UtilityOffset).DateTime);
         decimal lateFee;
         try
         {
@@ -443,16 +447,22 @@ public sealed class BillsController(BillPaymentService payments) : ControllerBas
     [HttpPost("{id:guid}/payments")]
     public async Task<IActionResult> Pay(Guid id, [FromBody] PayBillRequest request, CancellationToken ct)
     {
-        if (request.Amount <= 0) return BadRequest(new { error = "Amount must be positive." });
+        // Shape check only ("is this a sensible number?"). Whether the amount is *correct* is the domain's call.
+        if (request.Amount <= 0) return Problem(title: "Amount must be positive.", statusCode: StatusCodes.Status400BadRequest);
 
         var outcome = await payments.PayAsync(id, request.Amount, ct);
         return outcome.Status switch
         {
             PaymentStatus.Success => Ok(new PayBillResponse("Paid", outcome.LateFee ?? 0m)),
-            PaymentStatus.NotFound => NotFound(),
-            PaymentStatus.AlreadyPaid => Conflict(new { error = "This bill has already been paid." }),
-            PaymentStatus.AmountMismatch => UnprocessableEntity(new { error = "Amount does not match.", expected = outcome.ExpectedAmount }),
-            _ => StatusCode(StatusCodes.Status500InternalServerError)
+            PaymentStatus.NotFound => Problem(title: "Bill not found.", statusCode: StatusCodes.Status404NotFound),
+            PaymentStatus.AlreadyPaid => Problem(title: "This bill has already been paid.", statusCode: StatusCodes.Status409Conflict),
+            PaymentStatus.AmountMismatch => UnprocessableEntity(new ProblemDetails
+            {
+                Title = "Amount does not match the amount payable today.",
+                Status = StatusCodes.Status422UnprocessableEntity,
+                Extensions = { ["expected"] = outcome.ExpectedAmount },
+            }),
+            _ => Problem(statusCode: StatusCodes.Status500InternalServerError)
         };
     }
 }
@@ -465,6 +475,7 @@ using PowerPay.Infrastructure;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
+builder.Services.AddProblemDetails();                 // RFC 9457 error bodies for every failure path
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<IBillRepository, InMemoryBillRepository>();   // swap for PostgresBillRepository (scoped) later
 builder.Services.AddSingleton<IReceiptSender, LoggingReceiptSender>();
@@ -479,7 +490,10 @@ Notes on the choices:
 
 - **The service returns an outcome, not an `IActionResult`.** That keeps the service usable from a background job or a gRPC endpoint. The mapping to HTTP is the controller's single job.
 - **Domain exceptions are caught in the service, not the controller.** The service knows which exceptions are expected business outcomes. Unknown exceptions pass through to the global handler ([Filters, middleware and exception handling](#/lesson/m03-filters-exceptions)).
-- **`TimeProvider` is injected.** "Today" is an input to the late-fee rule, so tests can set it. The domain method takes `DateOnly today` as a parameter rather than reading a clock, which keeps `Bill` free of any dependency.
+- **`TimeProvider` is injected.** "Today" is an input to the late-fee rule, so tests can set it. The domain method takes `DateOnly today` as a parameter rather than reading a clock, which keeps `Bill` free of any dependency. The service converts the UTC instant to the utility's time zone (IST) before taking the date; using the UTC date would treat a payment made at 01:00 IST on 11 October as being on 10 October.
+- **Errors are Problem Details.** Every failure returns an `application/problem+json` body, the same shape the global exception handler produces, so clients parse one error format.
+- **Two payments at once.** With a real database, two requests for the same bill (a double tap, or the app retrying after a timeout) can both load it as `Unpaid`. The PostgreSQL repository must save with optimistic concurrency (a version column, or PostgreSQL's `xmin` with EF Core) so the second save fails and the service returns `AlreadyPaid`. Accepting an `Idempotency-Key` header and returning the first result for a repeated key makes the retry case friendly instead of a 409.
+- **Receipt after save.** The receipt is sent only after the payment is stored. If the SMS gateway is down, the payment still stands; in production the service writes a "receipt pending" row in the same transaction (an outbox) and a background worker sends it with retries.
 - **Lifetimes.** The in-memory repository is a singleton because it *is* the store. A PostgreSQL repository holding a `DbContext` would be scoped, and the service is scoped so it can hold it safely (see [Singleton, scoped and transient services](#/lesson/m03-service-lifetimes)).
 
 ## Bad design vs good design
@@ -1029,66 +1043,76 @@ Instead of catching the domain exception, `Batch` could expose `bool CanIssue(in
 - Using `DateTime.Today`, which is the server's local date and bypasses the injected clock.
 :::
 
-:::exercise id=m03-layers-ex4 difficulty=intermediate kind=design title="Draw the dependency graph for a RFI approval feature"
-A highway project management platform needs a "Request for Inspection" (RFI) feature: a contractor raises an RFI for a chainage segment; a site engineer approves or rejects it; approved RFIs schedule an inspection and notify the contractor by SMS. Design the classes across the four layers and show the dependency direction. Include at least one interface owned by the application layer and implemented by infrastructure.
+:::exercise id=m03-layers-ex4 difficulty=intermediate kind=design title="Draw the dependency graph for a course enrollment feature"
+A college's online portal needs an "enroll in a course section" feature. A student picks a section (for example *CS201 Data Structures, Section B, 60 seats*). If a seat is free, the enrollment is confirmed, a fee invoice of ₹4,500 for the course is raised in the fee portal, and the student gets an email. If the section is full, the student joins the waitlist and is told their position. Nobody can enroll after the add/drop deadline, and nobody can enroll twice in the same section. Design the classes across the four layers and show the dependency direction. Include at least one interface owned by the application layer and implemented by infrastructure.
 ::acceptance
-- `Rfi` (domain) holds the state machine `Raised → Approved | Rejected` and throws on invalid transitions.
-- An application service coordinates approval, scheduling and notification.
-- `IRfiRepository` and `ISmsNotifier` are interfaces in the application layer, implemented in infrastructure.
+- `CourseSection` (domain) holds the seat limit, the enrolled list and the waitlist, decides `Confirmed` versus `Waitlisted`, and throws on invalid operations (duplicate enrollment, enrolling after the deadline).
+- An application service coordinates enrollment, fee invoicing and notification.
+- `ISectionRepository` and `IEmailNotifier` are interfaces in the application layer, implemented in infrastructure.
 - No arrow points from domain to any other layer.
+- The design says what happens when two students try to take the last seat at the same moment.
 ::hint
-Start from the domain: what facts and rules does an RFI itself own?
+Start from the domain: what facts and rules does a course section itself own? Seats, deadline, who is in and who is waiting.
 ::hint
-List the steps of "approve RFI" in order. Each external step (store, SMS, scheduling) gets an interface.
+List the steps of "enroll" in order. Each external step (store, fee portal, email) gets an interface.
 ::hint
 Draw the Mermaid class diagram with the controller at the top and the domain at the bottom; check every solid arrow points downward.
+::hint
+For the last-seat race, think about what the repository's save must detect when the section changed after it was loaded.
 ::solution
 ```mermaid
 classDiagram
-    class RfiController {
-        +Approve(Guid id, ApproveRfiRequest req) IActionResult
+    class EnrollmentsController {
+        +Enroll(Guid sectionId, EnrollRequest req) IActionResult
     }
-    class RfiApprovalService {
-        -IRfiRepository rfis
-        -IInspectionScheduler scheduler
-        -ISmsNotifier sms
-        +ApproveAsync(Guid id, string engineerId) ApprovalOutcome
+    class EnrollmentService {
+        -ISectionRepository sections
+        -IFeeInvoicer fees
+        -IEmailNotifier email
+        -TimeProvider clock
+        +EnrollAsync(Guid sectionId, string studentId) EnrollmentOutcome
     }
-    class IRfiRepository {
+    class ISectionRepository {
         <<interface>>
-        +GetByIdAsync(Guid id) Rfi
-        +SaveAsync(Rfi rfi)
+        +GetByIdAsync(Guid id) CourseSection
+        +SaveAsync(CourseSection section)
     }
-    class IInspectionScheduler {
+    class IFeeInvoicer {
         <<interface>>
-        +ScheduleAsync(Rfi rfi) DateTimeOffset
+        +RaiseInvoiceAsync(string studentId, string courseCode) string
     }
-    class ISmsNotifier {
+    class IEmailNotifier {
         <<interface>>
-        +SendAsync(string phone, string message)
+        +SendAsync(string studentId, string message)
     }
-    class Rfi {
+    class CourseSection {
         +Guid Id
-        +string ChainageFrom
-        +string ChainageTo
-        +RfiStatus Status
-        +Approve(string engineerId)
-        +Reject(string engineerId, string reason)
+        +string CourseCode
+        +int Capacity
+        +DateOnly AddDropDeadline
+        +int SeatsTaken
+        +Enroll(string studentId, DateOnly today) EnrollmentStatus
+        +Drop(string studentId, DateOnly today)
     }
-    RfiController --> RfiApprovalService
-    RfiApprovalService --> IRfiRepository
-    RfiApprovalService --> IInspectionScheduler
-    RfiApprovalService --> ISmsNotifier
-    RfiApprovalService --> Rfi
-    IRfiRepository <|.. PostgresRfiRepository
-    IInspectionScheduler <|.. CalendarInspectionScheduler
-    ISmsNotifier <|.. TwilioSmsNotifier
+    EnrollmentsController --> EnrollmentService
+    EnrollmentService --> ISectionRepository
+    EnrollmentService --> IFeeInvoicer
+    EnrollmentService --> IEmailNotifier
+    EnrollmentService --> CourseSection
+    ISectionRepository <|.. PostgresSectionRepository
+    IFeeInvoicer <|.. FeePortalInvoicer
+    IEmailNotifier <|.. SmtpEmailNotifier
 ```
 
-`Rfi.Approve` throws `InvalidRfiTransitionException` unless the status is `Raised`. The service calls `rfi.Approve`, saves, then schedules and notifies. Scheduling and SMS happen *after* the save; if the SMS fails, the approval still stands and a retry job can resend. That ordering decision is a service concern, which is why the service, not the domain, owns it.
+`CourseSection.Enroll` throws `AlreadyEnrolledException` if the student is already enrolled or waitlisted, and `EnrollmentClosedException` after the add/drop deadline. Otherwise it returns `Confirmed` while `SeatsTaken < Capacity`, and `Waitlisted` (adding the student to the end of the queue) when the section is full. `Drop` frees a seat and promotes the first waitlisted student, so the "waitlist moves up" rule also lives in one place.
+
+The service calls `section.Enroll`, saves, and only then raises the fee invoice (for a confirmed seat) and sends the email. If the fee portal or email is down, the enrollment still stands and a retry job (or an outbox row written in the same transaction) finishes the side effects later. That ordering decision is a service concern, which is why the service, not the domain, owns it.
+
+The last-seat race: two students load the section with 59 of 60 seats taken, and both get `Confirmed` in memory. `PostgresSectionRepository.SaveAsync` uses optimistic concurrency (a version column checked in the `UPDATE ... WHERE version = @loaded`), so the second save fails. The service reloads the section and calls `Enroll` again, which now returns `Waitlisted`. The rule stays in the domain; the repository only detects that the data changed underneath.
 ::mistakes
-- Making `Rfi` call `ISmsNotifier` directly. The domain now depends on infrastructure and cannot be unit-tested without a fake notifier.
-- Putting the state check in the controller (`if (rfi.Status != Raised) return Conflict()`), so the mobile sync endpoint forgets it.
+- Making `CourseSection` call `IEmailNotifier` directly. The domain now depends on infrastructure and cannot be unit-tested without a fake notifier.
+- Putting the seat check in the controller (`if (section.SeatsTaken >= section.Capacity) return Conflict()`), so the registrar's bulk-enrollment import forgets it and overfills the class.
+- Checking seats in the service with a `SELECT COUNT(*)` and then inserting, with nothing to stop two requests doing it at the same time.
 :::
 
 :::exercise id=m03-layers-ex5 difficulty=advanced kind=written title="Decide how many layers two systems need"
@@ -1096,10 +1120,10 @@ You are asked to design two systems. For each, say which layers you would create
 
 **System A**: an internal tool for the HR team of a 200-person company to record employee laptop assignments. Three tables, six endpoints, one developer, no integrations, expected lifetime 3 years.
 
-**System B**: a toll-plaza transaction platform for a state highway authority. Rules for vehicle classes, exemptions, monthly passes and penalty calculations change by government notification every few months. Two external integrations (FASTag clearing house, SMS). Four developers, expected lifetime 10+ years, audited yearly.
+**System B**: the admissions and enrollment platform of a state university with 40 affiliated colleges and about 1.2 lakh students. Rules for eligibility, reserved-category seat quotas, fee waivers, scholarships and per-semester credit limits change by university or regulator circular every few months. Two external integrations (payment gateway for fees, SMS). Four developers, expected lifetime 10+ years, audited yearly.
 ::acceptance
 - System A ends up with fewer layers than System B, with reasons tied to the rules and the team, not to fashion.
-- For System B, the domain model is identified as the place where tariff rules live, with a stated reason.
+- For System B, the domain model is identified as the place where eligibility, quota and fee rules live, with a stated reason.
 - At least two concrete "add this layer when..." signals are given.
 ::hint
 Count the business rules, not the tables.
@@ -1110,7 +1134,7 @@ For System B, think about what the audit team will ask to see, and what changes 
 ::solution
 **System A.** Minimal API endpoints that use `DbContext` directly, plus request/response records. No repository interface: `DbContext` already abstracts the database and the only realistic second implementation is EF Core's in-memory or SQLite provider for tests. No separate service layer: each endpoint is one query or one save. Keep a `Domain/` folder for the `Assignment` entity so that if a rule appears ("an employee may hold at most two devices") it has a home. Signals to add a service: an endpoint grows past about 20 lines of logic, or a second caller (a nightly report, an import) needs the same steps. Signal to add a repository interface: the queries become complex enough to test on their own, or a second store appears.
 
-**System B.** All four layers from day one, and probably a separate `Domain` project with no package references so the compiler enforces the dependency rule. Tariff and penalty rules live in the domain (`TollTariff`, `VehicleClass`, `ExemptionPolicy`) because they change on a schedule the team does not control, they must be unit-tested exhaustively, and the auditor will want to read them in one place. Application services own the transaction boundaries (`RecordTransaction`, `SettleWithClearingHouse`). Infrastructure wraps FASTag and SMS behind interfaces so the clearing house's sandbox can be swapped in for testing and so an outage can be simulated. Even here, resist a fifth layer: no `Manager` on top of `Service`. Signal that you have gone too far: a layer that only forwards calls.
+**System B.** All four layers from day one, and probably a separate `Domain` project with no package references so the compiler enforces the dependency rule. Eligibility, quota and fee rules live in the domain (`EligibilityPolicy`, `SeatMatrix`, `FeeSchedule`, `CreditLimit`) because they change on a schedule the team does not control, they must be unit-tested exhaustively (a wrong quota calculation means a court case, not a bug ticket), and the auditor will want to read them in one place. Application services own the transaction boundaries (`ConfirmAdmission`, `CollectSemesterFee`). Infrastructure wraps the payment gateway and SMS behind interfaces so the gateway's sandbox can be swapped in for testing and so an outage during admission week can be simulated. Even here, resist a fifth layer: no `Manager` on top of `Service`. Signal that you have gone too far: a layer that only forwards calls.
 
 The general principle: layers are justified by rules that need isolation, integrations that need swapping, and people who need boundaries. System A has none of the three in quantity; System B has all three.
 ::mistakes
@@ -1169,7 +1193,7 @@ The ratio in a healthy codebase is roughly many domain tests, a good number of s
 
 - **ASP.NET Core templates and Microsoft's reference apps** (such as the eShop samples) use exactly this split, sometimes with the application and domain in separate projects so that the compiler enforces the dependency rule.
 - **Payment and banking APIs** keep money rules (limits, fees, rounding) in domain types like `Money` and `Account` because regulators ask to see the rule, not the SQL.
-- **Government and infrastructure project platforms**, such as progress-tracking systems for highway programmes, typically have rules that change by circular: how progress percentage is computed per contract type, which approvals are needed for a variation. Keeping those in the domain layer means a notification changes one class and its tests, not six controllers.
+- **University and online-course platforms** have rules that change by circular or by product decision: prerequisites per course, maximum credits per semester, refund windows after enrollment, fee waivers per category. Keeping those in the domain layer (`CourseSection`, `CreditLimit`, `RefundPolicy`) means a new circular changes one class and its tests, not six controllers and a nightly import job.
 - **Any system that grows a second front end** (mobile app, partner API, admin portal, scheduled job) gets its payback from the service layer: the use case is written once and called from four places.
 
 The counter-example is just as real: thousands of small internal tools run happily as minimal APIs over `DbContext` with no service or repository layer, and adding them would have been waste.

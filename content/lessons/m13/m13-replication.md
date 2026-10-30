@@ -45,17 +45,17 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-A highway project keeps its official measurement book (MB) at the head office. Every day, engineers record work done: "Chainage 12+400 to 12+600, bituminous layer, 200 m". Only the head office clerk may write in the official book — that's the **leader**.
+Picture a busy cloud kitchen in Bengaluru that takes phone and app orders. One person at the front desk keeps the official order book. Every order goes in it: "Order 4417, 2 × chicken biryani, Koramangala, ₹540". Only the desk keeps the official book — that's the **leader**.
 
-Each site office keeps a **copy** so engineers can look things up without phoning head office. After every entry, the clerk sends a photocopy of the new page by courier. These copies are the **followers**.
+The kitchen and the rider dispatch counter each keep a **copy**, so cooks and dispatchers can check orders without shouting across the room. After every new entry, the desk snaps a photo of the page and sends it to both counters on the team chat. These copies are the **followers**.
 
 Now three questions:
 
-1. **When does the clerk tell the engineer "recorded"?**
-   - Right after writing it in the master book (fast, but if the head office floods tonight, today's entries exist nowhere else) — **asynchronous**.
-   - Only after at least one site office confirms it received the photocopy (slower, but the entry survives a flood) — **synchronous** or **semi-synchronous**.
-2. **What if an engineer reads the site copy before today's photocopy arrives?** They see yesterday's figures — **replication lag**.
-3. **What if the head office burns down?** One site office must become the new head office — **failover**. If its copy was missing the last few pages, those entries are lost. And if the old clerk turns up next week still writing in his own book, you now have two "official" books that disagree — **split-brain**.
+1. **When does the desk tell the customer "order placed"?**
+   - Right after writing it in the official book (fast, but if someone spills tea on the book in the next minute, the order exists nowhere else) — **asynchronous**.
+   - Only after at least one counter confirms it received the photo (slower, but the order survives a spilled book) — **synchronous** or **semi-synchronous**.
+2. **What if a dispatcher checks their copy before the latest photo arrives?** They don't see the newest order yet — **replication lag**.
+3. **What if the desk person goes home sick?** The dispatch counter's copy becomes the new official book — **failover**. If its copy was missing the last few photos, those orders are lost: the customer was told "placed" but nobody cooks it. And if the original desk person comes back after lunch and keeps writing orders in the old book, you now have two "official" books that disagree — **split-brain**.
 
 That's all of leader-follower replication. The rest of this lesson is the engineering detail.
 
@@ -79,7 +79,7 @@ In PostgreSQL:
 - Every change is first written to the **write-ahead log (WAL)**. Each position in it is a **log sequence number (LSN)**, like `3/2A000000`.
 - **Physical streaming replication** sends WAL records to standbys over a replication connection. Standbys replay them and can serve read-only queries (*hot standby*).
 - **Logical replication** sends row-level changes for chosen tables, which allows different versions, partial copies and feeding other systems — at the cost of not replicating schema changes automatically.
-- **Replication slots** make the primary keep WAL until a standby has received it. Useful, but an abandoned slot keeps WAL forever and can fill the primary's disk.
+- **Replication slots** make the primary keep WAL until a standby has received it. Useful, but an abandoned slot keeps WAL forever and can fill the primary's disk. Set `max_slot_wal_keep_size` so a dead slot is invalidated instead of taking the primary down, and alert on slot retention. Since PostgreSQL 17, logical replication slots can be marked `failover` and synchronised to a physical standby (`sync_replication_slots`), so logical subscribers (CDC pipelines, search indexers) survive a primary failover.
 
 Because one node orders all writes, leader-follower gives you a single, total order of changes for free (the WAL), which is why it's the default for relational databases.
 
@@ -95,7 +95,7 @@ The key question is **when the leader tells the client "committed"**.
 
 Arithmetic (an estimate, to show the shape): at 2,000 writes per second and an average lag of 1.5 s at the moment the leader fails, about 2,000 × 1.5 = **3,000 acknowledged writes** are lost on failover.
 
-**Synchronous.** The leader waits for a follower to confirm before replying. In PostgreSQL, `synchronous_standby_names` lists the standbys that count, and `synchronous_commit` sets what "confirm" means: `remote_write` (standby received it), `on` (standby flushed it to disk) or `remote_apply` (standby replayed it, so reads there see it).
+**Synchronous.** The leader waits for a follower to confirm before replying. In PostgreSQL, `synchronous_standby_names` lists the standbys that count, and `synchronous_commit` sets what "confirm" means: `remote_write` (standby received it and handed it to its operating system, not yet flushed to disk), `on` (standby flushed it to disk) or `remote_apply` (standby replayed it, so reads there see it). `synchronous_commit` can also be changed per transaction (`SET LOCAL synchronous_commit = local`), so a low-value write such as a "last seen" timestamp can skip the wait while payments keep it.
 
 - Latency: every commit pays a round trip to the standby. Same region, different zone: about 1–2 ms (estimate). Another region: tens of milliseconds.
 - Durability: failing over to that standby loses no acknowledged write.
@@ -103,7 +103,7 @@ Arithmetic (an estimate, to show the shape): at 2,000 writes per second and an a
 
 **Semi-synchronous / quorum commit.** Wait for *some* followers, not all.
 
-- PostgreSQL: `synchronous_standby_names = 'ANY 1 (s1, s2)'` waits for any one of two standbys. One standby can fail without blocking writes.
+- PostgreSQL: `synchronous_standby_names = 'ANY 1 (s1, s2)'` waits for any one of two standbys (quorum). `'FIRST 1 (s1, s2)'` is priority-based: s1 is synchronous and s2 takes over the role only if s1 disconnects. Either way, one standby can fail without blocking writes.
 - MySQL's semi-synchronous replication waits until at least one replica has *received* the change, with a timeout (`rpl_semi_sync_source_timeout`) after which the source **falls back to asynchronous** until a replica catches up.
 
 **Failure case: the silent fallback.** A team turns on semi-synchronous replication "for zero data loss". During a network blip the replica stops acknowledging, the source waits for the timeout (a configurable number of seconds), then switches to asynchronous mode — and keeps running like that. A week later the source dies. The last 40 seconds of writes are gone, despite the "zero data loss" setting. Nobody noticed the fallback because there was no alert on it. The setting was correct; the monitoring wasn't. Treat "replication mode degraded" as a paging alert.
@@ -123,7 +123,7 @@ Arithmetic (an estimate, to show the shape): at 2,000 writes per second and an a
 
 - **Network** between zones or regions, or a saturated link (a bulk import on the leader can generate WAL faster than the link carries it).
 - **Apply speed**: replay of physical WAL in PostgreSQL is single-process per standby, so a write-heavy leader can outrun a standby with the same hardware.
-- **Long queries on the standby**: PostgreSQL may delay replay that would conflict with a running query, up to `max_standby_streaming_delay`. A 10-minute report can cause up to that much lag (or get cancelled, depending on the setting).
+- **Long queries on the standby**: when replay would remove rows a running query still needs, PostgreSQL pauses replay for up to `max_standby_streaming_delay` (default 30 s) and then cancels the query. Set it to `-1` and a 10-minute report can hold replay back for 10 minutes. Turning on `hot_standby_feedback` avoids most cancellations, but the primary then keeps old row versions for the standby's queries, which causes table bloat on the primary. A dedicated reporting replica with a large delay and a separate low-lag replica for user traffic is a common split.
 - **Big transactions and migrations**: an `ALTER TABLE` rewriting a 50 GB table produces a burst of WAL.
 
 How to see it on PostgreSQL:
@@ -154,7 +154,7 @@ When the leader fails, someone must:
 3. **Promote** it, so it accepts writes.
 4. **Fence** the old leader so it can't accept writes if it comes back: shut it down, revoke its network access, or have storage reject writes from an old **epoch** (also called term or generation number). The blunt version is called STONITH: "shoot the other node in the head".
 5. **Redirect** clients: update DNS, a virtual IP, a proxy (PgBouncer, HAProxy) or the connection string. Connection pools that hold open connections to the old leader must be drained.
-6. **Rejoin** the old leader as a follower later, after discarding any writes it had that the new leader doesn't (PostgreSQL's `pg_rewind` does this).
+6. **Rejoin** the old leader as a follower later, after discarding any writes it had that the new leader doesn't (PostgreSQL's `pg_rewind` does this; it needs `wal_log_hints = on` or data checksums enabled on the cluster beforehand, otherwise you rebuild the old leader from a fresh base backup).
 
 Managed services (Azure Database for PostgreSQL flexible server with high availability, Amazon RDS Multi-AZ) and tools like Patroni (which uses etcd or similar for leader election) automate these steps. Failover usually takes from tens of seconds to a couple of minutes, depending on detection timeouts and DNS caching — an estimate; test your own.
 
@@ -178,7 +178,7 @@ Why: users in each region get local write latency, and each region keeps working
 
 The cost is **write conflicts**: the same record changed in two regions before they synchronised.
 
-- **Avoid conflicts** where possible: home each record (a user, a tenant, a project) in one region and route all its writes there. Most "multi-leader" systems are really "single leader per record".
+- **Avoid conflicts** where possible: home each record (a user, a restaurant, a tenant) in one region and route all its writes there. Most "multi-leader" systems are really "single leader per record".
 - **Resolve deterministically**: last-writer-wins (loses data, see [logical clocks](#/lesson/m13-time-ordering)), merge functions, CRDTs, or keep both and ask a human.
 - **Constraints break**: a unique constraint (username, invoice number) can't be enforced across leaders without coordination. Two users in two regions both claim `@kumar`. Use a single authority for unique claims, or per-region number ranges.
 - **Auto-increment ids collide**: use UUIDs, ULIDs or per-leader id ranges.
@@ -256,7 +256,7 @@ The client was told "committed" at LSN 1042, but the follower only had 1041 when
 
 ## Step-by-step example
 
-A site-progress platform for road projects: engineers log daily quantities from the field; managers view dashboards. Peak about 400 writes per second, 6,000 reads per second (assumed).
+A food-delivery platform for one country: restaurants and riders update order status ("accepted", "picked up", "delivered"), customers track their orders, and restaurant owners watch sales dashboards. Peak about 400 writes per second and 6,000 reads per second (assumed: most reads are customers refreshing the tracking page).
 
 ### Step 1 — the naive version
 
@@ -264,7 +264,7 @@ One PostgreSQL VM, nightly backups. If the VM's disk fails at 6 p.m., you restor
 
 ### Step 2 — add an asynchronous replica for reads
 
-Dashboards move to a replica; the primary's load drops. Lag is usually under a second. But engineers who save a quantity and are redirected to the dashboard sometimes don't see it (read-your-writes). Route "my entries" pages to the primary; leave project-wide dashboards on the replica with a "data as of 12:01:05" label.
+Restaurant sales dashboards move to a replica; the primary's load drops. Lag is usually under a second. But a customer who places an order and is redirected to "Track my order" sometimes sees "order not found" (a read-your-writes violation). Route the tracking page for a just-placed order to the primary (for example, for 30 seconds after the customer's last write); leave sales dashboards on the replica with a "data as of 12:01:05" label.
 
 ### Step 3 — add a synchronous standby in another zone, with automated failover
 
@@ -279,7 +279,7 @@ Configure fencing so an old primary can never accept writes after failover, put 
 Real replication lives in the database. What application code owns is: choosing where to send a read, handling failover gracefully, and rejecting writes from a stale leader. The in-memory cluster below models leader-follower replication with commit modes, lag, failover and epoch fencing, so you can test application behaviour against it.
 
 ```text
-Progress.Api/
+Delivery.Api/
   Program.cs
   Replication/
     LogModel.cs
@@ -289,7 +289,7 @@ Progress.Api/
 ```
 
 ```csharp file=Replication/LogModel.cs
-namespace Progress.Replication;
+namespace Delivery.Replication;
 
 public enum NodeRole { Leader, Follower, Fenced }
 
@@ -335,7 +335,7 @@ public sealed record NodeStatus(string Name, NodeRole Role, long Epoch, long Las
 ```
 
 ```csharp file=Replication/LeaderFollowerCluster.cs
-namespace Progress.Replication;
+namespace Delivery.Replication;
 
 /// <summary>An in-memory model of single-leader replication: commit modes, lag, failover with
 /// epoch fencing, and rejoin with log truncation (like pg_rewind).</summary>
@@ -481,7 +481,7 @@ public sealed class LeaderFollowerCluster
 ```csharp file=Replication/LagAwareReadRouter.cs
 using Microsoft.Extensions.Options;
 
-namespace Progress.Replication;
+namespace Delivery.Replication;
 
 public sealed class ReadRoutingOptions
 {
@@ -514,7 +514,7 @@ public sealed class LagAwareReadRouter(LeaderFollowerCluster cluster, IOptions<R
 ```csharp file=Replication/ReplicationLagMonitor.cs
 using Microsoft.Extensions.Options;
 
-namespace Progress.Replication;
+namespace Delivery.Replication;
 
 /// <summary>Ships the log and reports lag every second. In production, the database ships the log
 /// and this service would read pg_stat_replication and publish metrics instead.</summary>
@@ -538,7 +538,7 @@ public sealed class ReplicationLagMonitor(
 ```
 
 ```csharp file=Program.cs
-using Progress.Replication;
+using Delivery.Replication;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -551,7 +551,7 @@ builder.Services.AddHostedService<ReplicationLagMonitor>();
 
 var app = builder.Build();
 
-app.MapPut("/quantities/{key}", (string key, QuantityWrite body, CommitMode? mode, LeaderFollowerCluster cluster) =>
+app.MapPut("/orders/{key}/status", (string key, OrderStatusWrite body, CommitMode? mode, LeaderFollowerCluster cluster) =>
 {
     try
     {
@@ -569,7 +569,7 @@ app.MapPut("/quantities/{key}", (string key, QuantityWrite body, CommitMode? mod
     }
 });
 
-app.MapGet("/quantities/{key}", (string key, bool? fresh, LagAwareReadRouter router, HttpResponse resp) =>
+app.MapGet("/orders/{key}/status", (string key, bool? fresh, LagAwareReadRouter router, HttpResponse resp) =>
 {
     var r = router.Read(key, requireFresh: fresh ?? false);
     resp.Headers["X-Served-By"] = r.ServedBy;
@@ -592,7 +592,7 @@ app.MapPost("/admin/nodes/{name}/rejoin", (string name, LeaderFollowerCluster c)
 
 app.Run();
 
-public sealed record QuantityWrite(string Value);
+public sealed record OrderStatusWrite(string Value);
 ```
 
 What to take from it:
@@ -753,7 +753,7 @@ Falling back to the primary is a *capacity* decision too: if every replica lags 
 :::
 
 :::exercise id=m13-replication-ex2 difficulty=beginner kind=written title="Choose a commit mode with numbers"
-A contractor-payments service in Mumbai writes about 600 payment records per second at peak. Options:
+The wallet-payments service of a food-delivery app in Mumbai (customer payments, refunds and restaurant payouts) writes about 600 payment records per second at peak. Options:
 
 - (A) asynchronous replication to a standby in another Mumbai zone (typical lag 200 ms, spikes to 5 s during batch jobs);
 - (B) synchronous replication to that standby (adds an estimated 1.5 ms per commit);
@@ -781,7 +781,7 @@ A region-wide disaster takes out both Mumbai zones. What protects you then, and 
 | C: sync, Hyderabad | 0 | ≈ 25 ms | **Writes block** |
 | D: ANY 1 of 2, same region | 0 (fail over to the acknowledging standby) | ≈ the faster standby's round trip, ~1.5 ms | Writes continue while one standby is up |
 
-**Recommendation: D.** Payments shouldn't lose acknowledged records, so A is out (3,000 lost payments in a bad moment means reconciliation with banks and contractors). B makes the primary's availability depend on one extra machine. C pays 25 ms on every payment and still blocks on one standby. D gives RPO 0 for acknowledged writes with small latency and tolerates one standby failure. Failover must promote the standby that acknowledged the latest writes (failover tools check LSNs).
+**Recommendation: D.** Payments shouldn't lose acknowledged records, so A is out (3,000 lost payments in a bad moment means reconciliation with banks, payment gateways and restaurants). B makes the primary's availability depend on one extra machine. C pays 25 ms on every payment and still blocks on one standby. D gives RPO 0 for acknowledged writes with small latency and tolerates one standby failure. Failover must promote the standby that acknowledged the latest writes (failover tools check LSNs).
 
 **Disaster recovery**: add an **asynchronous** replica in another region (Hyderabad or Chennai) plus WAL archiving to object storage in that region. Region-wide RPO is then the async lag (seconds; measure it) and RTO is the time to promote and redirect (minutes, drilled). Combined with idempotent payment processing and daily reconciliation with the bank, the few seconds of exposure are recoverable.
 ::mistakes
@@ -1299,14 +1299,14 @@ Add a `MinSyncLsn` input: if the cluster runs synchronous replication, refuse to
 public void Async_failover_reports_lost_writes_and_fences_old_leader()
 {
     var c = new LeaderFollowerCluster(new[] { "a", "b", "c" }, NullLogger<LeaderFollowerCluster>.Instance);
-    c.Write("ch-12400", "200m", CommitMode.Async);
+    c.Write("order-4417", "PLACED", CommitMode.Async);
     c.ReplicateTick();
-    c.Write("ch-12600", "180m", CommitMode.Async);   // not replicated yet
+    c.Write("order-4418", "PLACED", CommitMode.Async);   // not replicated yet
     c.Node("a").Reachable = false;
 
     var report = c.FailOver();
     Assert.Equal(1, report.LostWrites);
-    Assert.Throws<StaleEpochException>(() => c.Write("ch-12800", "150m", CommitMode.Async, viaNode: "a"));
+    Assert.Throws<StaleEpochException>(() => c.Write("order-4419", "PLACED", CommitMode.Async, viaNode: "a"));
 
     Assert.Equal(1, c.Rejoin("a"));   // its divergent tail is discarded
 }
@@ -1324,7 +1324,7 @@ public void Async_failover_reports_lost_writes_and_fences_old_leader()
 - **MySQL** offers asynchronous, semi-synchronous and group replication; the semi-synchronous timeout fallback described above is documented behaviour that teams must monitor.
 - **Dynamo-style databases** (Cassandra, Riak, and the design in Amazon's Dynamo paper) use leaderless replication with tunable N, R and W, read repair and hinted handoff.
 - **Offline-first mobile and field apps** behave like multi-leader systems: each device writes locally and syncs later, needing conflict resolution for every record type.
-- **Infrastructure-project reporting platforms** commonly put dashboards and MIS reports on a read replica while keeping data entry on the primary — exactly the "fresh path vs lag-tolerant path" split in this lesson.
+- **Food-delivery and e-commerce platforms** commonly put seller and restaurant dashboards and finance reports on a read replica while order placement and tracking-after-checkout stay on the primary — exactly the "fresh path vs lag-tolerant path" split in this lesson.
 
 ## Interview questions
 
@@ -1348,7 +1348,7 @@ When I want no acknowledged-write loss but can't let one standby's failure block
 ::q advanced
 A company wants active-active writes in two regions on PostgreSQL-compatible infrastructure. What do you advise?
 ::a
-First, challenge the need: most systems are fine with one write region, a synchronous standby in another zone, and an async DR replica in the second region. If active-active is required, avoid conflicts by homing each record (tenant, user, project) to one region and routing its writes there — that's single-leader per record. For data that genuinely can be written in both, decide conflict handling per table: mergeable types, explicit merge rules, or manual resolution; never default row-level LWW on multi-row business documents. Replace unique constraints and sequences that span regions with a single authority, UUIDs or id ranges. Budget for cross-region egress, test partitions, and monitor replication conflicts as a metric.
+First, challenge the need: most systems are fine with one write region, a synchronous standby in another zone, and an async DR replica in the second region. If active-active is required, avoid conflicts by homing each record (tenant, user, restaurant) to one region and routing its writes there — that's single-leader per record. For data that genuinely can be written in both, decide conflict handling per table: mergeable types, explicit merge rules, or manual resolution; never default row-level LWW on multi-row business documents. Replace unique constraints and sequences that span regions with a single authority, UUIDs or id ranges. Budget for cross-region egress, test partitions, and monitor replication conflicts as a metric.
 ::q advanced
 How does leaderless replication differ from leader-follower, and what are its pitfalls?
 ::a

@@ -7,7 +7,7 @@ status: reviewed
 template: capstone
 minutes: 2700
 prerequisites: [m12-rabbitmq, m12-idempotent-consumers, m12-retries-dlq, m12-outbox, m12-sagas, m12-redis, m10-idempotency, m16-saga-orchestration-choreography]
-related: [m08-order-management-project, m12-delivery-guarantees, m12-eventual-consistency, m13-retry-storms, m13-distributed-transactions, m10-timeouts-retries, m10-circuit-breaker, m17-ecommerce, m17-payment-system, m20-capstone-a, m20-capstone-c]
+related: [m08-order-management-project, m12-delivery-guarantees, m12-eventual-consistency, m13-retry-storms, m13-distributed-transactions, m10-timeouts-retries, m10-circuit-breaker, m17-ecommerce, m17-payment-system, m17-flash-sale, m17-unique-id-generator, m17-job-scheduler, m17-scaling-journey, m18-inventory-reservation, m20-capstone-a, m20-capstone-c]
 tags: [capstone, microservices, rabbitmq, redis, saga, idempotency, retries, dlq, outbox, distributed-systems]
 patterns: [Saga (orchestration), Transactional Outbox, Idempotent Consumer (Inbox), Retry with Backoff and Jitter, Dead Letter Queue, Idempotency Key]
 summary: Build an order pipeline split across several services that talk through RabbitMQ, with Redis-backed idempotency, an orchestrated saga with compensation, retries with backoff and jitter, dead-letter queues and a written failure analysis, and prove it survives crashes, duplicates and outages.
@@ -47,13 +47,13 @@ By the end of this capstone you will be able to:
 - Workflows: [sagas](#/lesson/m12-sagas) and [orchestration vs choreography](#/lesson/m16-saga-orchestration-choreography).
 - [Redis](#/lesson/m12-redis) and [API idempotency](#/lesson/m10-idempotency).
 
-Recommended: [Project: Order management domain](#/lesson/m08-order-management-project), because this capstone splits that domain across services, and [retry storms](#/lesson/m13-retry-storms).
+Recommended: [Project: Order management domain](#/lesson/m08-order-management-project), because this capstone splits that domain across services, and [retry storms](#/lesson/m13-retry-storms). The [scaling journey](#/lesson/m17-scaling-journey) case study ends at the stage where a checkout monolith is split into services; this capstone picks up from that point and makes the split correct.
 
 ## Project brief
 
 ### The business
 
-**ShopKart** (a fictional retailer) sells phones, appliances and accessories online across India. It runs large sales around Diwali and the Big Billion-style festival weekends that Indian e-commerce is known for. Fulfilment comes from six warehouses (Bhiwandi, Gurugram, Bengaluru, Kolkata, Hyderabad, Chennai). Payments go through two gateways (UPI, cards, net-banking, EMI). Shipping is booked with three courier partners through their APIs.
+**ShopKart** (a fictional retailer) sells phones, appliances and accessories online across India. It runs large sales around Diwali and the festival-season sale weekends that Indian e-commerce is known for, when a phone launch can sell out in minutes. Fulfilment comes from six warehouses (Bhiwandi, Gurugram, Bengaluru, Kolkata, Hyderabad, Chennai). Payments go through two gateways (UPI, cards, net-banking, EMI). Shipping is booked with three courier partners through their APIs.
 
 The current monolith falls over during sales: a slow courier API holds database connections, checkout times out, customers retry, and some get charged twice. Leadership has decided to split order processing into services owned by separate teams. You are the lead engineer responsible for making the split **correct under failure**.
 
@@ -138,16 +138,32 @@ About 7 weeks at 10–12 hours per week.
 | Week | Milestone | Scope | Exit criteria |
 |---|---|---|---|
 | 1 | **M1 — Requirements, HLD, contracts** | Deliverables 1, 2; message catalogue; ADRs for boundaries, broker and saga style | Every message has a producer, consumer, schema and idempotency key on paper |
-| 2 | **M2 — Messaging backbone** | Shared library: envelope, outbox relay with publisher confirms, inbox consumer with manual ack, retry and DLQ topology as code | A test publishes 10,000 messages while killing the relay twice; consumer sees each exactly once in its effects |
+| 2 | **M2 — Messaging backbone** | Shared library: envelope, outbox relay with publisher confirms, inbox consumer with manual ack, retry and DLQ topology as code | A test publishes 10,000 messages while killing the relay twice; consumer sees each exactly once in its effects; exercise 3 passes |
 | 3 | **M3 — Order API and idempotency** | Gateway, Order service, Redis idempotency keys, 202 + status endpoint | Exercise 6 passes; double-submit and parallel-submit tests pass |
 | 4 | **M4 — Saga happy path** | Orchestrator in Order service, Inventory, Payment, Shipping stubs | Order goes Pending → Confirmed through all services; exercise 4 passes |
-| 5 | **M5 — Compensation and timeouts** | Payment failure, shipment failure, cancel race, saga timeouts, reconciliation job | Every compensation path tested end to end; no stuck sagas after 1,000 random-failure runs |
-| 6 | **M6 — Retries, DLQ, operations** | Retry classifier, delay queues, DLQ admin endpoints, dashboards, alerts | Exercises 1–3 pass; poison message lands in DLQ and is replayed successfully |
+| 5 | **M5 — Compensation and timeouts** | Payment failure, shipment failure, cancel race, saga timeouts, stuck-saga and reconciliation jobs | Every compensation path tested end to end; no stuck sagas after 1,000 random-failure runs; exercise 2 runs as a scheduled check |
+| 6 | **M6 — Retries, DLQ, operations** | Retry classifier, delay queues, DLQ admin endpoints, dashboards, alerts | Exercise 1 passes; poison message lands in DLQ and is replayed successfully |
 | 7 | **M7 — Hardening and handover** | Performance tests, failure drills, security review, runbook, cost analysis, final review | Deliverables 9–16 complete; demo kills Payment mid-sale and recovers without data loss |
 
 :::callout type=warning title="Build the backbone before the business logic"
 Teams that start with the happy path through five services spend week 6 discovering that their messages are not durable and their consumers are not idempotent, and rewrite everything. Milestone 2 exists so that every service is built on a backbone that already survives crashes.
 :::
+
+**Keeping the scope realistic.** Five services, a gateway and sixteen deliverables is a lot for one person in seven weeks. The services are deliberately thin: Inventory, Payment and Shipping each have one or two tables and talk to **stubs** with configurable latency and failure rates, not real providers. If you fall behind, merge Notification into the Order service as a plain event consumer and drop the push channel, but never cut the outbox, the inbox, the compensations or the fault-injection runs; they are what this capstone grades.
+
+### Where each piece is taught
+
+| Piece | Lessons to revisit |
+|---|---|
+| Message ids, order ids and time-ordered keys | [Distributed unique ID generator](#/lesson/m17-unique-id-generator) |
+| Broker topology, acks, confirms, quorum queues | [RabbitMQ](#/lesson/m12-rabbitmq), [delivery guarantees](#/lesson/m12-delivery-guarantees) |
+| Outbox relay and inbox consumer | [Outbox](#/lesson/m12-outbox), [idempotent consumers](#/lesson/m12-idempotent-consumers) |
+| `Idempotency-Key` at the API | [API idempotency](#/lesson/m10-idempotency), [Redis](#/lesson/m12-redis) |
+| Saga, compensation, cancel race | [Sagas](#/lesson/m12-sagas), [orchestration vs choreography](#/lesson/m16-saga-orchestration-choreography), [LLD: order processing](#/lesson/m18-order-processing) |
+| Stock reservation without overselling at sale peak | [Inventory reservation](#/lesson/m18-inventory-reservation), [Flash sale system](#/lesson/m17-flash-sale) |
+| Retries, backoff, jitter, DLQ | [Retries and DLQ](#/lesson/m12-retries-dlq), [timeouts and retries](#/lesson/m10-timeouts-retries), [retry storms](#/lesson/m13-retry-storms) |
+| Saga timeouts, stuck-saga and reconciliation jobs | [Distributed job scheduler](#/lesson/m17-job-scheduler) |
+| Charges, refunds, reconciliation against the gateway | [Payment processing system](#/lesson/m17-payment-system) |
 
 ## Reference architecture
 
@@ -270,7 +286,7 @@ sequenceDiagram
     O->>O: order Confirmed, outbox OrderConfirmed event
 ```
 
-Every arrow into a service follows the same pattern: **inbox check, do the work, write the reply to the outbox, commit, then acknowledge** the broker message. Every arrow out of a service comes from an outbox relay that publishes with **publisher confirms** and marks the outbox row sent only after the broker confirms. The client is not kept waiting for any of this: it got 202 after the first local transaction and polls the status URL (or receives a push). The payment service passes the order id as the idempotency key to the gateway, so a retried `ChargePayment` cannot charge twice even if the first gateway call timed out after succeeding.
+Every arrow into a service follows the same pattern: **inbox check, do the work, write the reply to the outbox, commit, then acknowledge** the broker message. Every arrow out of a service comes from an outbox relay that publishes with **publisher confirms** and marks the outbox row sent only after the broker confirms. The client is not kept waiting for any of this: it got 202 after the first local transaction and polls the status URL (or receives a push). The payment service passes the order id as the idempotency key to the gateway, so a retried `ChargePayment` cannot charge twice even if the first gateway call timed out after succeeding. (That works because this design allows one charge attempt per order. If you later let customers "retry with another card", key on a payment-attempt id instead, or the gateway will replay the first decline.)
 
 ### Key sequence: payment fails, stock is released
 
@@ -349,7 +365,7 @@ namespace ShopKart.Messaging;
 
 /// <summary>Every message on the bus. MessageId is the idempotency key for consumers.</summary>
 public sealed record Envelope(
-    Guid MessageId,
+    Guid MessageId,           // Guid.CreateVersion7(): unique and roughly time-ordered, so inbox indexes stay compact
     string Type,              // e.g. "inventory.reserve.v1"
     Guid CorrelationId,       // the order id: ties every message in one saga together
     Guid? CausationId,        // the message that caused this one
@@ -453,6 +469,8 @@ The RabbitMQ wiring is not compiled here (the client library is not available of
 
 ```csharp
 // Consumer setup (RabbitMQ.Client 7.x, async API). Not compiled in this lesson.
+// Prefetch limits unacked messages; it does not by itself make handlers run in parallel. Set
+// ConsumerDispatchConcurrency (on the ConnectionFactory or per channel) to the number of handlers you want running at once.
 await channel.BasicQosAsync(prefetchSize: 0, prefetchCount: 20, global: false);   // at most 20 unacked per consumer
 var consumer = new AsyncEventingBasicConsumer(channel);
 consumer.ReceivedAsync += async (_, ea) =>
@@ -746,7 +764,7 @@ In production, replace the literal with `now()`, add a partial index `CREATE IND
 ::mistakes
 - Using `<=`, which reports 5007 at exactly 10 minutes.
 - Forgetting to exclude terminal states, flooding the report with finished orders.
-- Casting before flooring, which rounds 25.0 correctly but rounds 31.5 to 32 on some casts.
+- Casting to `int` before flooring: PostgreSQL's cast rounds, so 31.5 minutes becomes 32.
 :::
 
 :::exercise id=m20-capstone-b-ex3 difficulty=intermediate kind=code title="M2: an inbox that is safe under concurrent duplicates"
@@ -1165,7 +1183,7 @@ Reference architecture:
 
 **Idempotency at three layers.** (1) The gateway stores `Idempotency-Key` with a request fingerprint in Redis using `SET NX`; if Redis is lost, the Order DB's `UNIQUE (customer_id, idempotency_key)` still rejects duplicates, just more slowly. (2) Every consumer uses an inbox keyed by message id. (3) The Payment service sends the order id as the gateway's idempotency key, so a timed-out-but-successful charge is never repeated.
 
-**Scaling during a sale.** If the gateway slows from 300 ms to 3 s, `payment.commands` grows first. With a prefetch of 20 and 4 instances, throughput is about 80 in-flight charges ÷ 3 s ≈ 27/s, below the 40/s arrival rate, so the queue grows by ~13/s (estimate). Scale Payment consumers (stateless) up to the gateway's contracted rate limit, and *not* beyond it, or you convert a slowdown into 429 errors and retries. The broker and primary databases do not scale by adding instances during the sale; size them beforehand from the load test (Little's law: in-flight = rate × latency).
+**Scaling during a sale.** If the gateway slows from 300 ms to 3 s, `payment.commands` grows first. With a prefetch and dispatch concurrency of 20 on each of 4 instances, throughput is about 80 in-flight charges ÷ 3 s ≈ 27/s, below the 40/s arrival rate, so the queue grows by ~13/s (estimate). Scale Payment consumers (stateless) up to the gateway's contracted rate limit, and *not* beyond it, or you convert a slowdown into 429 errors and retries. The broker and primary databases do not scale by adding instances during the sale; size them beforehand from the load test (Little's law: in-flight = rate × latency).
 
 **DLQ.** Per-queue DLQs, an alert when any is non-empty, and an ops console that shows the message, its error and attempt history, and offers replay (republish to the original exchange with a new message id that keeps the original id in a header, so the inbox does not swallow it) or discard, both audited.
 

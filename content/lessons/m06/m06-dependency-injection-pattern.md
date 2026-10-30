@@ -43,19 +43,19 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Think of a **site engineer** arriving at a new bridge project. On day one, two things could happen.
+Think of a **delivery rider** joining a food-delivery company. On day one, two things could happen.
 
-**Option A:** the engineer must find their own tools. They go to Delhi to buy a total station, arrange a jeep, and hire a helper. They can only work with *that* total station and *that* jeep. If the jeep breaks, work stops, and you can't test them on a training site without the same jeep.
+**Option A:** the rider must find their own kit. They buy a scooter, a phone and an insulated food bag themselves. They can only work with *that* scooter and *that* bag. If the scooter breaks, deliveries stop, and you can't train them on a practice route without the same scooter.
 
-**Option B:** the **project office** hands the engineer a kit on arrival: a total station, a jeep and a helper. The engineer only says what they *need* ("something that measures angles and distances"). The office decides which brand. On a training site, the office hands over a cheaper practice kit, and the engineer works exactly the same way.
+**Option B:** the **local hub** hands the rider a kit on arrival: a scooter, a phone with the rider app, and an insulated bag. The rider only says what they *need* ("something that keeps food hot for 30 minutes"). The hub decides which brand. On a training day, the hub hands over a practice kit, and the rider works exactly the same way.
 
 Option B is Dependency Injection.
 
-- The engineer is the **class** (the consumer).
-- "Something that measures angles" is an **interface** (the abstraction).
+- The rider is the **class** (the consumer).
+- "Something that keeps food hot" is an **interface** (the abstraction).
 - The kit handed over is the set of **dependencies** passed in, usually through the constructor.
-- The project office, the one place that decides what goes in every kit, is the **composition root**.
-- An automated store that assembles kits from a list is a **DI container**. It's helpful, but the office could do it by hand.
+- The hub, the one place that decides what goes in every kit, is the **composition root**.
+- An automated locker that assembles kits from a checklist is a **DI container**. It's helpful, but the hub manager could do it by hand.
 
 ## First-principles explanation
 
@@ -106,11 +106,11 @@ The **composition root** is the single place, as close to the application's entr
 
 | Lifetime | One instance per… | Typical examples | Watch out for |
 |---|---|---|---|
-| **Singleton** | application | `TimeProvider`, `HttpClient` handlers via `IHttpClientFactory`, caches, rate tables | Must be thread-safe. Must not hold scoped things. |
+| **Singleton** | application | `TimeProvider`, `IHttpClientFactory`, in-memory caches, price or rate tables | Must be thread-safe. Must not hold scoped things. |
 | **Scoped** | scope (an HTTP request) | `DbContext`, unit of work, current-user/tenant context | Don't resolve from the root provider. Don't share across threads. |
 | **Transient** | resolution | Lightweight stateless helpers | A disposable transient resolved from the root provider is kept until the app shuts down. |
 
-**Captive dependency**: a longer-lived service holds a shorter-lived one. The classic example is a singleton that takes a scoped `DbContext` in its constructor. The first request's `DbContext` is captured forever and shared by every request on every thread. The result is data leaking between users and random concurrency exceptions. ASP.NET Core turns on `ValidateScopes` in Development, which throws when a scoped service is resolved from the root provider (the captive-dependency symptom). `ValidateOnBuild` checks that every registration can be constructed at startup. Turn both on in every environment's tests.
+**Captive dependency**: a longer-lived service holds a shorter-lived one. The classic example is a singleton that takes a scoped `DbContext` in its constructor. The first request's `DbContext` is captured forever and shared by every request on every thread. The result is data leaking between users and random concurrency exceptions. `ValidateScopes` makes the container throw when a singleton depends on a scoped service, or when a scoped service is resolved from the root provider. `ValidateOnBuild` checks at start-up that every registration can be constructed. ASP.NET Core turns both on in the Development environment only, so also turn them on in a test of your real registrations (shown later) to catch problems in CI.
 
 ### When DI is unnecessary
 
@@ -629,23 +629,23 @@ public static class Program
 ## Exercises
 
 :::exercise id=m06-dependency-injection-pattern-ex1 difficulty=beginner kind=code title="Refactor a hard-wired reminder service"
-The original `LicenceExpiryReminder` looked like this:
+A gym chain's original `MembershipExpiryReminder` looked like this:
 
 ```csharp
 public int SendReminders()
 {
     var sms = new TwilioLikeSms("live-key");
-    var contractors = new ContractorDb("Host=prod").All();
+    var members = new MemberDb("Host=prod").All();
     var today = DateOnly.FromDateTime(DateTime.Now);
-    // send SMS to everyone whose licence expires within 30 days...
+    // send SMS to every member whose membership expires within 30 days...
 }
 ```
 
 The constructor has already been changed to receive its dependencies. Implement `SendReminders` using **only** the injected dependencies.
 ::requirements
-- A contractor whose licence expires between today and today + 30 days (inclusive) gets one SMS.
+- A member whose membership expires between today and today + 30 days (inclusive) gets one SMS.
 - Already expired or later than 30 days: no SMS.
-- Message text: `"Dear {Name}, your contractor licence expires on {date:dd-MM-yyyy}. Please renew."`
+- Message text: `"Dear {Name}, your gym membership expires on {date:dd-MM-yyyy}. Please renew."`
 - Return the number of SMS sent. "Today" comes from `TimeProvider` (UTC date).
 ::acceptance
 - Tests with a fake clock, a fake SMS sender and a fake directory pass.
@@ -655,49 +655,49 @@ Every dependency the method needs is already a constructor parameter. Use them.
 ::hint
 `DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime)` gives today's date from a `TimeProvider`.
 ::hint
-Filter with `c.LicenceExpiresOn >= today && c.LicenceExpiresOn <= today.AddDays(30)`.
+Filter with `m.MembershipExpiresOn >= today && m.MembershipExpiresOn <= today.AddDays(30)`.
 ::hint
 Format the date with `ToString("dd-MM-yyyy", CultureInfo.InvariantCulture)` so the output doesn't depend on the machine's culture.
 ::starter
-```csharp file=LicenceExpiryReminder.cs
+```csharp file=MembershipExpiryReminder.cs
 using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 
-public sealed record Contractor(string Name, string Mobile, DateOnly LicenceExpiresOn);
+public sealed record Member(string Name, string Mobile, DateOnly MembershipExpiresOn);
 public interface ISmsSender { void Send(string mobile, string text); }
-public interface IContractorDirectory { IReadOnlyList<Contractor> All(); }
+public interface IMemberDirectory { IReadOnlyList<Member> All(); }
 
-public sealed class LicenceExpiryReminder(TimeProvider clock, ISmsSender sms, IContractorDirectory directory)
+public sealed class MembershipExpiryReminder(TimeProvider clock, ISmsSender sms, IMemberDirectory directory)
 {
     public int SendReminders() => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=LicenceExpiryReminderTests.cs
+```csharp file=MembershipExpiryReminderTests.cs
 using System;
 using System.Collections.Generic;
 using Xunit;
 
-public class LicenceExpiryReminderTests
+public class MembershipExpiryReminderTests
 {
     private sealed class FixedClock(DateTimeOffset now) : TimeProvider { public override DateTimeOffset GetUtcNow() => now; }
     private sealed class FakeSms : ISmsSender { public List<(string To, string Text)> Sent = new(); public void Send(string m, string t) => Sent.Add((m, t)); }
-    private sealed class FakeDirectory(params Contractor[] all) : IContractorDirectory { public IReadOnlyList<Contractor> All() => all; }
+    private sealed class FakeDirectory(params Member[] all) : IMemberDirectory { public IReadOnlyList<Member> All() => all; }
 
     private static readonly DateTimeOffset Now = new(2026, 10, 18, 9, 0, 0, TimeSpan.Zero);
 
     [Fact]
-    public void Sends_only_to_licences_expiring_within_30_days()
+    public void Sends_only_to_memberships_expiring_within_30_days()
     {
         var sms = new FakeSms();
         var dir = new FakeDirectory(
-            new Contractor("Ravi Infra", "9800000001", new DateOnly(2026, 10, 18)),   // today
-            new Contractor("Kaveri Roads", "9800000002", new DateOnly(2026, 11, 17)), // +30
-            new Contractor("Old Co", "9800000003", new DateOnly(2026, 10, 17)),       // expired
-            new Contractor("Later Ltd", "9800000004", new DateOnly(2026, 11, 18)));   // +31
-        var count = new LicenceExpiryReminder(new FixedClock(Now), sms, dir).SendReminders();
+            new Member("Ravi Kumar", "9800000001", new DateOnly(2026, 10, 18)),    // today
+            new Member("Kavya Iyer", "9800000002", new DateOnly(2026, 11, 17)),    // +30
+            new Member("Old Member", "9800000003", new DateOnly(2026, 10, 17)),    // expired
+            new Member("Later Member", "9800000004", new DateOnly(2026, 11, 18))); // +31
+        var count = new MembershipExpiryReminder(new FixedClock(Now), sms, dir).SendReminders();
         Assert.Equal(2, count);
         Assert.Equal(new[] { "9800000001", "9800000002" }, sms.Sent.ConvertAll(s => s.To).ToArray());
     }
@@ -706,36 +706,36 @@ public class LicenceExpiryReminderTests
     public void Message_text_is_exact()
     {
         var sms = new FakeSms();
-        new LicenceExpiryReminder(new FixedClock(Now), sms,
-            new FakeDirectory(new Contractor("Kaveri Roads", "98", new DateOnly(2026, 11, 2)))).SendReminders();
-        Assert.Equal("Dear Kaveri Roads, your contractor licence expires on 02-11-2026. Please renew.", sms.Sent[0].Text);
+        new MembershipExpiryReminder(new FixedClock(Now), sms,
+            new FakeDirectory(new Member("Kavya Iyer", "98", new DateOnly(2026, 11, 2)))).SendReminders();
+        Assert.Equal("Dear Kavya Iyer, your gym membership expires on 02-11-2026. Please renew.", sms.Sent[0].Text);
     }
 
     [Fact]
-    public void No_contractors_no_sms() =>
-        Assert.Equal(0, new LicenceExpiryReminder(new FixedClock(Now), new FakeSms(), new FakeDirectory()).SendReminders());
+    public void No_members_no_sms() =>
+        Assert.Equal(0, new MembershipExpiryReminder(new FixedClock(Now), new FakeSms(), new FakeDirectory()).SendReminders());
 }
 ```
 ::solution
-```csharp file=LicenceExpiryReminder.cs
+```csharp file=MembershipExpiryReminder.cs
 using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 
-public sealed record Contractor(string Name, string Mobile, DateOnly LicenceExpiresOn);
+public sealed record Member(string Name, string Mobile, DateOnly MembershipExpiresOn);
 public interface ISmsSender { void Send(string mobile, string text); }
-public interface IContractorDirectory { IReadOnlyList<Contractor> All(); }
+public interface IMemberDirectory { IReadOnlyList<Member> All(); }
 
-public sealed class LicenceExpiryReminder(TimeProvider clock, ISmsSender sms, IContractorDirectory directory)
+public sealed class MembershipExpiryReminder(TimeProvider clock, ISmsSender sms, IMemberDirectory directory)
 {
     public int SendReminders()
     {
         var today = DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
         var last = today.AddDays(30);
-        var due = directory.All().Where(c => c.LicenceExpiresOn >= today && c.LicenceExpiresOn <= last).ToList();
-        foreach (var c in due)
-            sms.Send(c.Mobile, $"Dear {c.Name}, your contractor licence expires on {c.LicenceExpiresOn.ToString("dd-MM-yyyy", CultureInfo.InvariantCulture)}. Please renew.");
+        var due = directory.All().Where(m => m.MembershipExpiresOn >= today && m.MembershipExpiresOn <= last).ToList();
+        foreach (var m in due)
+            sms.Send(m.Mobile, $"Dear {m.Name}, your gym membership expires on {m.MembershipExpiresOn.ToString("dd-MM-yyyy", CultureInfo.InvariantCulture)}. Please renew.");
         return due.Count;
     }
 }
@@ -749,14 +749,14 @@ The method's logic barely changed. What changed is **who decides** which SMS gat
 :::
 
 :::exercise id=m06-dependency-injection-pattern-ex2 difficulty=beginner kind=code title="Write a pure-DI composition root"
-A small CLI tool for a site office prices material requisitions. Write `CompositionRoot` by hand, with no container.
+A small CLI tool for a neighbourhood grocery shop prices customers' baskets. Write `CompositionRoot` by hand, with no container.
 ::requirements
 - `PriceList` is created **once** per `CompositionRoot` (a singleton).
-- `CreateHandler()` returns a new `RequisitionHandler` each call, with a **new** `Requisition` cart (scoped per call) and the shared `PriceList`.
-- `RequisitionHandler` receives an `IPriceFormatter`. Use `RupeeFormatter`.
+- `CreateHandler()` returns a new `BasketHandler` each call, with a **new** `Basket` (scoped per call) and the shared `PriceList`.
+- `BasketHandler` receives an `IPriceFormatter`. Use `RupeeFormatter`.
 ::acceptance
-- Two handlers share the same `PriceList` instance but have different `Requisition` instances.
-- `handler.Add("CEM-OPC53", 10)` followed by `handler.Total()` returns `"₹4,100.00"` with the default rate table (410 per bag).
+- Two handlers share the same `PriceList` instance but have different `Basket` instances.
+- `handler.Add("RICE-5KG", 10)` followed by `handler.Total()` returns `"₹4,100.00"` with the default price list (₹410 per 5 kg bag of rice).
 ::hint
 Singletons become fields initialised in the composition root's constructor. Scoped objects are created inside `CreateHandler()`.
 ::hint
@@ -764,7 +764,7 @@ Expose `PriceList` and the handler's `Cart` as properties so the tests can check
 ::hint
 ```csharp
 private readonly PriceList _prices = new();
-public RequisitionHandler CreateHandler() => new(_prices, new Requisition(), new RupeeFormatter());
+public BasketHandler CreateHandler() => new(_prices, new Basket(), new RupeeFormatter());
 ```
 ::starter
 ```csharp file=CompositionRoot.cs
@@ -775,11 +775,11 @@ using System.Linq;
 
 public sealed class PriceList
 {
-    private readonly Dictionary<string, decimal> _rates = new() { ["CEM-OPC53"] = 410m, ["STL-FE500"] = 62_000m };
+    private readonly Dictionary<string, decimal> _rates = new() { ["RICE-5KG"] = 410m, ["GHEE-1L"] = 620m };
     public decimal RateOf(string code) => _rates.TryGetValue(code, out var r) ? r : throw new KeyNotFoundException(code);
 }
 
-public sealed class Requisition { public List<(string Code, decimal Qty)> Lines { get; } = new(); }
+public sealed class Basket { public List<(string Code, decimal Qty)> Lines { get; } = new(); }
 
 public interface IPriceFormatter { string Format(decimal amount); }
 public sealed class RupeeFormatter : IPriceFormatter
@@ -787,10 +787,10 @@ public sealed class RupeeFormatter : IPriceFormatter
     public string Format(decimal amount) => "₹" + amount.ToString("#,##0.00", CultureInfo.InvariantCulture);
 }
 
-public sealed class RequisitionHandler(PriceList prices, Requisition cart, IPriceFormatter formatter)
+public sealed class BasketHandler(PriceList prices, Basket cart, IPriceFormatter formatter)
 {
     public PriceList Prices => prices;
-    public Requisition Cart => cart;
+    public Basket Cart => cart;
     public void Add(string code, decimal qty) => cart.Lines.Add((code, qty));
     public string Total() => formatter.Format(cart.Lines.Sum(l => prices.RateOf(l.Code) * l.Qty));
 }
@@ -798,7 +798,7 @@ public sealed class RequisitionHandler(PriceList prices, Requisition cart, IPric
 public sealed class CompositionRoot
 {
     public PriceList PriceList => throw new NotImplementedException();
-    public RequisitionHandler CreateHandler() => throw new NotImplementedException();
+    public BasketHandler CreateHandler() => throw new NotImplementedException();
 }
 ```
 ::tests
@@ -822,7 +822,7 @@ public class CompositionRootTests
     public void Totals_are_formatted_in_rupees()
     {
         var h = new CompositionRoot().CreateHandler();
-        h.Add("CEM-OPC53", 10);
+        h.Add("RICE-5KG", 10);
         Assert.Equal("₹4,100.00", h.Total());
     }
 
@@ -840,11 +840,11 @@ using System.Linq;
 
 public sealed class PriceList
 {
-    private readonly Dictionary<string, decimal> _rates = new() { ["CEM-OPC53"] = 410m, ["STL-FE500"] = 62_000m };
+    private readonly Dictionary<string, decimal> _rates = new() { ["RICE-5KG"] = 410m, ["GHEE-1L"] = 620m };
     public decimal RateOf(string code) => _rates.TryGetValue(code, out var r) ? r : throw new KeyNotFoundException(code);
 }
 
-public sealed class Requisition { public List<(string Code, decimal Qty)> Lines { get; } = new(); }
+public sealed class Basket { public List<(string Code, decimal Qty)> Lines { get; } = new(); }
 
 public interface IPriceFormatter { string Format(decimal amount); }
 public sealed class RupeeFormatter : IPriceFormatter
@@ -852,10 +852,10 @@ public sealed class RupeeFormatter : IPriceFormatter
     public string Format(decimal amount) => "₹" + amount.ToString("#,##0.00", CultureInfo.InvariantCulture);
 }
 
-public sealed class RequisitionHandler(PriceList prices, Requisition cart, IPriceFormatter formatter)
+public sealed class BasketHandler(PriceList prices, Basket cart, IPriceFormatter formatter)
 {
     public PriceList Prices => prices;
-    public Requisition Cart => cart;
+    public Basket Cart => cart;
     public void Add(string code, decimal qty) => cart.Lines.Add((code, qty));
     public string Total() => formatter.Format(cart.Lines.Sum(l => prices.RateOf(l.Code) * l.Qty));
 }
@@ -867,14 +867,14 @@ public sealed class CompositionRoot
 
     public PriceList PriceList => _priceList;
 
-    public RequisitionHandler CreateHandler() => new(_priceList, new Requisition(), _formatter);   // new cart per "scope"
+    public BasketHandler CreateHandler() => new(_priceList, new Basket(), _formatter);   // new cart per "scope"
 }
 ```
 
 That's the entire "container". For a tool with a handful of classes, it's clearer than `ServiceCollection`, and a missing dependency is a compile error, not a runtime one.
 ::mistakes
 - Making `PriceList` `static`. That's a hidden global, and two roots (for example two tests) would share state.
-- Creating `PriceList` inside `CreateHandler()`, so each handler reloads the rate table.
+- Creating `PriceList` inside `CreateHandler()`, so each handler reloads the price list.
 :::
 
 :::exercise id=m06-dependency-injection-pattern-ex3 difficulty=intermediate kind=code title="Fix the lifetimes"
@@ -887,7 +887,7 @@ services.AddScoped<RateTable>();
 services.AddSingleton<IdGenerator>();
 ```
 
-Every tenant saw the first tenant's name, and the rate table never refreshed. Implement `AppServices.Register` with correct lifetimes.
+This is a restaurant-ordering SaaS where each restaurant is a tenant. Every restaurant saw the first restaurant's name, and the delivery-fee table never refreshed. Implement `AppServices.Register` with correct lifetimes.
 ::requirements
 - `TenantContext` holds the current request's tenant, so it's **scoped**.
 - `RateTable` is loaded once and shared, so it's a **singleton**.
@@ -910,11 +910,11 @@ using System;
 using Microsoft.Extensions.DependencyInjection;
 
 public sealed class TenantContext { public string TenantId { get; set; } = "unknown"; }
-public sealed class RateTable { public decimal CementPerBag { get; } = 410m; }
+public sealed class RateTable { public decimal DeliveryFeePerKm { get; } = 12m; }
 public sealed class TenantGreeting(TenantContext tenant, RateTable rates)
 {
     public TenantContext Tenant => tenant;
-    public string Text() => $"Welcome {tenant.TenantId}. Cement today: ₹{rates.CementPerBag}/bag";
+    public string Text() => $"Welcome {tenant.TenantId}. Delivery today: ₹{rates.DeliveryFeePerKm}/km";
 }
 public sealed class IdGenerator { public Guid Id { get; } = Guid.NewGuid(); }
 
@@ -940,10 +940,10 @@ public class AppServicesTests
         using var sp = Build();
         using var s1 = sp.CreateScope();
         using var s2 = sp.CreateScope();
-        s1.ServiceProvider.GetRequiredService<TenantContext>().TenantId = "nhai-pune";
-        s2.ServiceProvider.GetRequiredService<TenantContext>().TenantId = "bsrdc-patna";
-        Assert.Contains("nhai-pune", s1.ServiceProvider.GetRequiredService<TenantGreeting>().Text());
-        Assert.Contains("bsrdc-patna", s2.ServiceProvider.GetRequiredService<TenantGreeting>().Text());
+        s1.ServiceProvider.GetRequiredService<TenantContext>().TenantId = "dosa-corner-pune";
+        s2.ServiceProvider.GetRequiredService<TenantContext>().TenantId = "biryani-house-patna";
+        Assert.Contains("dosa-corner-pune", s1.ServiceProvider.GetRequiredService<TenantGreeting>().Text());
+        Assert.Contains("biryani-house-patna", s2.ServiceProvider.GetRequiredService<TenantGreeting>().Text());
         Assert.Same(s1.ServiceProvider.GetRequiredService<TenantGreeting>(), s1.ServiceProvider.GetRequiredService<TenantGreeting>());
     }
 
@@ -979,11 +979,11 @@ using System;
 using Microsoft.Extensions.DependencyInjection;
 
 public sealed class TenantContext { public string TenantId { get; set; } = "unknown"; }
-public sealed class RateTable { public decimal CementPerBag { get; } = 410m; }
+public sealed class RateTable { public decimal DeliveryFeePerKm { get; } = 12m; }
 public sealed class TenantGreeting(TenantContext tenant, RateTable rates)
 {
     public TenantContext Tenant => tenant;
-    public string Text() => $"Welcome {tenant.TenantId}. Cement today: ₹{rates.CementPerBag}/bag";
+    public string Text() => $"Welcome {tenant.TenantId}. Delivery today: ₹{rates.DeliveryFeePerKm}/km";
 }
 public sealed class IdGenerator { public Guid Id { get; } = Guid.NewGuid(); }
 
@@ -1007,7 +1007,7 @@ The original had two bugs. A singleton `TenantContext` meant one tenant for the 
 :::
 
 :::exercise id=m06-dependency-injection-pattern-ex4 difficulty=intermediate kind=code title="Route notifications with keyed services"
-Contractors choose how they want to be notified: `"sms"`, `"email"` or `"whatsapp"`. Register three notifiers as keyed services, and implement a `NotificationRouter` that picks one by the contractor's preference.
+Customers of an online store choose how they want to be notified about their orders: `"sms"`, `"email"` or `"whatsapp"`. Register three notifiers as keyed services, and implement a `NotificationRouter` that picks one by the customer's preference.
 ::requirements
 - `NotificationSetup.Register(services)` registers `SmsNotifier`, `EmailNotifier` and `WhatsAppNotifier` as **keyed singletons** for `INotifier`, plus `NotificationRouter` as a singleton.
 - `NotificationRouter.Send(preference, to, text)` resolves the keyed `INotifier`, calls it, and returns the channel name it used.
@@ -1073,16 +1073,16 @@ public class NotificationRouterTests
     public void Routes_by_preference(string preference, string expected)
     {
         using var sp = Build();
-        Assert.Equal(expected, sp.GetRequiredService<NotificationRouter>().Send(preference, "x", "Bill passed"));
+        Assert.Equal(expected, sp.GetRequiredService<NotificationRouter>().Send(preference, "x", "Order shipped"));
     }
 
     [Fact]
     public void Message_reaches_the_keyed_instance()
     {
         using var sp = Build();
-        sp.GetRequiredService<NotificationRouter>().Send("whatsapp", "9800000001", "RA bill 7 approved");
+        sp.GetRequiredService<NotificationRouter>().Send("whatsapp", "9800000001", "Order 7 shipped");
         var wa = (WhatsAppNotifier)sp.GetRequiredKeyedService<INotifier>("whatsapp");
-        Assert.Equal(("9800000001", "RA bill 7 approved"), Assert.Single(wa.Sent));
+        Assert.Equal(("9800000001", "Order 7 shipped"), Assert.Single(wa.Sent));
     }
 }
 ```
@@ -1135,7 +1135,7 @@ The router is singleton and resolves singletons, so there's no captive-dependenc
 Inject `IEnumerable<INotifier>` and build a `Dictionary<string, INotifier>` keyed by `Channel` in the constructor. That needs no `IServiceProvider` and no keyed services, works on any container, and is easy to test with plain `new`. This is the [Strategy](#/lesson/m06-strategy) resolver approach. Keyed services shine when the key is known at *registration* time and consumers use `[FromKeyedServices]`.
 ::mistakes
 - Comparing keys case-sensitively, so `"SMS"` from a mobile app silently falls back to email.
-- Throwing on an unknown preference, when a notification failure shouldn't block bill approval.
+- Throwing on an unknown preference, when a notification failure shouldn't block the order update.
 :::
 
 :::exercise id=m06-dependency-injection-pattern-ex5 difficulty=advanced kind=code title="Write a Decorate extension without a library"
@@ -1147,9 +1147,9 @@ Inject `IEnumerable<INotifier>` and build a `Dictionary<string, INotifier>` keye
 - Throw `InvalidOperationException` if `TService` isn't registered.
 - Decorating twice nests: the last decorator is outermost.
 ::acceptance
-- Resolving `IRateSource` returns `CachingRateSource`, which wraps `DsrRateSource`.
+- Resolving `IRateSource` returns `CachingRateSource`, which wraps `CourierApiRateSource`.
 - A scoped registration stays scoped: same within a scope, different across scopes.
-- Decorating twice gives `Logging(Caching(Dsr))`.
+- Decorating twice gives `Logging(Caching(CourierApi))`.
 - Decorating an unregistered service throws.
 ::hint
 `IServiceCollection` is an `IList<ServiceDescriptor>`, so you can replace `services[i]`.
@@ -1168,13 +1168,13 @@ services[i] = ServiceDescriptor.Describe(typeof(TService), sp => ActivatorUtilit
 using System;
 using Microsoft.Extensions.DependencyInjection;
 
-public interface IRateSource { decimal CementRate(string district); }
+public interface IRateSource { decimal DeliveryRate(string city); }
 
-/// <summary>Delhi Schedule of Rates style source (pretend it's slow).</summary>
-public sealed class DsrRateSource : IRateSource
+/// <summary>Calls a courier partner's rate API (pretend it's slow).</summary>
+public sealed class CourierApiRateSource : IRateSource
 {
     public int Calls { get; private set; }
-    public decimal CementRate(string district) { Calls++; return district == "Gurugram" ? 410m : 395m; }
+    public decimal DeliveryRate(string city) { Calls++; return city == "Mumbai" ? 49m : 59m; }
 }
 
 public sealed class RateCache { public System.Collections.Generic.Dictionary<string, decimal> Items { get; } = new(); }
@@ -1182,15 +1182,15 @@ public sealed class RateCache { public System.Collections.Generic.Dictionary<str
 public sealed class CachingRateSource(IRateSource inner, RateCache cache) : IRateSource
 {
     public IRateSource Inner => inner;
-    public decimal CementRate(string district) =>
-        cache.Items.TryGetValue(district, out var r) ? r : cache.Items[district] = inner.CementRate(district);
+    public decimal DeliveryRate(string city) =>
+        cache.Items.TryGetValue(city, out var r) ? r : cache.Items[city] = inner.DeliveryRate(city);
 }
 
 public sealed class LoggingRateSource(IRateSource inner) : IRateSource
 {
     public IRateSource Inner => inner;
     public int Logged { get; private set; }
-    public decimal CementRate(string district) { Logged++; return inner.CementRate(district); }
+    public decimal DeliveryRate(string city) { Logged++; return inner.DeliveryRate(city); }
 }
 
 public static class DecorateExtensions
@@ -1214,13 +1214,13 @@ public class DecorateExtensionsTests
     [Fact]
     public void Wraps_type_registration_and_keeps_scoped_lifetime()
     {
-        var s = new ServiceCollection().AddScoped<RateCache>().AddScoped<IRateSource, DsrRateSource>();
+        var s = new ServiceCollection().AddScoped<RateCache>().AddScoped<IRateSource, CourierApiRateSource>();
         s.Decorate<IRateSource, CachingRateSource>();
         using var sp = Build(s);
         using var a = sp.CreateScope();
         using var b = sp.CreateScope();
         var r1 = a.ServiceProvider.GetRequiredService<IRateSource>();
-        Assert.IsType<DsrRateSource>(Assert.IsType<CachingRateSource>(r1).Inner);
+        Assert.IsType<CourierApiRateSource>(Assert.IsType<CachingRateSource>(r1).Inner);
         Assert.Same(r1, a.ServiceProvider.GetRequiredService<IRateSource>());
         Assert.NotSame(r1, b.ServiceProvider.GetRequiredService<IRateSource>());
     }
@@ -1228,26 +1228,26 @@ public class DecorateExtensionsTests
     [Fact]
     public void Caching_decorator_actually_caches()
     {
-        var dsr = new DsrRateSource();
-        var s = new ServiceCollection().AddSingleton<RateCache>().AddSingleton<IRateSource>(dsr);
+        var api = new CourierApiRateSource();
+        var s = new ServiceCollection().AddSingleton<RateCache>().AddSingleton<IRateSource>(api);
         s.Decorate<IRateSource, CachingRateSource>();
         using var sp = Build(s);
         var r = sp.GetRequiredService<IRateSource>();
-        Assert.Equal(410m, r.CementRate("Gurugram"));
-        Assert.Equal(410m, r.CementRate("Gurugram"));
-        Assert.Equal(1, dsr.Calls);
+        Assert.Equal(49m, r.DeliveryRate("Mumbai"));
+        Assert.Equal(49m, r.DeliveryRate("Mumbai"));
+        Assert.Equal(1, api.Calls);
     }
 
     [Fact]
     public void Factory_registration_and_double_decoration_nest()
     {
-        var s = new ServiceCollection().AddSingleton<RateCache>().AddSingleton<IRateSource>(_ => new DsrRateSource());
+        var s = new ServiceCollection().AddSingleton<RateCache>().AddSingleton<IRateSource>(_ => new CourierApiRateSource());
         s.Decorate<IRateSource, CachingRateSource>();
         s.Decorate<IRateSource, LoggingRateSource>();
         using var sp = Build(s);
         var outer = Assert.IsType<LoggingRateSource>(sp.GetRequiredService<IRateSource>());
         var mid = Assert.IsType<CachingRateSource>(outer.Inner);
-        Assert.IsType<DsrRateSource>(mid.Inner);
+        Assert.IsType<CourierApiRateSource>(mid.Inner);
         Assert.Same(outer, sp.GetRequiredService<IRateSource>());
     }
 
@@ -1261,13 +1261,13 @@ public class DecorateExtensionsTests
 using System;
 using Microsoft.Extensions.DependencyInjection;
 
-public interface IRateSource { decimal CementRate(string district); }
+public interface IRateSource { decimal DeliveryRate(string city); }
 
-/// <summary>Delhi Schedule of Rates style source (pretend it's slow).</summary>
-public sealed class DsrRateSource : IRateSource
+/// <summary>Calls a courier partner's rate API (pretend it's slow).</summary>
+public sealed class CourierApiRateSource : IRateSource
 {
     public int Calls { get; private set; }
-    public decimal CementRate(string district) { Calls++; return district == "Gurugram" ? 410m : 395m; }
+    public decimal DeliveryRate(string city) { Calls++; return city == "Mumbai" ? 49m : 59m; }
 }
 
 public sealed class RateCache { public System.Collections.Generic.Dictionary<string, decimal> Items { get; } = new(); }
@@ -1275,15 +1275,15 @@ public sealed class RateCache { public System.Collections.Generic.Dictionary<str
 public sealed class CachingRateSource(IRateSource inner, RateCache cache) : IRateSource
 {
     public IRateSource Inner => inner;
-    public decimal CementRate(string district) =>
-        cache.Items.TryGetValue(district, out var r) ? r : cache.Items[district] = inner.CementRate(district);
+    public decimal DeliveryRate(string city) =>
+        cache.Items.TryGetValue(city, out var r) ? r : cache.Items[city] = inner.DeliveryRate(city);
 }
 
 public sealed class LoggingRateSource(IRateSource inner) : IRateSource
 {
     public IRateSource Inner => inner;
     public int Logged { get; private set; }
-    public decimal CementRate(string district) { Logged++; return inner.CementRate(district); }
+    public decimal DeliveryRate(string city) { Logged++; return inner.DeliveryRate(city); }
 }
 
 public static class DecorateExtensions
@@ -1334,8 +1334,8 @@ var store = new FakeInvoiceStore();
 var service = new InvoiceService(new GstCalculator(Options.Create(new CompanyOptions { SupplierStateCode = "06" })),
     new InMemoryInvoiceNumberGenerator(), store, new FakeNotifier(), new FixedClock(new DateTimeOffset(2026, 10, 18, 0, 0, 0, TimeSpan.Zero)));
 
-var invoice = await service.IssueAsync(new InvoiceRequest("Sahyadri Infra", "a@b.in", "27",
-    new[] { new InvoiceLine("Consultancy", 100_000m, 18m) }), default);
+var invoice = await service.IssueAsync(new InvoiceRequest("Sahyadri Foods", "a@b.in", "27",
+    new[] { new InvoiceLine("Annual POS software subscription", 100_000m, 18m) }), default);
 
 Assert.Equal(18_000m, invoice.Amounts.Igst);          // Maharashtra (27) ≠ Haryana (06) → IGST
 Assert.Equal("INV/2026-27/000001", invoice.Number);

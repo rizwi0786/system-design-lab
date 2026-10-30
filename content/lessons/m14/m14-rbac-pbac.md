@@ -24,7 +24,7 @@ references:
     url: https://www.usenix.org/conference/atc19/presentation/pang
 ---
 
-A municipal e-procurement portal runs tenders for road and drainage works. On day one the rules were simple: bidders submit bids, officers publish tenders, evaluators score bids. Three roles, three `[Authorize(Roles = "...")]` attributes. A year later the rules read like this: an evaluator may score a bid only after the bid deadline, only for tenders in projects they are assigned to, and never if they declared a conflict of interest with that bidder. An Executive Engineer may approve awards up to ₹50 lakh, a Superintending Engineer up to ₹5 crore. The person who created a payment can't approve it. Roles alone can't express any of that. This lesson shows how to grow from roles to policies without turning your code into a maze of `if` statements.
+A university runs an online scholarship portal. On day one the rules were simple: students submit applications, scholarship officers publish scholarships, reviewers (faculty members) score applications. Three roles, three `[Authorize(Roles = "...")]` attributes. A year later the rules read like this: a reviewer may score an application only after the application deadline (so every applicant is judged against the same pool), only for scholarships of departments they are assigned to, and never if they declared a conflict of interest with that applicant (a relative, or a student they tutor privately). A Head of Department may approve an award round up to ₹5 lakh, a Dean up to ₹50 lakh. The finance clerk who created a payment batch can't approve it. Roles alone can't express any of that. This lesson shows how to grow from roles to policies without turning your code into a maze of `if` statements.
 
 ## Learning objectives
 
@@ -66,11 +66,11 @@ The practical approach most teams end up with: **roles for the coarse picture, p
 
 RBAC has three ideas:
 
-1. **Permissions** are named actions: `bid.submit`, `bid.evaluate`, `award.approve`.
-2. **Roles** are named sets of permissions: `Evaluator = {bid.read, bid.evaluate}`.
-3. **Assignments** link users to roles, optionally **scoped**: "Asha is Evaluator *on project NH-48*".
+1. **Permissions** are named actions: `application.submit`, `application.review`, `award.approve`.
+2. **Roles** are named sets of permissions: `Reviewer = {application.read, application.review}`.
+3. **Assignments** link users to roles, optionally **scoped**: "Asha is Reviewer *for department D-CSE* (Computer Science)".
 
-The most important habit: **check permissions in code, not role names.** `User.IsInRole("Evaluator")` scattered across 60 endpoints means a new role "Senior Evaluator" requires editing 60 places. A check for the permission `bid.evaluate` doesn't change when roles are reorganised. Only the role → permission table does.
+The most important habit: **check permissions in code, not role names.** `User.IsInRole("Reviewer")` scattered across 60 endpoints means a new role "Senior Reviewer" requires editing 60 places. A check for the permission `application.review` doesn't change when roles are reorganised. Only the role → permission table does.
 
 RBAC is excellent when:
 
@@ -80,22 +80,22 @@ RBAC is excellent when:
 
 RBAC struggles with:
 
-- **Ownership and relationships** ("their own bid", "patients under their care"). You'd need a role per object.
+- **Ownership and relationships** ("their own application", "patients under their care"). You'd need a role per object.
 - **Context** (time windows, amounts, location, device posture).
-- **Role explosion.** Encoding attributes into roles produces names like `Evaluator_NH48_RoadWorks_Under50L`. Organisations with hundreds of such roles stop being able to review them.
+- **Role explosion.** Encoding attributes into roles produces names like `Reviewer_CSE_NeedBased_Under5L`. Organisations with hundreds of such roles stop being able to review them.
 
 ### ABAC and PBAC: rules over attributes
 
 An ABAC decision evaluates a rule over four groups of attributes:
 
-| Group | Examples in the tender portal |
+| Group | Examples in the scholarship portal |
 |---|---|
-| Subject | user id, roles, department, approval limit, assigned projects |
-| Resource | tender id, project, estimated value, deadline, bid owner, status |
-| Action | read, submit, evaluate, approve |
+| Subject | user id, roles, home department, approval limit, departments assigned for review |
+| Resource | scholarship id, department, total award, deadline, applicant, status |
+| Action | read, submit, review, approve |
 | Environment | current time, IP range, MFA used for this session, emergency flag |
 
-A rule reads like a sentence: *"Allow `evaluate` on a bid if the subject has `bid.evaluate`, the subject is assigned to the bid's project, now is after the tender's deadline, and the subject has no conflict declaration for this bidder."*
+A rule reads like a sentence: *"Allow `review` on an application if the subject has `application.review`, the subject is assigned to the scholarship's department, now is after the application deadline, and the subject has no conflict declaration for this applicant."*
 
 "PBAC" is mostly a name for the same idea with the emphasis on **policies as named, testable, centrally managed units**. In ASP.NET Core, a policy is a named list of requirements, and each requirement is checked by handlers.
 
@@ -104,12 +104,12 @@ Trade-offs of ABAC/PBAC:
 | You gain | You pay |
 |---|---|
 | Precise rules without role explosion | "Who can do X?" is no longer a simple lookup. You must evaluate the policy for each candidate |
-| Context-aware decisions (time, amount, MFA) | Attributes must be fresh and correct. A stale "assigned projects" list is a security bug |
+| Context-aware decisions (time, amount, MFA) | Attributes must be fresh and correct. A stale "assigned departments" list is a security bug |
 | Rules live in one place, testable as units | Harder for non-developers to review than a role list |
 
 ### ReBAC: relationships as the main attribute
 
-Many rules are really about a graph: user → member of → team → editor of → folder → contains → document. Google's Zanzibar paper describes a system that stores such relationship tuples (`doc:42#editor@team:roads#member`) and answers "can user U edit doc 42?" by walking the graph, at very large scale. Open-source systems inspired by it (SpiceDB, OpenFGA and others) exist. You need this style when sharing is user-driven (Google Drive-like folders, nested groups). For most line-of-business apps, a few membership tables and policies are enough.
+Many rules are really about a graph: user → member of → team → editor of → folder → contains → document. Google's Zanzibar paper describes a system that stores such relationship tuples (`doc:42#editor@team:design#member`) and answers "can user U edit doc 42?" by walking the graph, at very large scale. Open-source systems inspired by it (SpiceDB, OpenFGA and others) exist. You need this style when sharing is user-driven (Google Drive-like folders, nested groups). For most line-of-business apps, a few membership tables and policies are enough.
 
 ### Where decisions are made: PEP, PDP, PIP
 
@@ -117,36 +117,36 @@ Security literature names the pieces, and the names help in design discussions:
 
 - **Policy Enforcement Point (PEP)**: the code that stops the request. In ASP.NET Core: the authorization middleware, or your endpoint calling `IAuthorizationService`.
 - **Policy Decision Point (PDP)**: the code that evaluates the rules. In ASP.NET Core: the authorization handlers. In larger systems it might be a separate service (for example Open Policy Agent).
-- **Policy Information Point (PIP)**: where attributes come from: claims in the token, the database (project assignments), a cache.
+- **Policy Information Point (PIP)**: where attributes come from: claims in the token, the database (department assignments), a cache.
 
 Keeping these separate is what lets you unit-test the decision logic without HTTP and swap where attributes come from.
 
 ### ASP.NET Core's model
 
-- A **requirement** (`IAuthorizationRequirement`) is a piece of data describing what must be true: "has permission `bid.evaluate`", "amount within approval limit".
+- A **requirement** (`IAuthorizationRequirement`) is a piece of data describing what must be true: "has permission `application.review`", "amount within approval limit".
 - A **handler** (`AuthorizationHandler<TRequirement>` or `AuthorizationHandler<TRequirement, TResource>`) decides whether a requirement is met. It calls `context.Succeed(requirement)` to approve, does nothing to abstain, or calls `context.Fail()` to veto.
 - A **policy** is a named set of requirements. **All** requirements must succeed. For a single requirement, **any** handler can satisfy it, unless some handler calls `Fail()`, which overrides everything.
 - **Resource-based authorization**: the endpoint loads the resource and calls `IAuthorizationService.AuthorizeAsync(User, resource, requirementOrPolicy)`. Attributes like `[Authorize]` run before your code, before the resource is loaded, so they can't check ownership.
-- **`IAuthorizationPolicyProvider`** builds policies on demand, so `"perm:bid.evaluate"` can become a policy without registering one per permission.
+- **`IAuthorizationPolicyProvider`** builds policies on demand, so `"perm:application.review"` can become a policy without registering one per permission.
 
 ### Common rules and how to express them
 
 | Rule | Model | ASP.NET Core |
 |---|---|---|
-| Only officers publish tenders | RBAC permission | Policy with `PermissionRequirement("tender.publish")` |
-| Bidders edit only their own draft bids before the deadline | Ownership + state + time | Resource handler on `Bid` |
-| Award approval up to the user's limit | ABAC (subject attribute vs resource attribute) | Requirement + handler comparing a claim with the tender value |
+| Only scholarship officers publish scholarships | RBAC permission | Policy with `PermissionRequirement("scholarship.publish")` |
+| Applicants edit only their own draft applications before the deadline | Ownership + state + time | Resource handler on `ScholarshipApplication` |
+| Award approval up to the user's limit | ABAC (subject attribute vs resource attribute) | Requirement + handler comparing a claim with the scholarship's total award |
 | Maker can't approve their own payment | Segregation of duties | Resource handler: `payment.CreatedBy != user` → else `Fail()` |
-| Evaluator can't score bids with declared conflicts | ABAC with an external attribute (PIP) | Resource handler that queries the conflict registry, `Fail()` with a reason |
+| Reviewer can't score applications with declared conflicts | ABAC with an external attribute (PIP) | Resource handler that queries the conflict registry, `Fail()` with a reason |
 | Auditors read everything but change nothing | RBAC | Permissions `*.read` only |
 | Break-glass access in emergencies | Context + audit | Separate policy requiring a justification claim, alerting and logging |
 
 ### Failure modes
 
-- **Fail-open handlers.** A handler that catches an exception from the conflict registry and calls `Succeed` "so evaluators aren't blocked". Under a database outage, every conflict check passes. Authorization must fail **closed**.
+- **Fail-open handlers.** A handler that catches an exception from the conflict registry and calls `Succeed` "so reviewers aren't blocked". Under a database outage, every conflict check passes. Authorization must fail **closed**.
 - **Stale permissions in tokens.** Permissions copied into a JWT at login stay valid until it expires. Keep tokens to roles or identity, and resolve fine-grained permissions server-side with a short cache (see [JWT validation and limitations](#/lesson/m14-jwt)).
-- **List endpoints that filter after loading.** Loading 10,000 bids and filtering in memory leaks data through counts and pagination, and is slow. Push authorization into the query (`WHERE project_id = ANY(@assignedProjects)`) or into PostgreSQL row-level security (see [Multi-tenant security](#/lesson/m14-multi-tenant-security)).
-- **Role names as magic strings** sprinkled through code, where a typo (`"Evalutor"`) silently denies, or worse, an inverted check silently allows.
+- **List endpoints that filter after loading.** Loading 10,000 applications and filtering in memory leaks data through counts and pagination, and is slow. Push authorization into the query (`WHERE department_id = ANY(@assignedDepartments)`) or into PostgreSQL row-level security (see [Multi-tenant security](#/lesson/m14-multi-tenant-security)).
+- **Role names as magic strings** sprinkled through code, where a typo (`"Reviwer"`) silently denies, or worse, an inverted check silently allows.
 - **No audit of denials.** Repeated 403s from one account are an early signal of probing or misconfiguration.
 
 ### When a simpler alternative is enough
@@ -161,154 +161,155 @@ Keeping these separate is what lets you unit-test the decision logic without HTT
 
 ```mermaid
 flowchart LR
-    U["Evaluator (token: sub, roles)"] -->|"POST /bids/88/evaluation"| PEP["Endpoint (PEP): load bid, call AuthorizeAsync"]
-    PEP -->|"user + bid + operation Evaluate"| PDP["Authorization handlers (PDP)"]
+    U["Reviewer (token: sub, roles)"] -->|"POST /applications/88/review"| PEP["Endpoint (PEP): load application, call AuthorizeAsync"]
+    PEP -->|"user + application + operation Review"| PDP["Authorization handlers (PDP)"]
     PDP -->|"role to permissions"| RP[("Role-permission table, cached 60 s")]
-    PDP -->|"assigned projects?"| AS[("Project assignments")]
+    PDP -->|"assigned departments?"| AS[("Department assignments")]
     PDP -->|"conflict declared?"| CR[("Conflict registry")]
     PDP -->|"time now vs deadline"| CLK["TimeProvider"]
     PDP -->|"Succeeded or Failed with reason"| PEP
     PEP -.->|"decision + reason"| AUD["Audit log"]
 ```
 
-The endpoint is the **enforcement point**: it can't decide anything itself, it only loads the resource and asks. The handlers are the **decision point**: they combine the user's claims with **information points**, the role-permission table, project assignments, the conflict registry and the clock. Each information source is behind an interface, which is what makes the handlers unit-testable. The decision comes back to the endpoint, which returns 200, 403 or 404, and every denial is written to the audit log with its reason.
+The endpoint is the **enforcement point**: it can't decide anything itself, it only loads the resource and asks. The handlers are the **decision point**: they combine the user's claims with **information points**, the role-permission table, department assignments, the conflict registry and the clock. Each information source is behind an interface, which is what makes the handlers unit-testable. The decision comes back to the endpoint, which returns 200, 403 or 404, and every denial is written to the audit log with its reason.
 
 ### A resource-based check, step by step
 
 ```mermaid
 sequenceDiagram
-    participant C as Evaluator browser
-    participant E as Evaluation endpoint
+    participant C as Reviewer browser
+    participant E as Review endpoint
     participant R as Repository
     participant A as IAuthorizationService
-    participant H as BidAuthorizationHandler
+    participant H as ApplicationAuthorizationHandler
     participant X as Conflict registry
-    C->>E: POST /bids/88/evaluation
-    E->>R: load bid 88 and its tender
-    R-->>E: bid from company K-3, tender T-17
-    E->>A: AuthorizeAsync(user, bid, Evaluate)
+    C->>E: POST /applications/88/review
+    E->>R: load application 88 and its scholarship
+    R-->>E: application from applicant STU-3, scholarship S-17
+    E->>A: AuthorizeAsync(user, application, Review)
     A->>H: HandleRequirementAsync
-    H->>H: has bid.evaluate and deadline has passed
-    H->>X: HasConflict(user, company K-3)
+    H->>H: has application.review and deadline has passed
+    H->>X: HasConflict(user, applicant STU-3)
     X-->>H: true
     H->>A: Fail with reason conflict of interest
     A-->>E: Failed
     E-->>C: 403 with problem details
 ```
 
-The coarse check (does this user have any evaluation permission?) could happen at the endpoint's policy. The fine checks need the bid, so they happen after loading it. The handler calls `Fail` with a reason rather than just not succeeding, so even if another handler for the same requirement would succeed (say, a "super evaluator" rule added later), the conflict of interest still vetoes the decision. The endpoint returns 403, not 404, because evaluators are allowed to know the bid exists. They're blocked from scoring it.
+The coarse check (does this user have any review permission?) could happen at the endpoint's policy. The fine checks need the application, so they happen after loading it. The handler calls `Fail` with a reason rather than just not succeeding, so even if another handler for the same requirement would succeed (say, a "super reviewer" rule added later), the conflict of interest still vetoes the decision. The endpoint returns 403, not 404, because reviewers are allowed to know the application exists. They're blocked from scoring it.
 
 ## Step-by-step example
 
 ### Step 1 — roles on attributes
 
 ```csharp
-[Authorize(Roles = "Evaluator,ProcurementOfficer")]
-public IActionResult Evaluate(string bidId, EvaluationDto dto) { /* ... */ }
+[Authorize(Roles = "Reviewer,ScholarshipOfficer")]
+public IActionResult Review(string applicationId, ReviewDto dto) { /* ... */ }
 ```
 
-Works for week one. Problems appear quickly: officers shouldn't evaluate, new roles need code edits, and nothing checks the deadline or conflicts.
+Works for week one. Problems appear quickly: officers shouldn't review, new roles need code edits, and nothing checks the deadline or conflicts.
 
 ### Step 2 — roles become permission bundles
 
-Create the permission list and a role → permission map. Endpoints require permissions: `.RequirePermission("bid.evaluate")`. A dynamic policy provider turns `"perm:bid.evaluate"` into a policy with a `PermissionRequirement`. Reorganising roles now touches only the map.
+Create the permission list and a role → permission map. Endpoints require permissions: `.RequirePermission("application.review")`. A dynamic policy provider turns `"perm:application.review"` into a policy with a `PermissionRequirement`. Reorganising roles now touches only the map.
 
 ### Step 3 — resource rules in a handler
 
-`BidAuthorizationHandler` handles `Edit` and `Evaluate` for a `(Bid, Tender)` pair: bidders edit their own drafts before the deadline; evaluators score after the deadline, with no conflict declared. Endpoints call `AuthorizeAsync(User, new BidContext(bid, tender), BidOperations.Evaluate)`.
+`ApplicationAuthorizationHandler` handles `Edit` and `Review` for a `(ScholarshipApplication, Scholarship)` pair: applicants edit their own drafts before the deadline (the owner gets a `Fail` with a reason afterwards); reviewers score after the deadline, with no conflict declared. Endpoints call `AuthorizeAsync(User, new ApplicationResource(application, scholarship), ApplicationOperations.Review)`.
 
 ### Step 4 — attribute rules
 
-`ApprovalLimitHandler` compares the user's `approval_limit_inr` claim (from HR data, resolved at login or from a cache) with the tender's estimated value. A ₹3.2 crore award needs a Superintending Engineer; an Executive Engineer gets 403 with a clear reason.
+`ApprovalLimitHandler` compares the user's `approval_limit_inr` claim (from HR data, resolved at login or from a cache) with the scholarship's total award. A ₹12 lakh award round needs a Dean; a Head of Department (limit ₹5 lakh) gets 403 with a clear reason.
 
 ### Step 5 — queries that respect authorization
 
-The "my bids to evaluate" list doesn't load all bids. It queries `WHERE tender.project_id = ANY(@assignedProjects) AND tender.deadline < now() AND NOT EXISTS (conflict…)`. The handler and the query implement the same rule, so a test checks they agree.
+The "applications for me to review" list doesn't load all applications. It queries `WHERE scholarship.department_id = ANY(@assignedDepartments) AND scholarship.deadline < now() AND NOT EXISTS (conflict…)`. The handler and the query implement the same rule, so a test checks they agree.
 
 ## Production-style C# implementation
 
 ```text
-Tenders.Api/
+Scholarships.Api/
   Program.cs
-  Tenders/
+  Scholarships/
     Domain.cs
     InMemoryStores.cs
   Authorization/
     Permissions.cs
     PermissionAuthorization.cs
-    BidAuthorization.cs
+    ApplicationAuthorization.cs
     ApprovalLimit.cs
 ```
 
-```csharp file=Tenders/Domain.cs
-namespace Tenders.Domain;
+```csharp file=Scholarships/Domain.cs
+namespace Scholarships.Domain;
 
-public enum BidStatus { Draft, Submitted, Withdrawn }
+public enum ApplicationStatus { Draft, Submitted, Withdrawn }
 
-public sealed record Tender(string Id, string ProjectId, decimal EstimatedValueInr, DateTimeOffset BidDeadline);
+/// <summary>One scholarship call, for example "Merit scholarship 2026, Computer Science".</summary>
+public sealed record Scholarship(string Id, string DepartmentId, decimal TotalAwardInr, DateTimeOffset ApplicationDeadline);
 
-public sealed class Bid(string id, string tenderId, string bidderCompanyId)
+public sealed class ScholarshipApplication(string id, string scholarshipId, string applicantId)
 {
     public string Id { get; } = id;
-    public string TenderId { get; } = tenderId;
-    public string BidderCompanyId { get; } = bidderCompanyId;
-    public BidStatus Status { get; set; } = BidStatus.Draft;
-    public decimal QuotedAmountInr { get; set; }
+    public string ScholarshipId { get; } = scholarshipId;
+    public string ApplicantId { get; } = applicantId;   // the student's id, matches their "student_id" claim
+    public ApplicationStatus Status { get; set; } = ApplicationStatus.Draft;
+    public decimal RequestedAmountInr { get; set; }
     public int? Score { get; set; }
-    public string? EvaluatedBy { get; set; }
+    public string? ReviewedBy { get; set; }
 }
 
-public interface ITenderStore
+public interface IScholarshipStore
 {
-    Tender? FindTender(string id);
-    Bid? FindBid(string id);
+    Scholarship? FindScholarship(string id);
+    ScholarshipApplication? FindApplication(string id);
 }
 
 public interface IConflictRegistry
 {
-    /// <summary>True if the user declared a conflict of interest with this bidder company.</summary>
-    bool HasConflict(string userId, string bidderCompanyId);
+    /// <summary>True if the user declared a conflict of interest with this applicant (a relative, a private tuition student).</summary>
+    bool HasConflict(string userId, string applicantId);
 }
 
 public interface IAssignmentStore
 {
-    IReadOnlySet<string> ProjectsFor(string userId);
+    IReadOnlySet<string> DepartmentsFor(string userId);
 }
 ```
 
-```csharp file=Tenders/InMemoryStores.cs
-using Tenders.Domain;
+```csharp file=Scholarships/InMemoryStores.cs
+using Scholarships.Domain;
 
-namespace Tenders.Infrastructure;
+namespace Scholarships.Infrastructure;
 
-public sealed class InMemoryTenderStore : ITenderStore
+public sealed class InMemoryScholarshipStore : IScholarshipStore
 {
-    private readonly Dictionary<string, Tender> _tenders = new()
+    private readonly Dictionary<string, Scholarship> _scholarships = new()
     {
-        ["T-17"] = new Tender("T-17", "P-NH48", 3_20_00_000m, new DateTimeOffset(2026, 10, 15, 11, 30, 0, TimeSpan.FromHours(5.5))),
+        ["S-17"] = new Scholarship("S-17", "D-CSE", 12_00_000m, new DateTimeOffset(2026, 10, 15, 11, 30, 0, TimeSpan.FromHours(5.5))),
     };
-    private readonly Dictionary<string, Bid> _bids = new()
+    private readonly Dictionary<string, ScholarshipApplication> _applications = new()
     {
-        ["B-88"] = new Bid("B-88", "T-17", "K-3") { Status = BidStatus.Submitted, QuotedAmountInr = 3_05_00_000m },
+        ["A-88"] = new ScholarshipApplication("A-88", "S-17", "STU-3") { Status = ApplicationStatus.Submitted, RequestedAmountInr = 60_000m },
     };
-    public Tender? FindTender(string id) => _tenders.GetValueOrDefault(id);
-    public Bid? FindBid(string id) => _bids.GetValueOrDefault(id);
+    public Scholarship? FindScholarship(string id) => _scholarships.GetValueOrDefault(id);
+    public ScholarshipApplication? FindApplication(string id) => _applications.GetValueOrDefault(id);
 }
 
 public sealed class InMemoryConflictRegistry : IConflictRegistry
 {
-    private readonly HashSet<(string User, string Company)> _declared = [("u-meera", "K-3")];
-    public bool HasConflict(string userId, string bidderCompanyId) => _declared.Contains((userId, bidderCompanyId));
+    private readonly HashSet<(string User, string Applicant)> _declared = [("u-meera", "STU-3")];
+    public bool HasConflict(string userId, string applicantId) => _declared.Contains((userId, applicantId));
 }
 
 public sealed class InMemoryAssignmentStore : IAssignmentStore
 {
     private readonly Dictionary<string, HashSet<string>> _byUser = new()
     {
-        ["u-asha"] = ["P-NH48"],
-        ["u-meera"] = ["P-NH48", "P-RING"],
+        ["u-asha"] = ["D-CSE"],
+        ["u-meera"] = ["D-CSE", "D-MECH"],
     };
-    public IReadOnlySet<string> ProjectsFor(string userId) =>
+    public IReadOnlySet<string> DepartmentsFor(string userId) =>
         _byUser.TryGetValue(userId, out var set) ? set : new HashSet<string>();
 }
 ```
@@ -316,14 +317,14 @@ public sealed class InMemoryAssignmentStore : IAssignmentStore
 ```csharp file=Authorization/Permissions.cs
 using System.Collections.Frozen;
 
-namespace Tenders.Authorization;
+namespace Scholarships.Authorization;
 
 public static class Permissions
 {
-    public const string TenderPublish = "tender.publish";
-    public const string BidSubmit = "bid.submit";
-    public const string BidRead = "bid.read";
-    public const string BidEvaluate = "bid.evaluate";
+    public const string ScholarshipPublish = "scholarship.publish";
+    public const string ApplicationSubmit = "application.submit";
+    public const string ApplicationRead = "application.read";
+    public const string ApplicationReview = "application.review";
     public const string AwardApprove = "award.approve";
     public const string AuditRead = "audit.read";
 }
@@ -339,12 +340,12 @@ public sealed class StaticRolePermissionStore : IRolePermissionStore
 {
     private static readonly FrozenDictionary<string, string[]> Map = new Dictionary<string, string[]>
     {
-        ["Bidder"] = [Permissions.BidSubmit],
-        ["Evaluator"] = [Permissions.BidRead, Permissions.BidEvaluate],
-        ["ProcurementOfficer"] = [Permissions.TenderPublish, Permissions.BidRead],
-        ["ExecutiveEngineer"] = [Permissions.BidRead, Permissions.AwardApprove],
-        ["SuperintendingEngineer"] = [Permissions.BidRead, Permissions.AwardApprove],
-        ["Auditor"] = [Permissions.BidRead, Permissions.AuditRead],
+        ["Applicant"] = [Permissions.ApplicationSubmit],
+        ["Reviewer"] = [Permissions.ApplicationRead, Permissions.ApplicationReview],
+        ["ScholarshipOfficer"] = [Permissions.ScholarshipPublish, Permissions.ApplicationRead],
+        ["HeadOfDepartment"] = [Permissions.ApplicationRead, Permissions.AwardApprove],
+        ["Dean"] = [Permissions.ApplicationRead, Permissions.AwardApprove],
+        ["Auditor"] = [Permissions.ApplicationRead, Permissions.AuditRead],
     }.ToFrozenDictionary(StringComparer.Ordinal);
 
     public IReadOnlySet<string> PermissionsFor(IEnumerable<string> roles) =>
@@ -358,7 +359,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Options;
 
-namespace Tenders.Authorization;
+namespace Scholarships.Authorization;
 
 public sealed class PermissionRequirement(string permission) : IAuthorizationRequirement
 {
@@ -375,7 +376,7 @@ public sealed class PermissionHandler(IRolePermissionStore store) : Authorizatio
     }
 }
 
-/// <summary>Turns "perm:bid.evaluate" into a policy on demand, so permissions need no individual registration.</summary>
+/// <summary>Turns "perm:application.review" into a policy on demand, so permissions need no individual registration.</summary>
 public sealed class PermissionPolicyProvider(IOptions<AuthorizationOptions> options) : IAuthorizationPolicyProvider
 {
     public const string Prefix = "perm:";
@@ -404,53 +405,62 @@ public static class PermissionEndpointExtensions
 }
 ```
 
-```csharp file=Authorization/BidAuthorization.cs
+```csharp file=Authorization/ApplicationAuthorization.cs
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Infrastructure;
-using Tenders.Domain;
+using Scholarships.Domain;
 
-namespace Tenders.Authorization;
+namespace Scholarships.Authorization;
 
-public static class BidOperations
+public static class ApplicationOperations
 {
     public static readonly OperationAuthorizationRequirement Edit = new() { Name = nameof(Edit) };
-    public static readonly OperationAuthorizationRequirement Evaluate = new() { Name = nameof(Evaluate) };
+    public static readonly OperationAuthorizationRequirement Review = new() { Name = nameof(Review) };
 }
 
-public sealed record BidContext(Bid Bid, Tender Tender);
+/// <summary>The resource passed to AuthorizeAsync: the application plus the scholarship it belongs to.</summary>
+public sealed record ApplicationResource(ScholarshipApplication Application, Scholarship Scholarship);
 
-public sealed class BidAuthorizationHandler(IRolePermissionStore permissions, IAssignmentStore assignments,
-                                            IConflictRegistry conflicts, TimeProvider clock)
-    : AuthorizationHandler<OperationAuthorizationRequirement, BidContext>
+public sealed class ApplicationAuthorizationHandler(IRolePermissionStore permissions, IAssignmentStore assignments,
+                                                    IConflictRegistry conflicts, TimeProvider clock)
+    : AuthorizationHandler<OperationAuthorizationRequirement, ApplicationResource>
 {
     protected override Task HandleRequirementAsync(AuthorizationHandlerContext context,
-        OperationAuthorizationRequirement requirement, BidContext resource)
+        OperationAuthorizationRequirement requirement, ApplicationResource resource)
     {
         var user = context.User;
         var userId = user.FindFirstValue("sub");
         if (userId is null) return Task.CompletedTask;
         var now = clock.GetUtcNow();
-        var (bid, tender) = resource;
+        var (application, scholarship) = resource;
 
         switch (requirement.Name)
         {
-            case nameof(BidOperations.Edit):
-                // Ownership + state + time: only the bidder's own company, only drafts, only before the deadline.
-                if (user.FindFirstValue("company_id") == bid.BidderCompanyId &&
-                    bid.Status == BidStatus.Draft && now < tender.BidDeadline)
+            case nameof(ApplicationOperations.Edit):
+                // Ownership + state + time: only the student's own application, only drafts, only before the deadline.
+                if (user.FindFirstValue("student_id") != application.ApplicantId) break;   // not the owner: abstain
+                if (application.Status != ApplicationStatus.Draft)
+                    context.Fail(new AuthorizationFailureReason(this, "Only draft applications can be edited."));
+                else if (now >= scholarship.ApplicationDeadline)
+                    context.Fail(new AuthorizationFailureReason(this, "The application deadline has passed."));
+                else
                     context.Succeed(requirement);
                 break;
 
-            case nameof(BidOperations.Evaluate):
+            case nameof(ApplicationOperations.Review):
                 var perms = permissions.PermissionsFor(user.FindAll(ClaimTypes.Role).Select(c => c.Value));
-                if (!perms.Contains(Permissions.BidEvaluate)) break;
-                if (!assignments.ProjectsFor(userId).Contains(tender.ProjectId)) break;
-                if (now < tender.BidDeadline) { context.Fail(new AuthorizationFailureReason(this, "Bids can't be evaluated before the deadline.")); break; }
-                if (conflicts.HasConflict(userId, bid.BidderCompanyId))
+                if (!perms.Contains(Permissions.ApplicationReview)) break;
+                if (!assignments.DepartmentsFor(userId).Contains(scholarship.DepartmentId)) break;
+                if (now < scholarship.ApplicationDeadline)
+                {
+                    context.Fail(new AuthorizationFailureReason(this, "Applications can't be reviewed before the deadline."));
+                    break;
+                }
+                if (conflicts.HasConflict(userId, application.ApplicantId))
                 {
                     // Veto: no other handler can override a declared conflict of interest.
-                    context.Fail(new AuthorizationFailureReason(this, "You declared a conflict of interest with this bidder."));
+                    context.Fail(new AuthorizationFailureReason(this, "You declared a conflict of interest with this applicant."));
                     break;
                 }
                 context.Succeed(requirement);
@@ -464,26 +474,26 @@ public sealed class BidAuthorizationHandler(IRolePermissionStore permissions, IA
 ```csharp file=Authorization/ApprovalLimit.cs
 using System.Globalization;
 using Microsoft.AspNetCore.Authorization;
-using Tenders.Domain;
+using Scholarships.Domain;
 
-namespace Tenders.Authorization;
+namespace Scholarships.Authorization;
 
 public sealed class ApprovalLimitRequirement : IAuthorizationRequirement
 {
     public static readonly ApprovalLimitRequirement Instance = new();
 }
 
-/// <summary>ABAC: compares a subject attribute (approval limit) with a resource attribute (estimated value).</summary>
-public sealed class ApprovalLimitHandler : AuthorizationHandler<ApprovalLimitRequirement, Tender>
+/// <summary>ABAC: compares a subject attribute (approval limit) with a resource attribute (total award).</summary>
+public sealed class ApprovalLimitHandler : AuthorizationHandler<ApprovalLimitRequirement, Scholarship>
 {
-    protected override Task HandleRequirementAsync(AuthorizationHandlerContext context, ApprovalLimitRequirement requirement, Tender tender)
+    protected override Task HandleRequirementAsync(AuthorizationHandlerContext context, ApprovalLimitRequirement requirement, Scholarship scholarship)
     {
         var raw = context.User.FindFirst("approval_limit_inr")?.Value;
-        if (decimal.TryParse(raw, NumberStyles.Number, CultureInfo.InvariantCulture, out var limit) && tender.EstimatedValueInr <= limit)
+        if (decimal.TryParse(raw, NumberStyles.Number, CultureInfo.InvariantCulture, out var limit) && scholarship.TotalAwardInr <= limit)
             context.Succeed(requirement);
         else
             context.Fail(new AuthorizationFailureReason(this,
-                $"Award of ₹{tender.EstimatedValueInr:N0} exceeds your approval limit."));
+                $"Awards totalling ₹{scholarship.TotalAwardInr:N0} exceed your approval limit."));
         return Task.CompletedTask;
     }
 }
@@ -493,21 +503,21 @@ public sealed class ApprovalLimitHandler : AuthorizationHandler<ApprovalLimitReq
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
-using Tenders.Authorization;
-using Tenders.Domain;
-using Tenders.Infrastructure;
+using Scholarships.Authorization;
+using Scholarships.Domain;
+using Scholarships.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<ITenderStore, InMemoryTenderStore>();
+builder.Services.AddSingleton<IScholarshipStore, InMemoryScholarshipStore>();
 builder.Services.AddSingleton<IConflictRegistry, InMemoryConflictRegistry>();
 builder.Services.AddSingleton<IAssignmentStore, InMemoryAssignmentStore>();
 builder.Services.AddSingleton<IRolePermissionStore, StaticRolePermissionStore>();
 
 builder.Services.AddSingleton<IAuthorizationPolicyProvider, PermissionPolicyProvider>();
 builder.Services.AddSingleton<IAuthorizationHandler, PermissionHandler>();
-builder.Services.AddSingleton<IAuthorizationHandler, BidAuthorizationHandler>();
+builder.Services.AddSingleton<IAuthorizationHandler, ApplicationAuthorizationHandler>();
 builder.Services.AddSingleton<IAuthorizationHandler, ApprovalLimitHandler>();
 
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme).AddCookie();
@@ -518,41 +528,45 @@ var app = builder.Build();
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.MapPost("/tenders/{id}/publish", (string id) => Results.Accepted())
-   .RequirePermission(Permissions.TenderPublish);
+app.MapPost("/scholarships/{id}/publish", (string id) => Results.Accepted())
+   .RequirePermission(Permissions.ScholarshipPublish);
 
-app.MapPut("/bids/{id}", async (string id, decimal amount, ClaimsPrincipal user, ITenderStore store, IAuthorizationService authz) =>
+app.MapPut("/applications/{id}", async (string id, decimal amount, ClaimsPrincipal user, IScholarshipStore store, IAuthorizationService authz) =>
 {
-    var bid = store.FindBid(id);
-    var tender = bid is null ? null : store.FindTender(bid.TenderId);
-    if (bid is null || tender is null) return Results.NotFound();
-    var result = await authz.AuthorizeAsync(user, new BidContext(bid, tender), BidOperations.Edit);
-    if (!result.Succeeded) return Results.NotFound();   // other companies' bids are invisible
-    bid.QuotedAmountInr = amount;
+    var application = store.FindApplication(id);
+    var scholarship = application is null ? null : store.FindScholarship(application.ScholarshipId);
+    if (application is null || scholarship is null) return Results.NotFound();
+    // Other students' applications are invisible: 404, so the id doesn't reveal that an application exists.
+    if (user.FindFirstValue("student_id") != application.ApplicantId) return Results.NotFound();
+    var result = await authz.AuthorizeAsync(user, new ApplicationResource(application, scholarship), ApplicationOperations.Edit);
+    if (!result.Succeeded)   // the owner may know their own application exists, so explain why: 403 with a reason
+        return Results.Problem(result.Failure?.FailureReasons.FirstOrDefault()?.Message ?? "You can't edit this application.",
+                               statusCode: StatusCodes.Status403Forbidden);
+    application.RequestedAmountInr = amount;
     return Results.NoContent();
-}).RequirePermission(Permissions.BidSubmit);
+}).RequirePermission(Permissions.ApplicationSubmit);
 
-app.MapPost("/bids/{id}/evaluation", async (string id, int score, ClaimsPrincipal user, ITenderStore store, IAuthorizationService authz) =>
+app.MapPost("/applications/{id}/review", async (string id, int score, ClaimsPrincipal user, IScholarshipStore store, IAuthorizationService authz) =>
 {
-    var bid = store.FindBid(id);
-    var tender = bid is null ? null : store.FindTender(bid.TenderId);
-    if (bid is null || tender is null) return Results.NotFound();
-    var result = await authz.AuthorizeAsync(user, new BidContext(bid, tender), BidOperations.Evaluate);
+    var application = store.FindApplication(id);
+    var scholarship = application is null ? null : store.FindScholarship(application.ScholarshipId);
+    if (application is null || scholarship is null) return Results.NotFound();
+    var result = await authz.AuthorizeAsync(user, new ApplicationResource(application, scholarship), ApplicationOperations.Review);
     if (!result.Succeeded)
     {
-        var reason = result.Failure?.FailureReasons.FirstOrDefault()?.Message ?? "You can't evaluate this bid.";
+        var reason = result.Failure?.FailureReasons.FirstOrDefault()?.Message ?? "You can't review this application.";
         return Results.Problem(reason, statusCode: StatusCodes.Status403Forbidden);
     }
-    bid.Score = score;
-    bid.EvaluatedBy = user.FindFirstValue("sub");
+    application.Score = score;
+    application.ReviewedBy = user.FindFirstValue("sub");
     return Results.NoContent();
-}).RequirePermission(Permissions.BidEvaluate);
+}).RequirePermission(Permissions.ApplicationReview);
 
-app.MapPost("/tenders/{id}/award", async (string id, ClaimsPrincipal user, ITenderStore store, IAuthorizationService authz) =>
+app.MapPost("/scholarships/{id}/award", async (string id, ClaimsPrincipal user, IScholarshipStore store, IAuthorizationService authz) =>
 {
-    var tender = store.FindTender(id);
-    if (tender is null) return Results.NotFound();
-    var result = await authz.AuthorizeAsync(user, tender, ApprovalLimitRequirement.Instance);
+    var scholarship = store.FindScholarship(id);
+    if (scholarship is null) return Results.NotFound();
+    var result = await authz.AuthorizeAsync(user, scholarship, ApprovalLimitRequirement.Instance);
     return result.Succeeded
         ? Results.Accepted()
         : Results.Problem(result.Failure?.FailureReasons.FirstOrDefault()?.Message, statusCode: StatusCodes.Status403Forbidden);
@@ -565,9 +579,10 @@ What to notice:
 
 - **Two layers.** `RequirePermission` is the cheap, coarse check that runs before the endpoint. The resource handlers run after loading data.
 - **Permissions, not role names, at endpoints.** Only `StaticRolePermissionStore` knows role names.
-- **`Fail` with reasons for vetoes.** The conflict-of-interest rule can't be overridden by a future handler that also handles `Evaluate`, and the user sees *why* they were refused.
-- **404 for bids of other companies, 403 for evaluators.** What a caller may know shapes the status code.
+- **`Fail` with reasons for vetoes.** The conflict-of-interest rule can't be overridden by a future handler that also handles `Review`, and the user sees *why* they were refused.
+- **404 for other students' applications, 403 with a reason for the owner and for reviewers.** A student editing someone else's application gets 404, so ids don't reveal which applications exist. The owner editing after the deadline, or a submitted application, gets 403 with "The application deadline has passed", because they already know it exists. What a caller may know shapes the status code.
 - **Fallback policy.** Any endpoint without metadata requires an authenticated user.
+- **Audit the decisions that matter.** In production, log every denial and every award approval (user, resource, policy, reason) to the audit trail; repeated 403s from one account are an early signal of probing.
 
 ## Bad design vs good design
 
@@ -597,14 +612,14 @@ Putting permissions in the token avoids lookups but freezes them until the token
 :::
 
 :::callout type=mistake title="Authorization in the UI only"
-Hiding the "Approve" button when the user lacks the permission is good UX. It is not security. Every rule enforced in the UI must also be enforced by the API. A useful pattern is an endpoint like `GET /bids/88/permissions` that returns what the current user may do, computed by the same handlers, so the UI and the API never disagree.
+Hiding the "Approve" button when the user lacks the permission is good UX. It is not security. Every rule enforced in the UI must also be enforced by the API. A useful pattern is an endpoint like `GET /applications/88/permissions` that returns what the current user may do, computed by the same handlers, so the UI and the API never disagree.
 :::
 
 ## Practical playground
 
-The SQL playground below holds the tender portal's access data: users, roles, permissions, scoped role assignments and conflict declarations. Try writing queries such as "list every permission Meera has on project P-NH48", "who can approve awards anywhere?", and "which assignments expire in the next 30 days?". These are exactly the questions an access review asks.
+The SQL playground below holds the scholarship portal's access data: users, roles, permissions, scoped role assignments and conflict declarations. Try writing queries such as "list every permission Meera has in department D-CSE", "who can approve awards anywhere?", and "which assignments expire in the next 30 days?". These are exactly the questions an access review asks.
 
-:::playground type=sql title="Tender portal: roles, scopes and conflicts"
+:::playground type=sql title="Scholarship portal: roles, scopes and conflicts"
 ```sql
 CREATE TABLE app_user (user_id int PRIMARY KEY, name text NOT NULL, active boolean NOT NULL);
 CREATE TABLE role (role_id int PRIMARY KEY, name text UNIQUE NOT NULL);
@@ -612,24 +627,24 @@ CREATE TABLE role_permission (role_id int REFERENCES role, permission text NOT N
 CREATE TABLE user_role (
   user_id     int REFERENCES app_user,
   role_id     int REFERENCES role,
-  project_id  text,              -- NULL means every project
+  department_id text,            -- NULL means every department
   valid_until date               -- NULL means no end date
 );
-CREATE TABLE conflict_declaration (user_id int REFERENCES app_user, tender_id text NOT NULL);
-CREATE TABLE tender (tender_id text PRIMARY KEY, project_id text NOT NULL, estimated_value_inr numeric NOT NULL);
+CREATE TABLE conflict_declaration (user_id int REFERENCES app_user, scholarship_id text NOT NULL);
+CREATE TABLE scholarship (scholarship_id text PRIMARY KEY, department_id text NOT NULL, total_award_inr numeric NOT NULL);
 
 INSERT INTO app_user VALUES (1,'Asha',true),(2,'Ravi',true),(3,'Meera',true),(4,'Sunil',false),(5,'Farah',true),(6,'Arjun',true);
-INSERT INTO role VALUES (1,'Evaluator'),(2,'ProcurementOfficer'),(3,'Auditor'),(4,'ExecutiveEngineer');
+INSERT INTO role VALUES (1,'Reviewer'),(2,'ScholarshipOfficer'),(3,'Auditor'),(4,'HeadOfDepartment');
 INSERT INTO role_permission VALUES
- (1,'bid.read'),(1,'bid.evaluate'),
- (2,'tender.publish'),(2,'bid.read'),(2,'bid.evaluate'),
- (3,'bid.read'),(3,'audit.read'),
- (4,'bid.read'),(4,'award.approve');
+ (1,'application.read'),(1,'application.review'),
+ (2,'scholarship.publish'),(2,'application.read'),
+ (3,'application.read'),(3,'audit.read'),
+ (4,'application.read'),(4,'award.approve');
 INSERT INTO user_role VALUES
- (1,1,'P-NH48',NULL),(2,1,'P-RING',NULL),(3,2,NULL,NULL),(4,1,'P-NH48',NULL),
- (5,1,'P-NH48','2026-09-30'),(5,3,'P-NH48',NULL),(6,2,NULL,'2026-12-31'),(6,1,'P-NH48',NULL),(6,4,'P-RING',NULL);
-INSERT INTO conflict_declaration VALUES (3,'T-17');
-INSERT INTO tender VALUES ('T-17','P-NH48',32000000),('T-18','P-RING',4500000);
+ (1,1,'D-CSE',NULL),(2,1,'D-MECH',NULL),(2,2,NULL,NULL),(3,1,NULL,NULL),(4,1,'D-CSE',NULL),
+ (5,1,'D-CSE','2026-09-30'),(5,3,'D-CSE',NULL),(6,1,NULL,'2026-12-31'),(6,1,'D-CSE',NULL),(6,4,'D-MECH',NULL);
+INSERT INTO conflict_declaration VALUES (3,'S-17');
+INSERT INTO scholarship VALUES ('S-17','D-CSE',1200000),('S-18','D-MECH',300000);
 ```
 :::
 
@@ -644,9 +659,9 @@ Write `PermissionResolver`, which expands a user's roles into permissions and an
 - Role and permission names are case-sensitive (ordinal).
 - The resolver must not be affected if the caller later mutates the dictionary it was built from.
 ::acceptance
-- `["Evaluator"]` → `{bid.read, bid.evaluate}`.
-- `["Evaluator", "Auditor"]` → union, with `bid.read` once.
-- `["evaluator"]` (lower case) grants nothing.
+- `["Reviewer"]` → `{application.read, application.review}`.
+- `["Reviewer", "Auditor"]` → union, with `application.read` once.
+- `["reviewer"]` (lower case) grants nothing.
 - Changing the original dictionary after construction doesn't change answers.
 ::hint
 A `HashSet<string>` handles duplicates for you.
@@ -678,23 +693,23 @@ public class PermissionResolverTests
 {
     private static Dictionary<string, string[]> Map() => new()
     {
-        ["Evaluator"] = new[] { "bid.read", "bid.evaluate" },
-        ["Auditor"] = new[] { "bid.read", "audit.read" },
-        ["Bidder"] = new[] { "bid.submit" },
+        ["Reviewer"] = new[] { "application.read", "application.review" },
+        ["Auditor"] = new[] { "application.read", "audit.read" },
+        ["Applicant"] = new[] { "application.submit" },
     };
 
     [Fact]
     public void Single_role()
     {
-        var p = new PermissionResolver(Map()).PermissionsFor(new[] { "Evaluator" });
+        var p = new PermissionResolver(Map()).PermissionsFor(new[] { "Reviewer" });
         Assert.Equal(2, p.Count);
-        Assert.Contains("bid.evaluate", p);
+        Assert.Contains("application.review", p);
     }
 
     [Fact]
     public void Union_without_duplicates()
     {
-        var p = new PermissionResolver(Map()).PermissionsFor(new[] { "Evaluator", "Auditor" });
+        var p = new PermissionResolver(Map()).PermissionsFor(new[] { "Reviewer", "Auditor" });
         Assert.Equal(3, p.Count);
     }
 
@@ -702,19 +717,19 @@ public class PermissionResolverTests
     public void Unknown_role_grants_nothing() => Assert.Empty(new PermissionResolver(Map()).PermissionsFor(new[] { "Wizard" }));
 
     [Fact]
-    public void Case_sensitive() => Assert.False(new PermissionResolver(Map()).Can(new[] { "evaluator" }, "bid.evaluate"));
+    public void Case_sensitive() => Assert.False(new PermissionResolver(Map()).Can(new[] { "reviewer" }, "application.review"));
 
     [Fact]
-    public void Can_checks_any_role() => Assert.True(new PermissionResolver(Map()).Can(new[] { "Bidder", "Auditor" }, "audit.read"));
+    public void Can_checks_any_role() => Assert.True(new PermissionResolver(Map()).Can(new[] { "Applicant", "Auditor" }, "audit.read"));
 
     [Fact]
     public void Defensive_copy()
     {
         var map = Map();
         var resolver = new PermissionResolver(map);
-        map["Bidder"] = new[] { "award.approve" };
-        map["Evaluator"][0] = "award.approve";
-        Assert.False(resolver.Can(new[] { "Bidder", "Evaluator" }, "award.approve"));
+        map["Applicant"] = new[] { "award.approve" };
+        map["Reviewer"][0] = "award.approve";
+        Assert.False(resolver.Can(new[] { "Applicant", "Reviewer" }, "award.approve"));
     }
 }
 ```
@@ -746,55 +761,55 @@ public sealed class PermissionResolver
 
 The defensive copy matters more than it looks. If the resolver kept a reference to the caller's arrays, any code holding the original dictionary could quietly grant `award.approve` at runtime. Authorization data should be immutable once loaded and replaced as a whole when it changes (for example, swap in a new resolver every 60 seconds from the database).
 ::mistakes
-- Case-insensitive comparisons for permission names, which merge `Bid.Evaluate` and `bid.evaluate` and hide typos in configuration.
+- Case-insensitive comparisons for permission names, which merge `Application.Review` and `application.review` and hide typos in configuration.
 - Throwing on unknown roles. A role removed from the map while users still have it in old tokens should simply grant nothing.
 ::extensions
-Add role inheritance (`SeniorEvaluator` includes `Evaluator`) and detect cycles at construction time.
+Add role inheritance (`SeniorReviewer` includes `Reviewer`) and detect cycles at construction time.
 :::
 
-:::exercise id=m14-rbac-pbac-ex2 difficulty=beginner kind=code title="An ownership handler for site diary entries"
-Site engineers write daily diary entries (weather, labour count, work done). Write an ASP.NET Core `AuthorizationHandler` that decides who may edit an entry.
+:::exercise id=m14-rbac-pbac-ex2 difficulty=beginner kind=code title="An ownership handler for reviewer notes"
+Reviewers write private notes on the applications they read (strengths, doubts, documents to re-check). Write an ASP.NET Core `AuthorizationHandler` that decides who may edit a note.
 ::requirements
-- The author may edit their own entry within 24 hours of creating it.
-- A user with role `SiteManager` may edit any entry for a site they manage (claim `managed_site`, one claim per site), at any time.
+- The author may edit their own note within 24 hours of creating it.
+- A user with role `DepartmentCoordinator` may edit any note for a department they coordinate (claim `coordinated_department`, one claim per department), at any time.
 - Everyone else, including the author after 24 hours, is not authorized (the handler simply doesn't succeed).
 - Time comes from an injected `TimeProvider`.
 ::acceptance
 - Author at 23 hours: allowed. Author at 25 hours: not allowed.
-- Another engineer: not allowed.
-- Site manager of the entry's site: allowed even after a week. Site manager of a different site: not allowed.
+- Another reviewer: not allowed.
+- Coordinator of the note's department: allowed even after a week. Coordinator of a different department: not allowed.
 - A user with no `sub` claim: not allowed.
 ::hint
-Inherit from `AuthorizationHandler<EditDiaryRequirement, DiaryEntry>` and override `HandleRequirementAsync`.
+Inherit from `AuthorizationHandler<EditNoteRequirement, ReviewNote>` and override `HandleRequirementAsync`.
 ::hint
-`context.User.FindFirst("sub")?.Value` gives the user id. `context.User.IsInRole("SiteManager")` checks the role, provided the identity's role claim type is `ClaimTypes.Role`.
+`context.User.FindFirst("sub")?.Value` gives the user id. `context.User.IsInRole("DepartmentCoordinator")` checks the role, provided the identity's role claim type is `ClaimTypes.Role`.
 ::hint
-`context.User.HasClaim("managed_site", entry.SiteId)` checks the site.
+`context.User.HasClaim("coordinated_department", note.DepartmentId)` checks the department.
 ::hint
-In tests, build `new AuthorizationHandlerContext(new[] { requirement }, user, entry)` and call `await handler.HandleAsync(ctx)`. Then check `ctx.HasSucceeded`.
+In tests, build `new AuthorizationHandlerContext(new[] { requirement }, user, note)` and call `await handler.HandleAsync(ctx)`. Then check `ctx.HasSucceeded`.
 ::starter
-```csharp file=DiaryAuthorization.cs
+```csharp file=ReviewNoteAuthorization.cs
 using System;
 using System.Security.Claims;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 
-public sealed record DiaryEntry(string Id, string SiteId, string AuthorId, DateTimeOffset CreatedAt);
+public sealed record ReviewNote(string Id, string DepartmentId, string AuthorId, DateTimeOffset CreatedAt);
 
-public sealed class EditDiaryRequirement : IAuthorizationRequirement { }
+public sealed class EditNoteRequirement : IAuthorizationRequirement { }
 
-public sealed class EditDiaryHandler : AuthorizationHandler<EditDiaryRequirement, DiaryEntry>
+public sealed class EditNoteHandler : AuthorizationHandler<EditNoteRequirement, ReviewNote>
 {
     public static readonly TimeSpan AuthorEditWindow = TimeSpan.FromHours(24);
     private readonly TimeProvider _clock;
-    public EditDiaryHandler(TimeProvider clock) => _clock = clock;
+    public EditNoteHandler(TimeProvider clock) => _clock = clock;
 
-    protected override Task HandleRequirementAsync(AuthorizationHandlerContext context, EditDiaryRequirement requirement, DiaryEntry entry) =>
+    protected override Task HandleRequirementAsync(AuthorizationHandlerContext context, EditNoteRequirement requirement, ReviewNote note) =>
         throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=DiaryAuthorizationTests.cs
+```csharp file=ReviewNoteAuthorizationTests.cs
 using System;
 using System.Security.Claims;
 using System.Threading.Tasks;
@@ -806,10 +821,10 @@ public sealed class SetClock(DateTimeOffset now) : TimeProvider
     public override DateTimeOffset GetUtcNow() => now;
 }
 
-public class DiaryAuthorizationTests
+public class ReviewNoteAuthorizationTests
 {
     private static readonly DateTimeOffset Created = new(2026, 10, 19, 18, 0, 0, TimeSpan.Zero);
-    private static readonly DiaryEntry Entry = new("D-1", "SITE-PUNE-4", "u-ravi", Created);
+    private static readonly ReviewNote Note = new("D-1", "D-CSE", "u-ravi", Created);
 
     private static ClaimsPrincipal User(string? sub, params Claim[] extra)
     {
@@ -820,70 +835,70 @@ public class DiaryAuthorizationTests
 
     private static async Task<bool> Check(ClaimsPrincipal user, TimeSpan after)
     {
-        var req = new EditDiaryRequirement();
-        var ctx = new AuthorizationHandlerContext(new IAuthorizationRequirement[] { req }, user, Entry);
-        await new EditDiaryHandler(new SetClock(Created + after)).HandleAsync(ctx);
+        var req = new EditNoteRequirement();
+        var ctx = new AuthorizationHandlerContext(new IAuthorizationRequirement[] { req }, user, Note);
+        await new EditNoteHandler(new SetClock(Created + after)).HandleAsync(ctx);
         return ctx.HasSucceeded;
     }
 
     [Fact] public async Task Author_within_window() => Assert.True(await Check(User("u-ravi"), TimeSpan.FromHours(23)));
     [Fact] public async Task Author_after_window() => Assert.False(await Check(User("u-ravi"), TimeSpan.FromHours(25)));
-    [Fact] public async Task Other_engineer() => Assert.False(await Check(User("u-asha"), TimeSpan.FromHours(1)));
+    [Fact] public async Task Other_reviewer() => Assert.False(await Check(User("u-asha"), TimeSpan.FromHours(1)));
 
-    [Fact] public async Task Manager_of_site_any_time() => Assert.True(await Check(
-        User("u-meera", new Claim(ClaimTypes.Role, "SiteManager"), new Claim("managed_site", "SITE-PUNE-4")), TimeSpan.FromDays(7)));
+    [Fact] public async Task Coordinator_of_department_any_time() => Assert.True(await Check(
+        User("u-meera", new Claim(ClaimTypes.Role, "DepartmentCoordinator"), new Claim("coordinated_department", "D-CSE")), TimeSpan.FromDays(7)));
 
-    [Fact] public async Task Manager_of_other_site() => Assert.False(await Check(
-        User("u-meera", new Claim(ClaimTypes.Role, "SiteManager"), new Claim("managed_site", "SITE-NAGPUR-1")), TimeSpan.FromHours(1)));
+    [Fact] public async Task Coordinator_of_other_department() => Assert.False(await Check(
+        User("u-meera", new Claim(ClaimTypes.Role, "DepartmentCoordinator"), new Claim("coordinated_department", "D-MECH")), TimeSpan.FromHours(1)));
 
-    [Fact] public async Task Managed_site_claim_without_role() => Assert.False(await Check(
-        User("u-sunil", new Claim("managed_site", "SITE-PUNE-4")), TimeSpan.FromHours(30)));
+    [Fact] public async Task Department_claim_without_role() => Assert.False(await Check(
+        User("u-sunil", new Claim("coordinated_department", "D-CSE")), TimeSpan.FromHours(30)));
 
     [Fact] public async Task No_sub_claim() => Assert.False(await Check(User(null), TimeSpan.FromHours(1)));
 }
 ```
 ::solution
-```csharp file=DiaryAuthorization.cs
+```csharp file=ReviewNoteAuthorization.cs
 using System;
 using System.Security.Claims;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 
-public sealed record DiaryEntry(string Id, string SiteId, string AuthorId, DateTimeOffset CreatedAt);
+public sealed record ReviewNote(string Id, string DepartmentId, string AuthorId, DateTimeOffset CreatedAt);
 
-public sealed class EditDiaryRequirement : IAuthorizationRequirement { }
+public sealed class EditNoteRequirement : IAuthorizationRequirement { }
 
-public sealed class EditDiaryHandler : AuthorizationHandler<EditDiaryRequirement, DiaryEntry>
+public sealed class EditNoteHandler : AuthorizationHandler<EditNoteRequirement, ReviewNote>
 {
     public static readonly TimeSpan AuthorEditWindow = TimeSpan.FromHours(24);
     private readonly TimeProvider _clock;
-    public EditDiaryHandler(TimeProvider clock) => _clock = clock;
+    public EditNoteHandler(TimeProvider clock) => _clock = clock;
 
-    protected override Task HandleRequirementAsync(AuthorizationHandlerContext context, EditDiaryRequirement requirement, DiaryEntry entry)
+    protected override Task HandleRequirementAsync(AuthorizationHandlerContext context, EditNoteRequirement requirement, ReviewNote note)
     {
         var userId = context.User.FindFirst("sub")?.Value;
         if (userId is null) return Task.CompletedTask;
 
-        var isAuthorInWindow = userId == entry.AuthorId && _clock.GetUtcNow() - entry.CreatedAt <= AuthorEditWindow;
-        var isSiteManager = context.User.IsInRole("SiteManager") && context.User.HasClaim("managed_site", entry.SiteId);
+        var isAuthorInWindow = userId == note.AuthorId && _clock.GetUtcNow() - note.CreatedAt <= AuthorEditWindow;
+        var isCoordinator = context.User.IsInRole("DepartmentCoordinator") && context.User.HasClaim("coordinated_department", note.DepartmentId);
 
-        if (isAuthorInWindow || isSiteManager) context.Succeed(requirement);
+        if (isAuthorInWindow || isCoordinator) context.Succeed(requirement);
         return Task.CompletedTask;
     }
 }
 ```
 
-Register it with `builder.Services.AddSingleton<IAuthorizationHandler, EditDiaryHandler>()` and call `authz.AuthorizeAsync(User, entry, new EditDiaryRequirement())` in the endpoint after loading the entry. The handler never calls `Fail()`, because "not the author" isn't a veto: a different handler (say, an auditor correction workflow) could legitimately satisfy the same requirement later.
+Register it with `builder.Services.AddSingleton<IAuthorizationHandler, EditNoteHandler>()` and call `authz.AuthorizeAsync(User, note, new EditNoteRequirement())` in the endpoint after loading the note. The handler never calls `Fail()`, because "not the author" isn't a veto: a different handler (say, an auditor correction workflow) could legitimately satisfy the same requirement later.
 ::alternatives
-Split the two rules into two handlers for the same requirement (`AuthorWindowHandler`, `SiteManagerHandler`). ASP.NET Core succeeds if either one succeeds. This keeps each rule tiny and lets you add rules without editing existing ones.
+Split the two rules into two handlers for the same requirement (`AuthorWindowHandler`, `DepartmentCoordinatorHandler`). ASP.NET Core succeeds if either one succeeds. This keeps each rule tiny and lets you add rules without editing existing ones.
 ::mistakes
-- Checking `managed_site` without the role, so any stale claim grants manager powers.
-- Comparing `entry.AuthorId` with `User.Identity.Name`, which is often the email address, not the stable id.
+- Checking `coordinated_department` without the role, so any stale claim grants coordinator powers.
+- Comparing `note.AuthorId` with `User.Identity.Name`, which is often the email address, not the stable id.
 - Using `DateTime.Now`.
 :::
 
 :::exercise id=m14-rbac-pbac-ex3 difficulty=intermediate kind=code title="Payment approval: maker-checker and limits"
-Write `PaymentApprovalPolicy.Evaluate`, an attribute-based policy that returns a decision and a reason.
+The finance office releases scholarship money to students' bank accounts in payment batches. Write `PaymentApprovalPolicy.Evaluate`, an attribute-based policy that returns a decision and a reason.
 ::requirements
 - Deny with reason `"maker-checker"` if the approver created the payment.
 - Deny with `"missing-permission"` if the approver lacks `payment.approve`.
@@ -935,10 +950,10 @@ using Xunit;
 
 public class PaymentApprovalPolicyTests
 {
-    private static Approver A(decimal limit = 5_00_000m, bool mfa = false, string dept = "Roads", params string[] perms) =>
+    private static Approver A(decimal limit = 5_00_000m, bool mfa = false, string dept = "Science", params string[] perms) =>
         new("u-asha", dept, new HashSet<string>(perms.Length == 0 ? new[] { "payment.approve" } : perms), limit, mfa);
 
-    private static Payment P(decimal amount, string createdBy = "u-ravi", string dept = "Roads") => new("PAY-1", createdBy, dept, amount);
+    private static Payment P(decimal amount, string createdBy = "u-ravi", string dept = "Science") => new("PAY-1", createdBy, dept, amount);
 
     [Fact] public void Maker_cannot_check() =>
         Assert.Equal(Decision.Deny("maker-checker"), PaymentApprovalPolicy.Evaluate(A(), P(5_000m, createdBy: "u-asha")));
@@ -952,10 +967,10 @@ public class PaymentApprovalPolicyTests
     [Fact] public void Over_limit() => Assert.Equal("limit", PaymentApprovalPolicy.Evaluate(A(), P(5_00_001m)).Reason);
 
     [Fact] public void Other_department_denied() =>
-        Assert.Equal("department", PaymentApprovalPolicy.Evaluate(A(), P(1_000m, dept: "Water")).Reason);
+        Assert.Equal("department", PaymentApprovalPolicy.Evaluate(A(), P(1_000m, dept: "Commerce")).Reason);
 
     [Fact] public void Other_department_with_all_departments() =>
-        Assert.True(PaymentApprovalPolicy.Evaluate(A(perms: new[] { "payment.approve", "payment.approve.all-departments" }), P(1_000m, dept: "Water")).Allowed);
+        Assert.True(PaymentApprovalPolicy.Evaluate(A(perms: new[] { "payment.approve", "payment.approve.all-departments" }), P(1_000m, dept: "Commerce")).Allowed);
 
     [Theory]
     [InlineData(false, "mfa-required")]
@@ -1007,49 +1022,49 @@ External policy engines (Open Policy Agent with Rego, Cedar, Casbin) express the
 - Taking `UsedMfa` from the request body. It must come from the authentication result (the `amr` claim).
 :::
 
-:::exercise id=m14-rbac-pbac-ex4 difficulty=intermediate kind=sql ordered=true title="Who can evaluate bids for tender T-17?"
-Using the tender portal's access tables, list every user who may perform `bid.evaluate` on tender `T-17` as of `2026-10-20`. A user qualifies if they are active, hold a role granting `bid.evaluate`, the role assignment is for the tender's project or for all projects (`project_id IS NULL`), the assignment hasn't expired (`valid_until IS NULL` or on/after the date), and they have no conflict declaration for `T-17`. Return `user_id` and `name`, once per user, ordered by `user_id`.
+:::exercise id=m14-rbac-pbac-ex4 difficulty=intermediate kind=sql ordered=true title="Who can review applications for scholarship S-17?"
+Using the scholarship portal's access tables, list every user who may perform `application.review` on scholarship `S-17` as of `2026-10-20`. A user qualifies if they are active, hold a role granting `application.review`, the role assignment is for the scholarship's department or for all departments (`department_id IS NULL`), the assignment hasn't expired (`valid_until IS NULL` or on/after the date), and they have no conflict declaration for `S-17`. Return `user_id` and `name`, once per user, ordered by `user_id`.
 ::setup
 ```sql
 CREATE TABLE app_user (user_id int PRIMARY KEY, name text NOT NULL, active boolean NOT NULL);
 CREATE TABLE role (role_id int PRIMARY KEY, name text UNIQUE NOT NULL);
 CREATE TABLE role_permission (role_id int REFERENCES role, permission text NOT NULL, PRIMARY KEY (role_id, permission));
-CREATE TABLE user_role (user_id int REFERENCES app_user, role_id int REFERENCES role, project_id text, valid_until date);
-CREATE TABLE conflict_declaration (user_id int REFERENCES app_user, tender_id text NOT NULL);
-CREATE TABLE tender (tender_id text PRIMARY KEY, project_id text NOT NULL, estimated_value_inr numeric NOT NULL);
+CREATE TABLE user_role (user_id int REFERENCES app_user, role_id int REFERENCES role, department_id text, valid_until date);
+CREATE TABLE conflict_declaration (user_id int REFERENCES app_user, scholarship_id text NOT NULL);
+CREATE TABLE scholarship (scholarship_id text PRIMARY KEY, department_id text NOT NULL, total_award_inr numeric NOT NULL);
 
 INSERT INTO app_user VALUES (1,'Asha',true),(2,'Ravi',true),(3,'Meera',true),(4,'Sunil',false),(5,'Farah',true),(6,'Arjun',true);
-INSERT INTO role VALUES (1,'Evaluator'),(2,'ProcurementOfficer'),(3,'Auditor'),(4,'ExecutiveEngineer');
+INSERT INTO role VALUES (1,'Reviewer'),(2,'ScholarshipOfficer'),(3,'Auditor'),(4,'HeadOfDepartment');
 INSERT INTO role_permission VALUES
- (1,'bid.read'),(1,'bid.evaluate'),
- (2,'tender.publish'),(2,'bid.read'),(2,'bid.evaluate'),
- (3,'bid.read'),(3,'audit.read'),
- (4,'bid.read'),(4,'award.approve');
+ (1,'application.read'),(1,'application.review'),
+ (2,'scholarship.publish'),(2,'application.read'),
+ (3,'application.read'),(3,'audit.read'),
+ (4,'application.read'),(4,'award.approve');
 INSERT INTO user_role VALUES
- (1,1,'P-NH48',NULL),(2,1,'P-RING',NULL),(3,2,NULL,NULL),(4,1,'P-NH48',NULL),
- (5,1,'P-NH48','2026-09-30'),(5,3,'P-NH48',NULL),(6,2,NULL,'2026-12-31'),(6,1,'P-NH48',NULL),(6,4,'P-RING',NULL);
-INSERT INTO conflict_declaration VALUES (3,'T-17');
-INSERT INTO tender VALUES ('T-17','P-NH48',32000000),('T-18','P-RING',4500000);
+ (1,1,'D-CSE',NULL),(2,1,'D-MECH',NULL),(2,2,NULL,NULL),(3,1,NULL,NULL),(4,1,'D-CSE',NULL),
+ (5,1,'D-CSE','2026-09-30'),(5,3,'D-CSE',NULL),(6,1,NULL,'2026-12-31'),(6,1,'D-CSE',NULL),(6,4,'D-MECH',NULL);
+INSERT INTO conflict_declaration VALUES (3,'S-17');
+INSERT INTO scholarship VALUES ('S-17','D-CSE',1200000),('S-18','D-MECH',300000);
 ```
 ::check
 ```sql
 SELECT DISTINCT u.user_id, u.name
-FROM tender t
-JOIN user_role ur ON (ur.project_id = t.project_id OR ur.project_id IS NULL)
-JOIN role_permission rp ON rp.role_id = ur.role_id AND rp.permission = 'bid.evaluate'
+FROM scholarship sc
+JOIN user_role ur ON (ur.department_id = sc.department_id OR ur.department_id IS NULL)
+JOIN role_permission rp ON rp.role_id = ur.role_id AND rp.permission = 'application.review'
 JOIN app_user u ON u.user_id = ur.user_id AND u.active
-WHERE t.tender_id = 'T-17'
+WHERE sc.scholarship_id = 'S-17'
   AND (ur.valid_until IS NULL OR ur.valid_until >= date '2026-10-20')
-  AND NOT EXISTS (SELECT 1 FROM conflict_declaration c WHERE c.user_id = u.user_id AND c.tender_id = t.tender_id)
+  AND NOT EXISTS (SELECT 1 FROM conflict_declaration c WHERE c.user_id = u.user_id AND c.scholarship_id = sc.scholarship_id)
 ORDER BY u.user_id;
 ```
 ::acceptance
-- Asha (1) and Arjun (6) are listed, Arjun only once although two of his assignments qualify.
-- Ravi is excluded (wrong project), Meera (conflict), Sunil (inactive), Farah (expired evaluator assignment, auditor role lacks the permission).
+- Asha (1) and Arjun (6) are listed, Arjun only once although two of his assignments qualify (his university-wide reviewer assignment until 31 December and his D-CSE one).
+- Ravi is excluded (his reviewer assignment is for D-MECH, and his university-wide ScholarshipOfficer role has no review permission), Meera (university-wide reviewer, but she declared a conflict for S-17), Sunil (inactive), Farah (expired reviewer assignment, auditor role lacks the permission).
 ::hint
-Start from the tender, because its project decides which assignments count.
+Start from the scholarship, because its department decides which assignments count.
 ::hint
-The project condition has two alternatives: the same project, or a global assignment (`IS NULL`).
+The department condition has two alternatives: the same department, or a global assignment (`IS NULL`).
 ::hint
 Use `NOT EXISTS` for the conflict rule. A `LEFT JOIN ... IS NULL` also works.
 ::hint
@@ -1057,25 +1072,25 @@ A user can qualify through several assignments. `DISTINCT` (or `EXISTS` in a que
 ::solution
 ```sql
 SELECT DISTINCT u.user_id, u.name
-FROM tender t
-JOIN user_role ur ON (ur.project_id = t.project_id OR ur.project_id IS NULL)
-JOIN role_permission rp ON rp.role_id = ur.role_id AND rp.permission = 'bid.evaluate'
+FROM scholarship sc
+JOIN user_role ur ON (ur.department_id = sc.department_id OR ur.department_id IS NULL)
+JOIN role_permission rp ON rp.role_id = ur.role_id AND rp.permission = 'application.review'
 JOIN app_user u ON u.user_id = ur.user_id AND u.active
-WHERE t.tender_id = 'T-17'
+WHERE sc.scholarship_id = 'S-17'
   AND (ur.valid_until IS NULL OR ur.valid_until >= date '2026-10-20')
-  AND NOT EXISTS (SELECT 1 FROM conflict_declaration c WHERE c.user_id = u.user_id AND c.tender_id = t.tender_id)
+  AND NOT EXISTS (SELECT 1 FROM conflict_declaration c WHERE c.user_id = u.user_id AND c.scholarship_id = sc.scholarship_id)
 ORDER BY u.user_id;
 ```
 
-This is the **"who can?"** question that ABAC makes hard and RBAC makes easy. Because the rule here is mostly relational (roles, scopes, dates, a conflict table), it can be answered in SQL. The C# handler and this query encode the same rule, so keep a test that runs both against the same fixture and compares results. If they drift, either the evaluation list shows bids a user can't open, or worse, the API allows what the list hides. For list endpoints, the same predicate becomes the `WHERE` clause, so you never load and then filter.
+This is the **"who can?"** question that ABAC makes hard and RBAC makes easy. Because the rule here is mostly relational (roles, scopes, dates, a conflict table), it can be answered in SQL. The C# handler and this query encode the same rule, so keep a test that runs both against the same fixture and compares results. If they drift, either the review list shows applications a user can't open, or worse, the API allows what the list hides. For list endpoints, the same predicate becomes the `WHERE` clause, so you never load and then filter.
 ::mistakes
-- `ur.project_id = t.project_id` alone, which drops global assignments (Arjun's officer role).
-- Forgetting `u.active`, so offboarded staff appear in access reviews as able to evaluate.
+- `ur.department_id = sc.department_id` alone, which drops global assignments (Arjun's and Meera's university-wide reviewer roles). Here Arjun still appears through his D-CSE assignment, so test with a fixture where someone qualifies *only* globally.
+- Forgetting `u.active`, so offboarded staff appear in access reviews as able to review.
 - Applying the date filter in `WHERE` on a `LEFT JOIN`ed table, accidentally turning it into an inner join (not a problem here, but common in variants of this query).
 :::
 
 :::exercise id=m14-rbac-pbac-ex5 difficulty=advanced kind=hld title="Authorization for a multi-tenant project platform"
-A SaaS project-management platform serves 2,000 organisations and 300,000 users. Inside each organisation: projects, folders and documents; teams and nested groups; per-folder sharing ("share this folder with the PMC team as viewers"); and organisation-wide roles (Owner, Admin, Member, Guest). Peak traffic is 20,000 page loads per second, and an average page performs 15 authorization checks (the document list shows only what the user may see, and buttons depend on permissions).
+A SaaS project-management platform serves 2,000 organisations and 300,000 users. Inside each organisation: projects, folders and documents; teams and nested groups; per-folder sharing ("share this folder with the design team as viewers"); and organisation-wide roles (Owner, Admin, Member, Guest). Peak traffic is 20,000 page loads per second, and an average page performs 15 authorization checks (the document list shows only what the user may see, and buttons depend on permissions).
 
 Design the authorization architecture. Address where decisions are made, how relationship data is stored and cached, how lists are filtered, how quickly a removed share takes effect, and what happens when the authorization component is slow or down.
 ::acceptance
@@ -1157,7 +1172,7 @@ Relationship data: 300 k users × ~40 tuples ≈ 12 M tuples + folder shares ≈
 - **List filtering.** The API asks once for "folders granted to this user in this org" (typically tens to hundreds of ids), then queries `WHERE org_id = @org AND folder_id = ANY(@folders)`. PostgreSQL row-level security on `org_id` is a second wall against cross-tenant leaks. Checking 5,000 documents one by one after loading them would be slow and leak counts.
 - **Consistency.** Target: a removed share takes effect within 5 seconds in normal operation. The authz service publishes a change event with a new version for the affected folder and user, and API instances evict matching cache entries. The 30 s TTL is the safety net if an event is missed. For the "new enemy" problem, the API includes the folder's permission version with each write. A document added to a folder after a removal is stamped with the new version, and a cached grant older than that version is not trusted for it (the Zanzibar paper's "zookie" idea, simplified).
 - **Failure behaviour.** If the authz service is slow (p99 above 50 ms), the API serves from cache for already-cached users. On a cache miss with the authz service down, it **fails closed**: lists show only documents the user created, and other access returns a clear "permissions temporarily unavailable" error. Owners and admins (org roles, cached separately with a longer TTL) can still work. That is a product decision to agree in advance.
-- **What breaks first.** Large nested groups ("All Contractors", 20,000 members) make expansion expensive. Pre-compute group membership expansions into Redis and update them incrementally on change events.
+- **What breaks first.** Large nested groups ("All Freelancers", 20,000 members) make expansion expensive. Pre-compute group membership expansions into Redis and update them incrementally on change events.
 - **Simpler alternative.** For a platform with only org roles and project membership (no per-folder sharing, no nested groups), a `project_member(user_id, project_id, role)` table, a 30 s per-user cache, and query-side filtering inside the API are enough. Introduce a relationship service only when user-driven sharing appears.
 ::mistakes
 - Per-row authorization calls inside a list endpoint (N+1 checks across the network).
@@ -1176,17 +1191,30 @@ Authorization rules deserve more tests than most code, because a bug is silent: 
 
 ```csharp
 [Theory]
-[InlineData("Evaluator", true,  false, true,  true)]    // assigned, after deadline, no conflict → allow
-[InlineData("Evaluator", true,  true,  true,  false)]   // conflict → deny
-[InlineData("Evaluator", false, false, true,  false)]   // not assigned → deny
-[InlineData("Evaluator", true,  false, false, false)]   // before deadline → deny
+[InlineData("Reviewer", true,  false, true,  true)]    // assigned, after deadline, no conflict → allow
+[InlineData("Reviewer", true,  true,  true,  false)]   // conflict → deny
+[InlineData("Reviewer", false, false, true,  false)]   // not assigned → deny
+[InlineData("Reviewer", true,  false, false, false)]   // before deadline → deny
 [InlineData("Auditor",   true,  false, true,  false)]   // no permission → deny
-public async Task Evaluate_rules(string role, bool assigned, bool conflict, bool afterDeadline, bool expected) { /* build fakes, assert */ }
+public async Task Review_rules(string role, bool assigned, bool conflict, bool afterDeadline, bool expected) { /* build fakes, assert */ }
 ```
 
 Business owners can review the table directly.
 
-**3. Policy-wiring tests.** Resolve `IAuthorizationService` from a real `ServiceCollection` with your registrations (`AddAuthorization`, your policy provider and handlers, fakes for stores) and assert that `"perm:bid.evaluate"` resolves and behaves. This catches "forgot to register the handler", which makes every check silently deny.
+The edit rule gets its own table, including the status code the endpoint must return:
+
+```csharp
+[Theory]
+[InlineData(true,  "Draft",     false, true,  204)]   // owner, draft, before deadline → allowed
+[InlineData(true,  "Draft",     true,  false, 403)]   // owner after deadline → Fail("The application deadline has passed.")
+[InlineData(true,  "Submitted", false, false, 403)]   // owner, already submitted → Fail("Only draft applications can be edited.")
+[InlineData(false, "Draft",     false, false, 404)]   // someone else's application → handler abstains, endpoint hides it
+public async Task Edit_rules(bool owner, string status, bool afterDeadline, bool allowed, int expectedStatus) { /* handler + WebApplicationFactory */ }
+```
+
+Assert the handler decision with `AuthorizationHandlerContext`, and the status code and ProblemDetails `detail` with an endpoint test, because the 403-versus-404 choice lives in the endpoint.
+
+**3. Policy-wiring tests.** Resolve `IAuthorizationService` from a real `ServiceCollection` with your registrations (`AddAuthorization`, your policy provider and handlers, fakes for stores) and assert that `"perm:application.review"` resolves and behaves. This catches "forgot to register the handler", which makes every check silently deny.
 
 **4. Endpoint inventory.** Enumerate endpoints and assert each one has authorization metadata or `AllowAnonymous`, and that every `perm:` name it uses exists in the permissions list.
 
@@ -1198,7 +1226,7 @@ Business owners can review the table directly.
 - **Document sharing** systems (Google Drive-like products) are relationship-based. Google's Zanzibar paper describes one such system publicly, and products such as SpiceDB and OpenFGA implement its model.
 - **Banking and government finance** systems enforce maker-checker and delegated financial powers (approval limits by designation), exactly the rules in exercise 3.
 - **Hospitals** combine role permissions with care relationships and break-glass procedures with mandatory review.
-- **ASP.NET Core** itself offers roles, claims, policies, requirements, handlers, resource-based authorization and custom policy providers. Most applications never need anything beyond these.
+- **ASP.NET Core** itself offers roles, claims, policies, requirements, handlers, resource-based authorization and custom policy providers. Most apps never need anything beyond these.
 
 ## Interview questions
 
@@ -1206,11 +1234,11 @@ Business owners can review the table directly.
 ::q beginner
 What is RBAC, and why check permissions rather than role names in code?
 ::a
-Role-based access control assigns users to roles and roles to permissions. Checking permissions (`bid.evaluate`) rather than roles (`IsInRole("Evaluator")`) decouples code from the organisation chart: adding a "Senior Evaluator" role or merging two roles only changes the role-permission mapping, not every endpoint. It also makes access reviews easier, because "who can approve awards?" becomes a query over permissions.
+Role-based access control assigns users to roles and roles to permissions. Checking permissions (`application.review`) rather than roles (`IsInRole("Reviewer")`) decouples code from the organisation chart: adding a "Senior Reviewer" role or merging two roles only changes the role-permission mapping, not every endpoint. It also makes access reviews easier, because "who can approve awards?" becomes a query over permissions.
 ::q beginner
 What is resource-based authorization, and why can't `[Authorize]` do it?
 ::a
-It is an authorization decision that depends on the specific object being accessed, such as its owner, project, status or amount. `[Authorize]` runs before your endpoint code, so the object hasn't been loaded yet. In ASP.NET Core you load the resource and then call `IAuthorizationService.AuthorizeAsync(User, resource, requirement)`, with an `AuthorizationHandler<TRequirement, TResource>` implementing the rule.
+It is an authorization decision that depends on the specific object being accessed, such as its owner, department, status or amount. `[Authorize]` runs before your endpoint code, so the object hasn't been loaded yet. In ASP.NET Core you load the resource and then call `IAuthorizationService.AuthorizeAsync(User, resource, requirement)`, with an `AuthorizationHandler<TRequirement, TResource>` implementing the rule.
 ::q intermediate
 How do requirements, handlers and policies combine in ASP.NET Core?
 ::a
@@ -1250,10 +1278,10 @@ Q: In ASP.NET Core, when is a requirement satisfied?
 A: When at least one handler calls Succeed and no handler calls Fail.
 Q: When should a handler call context.Fail()?
 A: For hard vetoes that must override any other handler, such as conflicts of interest or maker-checker violations.
-Q: Why can't [Authorize] check that a user owns a bid?
-A: It runs before the endpoint loads the bid. Use IAuthorizationService.AuthorizeAsync with the loaded resource.
+Q: Why can't [Authorize] check that a user owns an application?
+A: It runs before the endpoint loads the application. Use IAuthorizationService.AuthorizeAsync with the loaded resource.
 Q: What is role explosion?
-A: Encoding attributes into role names (Evaluator_NH48_Under50L) until there are too many roles to manage or review.
+A: Encoding attributes into role names (Reviewer_CSE_Under5L) until there are too many roles to manage or review.
 Q: What is maker-checker?
 A: Segregation of duties: the person who creates a transaction can't approve it.
 Q: How should list endpoints apply authorization?
@@ -1264,33 +1292,33 @@ A: In the query (WHERE on granted scopes, plus row-level security), not by loadi
 
 :::quiz pass=70
 ::q single
-A new "Deputy Evaluator" role must be able to evaluate bids. With permission-based checks, what changes?
-- [ ] Every evaluation endpoint's `[Authorize(Roles = ...)]` list
-- [x] Only the role-to-permission mapping (grant `bid.evaluate` to the new role)
+A new "Deputy Reviewer" role must be able to review applications. With permission-based checks, what changes?
+- [ ] Every review endpoint's `[Authorize(Roles = ...)]` list
+- [x] Only the role-to-permission mapping (grant `application.review` to the new role)
 - [ ] The token signing key
 - [ ] Nothing can be done without a redeploy of all services
-> Endpoints check `bid.evaluate`, so adding a role is a data change in one place.
+> Endpoints check `application.review`, so adding a role is a data change in one place.
 ::q single
-An evaluator declared a conflict of interest with bidder K-3. A second handler, added later, lets "Chief Evaluators" evaluate any bid. The evaluator is also a Chief Evaluator. What should happen, and how do you guarantee it?
+A reviewer declared a conflict of interest with applicant STU-3. A second handler, added later, lets "Chief Reviewers" review any application. The reviewer is also a Chief Reviewer. What should happen, and how do you guarantee it?
 - [ ] Allowed, because one handler succeeded
 - [x] Denied: the conflict handler calls `context.Fail()`, which overrides any success
 - [ ] Denied only if the conflict handler is registered first
 - [ ] It depends on the HTTP method
 > `Fail` is a veto regardless of handler order. Abstaining (not calling Succeed) would let the other handler win.
 ::q single
-Bidders may edit only their own bids. Where is this enforced?
-- [ ] In `[Authorize(Roles = "Bidder")]`
+Applicants may edit only their own applications. Where is this enforced?
+- [ ] In `[Authorize(Roles = "Applicant")]`
 - [ ] In the Razor view, by hiding the Edit button
-- [x] In a resource-based handler after loading the bid, comparing its company with the user's `company_id` claim
+- [x] In a resource-based handler after loading the application, comparing its applicant id with the user's `student_id` claim
 - [ ] In the JWT
-> Ownership depends on the specific bid, so the check must run after it is loaded.
+> Ownership depends on the specific application, so the check must run after it is loaded.
 ::q multi
 Which are attribute-based rules that roles alone can't express cleanly? (Select all that apply.)
 - [x] Approve awards up to the user's personal limit
-- [x] Evaluate only after the bid deadline
-- [ ] Auditors may read bids
+- [x] Review only after the application deadline
+- [ ] Auditors may read applications
 - [x] The creator of a payment can't approve it
-> "Auditors may read bids" is a plain role permission. The others compare attributes of the user, the resource and time.
+> "Auditors may read applications" is a plain role permission. The others compare attributes of the user, the resource and time.
 ::q single
 A "My documents" page loads 8,000 documents and removes those the user can't see, showing "Showing 50 of 8,000". What is wrong?
 - [ ] Nothing, filtering is correct
@@ -1300,14 +1328,14 @@ A "My documents" page loads 8,000 documents and removes those the user can't see
 > Push grants into the `WHERE` clause and count only what the user may see.
 ::q single
 The conflict registry database times out during a check. What should the handler do?
-- [ ] Call Succeed so evaluators aren't blocked
+- [ ] Call Succeed so reviewers aren't blocked
 - [x] Not succeed (fail closed), log the error, and let the endpoint return an error
 - [ ] Retry forever
 - [ ] Skip the conflict rule and evaluate the others
 > Authorization must fail closed. A fail-open handler turns every outage into a policy bypass.
 ::q single
-Your company has 600 roles like `Engineer_Pune_Roads_Level2`. Which change helps most?
-- [ ] Add more roles for the new projects
+Your university has 600 roles like `Reviewer_Pune_Engineering_Level2`. Which change helps most?
+- [ ] Add more roles for the new departments
 - [x] Collapse to a few roles and express location, department and level as attributes evaluated by policies
 - [ ] Put all 600 roles into the JWT
 - [ ] Remove authorization from internal APIs

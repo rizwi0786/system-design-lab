@@ -44,17 +44,17 @@ By the end of this lesson you will be able to:
 
 ## Explain it like I'm a beginner
 
-Think of a building site office. A contractor's engineer wants a copy of drawing *DRG-C-104, revision 3*. They don't walk into the document vault themselves. They go to the **document controller** at the front desk.
+Think of a college library's **course-reserve desk**. A second-year student wants the printed notes for *CS201 Data Structures, lecture 7*. They don't walk into the closed stacks themselves. They ask the **librarian** at the desk.
 
-The document controller looks just like the vault from the engineer's point of view: you ask for a drawing, you get a drawing. But the controller does useful things on the way:
+From the student's point of view the desk behaves just like the stacks: you ask for notes, you get notes. But the librarian does useful things on the way:
 
-- **Checks your badge.** If you are not on this project, you don't get the drawing. (protection proxy)
-- **Keeps photocopies of popular drawings** on the desk, so they don't walk to the vault for every request. (caching proxy)
+- **Checks your ID card.** If you are not enrolled in CS201, you don't get its notes. (protection proxy)
+- **Keeps copies of popular notes** behind the desk, so they don't walk to the stacks for every request. (caching proxy)
 - **Writes every request in a register**: who, what, when. (logging proxy)
-- **Fetches from the head-office vault in Gurgaon** when the site vault doesn't have it, without you knowing it came from another city. (remote proxy)
-- **Doesn't open the heavy archive box until someone actually asks** for something inside it. (virtual, or lazy, proxy)
+- **Orders it from the main campus library in Bengaluru** when this branch doesn't have it, without you needing to know it came from another city. (remote proxy)
+- **Doesn't unpack the heavy box of old exam papers until someone actually asks** for something inside it. (virtual, or lazy, proxy)
 
-The engineer's process doesn't change. The vault doesn't change. A stand-in sits between them and controls access.
+The student's process doesn't change. The stacks don't change. A stand-in sits between them and controls access.
 
 That stand-in is a **Proxy**: an object with the *same interface* as the real object, which holds (or knows how to reach) the real object and decides when and whether to pass each call through.
 
@@ -73,12 +73,12 @@ The general problem is this: **you need to add control around an object (when it
 The smallest possible proxy is one class that implements the same interface and forwards:
 
 ```csharp
-public interface IDrawingArchive { byte[] Open(string drawingNo); }
+public interface ICourseArchive { byte[] Open(string materialId); }
 
-public sealed class ArchiveProxy(Func<IDrawingArchive> create) : IDrawingArchive
+public sealed class ArchiveProxy(Func<ICourseArchive> create) : ICourseArchive
 {
-    private IDrawingArchive? _real;                      // not created yet
-    public byte[] Open(string drawingNo) => (_real ??= create()).Open(drawingNo);
+    private ICourseArchive? _real;                      // not created yet
+    public byte[] Open(string materialId) => (_real ??= create()).Open(materialId);
 }
 ```
 
@@ -88,22 +88,22 @@ That is a complete virtual proxy (it is not thread-safe yet; we fix that with `L
 
 | Participant | Role | In our example |
 |---|---|---|
-| **Subject** | The interface both the real object and the proxy implement. | `IDrawingStore` |
-| **Real subject** | The object doing the actual work. | `FileSystemDrawingStore` |
-| **Proxy** | Implements Subject, holds or locates the real subject, controls access to it. | `AuthorizingDrawingStore`, `CachingDrawingStore` |
+| **Subject** | The interface both the real object and the proxy implement. | `ICourseMaterialStore` |
+| **Real subject** | The object doing the actual work. | `FileSystemMaterialStore` |
+| **Proxy** | Implements Subject, holds or locates the real subject, controls access to it. | `AuthorizingMaterialStore`, `CachingMaterialStore` |
 | **Client** | Talks only to Subject. Doesn't know whether it has a proxy. | The minimal API endpoint |
 
 ### The five kinds of proxy
 
-1. **Virtual proxy (lazy proxy).** Delays creating an expensive object until it is needed. Example: a 180 MB IFC model or a 4,000-page tender document that most requests never open. In .NET, `Lazy<T>` is the built-in building block.
-2. **Protection proxy.** Checks permissions before forwarding. Example: only users assigned to project `NH-48-PKG3` can read its drawings.
-3. **Remote proxy.** Makes an object on another machine look local. Example: a typed `HttpClient` or a gRPC client that implements `IDrawingStore` by calling an API in another region. The client calls a method; the proxy turns it into a network request (serialisation, retries, timeouts).
-4. **Caching proxy.** Remembers results of expensive calls. Example: GST rate lookups or a slow government land-records API that answers in 2–3 seconds but changes data rarely.
+1. **Virtual proxy (lazy proxy).** Delays creating an expensive object until it is needed. Example: a 180 MB interactive 3D anatomy model or a 1,200-page course pack that most page views never open. In .NET, `Lazy<T>` is the built-in building block.
+2. **Protection proxy.** Checks permissions before forwarding. Example: only students enrolled in course `CS201` (and its teachers) can read its materials.
+3. **Remote proxy.** Makes an object on another machine look local. Example: a typed `HttpClient` or a gRPC client that implements `ICourseMaterialStore` by calling an API in another region. The client calls a method; the proxy turns it into a network request (serialisation, retries, timeouts).
+4. **Caching proxy.** Remembers results of expensive calls. Example: GST rate lookups, or a slow university student-information-system API that answers in 2–3 seconds but whose data changes rarely.
 5. **Logging / monitoring proxy (sometimes called a smart reference).** Records calls, timings or reference counts. Example: logging each call's duration so you can see which storage call is slow.
 
 ### How it works internally
 
-A hand-written proxy is plain polymorphism: the client holds an `IDrawingStore` reference, and at runtime that reference points at the proxy object. The .NET runtime dispatches `GetInfoAsync` to the proxy's method (an interface call through the type's method table), and the proxy calls the inner object's method. The extra cost is one more virtual call, which is nanoseconds. That is negligible next to a disk read or a network call measured in milliseconds.
+A hand-written proxy is plain polymorphism: the client holds an `ICourseMaterialStore` reference, and at runtime that reference points at the proxy object. The .NET runtime dispatches `GetInfoAsync` to the proxy's method (an interface call through the type's method table), and the proxy calls the inner object's method. The extra cost is one more virtual call, which is nanoseconds. That is negligible next to a disk read or a network call measured in milliseconds.
 
 A *generated* proxy works differently. `DispatchProxy.Create<TInterface, TProxy>()` builds a new class at runtime (using `System.Reflection.Emit`) that implements `TInterface`. Every method on that generated class packs its arguments into an `object?[]` and calls your `Invoke(MethodInfo, object?[])` override. You decide what to do, usually `targetMethod.Invoke(inner, args)`. This is more flexible (one proxy class for every interface) but slower per call, because of reflection, boxing of value-type arguments and the argument array. For calls that hit a database, that overhead rarely matters; in a tight in-memory loop it would. Measure before you decide.
 
@@ -113,8 +113,8 @@ EF Core lazy loading uses a third technique: **subclassing**. With `UseLazyLoadi
 
 Without a proxy, the control logic goes into one of two wrong places:
 
-- **Into every caller.** Each endpoint checks permissions, checks the cache, and logs. Twelve endpoints means twelve copies. When the rule changes ("site engineers may read revision drafts too"), someone misses one copy, and that is a security bug.
-- **Into the real object.** `FileSystemDrawingStore` now knows about users, HTTP claims and caching. It can't be reused in a background job that has no user, and you can't test file reading without setting up a fake user.
+- **Into every caller.** Each endpoint checks permissions, checks the cache, and logs. Twelve endpoints means twelve copies. When the rule changes ("teaching assistants may read draft answer keys too"), someone misses one copy, and that is a security bug.
+- **Into the real object.** `FileSystemMaterialStore` now knows about users, HTTP claims and caching. It can't be reused in a background job that has no user, and you can't test file reading without setting up a fake user.
 
 ### When it is useful
 
@@ -126,7 +126,7 @@ Without a proxy, the control logic goes into one of two wrong places:
 
 ### When not to use it
 
-- **The check belongs to the domain.** "A bill above ₹50 lakh needs two approvers" is a business rule, not an access control wrapper. Put it in the domain or application service where it is visible and tested with the rest of the rules.
+- **The check belongs to the domain.** "A fee refund above ₹50,000 needs two approvers" is a business rule, not an access control wrapper. Put it in the domain or application service where it is visible and tested with the rest of the rules.
 - **The hiding hurts.** A remote proxy that looks exactly like a local object invites people to call it in a loop. A call that takes 40 ms over the network, made 500 times, is 20 seconds. Remote boundaries should often *look* remote: async, batch-friendly methods and explicit timeouts.
 - **The framework already does it.** Use ASP.NET Core authorization policies for endpoint-level checks, `HybridCache` or output caching for HTTP responses, and OpenTelemetry instrumentation for timings, before hand-rolling a proxy.
 - **One caller, one use.** If only one method in one service needs a cached value, a local `IMemoryCache` call is simpler than a new class.
@@ -146,67 +146,67 @@ Without a proxy, the control logic goes into one of two wrong places:
 
 ```mermaid
 classDiagram
-    class IDrawingStore {
+    class ICourseMaterialStore {
         <<interface>>
-        +GetInfoAsync(project, drawingNo, ct) DrawingInfo
-        +ListAsync(project, ct) IReadOnlyList~DrawingInfo~
-        +OpenAsync(project, drawingNo, ct) Stream
+        +GetInfoAsync(course, materialId, ct) MaterialInfo
+        +ListAsync(course, ct) IReadOnlyList~MaterialInfo~
+        +OpenAsync(course, materialId, ct) Stream
     }
-    class FileSystemDrawingStore {
+    class FileSystemMaterialStore {
         -string root
-        +GetInfoAsync(project, drawingNo, ct) DrawingInfo
+        +GetInfoAsync(course, materialId, ct) MaterialInfo
     }
-    class CachingDrawingStore {
-        -IDrawingStore inner
+    class CachingMaterialStore {
+        -ICourseMaterialStore inner
         -IMemoryCache cache
-        +GetInfoAsync(project, drawingNo, ct) DrawingInfo
+        +GetInfoAsync(course, materialId, ct) MaterialInfo
     }
-    class AuthorizingDrawingStore {
-        -IDrawingStore inner
+    class AuthorizingMaterialStore {
+        -ICourseMaterialStore inner
         -ICurrentUser user
-        -IProjectAccessPolicy policy
-        +GetInfoAsync(project, drawingNo, ct) DrawingInfo
+        -ICourseAccessPolicy policy
+        +GetInfoAsync(course, materialId, ct) MaterialInfo
     }
-    class DrawingEndpoint {
-        +Get(project, drawingNo)
+    class MaterialEndpoint {
+        +Get(course, materialId)
     }
-    IDrawingStore <|.. FileSystemDrawingStore
-    IDrawingStore <|.. CachingDrawingStore
-    IDrawingStore <|.. AuthorizingDrawingStore
-    CachingDrawingStore o-- IDrawingStore : inner
-    AuthorizingDrawingStore o-- IDrawingStore : inner
-    DrawingEndpoint --> IDrawingStore : uses
+    ICourseMaterialStore <|.. FileSystemMaterialStore
+    ICourseMaterialStore <|.. CachingMaterialStore
+    ICourseMaterialStore <|.. AuthorizingMaterialStore
+    CachingMaterialStore o-- ICourseMaterialStore : inner
+    AuthorizingMaterialStore o-- ICourseMaterialStore : inner
+    MaterialEndpoint --> ICourseMaterialStore : uses
 ```
 
-How to read it: all three classes implement `IDrawingStore` (dotted lines with hollow triangles). The two proxies also *hold* an `IDrawingStore` (the hollow diamond means "has a reference to"). The endpoint depends only on the interface. Because the proxies hold the interface rather than the concrete `FileSystemDrawingStore`, they can be nested: authorization wraps caching, which wraps the real store.
+How to read it: all three classes implement `ICourseMaterialStore` (dotted lines with hollow triangles). The two proxies also *hold* an `ICourseMaterialStore` (the hollow diamond means "has a reference to"). The endpoint depends only on the interface. Because the proxies hold the interface rather than the concrete `FileSystemMaterialStore`, they can be nested: authorization wraps caching, which wraps the real store.
 
 ### Sequence diagram
 
 ```mermaid
 sequenceDiagram
     participant E as Endpoint
-    participant A as AuthorizingDrawingStore
-    participant C as CachingDrawingStore
-    participant F as FileSystemDrawingStore
-    E->>A: GetInfoAsync("NH48-P3", "DRG-C-104")
-    A->>A: policy.CanRead(user, "NH48-P3")?
+    participant A as AuthorizingMaterialStore
+    participant C as CachingMaterialStore
+    participant F as FileSystemMaterialStore
+    E->>A: GetInfoAsync("CS201", "LEC-07")
+    A->>A: policy.CanRead(user, "CS201")?
     alt not allowed
-        A-->>E: throw ProjectAccessDeniedException
+        A-->>E: throw CourseAccessDeniedException
     else allowed
         A->>C: GetInfoAsync(...)
         alt cache hit
-            C-->>A: DrawingInfo (from memory)
+            C-->>A: MaterialInfo (from memory)
         else cache miss
             C->>F: GetInfoAsync(...)
-            F-->>C: DrawingInfo (from disk)
+            F-->>C: MaterialInfo (from disk)
             C->>C: store for 5 minutes
-            C-->>A: DrawingInfo
+            C-->>A: MaterialInfo
         end
-        A-->>E: DrawingInfo
+        A-->>E: MaterialInfo
     end
 ```
 
-The key point is **order**. The permission check runs *before* the cache is consulted. If the order were reversed (caching outside authorization) and the cache key didn't include the user, the second user to ask would get the cached drawing *without any permission check*. This is a real class of bug: a cache in front of an access check leaks data. Rule: **protection proxies go outermost.**
+The key point is **order**. The permission check runs *before* the cache is consulted. If the order were reversed (caching outside authorization) and the cache key didn't include the user, the second user to ask would get the cached material *without any permission check*. This is a real class of bug: a cache in front of an access check leaks data. Rule: **protection proxies go outermost.**
 
 ## Step-by-step example
 
@@ -215,17 +215,17 @@ We'll start from a naive endpoint and pull each concern into a proxy.
 ### Step 1 — the naive endpoint
 
 ```csharp
-app.MapGet("/projects/{p}/drawings/{no}", async (string p, string no, HttpContext http, IMemoryCache cache) =>
+app.MapGet("/courses/{c}/materials/{id}", async (string c, string id, HttpContext http, IMemoryCache cache) =>
 {
-    var projects = http.User.FindAll("project").Select(c => c.Value);
-    if (!projects.Contains(p)) return Results.StatusCode(403);
+    var courses = http.User.FindAll("course").Select(c => c.Value);
+    if (!courses.Contains(c)) return Results.StatusCode(403);
 
-    var key = $"{p}/{no}";
-    if (!cache.TryGetValue(key, out DrawingInfo? info))
+    var key = $"{c}/{id}";
+    if (!cache.TryGetValue(key, out MaterialInfo? info))
     {
         var sw = Stopwatch.StartNew();
-        var path = Path.Combine("/data/drawings", p, no + ".pdf");
-        info = File.Exists(path) ? new DrawingInfo(p, no, new FileInfo(path).Length, "application/pdf") : null;
+        var path = Path.Combine("/data/materials", c, id + ".pdf");
+        info = File.Exists(path) ? new MaterialInfo(c, id, new FileInfo(path).Length, File.GetLastWriteTimeUtc(path)) : null;
         Console.WriteLine($"disk read {sw.ElapsedMilliseconds} ms");
         cache.Set(key, info, TimeSpan.FromMinutes(5));
     }
@@ -237,15 +237,15 @@ Four jobs in one lambda: authorization, caching, timing and file access. The `/l
 
 ### Step 2 — extract the subject interface and the real subject
 
-Move file access behind `IDrawingStore` and into `FileSystemDrawingStore`. That class knows nothing about users or caches. Validate the drawing number in exactly one place.
+Move file access behind `ICourseMaterialStore` and into `FileSystemMaterialStore`. That class knows nothing about users or caches. Validate the material id in exactly one place.
 
 ### Step 3 — add a caching proxy
 
-`CachingDrawingStore : IDrawingStore` holds an inner `IDrawingStore` and an `IMemoryCache`. It caches metadata (small, read often) but *not* file streams (large, single-use).
+`CachingMaterialStore : ICourseMaterialStore` holds an inner `ICourseMaterialStore` and an `IMemoryCache`. It caches metadata (small, read often) but *not* file streams (large, single-use).
 
 ### Step 4 — add a protection proxy
 
-`AuthorizingDrawingStore : IDrawingStore` asks an `IProjectAccessPolicy` whether the current user may read the project, then forwards. It goes outermost.
+`AuthorizingMaterialStore : ICourseMaterialStore` asks an `ICourseAccessPolicy` whether the current user may read the course, then forwards. It goes outermost.
 
 ### Step 5 — add a logging proxy without writing a class per interface
 
@@ -256,85 +256,85 @@ Use `DispatchProxy` to build one `TimingProxy<T>` that works for any interface. 
 ```text
 Infra.Api/
   Program.cs
-  Drawings/
-    DrawingModels.cs            DrawingInfo, IDrawingStore, exceptions
-    FileSystemDrawingStore.cs   real subject
-    CachingDrawingStore.cs      caching proxy
-    Access.cs                   ICurrentUser, IProjectAccessPolicy
-    AuthorizingDrawingStore.cs  protection proxy
+  Materials/
+    MaterialModels.cs            MaterialInfo, ICourseMaterialStore, exceptions
+    FileSystemMaterialStore.cs   real subject
+    CachingMaterialStore.cs      caching proxy
+    Access.cs                   ICurrentUser, ICourseAccessPolicy
+    AuthorizingMaterialStore.cs  protection proxy
   Diagnostics/
     TimingProxy.cs              DispatchProxy-based logging proxy
 ```
 
-```csharp file=Drawings/DrawingModels.cs
-namespace Infra.Drawings;
+```csharp file=Materials/MaterialModels.cs
+namespace Infra.Materials;
 
-public sealed record DrawingInfo(string ProjectCode, string DrawingNo, long SizeBytes, DateTimeOffset LastModified);
+public sealed record MaterialInfo(string CourseCode, string MaterialId, long SizeBytes, DateTimeOffset LastModified);
 
-/// <summary>Subject: everything the app needs from drawing storage.</summary>
-public interface IDrawingStore
+/// <summary>Subject: everything the app needs from course-material storage.</summary>
+public interface ICourseMaterialStore
 {
-    Task<DrawingInfo?> GetInfoAsync(string projectCode, string drawingNo, CancellationToken ct);
-    Task<IReadOnlyList<DrawingInfo>> ListAsync(string projectCode, CancellationToken ct);
+    Task<MaterialInfo?> GetInfoAsync(string courseCode, string materialId, CancellationToken ct);
+    Task<IReadOnlyList<MaterialInfo>> ListAsync(string courseCode, CancellationToken ct);
     /// <summary>Caller owns and must dispose the returned stream.</summary>
-    Task<Stream?> OpenAsync(string projectCode, string drawingNo, CancellationToken ct);
+    Task<Stream?> OpenAsync(string courseCode, string materialId, CancellationToken ct);
 }
 
-public sealed class ProjectAccessDeniedException(string user, string project)
-    : Exception($"User '{user}' may not access project '{project}'.");
+public sealed class CourseAccessDeniedException(string user, string course)
+    : Exception($"User '{user}' is not enrolled in course '{course}'.");
 
-public sealed class DrawingStoreOptions
+public sealed class MaterialStoreOptions
 {
-    public string Root { get; set; } = "drawings";
+    public string Root { get; set; } = "materials";
 }
 ```
 
-```csharp file=Drawings/FileSystemDrawingStore.cs
+```csharp file=Materials/FileSystemMaterialStore.cs
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 
-namespace Infra.Drawings;
+namespace Infra.Materials;
 
 /// <summary>Real subject. Knows about files only: no users, no caching.</summary>
-public sealed partial class FileSystemDrawingStore(IOptions<DrawingStoreOptions> options) : IDrawingStore
+public sealed partial class FileSystemMaterialStore(IOptions<MaterialStoreOptions> options) : ICourseMaterialStore
 {
     private readonly string _root = Path.GetFullPath(options.Value.Root);
 
     [GeneratedRegex("^[A-Za-z0-9-]{1,40}$")]
     private static partial Regex SafeName();
 
-    public Task<DrawingInfo?> GetInfoAsync(string projectCode, string drawingNo, CancellationToken ct)
+    public Task<MaterialInfo?> GetInfoAsync(string courseCode, string materialId, CancellationToken ct)
     {
-        var file = new FileInfo(PathFor(projectCode, drawingNo));
-        DrawingInfo? info = file.Exists
-            ? new DrawingInfo(projectCode, drawingNo, file.Length, file.LastWriteTimeUtc)
+        var file = new FileInfo(PathFor(courseCode, materialId));
+        MaterialInfo? info = file.Exists
+            ? new MaterialInfo(courseCode, materialId, file.Length, file.LastWriteTimeUtc)
             : null;
         return Task.FromResult(info);
     }
 
-    public Task<IReadOnlyList<DrawingInfo>> ListAsync(string projectCode, CancellationToken ct)
+    public Task<IReadOnlyList<MaterialInfo>> ListAsync(string courseCode, CancellationToken ct)
     {
-        var dir = new DirectoryInfo(Path.Combine(_root, Check(projectCode)));
-        IReadOnlyList<DrawingInfo> list = dir.Exists
+        var dir = new DirectoryInfo(Path.Combine(_root, Check(courseCode)));
+        IReadOnlyList<MaterialInfo> list = dir.Exists
             ? dir.EnumerateFiles("*.pdf")
-                 .Select(f => new DrawingInfo(projectCode, Path.GetFileNameWithoutExtension(f.Name), f.Length, f.LastWriteTimeUtc))
-                 .OrderBy(d => d.DrawingNo, StringComparer.Ordinal)
+                 .Select(f => new MaterialInfo(courseCode, Path.GetFileNameWithoutExtension(f.Name), f.Length, f.LastWriteTimeUtc))
+                 .OrderBy(d => d.MaterialId, StringComparer.Ordinal)
                  .ToList()
             : [];
         return Task.FromResult(list);
     }
 
-    public Task<Stream?> OpenAsync(string projectCode, string drawingNo, CancellationToken ct)
+    public Task<Stream?> OpenAsync(string courseCode, string materialId, CancellationToken ct)
     {
-        var path = PathFor(projectCode, drawingNo);
+        var path = PathFor(courseCode, materialId);
         Stream? s = File.Exists(path)
             ? new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true)
             : null;
         return Task.FromResult(s);
     }
 
-    private string PathFor(string projectCode, string drawingNo) =>
-        Path.Combine(_root, Check(projectCode), Check(drawingNo) + ".pdf");
+    private string PathFor(string courseCode, string materialId) =>
+        Path.Combine(_root, Check(courseCode), Check(materialId) + ".pdf");
 
     // Only letters, digits and dashes: blocks "../" path traversal in one place.
     private static string Check(string part) =>
@@ -342,45 +342,45 @@ public sealed partial class FileSystemDrawingStore(IOptions<DrawingStoreOptions>
 }
 ```
 
-```csharp file=Drawings/CachingDrawingStore.cs
+```csharp file=Materials/CachingMaterialStore.cs
 using Microsoft.Extensions.Caching.Memory;
 
-namespace Infra.Drawings;
+namespace Infra.Materials;
 
 /// <summary>Caching proxy. Caches small metadata; never caches streams.</summary>
-public sealed class CachingDrawingStore(IDrawingStore inner, IMemoryCache cache, TimeSpan ttl) : IDrawingStore
+public sealed class CachingMaterialStore(ICourseMaterialStore inner, IMemoryCache cache, TimeSpan ttl) : ICourseMaterialStore
 {
-    public async Task<DrawingInfo?> GetInfoAsync(string projectCode, string drawingNo, CancellationToken ct)
+    public async Task<MaterialInfo?> GetInfoAsync(string courseCode, string materialId, CancellationToken ct)
     {
-        var key = $"drawing-info:{projectCode}:{drawingNo}";
-        if (cache.TryGetValue(key, out DrawingInfo? hit)) return hit;
+        var key = $"material-info:{courseCode}:{materialId}";
+        if (cache.TryGetValue(key, out MaterialInfo? hit)) return hit;
 
-        var info = await inner.GetInfoAsync(projectCode, drawingNo, ct);
-        if (info is not null)   // do not cache "not found": a drawing uploaded a second later should appear
+        var info = await inner.GetInfoAsync(courseCode, materialId, ct);
+        if (info is not null)   // do not cache "not found": a material uploaded a second later should appear
             cache.Set(key, info, new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = ttl, Size = 1 });
         return info;
     }
 
-    public async Task<IReadOnlyList<DrawingInfo>> ListAsync(string projectCode, CancellationToken ct)
+    public async Task<IReadOnlyList<MaterialInfo>> ListAsync(string courseCode, CancellationToken ct)
     {
-        var key = $"drawing-list:{projectCode}";
-        if (cache.TryGetValue(key, out IReadOnlyList<DrawingInfo>? hit) && hit is not null) return hit;
+        var key = $"material-list:{courseCode}";
+        if (cache.TryGetValue(key, out IReadOnlyList<MaterialInfo>? hit) && hit is not null) return hit;
 
-        var list = await inner.ListAsync(projectCode, ct);
+        var list = await inner.ListAsync(courseCode, ct);
         cache.Set(key, list, new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = ttl, Size = list.Count + 1 });
         return list;
     }
 
     // Streams are large and single-use: always go to the real store.
-    public Task<Stream?> OpenAsync(string projectCode, string drawingNo, CancellationToken ct) =>
-        inner.OpenAsync(projectCode, drawingNo, ct);
+    public Task<Stream?> OpenAsync(string courseCode, string materialId, CancellationToken ct) =>
+        inner.OpenAsync(courseCode, materialId, ct);
 }
 ```
 
-```csharp file=Drawings/Access.cs
+```csharp file=Materials/Access.cs
 using System.Security.Claims;
 
-namespace Infra.Drawings;
+namespace Infra.Materials;
 
 public interface ICurrentUser
 {
@@ -394,48 +394,48 @@ public sealed class HttpCurrentUser(IHttpContextAccessor accessor) : ICurrentUse
     public string Name => Principal.Identity?.Name ?? "anonymous";
 }
 
-public interface IProjectAccessPolicy
+public interface ICourseAccessPolicy
 {
-    bool CanRead(ClaimsPrincipal user, string projectCode);
+    bool CanRead(ClaimsPrincipal user, string courseCode);
 }
 
-/// <summary>A user may read a project if they carry a "project" claim for it, or the "DocumentAdmin" role.</summary>
-public sealed class ClaimsProjectAccessPolicy : IProjectAccessPolicy
+/// <summary>A user may read a course's materials if they carry a "course" claim for it (they are enrolled or teach it), or the "CourseAdmin" role.</summary>
+public sealed class ClaimsCourseAccessPolicy : ICourseAccessPolicy
 {
-    public bool CanRead(ClaimsPrincipal user, string projectCode) =>
-        user.IsInRole("DocumentAdmin") ||
-        user.FindAll("project").Any(c => string.Equals(c.Value, projectCode, StringComparison.OrdinalIgnoreCase));
+    public bool CanRead(ClaimsPrincipal user, string courseCode) =>
+        user.IsInRole("CourseAdmin") ||
+        user.FindAll("course").Any(c => string.Equals(c.Value, courseCode, StringComparison.OrdinalIgnoreCase));
 }
 ```
 
-```csharp file=Drawings/AuthorizingDrawingStore.cs
-namespace Infra.Drawings;
+```csharp file=Materials/AuthorizingMaterialStore.cs
+namespace Infra.Materials;
 
 /// <summary>Protection proxy. Must be the OUTERMOST wrapper so no cache can answer before the check.</summary>
-public sealed class AuthorizingDrawingStore(IDrawingStore inner, ICurrentUser user, IProjectAccessPolicy policy) : IDrawingStore
+public sealed class AuthorizingMaterialStore(ICourseMaterialStore inner, ICurrentUser user, ICourseAccessPolicy policy) : ICourseMaterialStore
 {
-    public Task<DrawingInfo?> GetInfoAsync(string projectCode, string drawingNo, CancellationToken ct)
+    public Task<MaterialInfo?> GetInfoAsync(string courseCode, string materialId, CancellationToken ct)
     {
-        Demand(projectCode);
-        return inner.GetInfoAsync(projectCode, drawingNo, ct);
+        Demand(courseCode);
+        return inner.GetInfoAsync(courseCode, materialId, ct);
     }
 
-    public Task<IReadOnlyList<DrawingInfo>> ListAsync(string projectCode, CancellationToken ct)
+    public Task<IReadOnlyList<MaterialInfo>> ListAsync(string courseCode, CancellationToken ct)
     {
-        Demand(projectCode);
-        return inner.ListAsync(projectCode, ct);
+        Demand(courseCode);
+        return inner.ListAsync(courseCode, ct);
     }
 
-    public Task<Stream?> OpenAsync(string projectCode, string drawingNo, CancellationToken ct)
+    public Task<Stream?> OpenAsync(string courseCode, string materialId, CancellationToken ct)
     {
-        Demand(projectCode);
-        return inner.OpenAsync(projectCode, drawingNo, ct);
+        Demand(courseCode);
+        return inner.OpenAsync(courseCode, materialId, ct);
     }
 
-    private void Demand(string projectCode)
+    private void Demand(string courseCode)
     {
-        if (!policy.CanRead(user.Principal, projectCode))
-            throw new ProjectAccessDeniedException(user.Name, projectCode);
+        if (!policy.CanRead(user.Principal, courseCode))
+            throw new CourseAccessDeniedException(user.Name, courseCode);
     }
 }
 ```
@@ -499,65 +499,67 @@ public class TimingProxy<T> : DispatchProxy where T : class
 
 ```csharp file=Program.cs
 using Infra.Diagnostics;
-using Infra.Drawings;
+using Infra.Materials;
 using Microsoft.Extensions.Caching.Memory;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddMemoryCache(o => o.SizeLimit = 50_000);
 builder.Services.AddHttpContextAccessor();
-builder.Services.Configure<DrawingStoreOptions>(builder.Configuration.GetSection("Drawings"));
+builder.Services.Configure<MaterialStoreOptions>(builder.Configuration.GetSection("Materials"));
 
 // Real subject and caching proxy are user-independent, so they can be singletons.
-builder.Services.AddSingleton<FileSystemDrawingStore>();
-builder.Services.AddSingleton(sp => new CachingDrawingStore(
-    sp.GetRequiredService<FileSystemDrawingStore>(),
+builder.Services.AddSingleton<FileSystemMaterialStore>();
+builder.Services.AddSingleton(sp => new CachingMaterialStore(
+    sp.GetRequiredService<FileSystemMaterialStore>(),
     sp.GetRequiredService<IMemoryCache>(),
     TimeSpan.FromMinutes(5)));
 
 builder.Services.AddScoped<ICurrentUser, HttpCurrentUser>();
-builder.Services.AddSingleton<IProjectAccessPolicy, ClaimsProjectAccessPolicy>();
+builder.Services.AddSingleton<ICourseAccessPolicy, ClaimsCourseAccessPolicy>();
 
 // What callers get: Authorization -> Timing -> Caching -> FileSystem. Protection is outermost.
-builder.Services.AddScoped<IDrawingStore>(sp =>
+builder.Services.AddScoped<ICourseMaterialStore>(sp =>
 {
-    IDrawingStore store = sp.GetRequiredService<CachingDrawingStore>();
-    store = TimingProxy<IDrawingStore>.Wrap(store, sp.GetRequiredService<ILoggerFactory>().CreateLogger("Drawings.Timing"));
-    return new AuthorizingDrawingStore(store, sp.GetRequiredService<ICurrentUser>(), sp.GetRequiredService<IProjectAccessPolicy>());
+    ICourseMaterialStore store = sp.GetRequiredService<CachingMaterialStore>();
+    store = TimingProxy<ICourseMaterialStore>.Wrap(store, sp.GetRequiredService<ILoggerFactory>().CreateLogger("Materials.Timing"));
+    return new AuthorizingMaterialStore(store, sp.GetRequiredService<ICurrentUser>(), sp.GetRequiredService<ICourseAccessPolicy>());
 });
 
 var app = builder.Build();
 
-// Map the proxy's exceptions to HTTP status codes in one place.
+// Map the proxy's exceptions to HTTP status codes in one place. Kept inline for brevity; in a real app
+// prefer builder.Services.AddProblemDetails() plus an IExceptionHandler so errors come back as RFC 9457 problem details.
 app.Use(async (ctx, next) =>
 {
     try { await next(ctx); }
-    catch (ProjectAccessDeniedException ex) { ctx.Response.StatusCode = 403; await ctx.Response.WriteAsync(ex.Message); }
+    catch (CourseAccessDeniedException ex) { ctx.Response.StatusCode = 403; await ctx.Response.WriteAsync(ex.Message); }
     catch (ArgumentException ex) { ctx.Response.StatusCode = 400; await ctx.Response.WriteAsync(ex.Message); }
 });
 
-app.MapGet("/projects/{project}/drawings", async (string project, IDrawingStore store, CancellationToken ct) =>
-    Results.Ok(await store.ListAsync(project, ct)));
+app.MapGet("/courses/{course}/materials", async (string course, ICourseMaterialStore store, CancellationToken ct) =>
+    Results.Ok(await store.ListAsync(course, ct)));
 
-app.MapGet("/projects/{project}/drawings/{no}", async (string project, string no, IDrawingStore store, CancellationToken ct) =>
-    await store.GetInfoAsync(project, no, ct) is { } info ? Results.Ok(info) : Results.NotFound());
+app.MapGet("/courses/{course}/materials/{id}", async (string course, string id, ICourseMaterialStore store, CancellationToken ct) =>
+    await store.GetInfoAsync(course, id, ct) is { } info ? Results.Ok(info) : Results.NotFound());
 
-app.MapGet("/projects/{project}/drawings/{no}/file", async (string project, string no, IDrawingStore store, CancellationToken ct) =>
-    await store.OpenAsync(project, no, ct) is { } stream
-        ? Results.Stream(stream, "application/pdf", fileDownloadName: $"{no}.pdf")
+app.MapGet("/courses/{course}/materials/{id}/file", async (string course, string id, ICourseMaterialStore store, CancellationToken ct) =>
+    await store.OpenAsync(course, id, ct) is { } stream
+        ? Results.Stream(stream, "application/pdf", fileDownloadName: $"{id}.pdf")
         : Results.NotFound());
 
 app.Run();
 ```
 
-Three design decisions are worth calling out:
+Four design decisions are worth calling out:
 
 - **Lifetimes.** The real store and caching proxy are singletons because they hold no per-user state. The protection proxy is scoped because it needs the current user. A singleton protection proxy holding a scoped `ICurrentUser` would be a captive dependency: every request would see the first request's user.
-- **What not to cache.** Streams are never cached. "Not found" isn't cached either, so a drawing uploaded one second after a miss appears immediately. Caching negatives (with a short TTL) is a valid choice when misses are expensive and frequent, but make it on purpose.
-- **Staleness.** If a new revision is uploaded, the metadata can be up to 5 minutes stale. If that is unacceptable, the upload path must remove `drawing-info:{project}:{no}` and `drawing-list:{project}` from the cache, or you shorten the TTL. A caching proxy always forces this conversation.
+- **What not to cache.** Streams are never cached. "Not found" isn't cached either, so a material uploaded one second after a miss appears immediately. Caching negatives (with a short TTL) is a valid choice when misses are expensive and frequent, but make it on purpose.
+- **Staleness.** If a new revision is uploaded, the metadata can be up to 5 minutes stale. If that is unacceptable, the upload path must remove `material-info:{course}:{id}` and `material-list:{course}` from the cache, or you shorten the TTL. A caching proxy always forces this conversation.
+- **403 or 404?** The middleware maps a denial to 403. For private resources many APIs return 404 instead, so an outsider can't even confirm that a hidden course or file exists. Pick one rule and apply it everywhere.
 
 :::callout type=note title="Libraries that remove the boilerplate"
-Scrutor's `services.Decorate<IDrawingStore, CachingDrawingStore>()` wraps an existing registration without the lambda. Castle DynamicProxy offers interceptors that are faster and richer than `DispatchProxy`. Both are fine in production; this lesson uses only the BCL so the code compiles anywhere.
+Scrutor's `services.Decorate<ICourseMaterialStore, CachingMaterialStore>()` wraps an existing registration without the lambda. Castle DynamicProxy offers interceptors that are faster and richer than `DispatchProxy`. Both are fine in production; this lesson uses only the BCL so the code compiles anywhere.
 :::
 
 ### Remote proxy in one screen
@@ -565,21 +567,22 @@ Scrutor's `services.Decorate<IDrawingStore, CachingDrawingStore>()` wraps an exi
 A typed `HttpClient` that implements the same interface is a remote proxy. The endpoint code is unchanged if you swap it in:
 
 ```csharp
-public sealed class HttpDrawingStore(HttpClient http) : IDrawingStore
+public sealed class HttpMaterialStore(HttpClient http) : ICourseMaterialStore
 {
-    public async Task<DrawingInfo?> GetInfoAsync(string p, string no, CancellationToken ct)
+    public async Task<MaterialInfo?> GetInfoAsync(string c, string id, CancellationToken ct)
     {
-        using var resp = await http.GetAsync($"projects/{Uri.EscapeDataString(p)}/drawings/{Uri.EscapeDataString(no)}", ct);
+        using var resp = await http.GetAsync($"courses/{Uri.EscapeDataString(c)}/materials/{Uri.EscapeDataString(id)}", ct);
         if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
         resp.EnsureSuccessStatusCode();
-        return await resp.Content.ReadFromJsonAsync<DrawingInfo>(ct);
+        return await resp.Content.ReadFromJsonAsync<MaterialInfo>(ct);
     }
     // ListAsync and OpenAsync follow the same shape.
 }
-// builder.Services.AddHttpClient<HttpDrawingStore>(c => { c.BaseAddress = new("https://docs.example.internal/"); c.Timeout = TimeSpan.FromSeconds(10); });
+// builder.Services.AddHttpClient<ICourseMaterialStore, HttpMaterialStore>(c => c.BaseAddress = new("https://materials.example.internal/"))
+//     .AddStandardResilienceHandler();   // Microsoft.Extensions.Http.Resilience: timeouts, retries with backoff, circuit breaker
 ```
 
-Notice what the interface *forces* here: `CancellationToken` parameters and `Task` return types. Because `IDrawingStore` was async from the start, a remote implementation fits. A synchronous `DrawingInfo GetInfo(...)` interface would have forced the remote proxy to block on network I/O. Design the subject for the slowest implementation you expect.
+Notice what the interface *forces* here: `CancellationToken` parameters and `Task` return types. Because `ICourseMaterialStore` was async from the start, a remote implementation fits. A synchronous `MaterialInfo GetInfo(...)` interface would have forced the remote proxy to block on network I/O. Design the subject for the slowest implementation you expect.
 
 ### EF Core lazy-loading proxies
 
@@ -589,88 +592,88 @@ EF Core's lazy loading is the most widely used virtual proxy in .NET:
 // Requires Microsoft.EntityFrameworkCore.Proxies
 options.UseNpgsql(connectionString).UseLazyLoadingProxies();
 
-public class Project
+public class Course
 {
     public int Id { get; set; }
-    public string Name { get; set; } = "";
-    public virtual ICollection<Drawing> Drawings { get; set; } = [];   // virtual: the proxy overrides it
+    public string Title { get; set; } = "";
+    public virtual ICollection<Material> Materials { get; set; } = [];   // virtual: the proxy overrides it
 }
 ```
 
-When you load a `Project`, EF Core gives you an instance of a generated subclass (something like `Castle.Proxies.ProjectProxy`). The first time you read `project.Drawings`, the overridden getter runs `SELECT ... FROM drawings WHERE project_id = @id`.
+When you load a `Course`, EF Core gives you an instance of a generated subclass (something like `Castle.Proxies.CourseProxy`). The first time you read `course.Materials`, the overridden getter runs `SELECT ... FROM materials WHERE course_id = @id`.
 
 That convenience is also the danger:
 
 ```csharp
-foreach (var p in await db.Projects.ToListAsync())     // 1 query
-    total += p.Drawings.Count;                          // +1 query PER project
+foreach (var c in await db.Courses.ToListAsync())      // 1 query
+    total += c.Materials.Count;                         // +1 query PER course
 ```
 
-With 300 projects, that is 301 round trips to PostgreSQL: the N+1 problem (see [N+1 query problems](#/lesson/m09-n-plus-one)). If each round trip takes 1 ms on the same network, that is 0.3 s; across regions at 30 ms it is 9 s. The fix is to load what you need up front: `Include(p => p.Drawings)` or, better here, a projection `Select(p => p.Drawings.Count)` that becomes one SQL query. Many teams leave lazy loading off in web APIs for this reason. Also note that a lazy proxy needs its `DbContext` alive: touching a navigation after the request's context is disposed throws.
+With 300 courses, that is 301 round trips to PostgreSQL: the N+1 problem (see [N+1 query problems](#/lesson/m09-n-plus-one)). If each round trip takes 1 ms on the same network, that is 0.3 s; across regions at 30 ms it is 9 s. The fix is to load what you need up front: `Include(c => c.Materials)` or, better here, a projection `Select(c => c.Materials.Count)` that becomes one SQL query. Many teams leave lazy loading off in web APIs for this reason. Also note that a lazy proxy needs its `DbContext` alive: touching a navigation after the request's context is disposed throws.
 
 ## Bad design vs good design
 
-**Bad:** the Step 1 lambda, copied into three endpoints, plus a background "nightly drawing register" job that reads files directly and therefore skips the cache *and* the permission check. Problems:
+**Bad:** the Step 1 lambda, copied into three endpoints, plus a background "nightly course-material index" job that reads files directly and therefore skips the cache *and* the permission check. Problems:
 
-- The permission rule exists three times. One copy is already different (`/download` forgot the `DocumentAdmin` role).
+- The permission rule exists three times. One copy is already different (`/download` forgot the `CourseAdmin` role).
 - The job and the API read files with different path logic; only one validates names.
 - Timing is `Console.WriteLine`, so it never reaches the log system.
 
-**Good:** one real subject, two hand-written proxies, one generated proxy, composed in one place. The job resolves `FileSystemDrawingStore` (or `CachingDrawingStore`) directly because it runs as a trusted system process, and that choice is visible in its constructor.
+**Good:** one real subject, two hand-written proxies, one generated proxy, composed in one place. The job resolves `FileSystemMaterialStore` (or `CachingMaterialStore`) directly because it runs as a trusted system process, and that choice is visible in its constructor.
 
 **A second bad design, subtler:** caching outside authorization.
 
 ```csharp
 // WRONG ORDER: cache answers before anyone checks permissions.
-IDrawingStore store = new CachingDrawingStore(new AuthorizingDrawingStore(real, user, policy), cache, ttl);
+ICourseMaterialStore store = new CachingMaterialStore(new AuthorizingMaterialStore(real, user, policy), cache, ttl);
 ```
 
-User A (allowed) loads `DRG-C-104`; it is now cached. User B (not allowed) asks for it; the caching proxy returns the cached copy and never calls the authorizing proxy. Only an end-to-end test with two users catches this, which is why the automated testing section includes one.
+User A (allowed) loads `LEC-07`; it is now cached. User B (not allowed) asks for it; the caching proxy returns the cached copy and never calls the authorizing proxy. Only an end-to-end test with two users catches this, which is why the automated testing section includes one.
 
 **Is the improvement worth it?** For one endpoint with no reuse, the naive version is shorter and fine. Pull out proxies when the same control applies to several entry points, or when the real subject must be reusable without it.
 
 ## Practical playground
 
-The playground shows a virtual proxy and a protection proxy for a large BIM model. Run it and watch *when* the "Loading..." line prints. Then try swapping the wrapping order and predict the output before running.
+The playground shows a virtual proxy and a protection proxy for a large PDF course pack. Run it and watch *when* the "Loading..." line prints. Then try swapping the wrapping order and predict the output before running.
 
 :::playground type=csharp title="Virtual and protection proxies"
 ```csharp file=Program.cs
 using System;
 using System.Collections.Generic;
 
-public interface IBimModel
+public interface ICoursePack
 {
     string Name { get; }
-    int ElementCount();
+    int PageCount();
 }
 
-public sealed class IfcModel : IBimModel
+public sealed class PdfCoursePack : ICoursePack
 {
-    private readonly int _elements;
+    private readonly int _pages;
     public string Name { get; }
-    public IfcModel(string name)
+    public PdfCoursePack(string name)
     {
-        Console.WriteLine($"  Loading {name} from disk (imagine 180 MB and 6 seconds)...");
+        Console.WriteLine($"  Loading {name} from storage (imagine 180 MB and 6 seconds)...");
         Name = name;
-        _elements = 48_213;
+        _pages = 1_240;
     }
-    public int ElementCount() => _elements;
+    public int PageCount() => _pages;
 }
 
-// Virtual proxy: Name is cheap and known up front; the heavy model loads on first real use.
-public sealed class LazyBimModel(string name, Func<IBimModel> load) : IBimModel
+// Virtual proxy: Name is cheap and known up front; the heavy pack loads on first real use.
+public sealed class LazyCoursePack(string name, Func<ICoursePack> load) : ICoursePack
 {
-    private readonly Lazy<IBimModel> _real = new(load);
+    private readonly Lazy<ICoursePack> _real = new(load);
     public string Name => name;
-    public int ElementCount() => _real.Value.ElementCount();
+    public int PageCount() => _real.Value.PageCount();
 }
 
-// Protection proxy: only users on the allow-list may query the model.
-public sealed class GuardedBimModel(IBimModel inner, string user, ISet<string> allowed) : IBimModel
+// Protection proxy: only users on the allow-list may open the pack.
+public sealed class GuardedCoursePack(ICoursePack inner, string user, ISet<string> allowed) : ICoursePack
 {
     public string Name => inner.Name;
-    public int ElementCount() =>
-        allowed.Contains(user) ? inner.ElementCount() : throw new UnauthorizedAccessException($"{user} may not open {Name}");
+    public int PageCount() =>
+        allowed.Contains(user) ? inner.PageCount() : throw new UnauthorizedAccessException($"{user} may not open {Name}");
 }
 
 public static class Program
@@ -678,18 +681,18 @@ public static class Program
     public static void Main()
     {
         var allowed = new HashSet<string> { "meera" };
-        IBimModel Build(string user) =>
-            new GuardedBimModel(new LazyBimModel("Bridge-P14.ifc", () => new IfcModel("Bridge-P14.ifc")), user, allowed);
+        ICoursePack Build(string user) =>
+            new GuardedCoursePack(new LazyCoursePack("CS201-course-pack.pdf", () => new PdfCoursePack("CS201-course-pack.pdf")), user, allowed);
 
         var forRavi = Build("ravi");
-        Console.WriteLine($"Opened project tree, showing {forRavi.Name}");
-        try { forRavi.ElementCount(); }
+        Console.WriteLine($"Opened course page, showing {forRavi.Name}");
+        try { forRavi.PageCount(); }
         catch (UnauthorizedAccessException ex) { Console.WriteLine($"Denied: {ex.Message} (and nothing was loaded)"); }
 
         var forMeera = Build("meera");
-        Console.WriteLine("Meera clicks the model:");
-        Console.WriteLine($"  {forMeera.ElementCount()} elements");
-        Console.WriteLine($"  {forMeera.ElementCount()} elements (second call, no reload)");
+        Console.WriteLine("Meera opens the course pack:");
+        Console.WriteLine($"  {forMeera.PageCount()} pages");
+        Console.WriteLine($"  {forMeera.PageCount()} pages (second call, no reload)");
     }
 }
 ```
@@ -697,19 +700,19 @@ public static class Program
 
 ## Exercises
 
-:::exercise id=m06-proxy-ex1 difficulty=beginner kind=code title="A thread-safe virtual proxy for a site photo album"
-A site photo album for a highway package holds 2,000 high-resolution photos. Building the real `SitePhotoAlbum` scans storage and takes several seconds. The project dashboard shows the album's title on every page load but rarely needs the photo count.
+:::exercise id=m06-proxy-ex1 difficulty=beginner kind=code title="A thread-safe virtual proxy for a course video library"
+A course's video library holds 240 recorded lectures. Building the real `VideoLibrary` scans object storage and takes several seconds. The course home page shows the library's title on every page load but rarely needs the video count.
 
-Implement `LazySitePhotoAlbum` so that the real album is created only when `PhotoCount` is first read, and exactly once even when many threads ask at the same time.
+Implement `LazyVideoLibrary` so that the real library is created only when `VideoCount` is first read, and exactly once even when many threads ask at the same time.
 ::requirements
 - `Title` is known up front and never triggers loading.
-- `PhotoCount` creates the real album on first access and reuses it afterwards.
-- `IsLoaded` reports whether the real album has been created.
-- 50 parallel reads of `PhotoCount` call the factory exactly once.
+- `VideoCount` creates the real library on first access and reuses it afterwards.
+- `IsLoaded` reports whether the real library has been created.
+- 50 parallel reads of `VideoCount` call the factory exactly once.
 ::acceptance
 - Constructing the proxy does not call the factory.
 - Reading `Title` does not call the factory.
-- Reading `PhotoCount` three times calls the factory once.
+- Reading `VideoCount` three times calls the factory once.
 - The parallel test calls the factory once.
 ::hint
 The proxy needs two pieces of data in its constructor: the cheap value (title) and a way to create the expensive object later.
@@ -721,55 +724,55 @@ The proxy needs two pieces of data in its constructor: the cheap value (title) a
 `IsLoaded` maps directly onto `Lazy<T>.IsValueCreated`.
 ::hint
 ```csharp
-private readonly Lazy<ISitePhotoAlbum> _real = new(factory, LazyThreadSafetyMode.ExecutionAndPublication);
-public int PhotoCount => _real.Value.PhotoCount;
+private readonly Lazy<IVideoLibrary> _real = new(factory, LazyThreadSafetyMode.ExecutionAndPublication);
+public int VideoCount => _real.Value.VideoCount;
 ```
 ::starter
-```csharp file=LazySitePhotoAlbum.cs
+```csharp file=LazyVideoLibrary.cs
 using System;
 using System.Threading;
 
-public interface ISitePhotoAlbum
+public interface IVideoLibrary
 {
     string Title { get; }
-    int PhotoCount { get; }
+    int VideoCount { get; }
 }
 
-public sealed class SitePhotoAlbum : ISitePhotoAlbum
+public sealed class VideoLibrary : IVideoLibrary
 {
-    public SitePhotoAlbum(string title, int photoCount)
+    public VideoLibrary(string title, int videoCount)
     {
         Thread.Sleep(20); // stands in for an expensive storage scan
         Title = title;
-        PhotoCount = photoCount;
+        VideoCount = videoCount;
     }
     public string Title { get; }
-    public int PhotoCount { get; }
+    public int VideoCount { get; }
 }
 
-public sealed class LazySitePhotoAlbum : ISitePhotoAlbum
+public sealed class LazyVideoLibrary : IVideoLibrary
 {
-    public LazySitePhotoAlbum(string title, Func<ISitePhotoAlbum> factory)
+    public LazyVideoLibrary(string title, Func<IVideoLibrary> factory)
     {
         // TODO: store what you need. Do NOT call the factory here.
     }
 
     public string Title => throw new NotImplementedException();
-    public int PhotoCount => throw new NotImplementedException();
+    public int VideoCount => throw new NotImplementedException();
     public bool IsLoaded => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=LazySitePhotoAlbumTests.cs
+```csharp file=LazyVideoLibraryTests.cs
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
-public class LazySitePhotoAlbumTests
+public class LazyVideoLibraryTests
 {
     private int _calls;
-    private LazySitePhotoAlbum Make() =>
-        new("NH-48 Package 3", () => { Interlocked.Increment(ref _calls); return new SitePhotoAlbum("NH-48 Package 3", 2000); });
+    private LazyVideoLibrary Make() =>
+        new("CS201 Data Structures", () => { Interlocked.Increment(ref _calls); return new VideoLibrary("CS201 Data Structures", 240); });
 
     [Fact]
     public void Constructing_does_not_load()
@@ -783,17 +786,17 @@ public class LazySitePhotoAlbumTests
     public void Title_does_not_load()
     {
         var p = Make();
-        Assert.Equal("NH-48 Package 3", p.Title);
+        Assert.Equal("CS201 Data Structures", p.Title);
         Assert.Equal(0, _calls);
     }
 
     [Fact]
-    public void PhotoCount_loads_once()
+    public void VideoCount_loads_once()
     {
         var p = Make();
-        Assert.Equal(2000, p.PhotoCount);
-        Assert.Equal(2000, p.PhotoCount);
-        Assert.Equal(2000, p.PhotoCount);
+        Assert.Equal(240, p.VideoCount);
+        Assert.Equal(240, p.VideoCount);
+        Assert.Equal(240, p.VideoCount);
         Assert.Equal(1, _calls);
         Assert.True(p.IsLoaded);
     }
@@ -802,7 +805,7 @@ public class LazySitePhotoAlbumTests
     public void Parallel_reads_load_once()
     {
         var p = Make();
-        Parallel.For(0, 50, _ => Assert.Equal(2000, p.PhotoCount));
+        Parallel.For(0, 50, _ => Assert.Equal(240, p.VideoCount));
         Assert.Equal(1, _calls);
     }
 }
@@ -810,55 +813,55 @@ public class LazySitePhotoAlbumTests
 ::solution
 Wrap the factory in a `Lazy<T>` with `ExecutionAndPublication`. Keep the title as a plain field so it never touches the lazy value.
 
-```csharp file=LazySitePhotoAlbum.cs
+```csharp file=LazyVideoLibrary.cs
 using System;
 using System.Threading;
 
-public interface ISitePhotoAlbum
+public interface IVideoLibrary
 {
     string Title { get; }
-    int PhotoCount { get; }
+    int VideoCount { get; }
 }
 
-public sealed class SitePhotoAlbum : ISitePhotoAlbum
+public sealed class VideoLibrary : IVideoLibrary
 {
-    public SitePhotoAlbum(string title, int photoCount)
+    public VideoLibrary(string title, int videoCount)
     {
         Thread.Sleep(20); // stands in for an expensive storage scan
         Title = title;
-        PhotoCount = photoCount;
+        VideoCount = videoCount;
     }
     public string Title { get; }
-    public int PhotoCount { get; }
+    public int VideoCount { get; }
 }
 
-public sealed class LazySitePhotoAlbum : ISitePhotoAlbum
+public sealed class LazyVideoLibrary : IVideoLibrary
 {
-    private readonly Lazy<ISitePhotoAlbum> _real;
+    private readonly Lazy<IVideoLibrary> _real;
 
-    public LazySitePhotoAlbum(string title, Func<ISitePhotoAlbum> factory)
+    public LazyVideoLibrary(string title, Func<IVideoLibrary> factory)
     {
         ArgumentNullException.ThrowIfNull(factory);
         Title = title;
-        _real = new Lazy<ISitePhotoAlbum>(factory, LazyThreadSafetyMode.ExecutionAndPublication);
+        _real = new Lazy<IVideoLibrary>(factory, LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     public string Title { get; }
-    public int PhotoCount => _real.Value.PhotoCount;
+    public int VideoCount => _real.Value.VideoCount;
     public bool IsLoaded => _real.IsValueCreated;
 }
 ```
 
-Why not `_real ??= factory()`? Two threads can both see `null` and both call the factory. With a 6-second load that wastes 6 seconds of work and, worse, two different album objects may be handed out.
+Why not `_real ??= factory()`? Two threads can both see `null` and both call the factory. With a 6-second load that wastes 6 seconds of work and, worse, two different library objects may be handed out.
 ::alternatives
 `LazyThreadSafetyMode.PublicationOnly` lets several threads run the factory but publishes only the first result. It avoids holding a lock during the factory call, which is useful if the factory could deadlock, but it wastes work. For a slow storage scan, `ExecutionAndPublication` is the right default.
 ::mistakes
 - Calling the factory in the constructor "to be safe", which removes the whole benefit.
-- Forwarding `Title` through the lazy value, so the dashboard triggers the expensive load on every page view.
+- Forwarding `Title` through the lazy value, so the course page triggers the expensive load on every page view.
 - Using `LazyThreadSafetyMode.None` in code that is reached from parallel requests.
 - Forgetting that `Lazy<T>` caches exceptions in `ExecutionAndPublication` mode: if the first load throws, every later access throws the same exception. Decide whether that is acceptable.
 ::extensions
-Make the factory async (`Func<Task<ISitePhotoAlbum>>`) and expose `Task<int> GetPhotoCountAsync()`. Hint: `Lazy<Task<T>>` works, but think about what happens when the first task faults.
+Make the factory async (`Func<Task<IVideoLibrary>>`) and expose `Task<int> GetVideoCountAsync()`. Hint: `Lazy<Task<T>>` works, but think about what happens when the first task faults.
 :::
 
 :::exercise id=m06-proxy-ex2 difficulty=beginner kind=written title="Name the proxy and the pattern"
@@ -868,8 +871,8 @@ For each scenario, say whether it is a Proxy, and if so which kind (virtual, pro
 2. `ReadOnlyCollection<T>` wraps a `List<T>` and throws on `Add`.
 3. A class implements `IPaymentGateway` by translating calls into a vendor SDK whose method names and types are completely different.
 4. A `RetryingSmsSender` wraps `ISmsSender` and retries failed sends three times with backoff. It is registered alongside `MetricsSmsSender`, which also wraps `ISmsSender`.
-5. An EF Core `Contractor` entity whose `virtual Bills` collection loads on first access.
-6. `ProjectSummaryService` exposes one method that calls five other services and combines the results.
+5. An EF Core `Student` entity whose `virtual Enrollments` collection loads on first access.
+6. `StudentDashboardService` exposes one method that calls five other services and combines the results.
 ::acceptance
 - Each answer names Proxy-kind or the other pattern.
 - Each answer gives a one-line reason based on *intent* and *interface*, not just structure.
@@ -1110,7 +1113,7 @@ Notes:
 - The `catch when` filter evicts only when the *shared task* failed. If the caller's own token was cancelled, the shared call may still succeed for others, so we keep it.
 - The dictionary grows with the number of distinct HSN codes. There are a few thousand, so that's fine here. For unbounded keys use `IMemoryCache` with a size limit.
 ::alternatives
-In ASP.NET Core 9+, `HybridCache.GetOrCreateAsync` gives single-flight (stampede protection), TTLs and an optional distributed second level out of the box. Prefer it in a real app; this exercise shows what it does underneath. `IMemoryCache.GetOrCreateAsync` alone does **not** prevent concurrent duplicate calls.
+On .NET 9 and later, `HybridCache.GetOrCreateAsync` (package `Microsoft.Extensions.Caching.Hybrid`) gives single-flight (stampede protection), TTLs and an optional distributed second level out of the box. Prefer it in a real app; this exercise shows what it does underneath. `IMemoryCache.GetOrCreateAsync` alone does **not** prevent concurrent duplicate calls.
 ::mistakes
 - Caching the `decimal` after awaiting, so 200 concurrent callers all miss and all call the API.
 - Caching a faulted task, so one timeout poisons the cache for 10 minutes.
@@ -1121,75 +1124,75 @@ Add `Invalidate(string hsnCode)` and a test proving a call after invalidation go
 :::
 
 :::exercise id=m06-proxy-ex4 difficulty=intermediate kind=design title="Refactor: pull access control and caching out of a service"
-You inherit this application service from a contractor-billing module:
+You inherit this application service from a college's exam-results module. Faculty may read grade sheets only for courses they teach; the exam cell may read all of them:
 
 ```csharp
-public class BillService(AppDbContext db, IHttpContextAccessor http, IMemoryCache cache, ILogger<BillService> log)
+public class GradeSheetService(AppDbContext db, IHttpContextAccessor http, IMemoryCache cache, ILogger<GradeSheetService> log)
 {
-    public async Task<BillDto?> GetBill(int billId)
+    public async Task<GradeSheetDto?> GetGradeSheet(int sheetId)
     {
         var sw = Stopwatch.StartNew();
         var user = http.HttpContext!.User;
-        if (cache.TryGetValue($"bill:{billId}", out BillDto? cached)) return cached;
-        var bill = await db.Bills.Include(b => b.Items).FirstOrDefaultAsync(b => b.Id == billId);
-        if (bill is null) return null;
-        if (!user.HasClaim("project", bill.ProjectCode) && !user.IsInRole("Finance")) throw new UnauthorizedAccessException();
-        var dto = BillDto.From(bill);
-        cache.Set($"bill:{billId}", dto, TimeSpan.FromMinutes(30));
-        log.LogInformation("GetBill {Id} took {Ms}", billId, sw.ElapsedMilliseconds);
+        if (cache.TryGetValue($"sheet:{sheetId}", out GradeSheetDto? cached)) return cached;
+        var sheet = await db.GradeSheets.Include(s => s.Entries).FirstOrDefaultAsync(s => s.Id == sheetId);
+        if (sheet is null) return null;
+        if (!user.HasClaim("course", sheet.CourseCode) && !user.IsInRole("ExamCell")) throw new UnauthorizedAccessException();
+        var dto = GradeSheetDto.From(sheet);
+        cache.Set($"sheet:{sheetId}", dto, TimeSpan.FromMinutes(30));
+        log.LogInformation("GetGradeSheet {Id} took {Ms}", sheetId, sw.ElapsedMilliseconds);
         return dto;
     }
-    // ApproveBill, ListBills, ... follow the same shape.
+    // PublishGradeSheet, ListGradeSheets, ... follow the same shape.
 }
 ```
 
 Redesign it using proxies. Produce a class diagram, the wrapping order, DI lifetimes, and name the security bug in the current code.
 ::acceptance
-- Identifies the bug: the cache check runs *before* the permission check, so a cached bill is returned to any user.
+- Identifies the bug: the cache check runs *before* the permission check, so a cached grade sheet is returned to any user.
 - The real subject has no dependency on `IHttpContextAccessor`, `IMemoryCache` or timing.
 - The protection proxy is outermost, and the diagram shows the order.
-- Explains that the permission check needs the bill's project, and how the proxy gets it without loading the bill twice.
-- States which writes (for example `ApproveBill`) must invalidate the cache.
+- Explains that the permission check needs the sheet's course, and how the proxy gets it without loading the sheet twice.
+- States which writes (for example `PublishGradeSheet`) must invalidate the cache.
 ::hint
-Trace the code for two users: A (allowed) requests bill 77, then B (not allowed) requests bill 77. What does B get?
+Trace the code for two users: A (allowed) requests grade sheet 77, then B (not allowed) requests grade sheet 77. What does B get?
 ::hint
-The protection check depends on *data* (the bill's project code), not just the bill id. The proxy needs a cheap way to learn the project.
+The protection check depends on *data* (the sheet's course code), not just the sheet id. The proxy needs a cheap way to learn the course.
 ::hint
-Options: a small `IBillProjectLookup.GetProjectCode(billId)` (cached; project codes never change), or check after loading in the protection proxy (load via inner, check, then return).
+Options: a small `IGradeSheetCourseLookup.GetCourseCode(sheetId)` (cached; a sheet's course never changes), or check after loading in the protection proxy (load via inner, check, then return).
 ::hint
-Order: `AuthorizingBillService → TimingProxy → CachingBillService → BillService`. Caching and the real service can be scoped (they use `DbContext`) or the cache can be a singleton `IMemoryCache` used by a scoped proxy.
+Order: `AuthorizingGradeSheetService → TimingProxy → CachingGradeSheetService → GradeSheetService`. Caching and the real service can be scoped (they use `DbContext`) or the cache can be a singleton `IMemoryCache` used by a scoped proxy.
 ::solution
-**The bug:** `cache.TryGetValue` returns before the permission check. After user A loads bill 77, user B gets it from cache for 30 minutes. This is an authorization bypass.
+**The bug:** `cache.TryGetValue` returns before the permission check. After faculty member A loads grade sheet 77, faculty member B (who teaches another course) gets it from cache for 30 minutes: other students' marks leak. This is an authorization bypass.
 
 ```mermaid
 classDiagram
-    class IBillService { <<interface>> +GetBill(id) BillDto +ApproveBill(id) }
-    class BillService { -AppDbContext db }
-    class CachingBillService { -IBillService inner -IMemoryCache cache }
-    class AuthorizingBillService { -IBillService inner -ICurrentUser user -IBillProjectLookup projects }
-    class IBillProjectLookup { <<interface>> +GetProjectCode(billId) string }
-    IBillService <|.. BillService
-    IBillService <|.. CachingBillService
-    IBillService <|.. AuthorizingBillService
-    CachingBillService o-- IBillService
-    AuthorizingBillService o-- IBillService
-    AuthorizingBillService --> IBillProjectLookup
+    class IGradeSheetService { <<interface>> +GetGradeSheet(id) GradeSheetDto +PublishGradeSheet(id) }
+    class GradeSheetService { -AppDbContext db }
+    class CachingGradeSheetService { -IGradeSheetService inner -IMemoryCache cache }
+    class AuthorizingGradeSheetService { -IGradeSheetService inner -ICurrentUser user -IGradeSheetCourseLookup courses }
+    class IGradeSheetCourseLookup { <<interface>> +GetCourseCode(sheetId) string }
+    IGradeSheetService <|.. GradeSheetService
+    IGradeSheetService <|.. CachingGradeSheetService
+    IGradeSheetService <|.. AuthorizingGradeSheetService
+    CachingGradeSheetService o-- IGradeSheetService
+    AuthorizingGradeSheetService o-- IGradeSheetService
+    AuthorizingGradeSheetService --> IGradeSheetCourseLookup
 ```
 
-Wrapping order for callers: `AuthorizingBillService → TimingProxy<IBillService> → CachingBillService → BillService`.
+Wrapping order for callers: `AuthorizingGradeSheetService → TimingProxy<IGradeSheetService> → CachingGradeSheetService → GradeSheetService`.
 
-- `AuthorizingBillService` (scoped): calls `projects.GetProjectCode(billId)`, a one-column query cached for hours because a bill never moves project, then checks the claim or `Finance` role, then forwards.
-- `CachingBillService` (scoped, uses the singleton `IMemoryCache`): caches `BillDto` by id. `ApproveBill` forwards, then removes `bill:{id}`; `ListBills` caches per project with a short TTL or not at all.
-- `BillService` (scoped, holds `DbContext`): pure data access and mapping.
+- `AuthorizingGradeSheetService` (scoped): calls `courses.GetCourseCode(sheetId)`, a one-column query cached for hours because a grade sheet never moves to another course, then checks the `course` claim or `ExamCell` role, then forwards.
+- `CachingGradeSheetService` (scoped, uses the singleton `IMemoryCache`): caches `GradeSheetDto` by id. `PublishGradeSheet` forwards, then removes `sheet:{id}`; `ListGradeSheets` caches per course with a short TTL or not at all.
+- `GradeSheetService` (scoped, holds `DbContext`): pure data access and mapping.
 - Timing: the `DispatchProxy` from the lesson, or OpenTelemetry instrumentation of EF Core, which is usually better.
 
-The background "monthly bill export" job resolves `BillService` directly, without the protection proxy, because it runs as a system identity. That choice is explicit in its constructor.
+The background "semester results export" job resolves `GradeSheetService` directly, without the protection proxy, because it runs as a system identity. That choice is explicit in its constructor.
 ::alternatives
-Move the project check into an ASP.NET Core resource-based authorization handler (`IAuthorizationService.AuthorizeAsync(user, bill, "CanReadBill")`). That is the framework's built-in protection mechanism and integrates with policies. The proxy is still valuable when the same service is called from several hosts (API, gRPC, Blazor Server) that must all enforce it.
+Move the course check into an ASP.NET Core resource-based authorization handler (`IAuthorizationService.AuthorizeAsync(user, sheet, "CanReadGradeSheet")`). That is the framework's built-in protection mechanism and integrates with policies. The proxy is still valuable when the same service is called from several hosts (API, gRPC, Blazor Server) that must all enforce it.
 ::mistakes
 - Moving the cache to the outside "for performance".
 - Including the user id in the cache key to "fix" the bug, which multiplies memory use and still hides that the check is in the wrong place.
-- Forgetting cache invalidation on `ApproveBill`, so a just-approved bill still shows "Pending" for 30 minutes.
+- Forgetting cache invalidation on `PublishGradeSheet`, so a just-published sheet still shows "Draft" for 30 minutes.
 :::
 
 :::exercise id=m06-proxy-ex5 difficulty=advanced kind=code title="An audit proxy with DispatchProxy that handles async correctly"
@@ -1258,7 +1261,7 @@ using System;
 using System.Threading.Tasks;
 using Xunit;
 
-public interface IMeasurementService
+public interface IGradingService
 {
     int Add(int a, int b);
     void Explode();
@@ -1266,18 +1269,18 @@ public interface IMeasurementService
     Task FailAsync();
 }
 
-public sealed class MeasurementService : IMeasurementService
+public sealed class GradingService : IGradingService
 {
     public int Add(int a, int b) => a + b;
-    public void Explode() => throw new InvalidOperationException("total station offline");
+    public void Explode() => throw new InvalidOperationException("grading engine offline");
     public async Task<int> DoubleAsync(int x) { await Task.Delay(20); return x * 2; }
-    public async Task FailAsync() { await Task.Delay(20); throw new TimeoutException("survey API timeout"); }
+    public async Task FailAsync() { await Task.Delay(20); throw new TimeoutException("plagiarism-check API timeout"); }
 }
 
 public class AuditProxyTests
 {
     private readonly ListSink _sink = new();
-    private IMeasurementService Make() => AuditProxy<IMeasurementService>.Wrap(new MeasurementService(), _sink);
+    private IGradingService Make() => AuditProxy<IGradingService>.Wrap(new GradingService(), _sink);
 
     [Fact]
     public void Sync_success_is_recorded()
@@ -1292,10 +1295,10 @@ public class AuditProxyTests
     public void Sync_exception_keeps_original_type()
     {
         var ex = Assert.Throws<InvalidOperationException>(() => Make().Explode());
-        Assert.Equal("total station offline", ex.Message);
+        Assert.Equal("grading engine offline", ex.Message);
         var r = Assert.Single(_sink.Records);
         Assert.False(r.Succeeded);
-        Assert.Equal("total station offline", r.Error);
+        Assert.Equal("grading engine offline", r.Error);
     }
 
     [Fact]
@@ -1313,12 +1316,12 @@ public class AuditProxyTests
         await Assert.ThrowsAsync<TimeoutException>(() => Make().FailAsync());
         var r = Assert.Single(_sink.Records);
         Assert.False(r.Succeeded);
-        Assert.Equal("survey API timeout", r.Error);
+        Assert.Equal("plagiarism-check API timeout", r.Error);
     }
 
     [Fact]
     public void Null_inner_is_rejected() =>
-        Assert.Throws<ArgumentNullException>(() => AuditProxy<IMeasurementService>.Wrap(null!, _sink));
+        Assert.Throws<ArgumentNullException>(() => AuditProxy<IGradingService>.Wrap(null!, _sink));
 }
 ```
 ::solution
@@ -1444,12 +1447,12 @@ Test proxies at three levels.
 **1. Each proxy alone, with a hand-written fake inner subject.** The fake counts calls, which is what you assert for caching and lazy proxies:
 
 ```csharp
-sealed class CountingStore : IDrawingStore
+sealed class CountingStore : ICourseMaterialStore
 {
     public int InfoCalls;
-    public Task<DrawingInfo?> GetInfoAsync(string p, string n, CancellationToken ct)
-    { InfoCalls++; return Task.FromResult<DrawingInfo?>(new(p, n, 1024, DateTimeOffset.UnixEpoch)); }
-    public Task<IReadOnlyList<DrawingInfo>> ListAsync(string p, CancellationToken ct) => Task.FromResult<IReadOnlyList<DrawingInfo>>([]);
+    public Task<MaterialInfo?> GetInfoAsync(string p, string n, CancellationToken ct)
+    { InfoCalls++; return Task.FromResult<MaterialInfo?>(new(p, n, 1024, DateTimeOffset.UnixEpoch)); }
+    public Task<IReadOnlyList<MaterialInfo>> ListAsync(string p, CancellationToken ct) => Task.FromResult<IReadOnlyList<MaterialInfo>>([]);
     public Task<Stream?> OpenAsync(string p, string n, CancellationToken ct) => Task.FromResult<Stream?>(new MemoryStream());
 }
 
@@ -1457,20 +1460,20 @@ sealed class CountingStore : IDrawingStore
 public async Task Caching_proxy_calls_inner_once()
 {
     var inner = new CountingStore();
-    var sut = new CachingDrawingStore(inner, new MemoryCache(new MemoryCacheOptions()), TimeSpan.FromMinutes(5));
-    await sut.GetInfoAsync("NH48-P3", "DRG-C-104", default);
-    await sut.GetInfoAsync("NH48-P3", "DRG-C-104", default);
+    var sut = new CachingMaterialStore(inner, new MemoryCache(new MemoryCacheOptions()), TimeSpan.FromMinutes(5));
+    await sut.GetInfoAsync("CS201", "LEC-07", default);
+    await sut.GetInfoAsync("CS201", "LEC-07", default);
     Assert.Equal(1, inner.InfoCalls);
 }
 ```
 
 For the protection proxy, assert both directions: an allowed user reaches the inner store, and a denied user throws **and the inner store is never called** (`InfoCalls == 0`). The second assertion is what proves the check runs before forwarding.
 
-**2. The composition.** Build the same chain `Program.cs` builds and run the two-user test: user A (allowed) reads a drawing, then user B (denied) reads the same drawing and must get `ProjectAccessDeniedException`. This is the test that catches the wrong wrapping order. Better still, resolve `IDrawingStore` from a real `ServiceCollection` configured by the same extension method production uses, so the test checks the real wiring.
+**2. The composition.** Build the same chain `Program.cs` builds and run the two-user test: user A (allowed) reads a material, then user B (denied) reads the same material and must get `CourseAccessDeniedException`. This is the test that catches the wrong wrapping order. Better still, resolve `ICourseMaterialStore` from a real `ServiceCollection` configured by the same extension method production uses, so the test checks the real wiring.
 
-**3. The real subject.** Test `FileSystemDrawingStore` against a temporary folder (`Directory.CreateTempSubdirectory()`), including the path traversal case: `GetInfoAsync("NH48-P3", "../secrets")` must throw `ArgumentException`.
+**3. The real subject.** Test `FileSystemMaterialStore` against a temporary folder (`Directory.CreateTempSubdirectory()`), including the path traversal case: `GetInfoAsync("CS201", "../secrets")` must throw `ArgumentException`.
 
-**Extensibility check:** adding a new kind of control (for example a rate-limiting proxy per user) should require one new class and one line in the composition, with zero changes to `FileSystemDrawingStore` or the endpoints. If it needs more, the subject interface is probably leaking implementation details.
+**Extensibility check:** adding a new kind of control (for example a rate-limiting proxy per user) should require one new class and one line in the composition, with zero changes to `FileSystemMaterialStore` or the endpoints. If it needs more, the subject interface is probably leaking implementation details.
 
 ## Real-world application
 
@@ -1478,7 +1481,7 @@ For the protection proxy, assert both directions: an allowed user reaches the in
 - **gRPC client stubs and typed `HttpClient`s** are remote proxies. Refit generates them from an interface definition.
 - **`Lazy<T>`** and `AsyncLazy`-style helpers are reusable virtual-proxy building blocks.
 - **Reverse proxies** such as YARP, NGINX or IIS ARR apply the same idea at the network level: same protocol as the backend, plus TLS termination, authentication, caching and logging. The name is not a coincidence (see [API gateways, reverse proxies and load balancers](#/lesson/m10-gateways-proxies-lb)).
-- **Document and drawing management in infrastructure projects:** controlling who can read which project's drawings, caching drawing registers, and fetching from a central archive are classic protection, caching and remote proxies.
+- **Learning platforms (LMS) and online-course sites:** controlling which students can read which course's materials, caching course catalogues, lazily loading large video and PDF assets, and fetching media from a central store are classic protection, caching, virtual and remote proxies.
 - **WCF and .NET Remoting** (older) generated transparent remote proxies; their history is a lesson in why remote calls should not *look* local.
 
 ## Interview questions
@@ -1547,14 +1550,14 @@ A: Concurrent requests for the same key share one in-flight call, usually by cac
 
 :::quiz pass=70
 ::q single
-A tender portal shows a list of 300 tenders. Each tender has a 40 MB bid document, but users open on average 2 documents per visit. Which proxy fits best for the document objects?
+A course catalogue shows 300 courses. Each course has a 40 MB PDF syllabus pack, but students open on average 2 packs per visit. Which proxy fits best for the document objects?
 - [x] Virtual (lazy) proxy
 - [ ] Remote proxy
 - [ ] Protection proxy
 - [ ] Logging proxy
 > The cost is in creating or loading an object most users never touch. A virtual proxy holds cheap metadata and loads the document on first real use.
 ::q single
-After a release, an auditor finds that site engineers from Package 2 can see Package 4's drawings, but only for drawings someone from Package 4 viewed in the previous few minutes. What is the most likely cause?
+After a release, a student reports that CS201 students can see CS305's assignment solutions, but only files someone enrolled in CS305 opened in the previous few minutes. What is the most likely cause?
 - [ ] The file system store has a path traversal bug.
 - [x] The caching proxy wraps the protection proxy instead of the other way round.
 - [ ] The cache TTL is too short.
@@ -1569,10 +1572,10 @@ Which statements about `DispatchProxy` are true? (Select all that apply.)
 - [ ] It is resolved at compile time, so it's ideal for Native AOT.
 > `DispatchProxy` proxies interfaces only, uses runtime code generation, and has per-call reflection overhead. Unwrap `TargetInvocationException` to preserve exception types.
 ::q single
-A `Project` list page with lazy loading enabled runs 1 query to load 250 projects, then shows each project's contractor name. SQL logs show 251 queries. What is the best fix?
+A `Course` list page with lazy loading enabled runs 1 query to load 250 courses, then shows each course's instructor name. SQL logs show 251 queries. What is the best fix?
 - [ ] Increase the connection pool size.
-- [ ] Cache each contractor in a caching proxy.
-- [x] Project the needed columns in the original query (for example `Select(p => new { p.Name, Contractor = p.Contractor.Name })`).
+- [ ] Cache each instructor in a caching proxy.
+- [x] Project the needed columns in the original query (for example `Select(c => new { c.Title, Instructor = c.Instructor.Name })`).
 - [ ] Make the navigation property non-virtual and keep everything else the same.
 > The lazy-loading proxy issues one query per navigation access (N+1). Loading the data in one query removes the round trips. Making the property non-virtual alone would just leave it empty.
 ::q single
@@ -1593,7 +1596,7 @@ Your caching proxy stores the `decimal` result after awaiting the inner call. A 
 When is a hand-written proxy the WRONG choice?
 - [ ] The same permission rule must apply to API, gRPC and background entry points.
 - [ ] The real subject is a slow remote service whose results can be reused.
-- [x] A rule like "bills above ₹50 lakh need two approvers" that is part of the business domain.
+- [x] A rule like "fee refunds above ₹50,000 need two approvers" that is part of the business domain.
 - [ ] An expensive object that most requests never use.
 > Business rules belong in the domain or application layer where they are visible and tested with other rules. Proxies are for access control and cross-cutting concerns around a subject.
 :::

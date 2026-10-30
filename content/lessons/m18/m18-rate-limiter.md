@@ -216,6 +216,8 @@ sequenceDiagram
 
 The filter is a thin adapter: build a key, ask the limiter, translate the answer. The lock is held only for the arithmetic, a few hundred nanoseconds at most (an estimate; measure it on your hardware), and only for this one key. A request for a different phone number takes a different lock and never waits.
 
+The key selector deserves the same care as the algorithm. If `phone` is missing, `"phone:"` becomes one bucket shared by every such request, so a single bot can lock out everyone who hits the bug. Validate the input first (return 400 for a missing or malformed phone number) and normalise it (`+91 98xxxxxx01`, `098xxxxxx01` and `98xxxxxx01` must map to one key), otherwise an attacker gets a fresh bucket per spelling.
+
 ## Patterns and design decisions
 
 ### Template Method for the shared skeleton
@@ -491,6 +493,8 @@ public sealed class TokenBucketLimiter(string policyName, TokenBucketOptions opt
 **Lazy refill** is the key idea: there is no timer adding tokens. Each request computes "how many tokens would have dripped in since I last looked?" That costs one subtraction and one multiplication, and means 1 million idle buckets cost zero CPU.
 
 Worked example with `otp` (capacity 3, refill 3 per 60 s = 0.05 tokens/s): at 10:00:00 a user sends 3 OTPs, leaving 0 tokens. At 10:00:05 the 4th request finds 0.25 tokens and is denied with retry-after (1 − 0.25) / 0.05 = 15 s. At 10:00:20 there is exactly 1 token and the request succeeds.
+
+One caution about that word "exactly". `Tokens` is a `double`, and rates like 0.05 are not exactly representable in binary, so after many small refills the balance can land on 0.9999999999 instead of 1.0 and deny a request that should pass. For human-scale limits this is invisible; if you need exact boundaries, store tokens as an integer number of "micro-tokens" (tokens × 1,000,000) or compare with a tiny tolerance (`s.Tokens + 1e-9 >= permits`).
 
 ### Fixed window counter
 
@@ -1018,6 +1022,17 @@ builder.Services.AddRateLimiter(o =>
 });
 app.UseRateLimiter();
 app.MapPost("/otp/send", (string phone) => Results.Accepted()).RequireRateLimiting("otp");
+```
+
+The middleware does **not** add a `Retry-After` header by itself. Set it in `OnRejected` from the lease metadata:
+
+```csharp
+o.OnRejected = (ctx, _) =>
+{
+    if (ctx.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+        ctx.HttpContext.Response.Headers.RetryAfter = ((int)Math.Ceiling(retryAfter.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
+    return ValueTask.CompletedTask;
+};
 ```
 
 Strengths: maintained by Microsoft, supports queuing and leases, integrates with endpoint metadata. Differences: it replenishes in discrete steps per period rather than continuously, and per-partition state management is handled for you (with less control). **For most HTTP APIs this is the right default.** This case study's value is learning the design so you can reason about, extend or replace it.

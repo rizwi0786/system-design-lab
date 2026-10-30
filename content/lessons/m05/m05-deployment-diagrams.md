@@ -49,15 +49,15 @@ By the end of this lesson you will be able to:
 
 A wedding has a guest list (who is coming) and a seating plan (who sits at which table, which tables are near the stage, where the exits are). The guest list is like a component diagram: it says *who*. The seating plan is like a deployment diagram: it says *where*. Both are about the same people, but they answer different questions. If the caterer asks "how far is table 12 from the kitchen?", the guest list is no help.
 
-### Our example: a road inspection system
+### Our example: an electricity meter-reading system
 
-A state road agency inspects bridges and culverts. Engineers use a **mobile app** in the field to record defects with photos and GPS. An **ASP.NET Core API** receives the inspections. A **background worker** resizes photos and generates PDF reports. Data lives in **PostgreSQL**. Photos go to **object storage**. A **legacy reports website**, also ASP.NET Core, runs on **IIS** in the agency's own data centre and reads from a database replica.
+A state electricity distribution company reads about 40 lakh home meters every month. Meter readers walk from house to house with a **mobile app** that records each reading with a photo of the meter and its GPS position, so a disputed bill can be checked later. An **ASP.NET Core API** receives the readings. A **background worker** resizes photos and generates PDF reports. Data lives in **PostgreSQL**. Photos go to **object storage**. A **legacy reports website**, also ASP.NET Core, runs on **IIS** in the company's own data centre and reads from a database replica.
 
 Where does each piece run? The deployment diagram answers:
 
 - The app runs on Android phones (a **device** node).
 - The API and worker run as **containers** in a cloud region, three API instances and one worker.
-- PostgreSQL runs in the **state data centre**, because the agency's policy says inspection records must stay on its premises. A read replica serves the reports site.
+- PostgreSQL runs in the **state data centre**, because the company's policy says consumer and billing records must stay on its own premises. A read replica serves the reports site.
 - The reports site runs on a **Windows Server VM** under **IIS**.
 - They talk over **HTTPS** and **TLS-encrypted PostgreSQL connections**, through a site-to-site VPN between the cloud and the data centre.
 
@@ -69,7 +69,7 @@ Already, the picture raises questions a component diagram never would: what happ
 
 A **node** is a computational resource on which artifacts can be deployed. It's drawn as a 3D box (a cube). UML distinguishes two kinds:
 
-- A **device** node is physical hardware: a server, a phone, a router, an IoT gateway on a bridge. Stereotype `«device»`.
+- A **device** node is physical hardware: a server, a phone, a router, an IoT gateway in an electricity substation. Stereotype `«device»`.
 - An **execution environment** node is a software environment that hosts other software: an operating system, a container runtime, a JVM or .NET runtime, a web server like IIS, a database server. Stereotype `«executionEnvironment»`, or something more specific such as `«container»`, `«IIS»`, `«Kubernetes»`.
 
 Nodes **nest**: a physical server contains a VM, the VM contains a container runtime, the runtime contains containers. Draw only the levels that matter for the question. For a security review, the VM boundary matters (who can log in?); for a capacity discussion, the container count matters.
@@ -81,16 +81,16 @@ Annotate nodes with what matters operationally: instance count (`×3`), size (`4
 An **artifact** is a physical piece of information that is deployed: a file or package. Drawn as a rectangle with `«artifact»` or a document icon. In .NET:
 
 - the output folder of `dotnet publish` (DLLs, `appsettings.json`, `web.config` for IIS);
-- a **container image** such as `inspections-api:1.8.2`;
+- a **container image** such as `meter-readings-api:1.8.2`;
 - a self-contained single-file executable;
 - a database migration script or bundle;
 - a mobile app package (APK/AAB).
 
-An artifact **manifests** one or more components: the `inspections-api` image contains the Inspections, Photos and Reports components from the component diagram. That link (component → artifact → node) is how the logical and physical views connect.
+An artifact **manifests** one or more components: the `meter-readings-api` image contains the Readings, Photos and Billing components from the component diagram. That link (component → artifact → node) is how the logical and physical views connect.
 
 ### Deployment
 
-A **deployment** places an artifact on a node: "`inspections-api:1.8.2` is deployed to the `api` container". Draw it by putting the artifact inside the node, or by a dashed arrow with `«deploy»` from the artifact to the node.
+A **deployment** places an artifact on a node: "`meter-readings-api:1.8.2` is deployed to the `api` container". Draw it by putting the artifact inside the node, or by a dashed arrow with `«deploy»` from the artifact to the node.
 
 ### Communication paths
 
@@ -102,7 +102,7 @@ A **deployment specification** is the configuration that tells an artifact how t
 
 - `ASPNETCORE_ENVIRONMENT=Production` (or `DOTNET_ENVIRONMENT` for non-web hosts);
 - `appsettings.Production.json`;
-- environment variables such as `ConnectionStrings__Inspections` (the double underscore maps to `:` in configuration keys);
+- environment variables such as `ConnectionStrings__Readings` (the double underscore maps to `:` in configuration keys);
 - for IIS, `web.config` and the app pool's settings;
 - for containers, the environment section of a Compose file or Kubernetes manifest, and secrets mounted from a vault.
 
@@ -135,7 +135,7 @@ flowchart LR
     subgraph cloud["«node» Cloud region: Mumbai"]
         subgraph k8s["«executionEnvironment» Kubernetes cluster"]
             subgraph apiPod["«container» api ×3"]
-                apiImage@{ shape: doc, label: "«artifact» inspections-api:1.8.2" }
+                apiImage@{ shape: doc, label: "«artifact» meter-readings-api:1.8.2" }
             end
         end
     end
@@ -192,15 +192,15 @@ The last four rows are the ones teams forget. A diagram that shows "×3" behind 
 
 ```mermaid
 flowchart LR
-    phone["«device»<br/>Android phone<br/>Inspector app 3.4"]
+    phone["«device»<br/>Android phone<br/>Meter reader app 3.4"]
     subgraph cloud["«node» Cloud region: Mumbai"]
         lb["«node» Managed load balancer<br/>TLS termination"]
         subgraph k8s["«executionEnvironment» Kubernetes cluster, 2 zones"]
             subgraph apiPod["«container» api ×3"]
-                apiImage@{ shape: doc, label: "«artifact» inspections-api:1.8.2" }
+                apiImage@{ shape: doc, label: "«artifact» meter-readings-api:1.8.2" }
             end
             subgraph workerPod["«container» worker ×1"]
-                workerImage@{ shape: doc, label: "«artifact» inspections-api:1.8.2" }
+                workerImage@{ shape: doc, label: "«artifact» meter-readings-api:1.8.2" }
             end
         end
         store[("«node» Object storage<br/>photos bucket")]
@@ -232,10 +232,10 @@ Read it node by node, then path by path:
 
 - **The phone** is a device node, outside every boundary. Its only path is HTTPS to the load balancer. The app never talks to the database or storage directly.
 - **The load balancer** terminates TLS, so traffic inside the cluster is plain HTTP on port 8080 over a private network. That's a deliberate trade-off, and it's why the API needs forwarded headers to know the original request was HTTPS.
-- **The Kubernetes cluster** is an execution environment spanning two availability zones. Inside it, `api ×3` and `worker ×1` are containers. Both run **the same artifact**, `inspections-api:1.8.2`. The **deployment specifications** make the difference: `Role=Api` serves HTTP, `Role=Worker` processes photos. One build, two deployments.
+- **The Kubernetes cluster** is an execution environment spanning two availability zones. Inside it, `api ×3` and `worker ×1` are containers. Both run **the same artifact**, `meter-readings-api:1.8.2`. The **deployment specifications** make the difference: `Role=Api` serves HTTP, `Role=Worker` processes photos. One build, two deployments.
 - **Object storage** holds photos. Both containers reach it over HTTPS.
 - **The state data centre** holds the database primary, its read replica and the IIS VM. The cloud containers reach the primary over a TLS connection through a site-to-site VPN. That VPN is on every write path, so it is a single point of failure and deserves redundancy (two tunnels) and monitoring.
-- **The IIS VM** runs the legacy reports site as a publish folder under IIS with the ASP.NET Core Module. It uses a **read-only** database user against the replica, so heavy reports can't slow down inspections, and a bug in the reports site can't write data.
+- **The IIS VM** runs the legacy reports site as a publish folder under IIS with the ASP.NET Core Module. It uses a **read-only** database user against the replica, so heavy reports can't slow down meter readings, and a bug in the reports site can't write data.
 
 Single points of failure visible at a glance: the primary database, the VPN, the single worker (degrades photo processing only) and the single IIS VM (degrades reports only). Each needs a decision: accept, add redundancy, or document a recovery time.
 
@@ -251,7 +251,7 @@ sequenceDiagram
     participant LB as Load balancer
     Dev->>CI: push tag v1.8.2
     CI->>CI: dotnet test, then dotnet publish as container image
-    CI->>Reg: push inspections-api:1.8.2
+    CI->>Reg: push meter-readings-api:1.8.2
     CI->>K: set image of api and worker to 1.8.2
     loop for each of the 3 api pods
         K->>K: start new pod with Role=Api
@@ -277,14 +277,14 @@ flowchart TB
     end
     subgraph uatEnv["UAT: one VM in the data centre"]
         subgraph uatVm["«VM» Windows Server 2022"]
-            subgraph uatIis["«IIS» site: inspections-uat"]
+            subgraph uatIis["«IIS» site: readings-uat"]
                 uatApi@{ shape: doc, label: "«artifact» publish folder 1.8.2" }
             end
             uatDb[("PostgreSQL 17, same VM")]
         end
     end
     subgraph prodEnv["Production: see diagram above"]
-        prodApi@{ shape: doc, label: "«artifact» inspections-api:1.8.2 ×3 + worker" }
+        prodApi@{ shape: doc, label: "«artifact» meter-readings-api:1.8.2 ×3 + worker" }
     end
     devApi --> devDb
     devApi --> devStore
@@ -317,7 +317,7 @@ For each pair of nodes that talk, write protocol, port, encryption and network. 
 
 ### Step 5 — attach deployment specifications
 
-Note the environment name, role and where secrets come from. Don't write secret **values** on a diagram. Write where they live ("connection string from vault: `inspections-db`").
+Note the environment name, role and where secrets come from. Don't write secret **values** on a diagram. Write where they live ("connection string from vault: `readings-db`").
 
 ### Step 6 — review it for failure
 
@@ -328,7 +328,7 @@ Walk through: "this node dies, what happens?", "this link drops?", "load doubles
 What does the code need, so that the deployment diagram above is actually true? This implementation is one artifact that runs correctly on every node in the diagram: behind the load balancer, under IIS, in a container, as the API or as the worker.
 
 ```text
-Inspections.Api/
+MeterReadings.Api/
   Program.cs
   Deployment/NodeOptions.cs            // the deployment specification, validated at startup
   Deployment/HostingInfo.cs            // "which node am I on?" for diagnostics
@@ -337,7 +337,7 @@ Inspections.Api/
 ```
 
 ```csharp file=Deployment/NodeOptions.cs
-namespace Inspections.Api.Deployment;
+namespace MeterReadings.Api.Deployment;
 
 public enum NodeRole { Api, Worker, All }
 
@@ -363,7 +363,7 @@ public sealed class NodeOptions
 ```csharp file=Deployment/HostingInfo.cs
 using System.Reflection;
 
-namespace Inspections.Api.Deployment;
+namespace MeterReadings.Api.Deployment;
 
 public enum HostingKind { SelfHosted, Container, Iis }
 
@@ -392,7 +392,7 @@ public sealed record HostingInfo(string Machine, string Environment, HostingKind
 ```csharp file=Deployment/DependencyHealthChecks.cs
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
-namespace Inspections.Api.Deployment;
+namespace MeterReadings.Api.Deployment;
 
 /// <summary>One probe per communication path on the deployment diagram.</summary>
 public interface IDependencyProbe
@@ -446,9 +446,9 @@ public sealed class ShutdownReadinessCheck(IHostApplicationLifetime lifetime) : 
 ```csharp file=Deployment/PhotoWorker.cs
 using System.Threading.Channels;
 
-namespace Inspections.Api.Deployment;
+namespace MeterReadings.Api.Deployment;
 
-public sealed record PhotoJob(Guid InspectionId, string ObjectKey);
+public sealed record PhotoJob(Guid ReadingId, string ObjectKey);
 
 /// <summary>The queue between the API role and the worker role. In production this is a
 /// table or a message broker, because the two roles run in different containers.</summary>
@@ -469,7 +469,7 @@ public sealed class PhotoWorker(PhotoQueue queue, ILogger<PhotoWorker> logger) :
             await foreach (var job in queue.ReadAllAsync(stoppingToken))
             {
                 // Resize, strip EXIF location if required, generate thumbnails...
-                logger.LogInformation("Processed photo {Key} for inspection {Id}", job.ObjectKey, job.InspectionId);
+                logger.LogInformation("Processed photo {Key} for reading {Id}", job.ObjectKey, job.ReadingId);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -481,7 +481,7 @@ public sealed class PhotoWorker(PhotoQueue queue, ILogger<PhotoWorker> logger) :
 ```
 
 ```csharp file=Program.cs
-using Inspections.Api.Deployment;
+using MeterReadings.Api.Deployment;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -503,7 +503,7 @@ builder.Services.AddOptions<NodeOptions>()
 var node = builder.Configuration.GetSection(NodeOptions.Section).Get<NodeOptions>() ?? new NodeOptions();
 
 // ×3 behind a load balancer: every instance must decrypt cookies and antiforgery tokens issued by the others.
-var dataProtection = builder.Services.AddDataProtection().SetApplicationName("inspections");
+var dataProtection = builder.Services.AddDataProtection().SetApplicationName("meter-readings");
 if (!string.IsNullOrWhiteSpace(node.KeyRingPath))
     dataProtection.PersistKeysToFileSystem(new DirectoryInfo(node.KeyRingPath));
 
@@ -514,7 +514,8 @@ builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSe
 builder.Services.Configure<ForwardedHeadersOptions>(o =>
 {
     o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
-    // In production, restrict to the load balancer's network instead of trusting any proxy.
+    // By default only loopback proxies are trusted. Add the load balancer's subnet to KnownIPNetworks
+    // (.NET 10; KnownNetworks in older versions). Never clear the lists to "trust everyone".
 });
 
 // One probe per communication path. The lambdas stand in for SELECT 1 and a bucket HEAD request.
@@ -540,12 +541,12 @@ app.MapGet("/about", (IHostEnvironment env, IOptions<NodeOptions> opts) => Hosti
 
 if (node.RunsHttp)
 {
-    app.MapPost("/inspections/{id:guid}/photos", async (Guid id, PhotoUpload upload, PhotoQueue queue, HttpContext http, CancellationToken ct) =>
+    app.MapPost("/readings/{id:guid}/photos", async (Guid id, PhotoUpload upload, PhotoQueue queue, HttpContext http, CancellationToken ct) =>
     {
         // Thanks to forwarded headers, this is "https" even though Kestrel received plain HTTP on 8080.
         var scheme = http.Request.Scheme;
         await queue.EnqueueAsync(new PhotoJob(id, upload.ObjectKey), ct);
-        return Results.Accepted($"{scheme}://{http.Request.Host}/inspections/{id}");
+        return Results.Accepted($"{scheme}://{http.Request.Host}/readings/{id}");
     });
 }
 
@@ -777,7 +778,7 @@ public class DeploymentSpecTests
     private static readonly Dictionary<string, string> Env = new()
     {
         ["APP_Node__Role"] = "Worker",
-        ["APP_ConnectionStrings__Main"] = "Host=db.dc.local;Database=inspections",
+        ["APP_ConnectionStrings__Main"] = "Host=db.dc.local;Database=readings",
         ["PATH"] = "/usr/bin",
     };
 
@@ -788,7 +789,7 @@ public class DeploymentSpecTests
         Assert.Equal("Warning", s["Logging:LogLevel:Default"]);
         Assert.Equal("insp-photos-prod", s["Node:PhotoBucket"]);
         Assert.Equal("Worker", s["Node:Role"]);
-        Assert.Equal("Host=db.dc.local;Database=inspections", s["ConnectionStrings:Main"]);
+        Assert.Equal("Host=db.dc.local;Database=readings", s["ConnectionStrings:Main"]);
     }
 
     [Fact]
@@ -953,8 +954,8 @@ public class TopologyTests
 
     private static List<DeployedArtifact> Artifacts() => new()
     {
-        new("inspections-api:1.8.2", "api"),
-        new("inspections-worker:1.8.2", "worker"),
+        new("meter-readings-api:1.8.2", "api"),
+        new("meter-readings-worker:1.8.2", "worker"),
         new("Reports.Web 2.3", "reports-vm", Critical: false),
     };
 
@@ -978,7 +979,7 @@ public class TopologyTests
         var a = Artifacts();
         a.Add(new("Reports.Scheduler", "reports-vm"));                     // critical, single IIS VM
         var msgs = Check(n, a, Paths());
-        Assert.Equal(new[] { "spof: inspections-worker:1.8.2 on worker", "spof: Reports.Scheduler on reports-vm" }, msgs);
+        Assert.Equal(new[] { "spof: meter-readings-worker:1.8.2 on worker", "spof: Reports.Scheduler on reports-vm" }, msgs);
     }
 
     [Fact]

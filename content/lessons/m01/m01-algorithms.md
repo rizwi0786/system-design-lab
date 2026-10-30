@@ -22,7 +22,7 @@ references:
     url: https://learn.microsoft.com/dotnet/api/system.collections.generic.stack-1
 ---
 
-You will rarely be asked to write a sorting algorithm at work. You will, many times a year, need to find which slab, segment or price band a value falls into; sort records by three keys with a deterministic tie-break; decide whether two objects are "the same" for a dictionary; total up a tree of tasks; or walk two sorted lists together to see what is missing. This lesson covers exactly those algorithms, using a highway construction project as the running example: a 120 km road split into contract packages, a work breakdown structure (WBS) of tasks, and a bank account that must be reconciled against the project's books.
+You will rarely be asked to write a sorting algorithm at work. You will, many times a year, need to find which slab, band or price tier a value falls into; sort records by three keys with a deterministic tie-break; decide whether two objects are "the same" for a dictionary; total up a tree of things; or walk two sorted lists together to see what is missing. This lesson covers exactly those algorithms, using a food-delivery platform (think of an app like Swiggy or Zomato) as the running example: delivery fees charged by distance band, a city → zone → restaurant hierarchy whose order numbers must be rolled up, a payouts bank account that must be reconciled against the platform's own books, and a support desk flooded with duplicate complaints.
 
 ## Learning objectives
 
@@ -48,7 +48,7 @@ By the end of this lesson you will be able to:
 
 **Hashing.** At a temple shoe stand, the attendant does not put your shoes "somewhere". They put them in rack 37 and give you token 37. Getting them back means going straight to rack 37. A **hash function** is the rule that turns something (your name, a vehicle number) into a rack number. Two different people can be given the same rack (a *collision*), so the attendant still checks the token inside the rack, but only a few pairs, not all of them.
 
-**Recursion.** The project director asks: "What is the total budget of this highway?" She does not add up 4,000 tasks herself. She asks each package manager, "What's your total?" Each package manager asks each of their section engineers. Each engineer, who has no one below them, just answers with their own number. The answers flow back up and get added. A method that solves a problem by asking *smaller copies of the same question* is **recursive**. The engineer who "just answers" is the **base case**; without one, the questions would never stop.
+**Recursion.** The Bengaluru city head asks: "How many orders did we deliver today?" She does not count 4,000 restaurants' orders herself. She asks each zone manager, "What's your total?" Each zone manager asks each of their restaurants. Each restaurant, which has no one below it, just answers with its own number. The answers flow back up and get added. A method that solves a problem by asking *smaller copies of the same question* is **recursive**. The restaurant that "just answers" is the **base case**; without one, the questions would never stop.
 
 **Two pointers.** You have the bank's statement and your own cash book, both sorted by date. Put one finger on the first line of each. If they match, tick both and move both fingers down. If the bank's line is earlier, it is missing from your book; move the bank finger. And so on. Each finger only ever moves forward, so you finish in one pass. That is the **two-pointer** technique.
 
@@ -59,7 +59,7 @@ By the end of this lesson you will be able to:
 Check each item until you find a match. O(n) time, no setup, works on any data.
 
 ```csharp
-static int IndexOfPackage(IReadOnlyList<string> codes, string wanted)
+static int IndexOfCoupon(IReadOnlyList<string> codes, string wanted)
 {
     for (int i = 0; i < codes.Count; i++)
         if (codes[i] == wanted) return i;
@@ -88,29 +88,29 @@ static int BinarySearch(int[] sorted, int target)
 }
 ```
 
-For 10 lakh items this needs about 20 comparisons. You should not normally write it yourself: `Array.BinarySearch`, `List<T>.BinarySearch` and `CollectionsMarshal`-free `MemoryExtensions.BinarySearch` on spans do it. When the value is not found, they return a **negative** number: the bitwise complement (`~index`) of where it would be inserted. That detail is the key to the most useful variant.
+For 10 lakh items this needs about 20 comparisons. You should not normally write it yourself: `Array.BinarySearch`, `List<T>.BinarySearch` and `MemoryExtensions.BinarySearch` (on spans) do it. When the value is not found, they return a **negative** number: the bitwise complement (`~index`) of where it would be inserted. That detail is the key to the most useful variant.
 
 **"Which range does this value fall in?"** This is the question business software actually asks:
 
-- Which contract package contains chainage 47.350 km?
+- Which delivery-fee band covers a restaurant 4.35 km from the customer?
 - Which income-tax slab does ₹14,20,000 fall into?
-- Which delivery-charge band applies to a 3.2 kg parcel?
+- Which shipping-charge band applies to a 3.2 kg parcel?
 
 Store the *start* of each range in a sorted array, and find the **last start that is ≤ the value**:
 
 ```csharp
-decimal[] packageStarts = { 0m, 22.5m, 47.0m, 71.8m, 96.0m };   // km where each package begins
+decimal[] bandStarts = { 0m, 2.5m, 4.0m, 6.5m, 9.0m };   // km where each delivery-fee band begins
 
-int FindPackage(decimal km)
+int FindBand(decimal km)
 {
-    int i = Array.BinarySearch(packageStarts, km);
-    if (i >= 0) return i;            // exactly on a boundary: that package starts here
+    int i = Array.BinarySearch(bandStarts, km);
+    if (i >= 0) return i;            // exactly on a boundary: that band starts here
     int insertAt = ~i;               // first start that is greater than km
     return insertAt - 1;             // the one before it (or -1 if km is before the first start)
 }
 
-FindPackage(47.35m);   // 2 → the package starting at 47.0 km
-FindPackage(22.5m);    // 1 → boundaries belong to the package that starts there
+FindBand(4.35m);   // 2 → the band starting at 4.0 km
+FindBand(2.5m);    // 1 → boundaries belong to the band that starts there
 ```
 
 Binary search has three classic bugs: forgetting that the data must be sorted (by the *same* rule you search with), off-by-one errors at boundaries, and the overflow in `(lo + hi) / 2` on very large arrays. Write tests for values below the first start, exactly on each boundary, and beyond the last range.
@@ -131,10 +131,10 @@ Binary search has three classic bugs: forgetting that the data must be sorted (b
 **Multi-key sorting** is clearer in LINQ:
 
 ```csharp
-var schedule = tasks
-    .OrderBy(t => t.PackageCode)
+var queue = tickets
+    .OrderBy(t => t.City)
     .ThenByDescending(t => t.Priority)
-    .ThenBy(t => t.DueDate)
+    .ThenBy(t => t.CreatedAt)
     .ThenBy(t => t.Id)                   // final tie-break makes the order fully deterministic
     .ToList();
 ```
@@ -142,8 +142,8 @@ var schedule = tasks
 **Custom comparers** let you sort by rules that are not just "property A then B":
 
 ```csharp
-// Sort WBS codes like "1.2.10" numerically per part, so 1.2.9 comes before 1.2.10
-sealed class WbsCodeComparer : IComparer<string>
+// Sort hierarchy codes like "1.2.10" (city.zone.restaurant) numerically per part, so 1.2.9 comes before 1.2.10
+sealed class OutlineCodeComparer : IComparer<string>
 {
     public int Compare(string? a, string? b)
     {
@@ -212,21 +212,21 @@ A recursive method calls itself on a smaller part of the problem. Every recursiv
 1. A **base case** that answers directly without recursing.
 2. A **recursive case** that moves *towards* the base case.
 
-Trees are the natural fit, because every subtree is itself a tree. A WBS is a tree: Project → Packages → Activities (earthwork, pavement, structures) → Tasks.
+Trees are the natural fit, because every subtree is itself a tree. The delivery network is a tree: Country → Cities → Zones (Koramangala, HSR Layout, Indiranagar) → Restaurants.
 
 ```csharp
-static decimal TotalBudget(WbsNode node)
+static int TotalOrders(ZoneNode node)
 {
-    decimal total = node.OwnBudget;                 // base case is implicit: a leaf has no children
+    int total = node.OwnOrders;                     // base case is implicit: a leaf has no children
     foreach (var child in node.Children)
-        total += TotalBudget(child);                // same question, smaller tree
+        total += TotalOrders(child);                // same question, smaller tree
     return total;
 }
 ```
 
 **How it runs.** Each call gets its own **stack frame** holding its local variables (`node`, `total`). Calls pile up on the **call stack** as the method goes deeper and unwind as each one returns. The call stack is a fixed-size area (commonly around 1 MB per thread by default; it depends on the OS and settings). Each frame uses a little of it.
 
-**The failure mode: stack overflow.** If the recursion is very deep, or never stops because there is no base case or the data has a cycle (task A is a child of B, which is a child of A), the stack fills up and .NET throws `StackOverflowException`. That exception **cannot be caught**; the whole process dies, taking every in-flight web request with it. Protect yourself by:
+**The failure mode: stack overflow.** If the recursion is very deep, or never stops because there is no base case or the data has a cycle (zone A is a child of B, which is a child of A), the stack fills up and .NET throws `StackOverflowException`. That exception **cannot be caught**; the whole process dies, taking every in-flight web request with it. Protect yourself by:
 
 - Validating that the data is a tree (no cycles) when it is built.
 - Adding a depth limit, and throwing a normal exception if it is exceeded.
@@ -234,7 +234,7 @@ static decimal TotalBudget(WbsNode node)
 
 **Recursion that repeats work.** The textbook Fibonacci (`Fib(n) = Fib(n-1) + Fib(n-2)`) recomputes the same values exponentially many times. The fix is **memoisation**: remember answers in a dictionary. In business code the same thing appears as "compute a node's total once and cache it" when many reports ask for it.
 
-**When not to use recursion:** for simple loops over a list (a `foreach` is clearer), and for data whose depth you don't control (user-uploaded JSON, deeply nested folders). For a WBS with 5–8 levels, recursion is perfect and the most readable choice.
+**When not to use recursion:** for simple loops over a list (a `foreach` is clearer), and for data whose depth you don't control (user-uploaded JSON, deeply nested folders). For a city → zone → restaurant hierarchy with 4–6 levels, recursion is perfect and the most readable choice.
 
 ### Two pointers
 
@@ -279,44 +279,44 @@ The **sliding window** from the [Big O lesson](#/lesson/m01-big-o) is a two-poin
 
 ## Visual explanation
 
-### Binary search for a chainage
+### Binary search for a delivery distance
 
 ```mermaid
 flowchart TD
-    S["Find package for km 47.35<br/>starts = 0, 22.5, 47.0, 71.8, 96.0"] --> M1["lo=0, hi=4, mid=2<br/>starts[2]=47.0 ≤ 47.35<br/>candidate=2, lo=3"]
-    M1 --> M2["lo=3, hi=4, mid=3<br/>starts[3]=71.8 > 47.35<br/>hi=2"]
+    S["Find fee band for 4.35 km<br/>starts = 0, 2.5, 4.0, 6.5, 9.0"] --> M1["lo=0, hi=4, mid=2<br/>starts[2]=4.0 ≤ 4.35<br/>candidate=2, lo=3"]
+    M1 --> M2["lo=3, hi=4, mid=3<br/>starts[3]=6.5 > 4.35<br/>hi=2"]
     M2 --> E{"lo > hi: stop"}
-    E --> R["Answer: candidate 2<br/>package starting at 47.0 km"]
-    R --> C{"47.35 < end of package 2?"}
-    C -- Yes --> OK["Return package 2"]
-    C -- "No (a gap between packages)" --> N["Return null"]
+    E --> R["Answer: candidate 2<br/>band starting at 4.0 km"]
+    R --> C{"4.35 < end of band 2?"}
+    C -- Yes --> OK["Return band 2"]
+    C -- "No (gap or beyond the last band)" --> N["Return null: not deliverable"]
 ```
 
-This flowchart traces the "last start ≤ value" search for chainage 47.35 km over five package start points. The first middle item (47.0) is not larger than the target, so it becomes the current best answer and the search moves right. The next middle (71.8) is too big, so the search moves left, and the range becomes empty. The best candidate found is package 2. A final check against that package's end handles gaps, such as a stretch of road that belongs to no package (a bypass built by another agency). Two comparisons were enough here; for 10,000 packages it would be about 14.
+This flowchart traces the "last start ≤ value" search for a 4.35 km delivery over five band start points. The first middle item (4.0) is not larger than the target, so it becomes the current best answer and the search moves right. The next middle (6.5) is too big, so the search moves left, and the range becomes empty. The best candidate found is band 2. A final check against that band's end handles gaps and the outer limit: a restaurant 14 km away falls after the last band (which ends at 12 km), so the app says "not deliverable" instead of charging a made-up fee. Two comparisons were enough here; for 10,000 bands it would be about 14.
 
 ### Recursion on the call stack
 
 ```mermaid
 sequenceDiagram
     participant Caller
-    participant P as TotalBudget(Project)
-    participant A as TotalBudget(Package A)
-    participant A1 as TotalBudget(Earthwork)
-    participant A2 as TotalBudget(Pavement)
-    participant B as TotalBudget(Package B)
+    participant P as TotalOrders(Bengaluru)
+    participant A as TotalOrders(South zone)
+    participant A1 as TotalOrders(Koramangala)
+    participant A2 as TotalOrders(HSR Layout)
+    participant B as TotalOrders(North zone)
     Caller->>P: total?
     P->>A: total?
     A->>A1: total?
-    A1-->>A: 40 crore (leaf: base case)
+    A1-->>A: 4,000 orders (leaf: base case)
     A->>A2: total?
-    A2-->>A: 65 crore (leaf)
-    A-->>P: 105 crore
+    A2-->>A: 6,500 orders (leaf)
+    A-->>P: 10,500 orders
     P->>B: total?
-    B-->>P: 80 crore (leaf)
-    P-->>Caller: 185 crore
+    B-->>P: 8,000 orders (leaf)
+    P-->>Caller: 18,500 orders
 ```
 
-This sequence diagram shows the call stack during a recursive budget roll-up. Each arrow to the right is a new call that pushes a frame onto the stack; each dashed arrow back is a return that pops one. At the deepest point, the stack holds Project → Package A → Earthwork: three frames. Leaves answer immediately (the base case), parents add their children's answers, and the final total reaches the caller. The depth of the stack equals the depth of the tree, not the number of nodes, which is why recursion is safe for a WBS of 6 levels with 4,000 tasks, and dangerous for a "tree" of unknown depth.
+This sequence diagram shows the call stack during a recursive order roll-up for one day. Each arrow to the right is a new call that pushes a frame onto the stack; each dashed arrow back is a return that pops one. At the deepest point, the stack holds Bengaluru → South zone → Koramangala: three frames. Leaves answer immediately (the base case), parents add their children's answers, and the final total reaches the caller. The depth of the stack equals the depth of the tree, not the number of nodes, which is why recursion is safe for a 5-level hierarchy with 4,000 restaurants, and dangerous for a "tree" of unknown depth.
 
 ### Two-pointer reconciliation
 
@@ -339,31 +339,31 @@ flowchart LR
     b2 -.-> X
 ```
 
-This diagram shows a reconciliation of three bank lines against three cash-book lines, both sorted by date and then amount. The first pair matches, so both pointers move. Next, the bank's 3 September entry is earlier than the ledger's 5 September entry, so it cannot have a partner in the ledger: it goes on the exceptions report as "only in bank" (perhaps bank charges nobody recorded), and only the bank pointer moves. The 5 September entries match. Finally the bank list is exhausted, so the remaining ledger entry (a cheque not yet cleared) is "only in ledger". Six lines were processed in six steps, and it would be the same shape for 60 lakh lines.
+This diagram shows a reconciliation of three bank lines against three cash-book lines, both sorted by date and then amount. The first pair matches, so both pointers move. Next, the bank's 3 September entry is earlier than the ledger's 5 September entry, so it cannot have a partner in the ledger: it goes on the exceptions report as "only in bank" (perhaps bank charges nobody recorded), and only the bank pointer moves. The 5 September entries match. Finally the bank list is exhausted, so the remaining ledger entry (a restaurant payout the bank has not processed yet) is "only in ledger". Six lines were processed in six steps, and it would be the same shape for 60 lakh lines.
 
 ## Step-by-step example
 
-The project office asks for a small service: "Given a chainage, tell us the package and contractor; give us budget and progress totals for the WBS; and reconcile the project bank account every night." We build each part with the simplest correct algorithm.
+The platform team asks for a small service: "Given the distance from restaurant to customer, tell us the delivery-fee band; give us order and on-time totals for any city or zone; reconcile the payouts bank account every night; and stop the support desk from opening five tickets for the same complaint." We build each part with the simplest correct algorithm.
 
-### Step 1: chainage lookup, linear first
+### Step 1: fee-band lookup, linear first
 
 ```csharp
-RoadSegment? Find(decimal km) => segments.FirstOrDefault(s => km >= s.StartKm && km < s.EndKm);
+DeliveryBand? Find(decimal km) => bands.FirstOrDefault(b => km >= b.FromKm && km < b.ToKm);
 ```
 
-Correct, readable, and for 6 packages perfectly fine. But the same lookup is used to tag 40,000 site photos a day by GPS-derived chainage, against a table of 2,400 sub-segments (every 50 m on some stretches). That is 40,000 × 2,400 ≈ 10 crore comparisons a day. Still small, but it is called on every photo upload request, so we move to binary search: about 12 comparisons per lookup instead of up to 2,400.
+Correct, readable, and for 5 bands perfectly fine. Later, the pricing team moves to 50-metre steps out to 12 km for fairer fees: 240 bands per city. The lookup runs on every cart refresh, about 40,000 times a minute at dinner peak, so a linear scan does up to 40,000 × 240 ≈ 1 crore comparisons a minute. That is still cheap for a modern CPU (estimate: well under a second of CPU time), so this is not an emergency. But binary search needs about 8 comparisons per lookup instead of up to 240, and once it is wrapped in a class it costs nothing in readability, so we switch.
 
 ### Step 2: binary search with validation
 
-Sort the segments by `StartKm` once in the constructor and **validate** them: each must end after it starts, and none may overlap. Binary search is only correct on clean, sorted data; validating once at the start is far cheaper than debugging wrong answers later.
+Sort the bands by `FromKm` once in the constructor and **validate** them: each must end after it starts, and none may overlap. Binary search is only correct on clean, sorted data; validating once at the start is far cheaper than debugging wrong fees later. Rate cards are edited by people, so overlapping bands ("2–4 km: ₹25" and "3.5–6 km: ₹35") are a real risk.
 
-### Step 3: WBS roll-up, recursive
+### Step 3: order roll-up, recursive
 
-Budget is a straight sum. Progress is a **weighted** average: a task worth ₹40 crore that is 50 % done contributes more than a ₹2 lakh task that is 100 % done. So we compute *earned value* (budget × percent complete) recursively and divide by total budget.
+Total orders is a straight sum. The on-time rate needs care: it is a **weighted** figure, so a zone with 6,500 orders at 85 % on time matters far more than a new restaurant with 20 orders at 100 %. The correct way is to add up on-time orders and total orders separately, then divide once at the top. Averaging the children's percentages (the "average of averages" mistake) gives a wrong answer whenever children have different sizes.
 
 ### Step 4: guard the recursion
 
-WBS data is edited by people in a spreadsheet and imported. A wrong parent code can create a cycle. We add a depth limit of 64 levels to the recursive version and also show an iterative version using `Stack<T>` that tracks visited nodes.
+The zone hierarchy is maintained by the operations team in a spreadsheet and imported. A wrong parent code can create a cycle. We add a depth limit of 64 levels to the recursive version and also show an iterative version using `Stack<T>` that tracks visited nodes.
 
 ### Step 5: reconciliation with two pointers
 
@@ -371,89 +371,92 @@ Sort bank entries and ledger entries by (date, amount), then walk both. Unmatche
 
 ### Step 6: duplicate complaints with hashing
 
-The project's public helpline receives the same complaint ("pothole near km 31, Sohna side") from the same mobile number several times a day. We normalise the text, combine it with the mobile number and the date, and hash it with SHA-256 to a stable fingerprint that can be stored in the database with a unique index.
+The support desk receives the same complaint ("order 4471 arrived cold, want refund") from the same mobile number several times within an hour, through the app, email and a chat bot. We normalise the text, combine it with the mobile number and the date, and hash it with SHA-256 to a stable fingerprint that can be stored in the database with a unique index.
 
 ## Production-style C# implementation
 
 ```text
-Highway.Api/
+FoodDelivery.Api/
   Program.cs
-  Segments/RoadSegment.cs        // record + ChainageIndex (binary search)
-  Wbs/WbsNode.cs                 // tree node
-  Wbs/WbsRollup.cs               // recursive + iterative roll-ups with guards
+  Pricing/DeliveryBand.cs        // record + DeliveryFeeTable (binary search)
+  Network/ZoneNode.cs            // tree node: country, city, zone or restaurant
+  Network/OrderRollup.cs         // recursive + iterative roll-ups with guards
   Finance/StatementReconciler.cs // two-pointer reconciliation
-  Helpline/ComplaintDesk.cs      // stable SHA-256 fingerprint for deduplication
+  Support/ComplaintDesk.cs       // stable SHA-256 fingerprint for deduplication
 ```
 
-```csharp file=Segments/RoadSegment.cs
-namespace Highway.Api.Segments;
+```csharp file=Pricing/DeliveryBand.cs
+namespace FoodDelivery.Api.Pricing;
 
-/// <summary>A stretch of road [StartKm, EndKm) handled by one contractor.</summary>
-public sealed record RoadSegment(string PackageCode, decimal StartKm, decimal EndKm, string Contractor);
+/// <summary>A distance band [FromKm, ToKm) with a flat delivery fee in rupees.</summary>
+public sealed record DeliveryBand(string Code, decimal FromKm, decimal ToKm, decimal Fee);
 
-/// <summary>Sorted, validated segments with O(log n) lookup by chainage.</summary>
-public sealed class ChainageIndex
+/// <summary>Sorted, validated bands with O(log n) lookup by distance.</summary>
+public sealed class DeliveryFeeTable
 {
-    private readonly RoadSegment[] _segments;
+    private readonly DeliveryBand[] _bands;
 
-    public ChainageIndex(IEnumerable<RoadSegment> segments)
+    public DeliveryFeeTable(IEnumerable<DeliveryBand> bands)
     {
-        _segments = segments.OrderBy(s => s.StartKm).ToArray();     // O(n log n), once
-        for (int i = 0; i < _segments.Length; i++)
+        _bands = bands.OrderBy(b => b.FromKm).ToArray();     // O(n log n), once
+        for (int i = 0; i < _bands.Length; i++)
         {
-            var s = _segments[i];
-            if (s.EndKm <= s.StartKm)
-                throw new ArgumentException($"{s.PackageCode}: end {s.EndKm} must be after start {s.StartKm}.");
-            if (i > 0 && s.StartKm < _segments[i - 1].EndKm)
-                throw new ArgumentException($"{s.PackageCode} overlaps {_segments[i - 1].PackageCode}.");
+            var b = _bands[i];
+            if (b.ToKm <= b.FromKm)
+                throw new ArgumentException($"{b.Code}: end {b.ToKm} must be after start {b.FromKm}.");
+            if (b.Fee < 0m)
+                throw new ArgumentException($"{b.Code}: fee cannot be negative.");
+            if (i > 0 && b.FromKm < _bands[i - 1].ToKm)
+                throw new ArgumentException($"{b.Code} overlaps {_bands[i - 1].Code}.");
         }
     }
 
-    public int Count => _segments.Length;
+    public int Count => _bands.Length;
 
-    /// <summary>Finds the last segment whose start is ≤ km, then checks km is before its end (gaps return null).</summary>
-    public RoadSegment? Find(decimal km)
+    /// <summary>Finds the last band whose start is ≤ km, then checks km is before its end (gaps and "too far" return null).</summary>
+    public DeliveryBand? Find(decimal km)
     {
-        int lo = 0, hi = _segments.Length - 1, candidate = -1;
+        int lo = 0, hi = _bands.Length - 1, candidate = -1;
         while (lo <= hi)
         {
             int mid = lo + (hi - lo) / 2;
-            if (_segments[mid].StartKm <= km) { candidate = mid; lo = mid + 1; }
+            if (_bands[mid].FromKm <= km) { candidate = mid; lo = mid + 1; }
             else hi = mid - 1;
         }
         if (candidate < 0) return null;
-        var segment = _segments[candidate];
-        return km < segment.EndKm ? segment : null;
+        var band = _bands[candidate];
+        return km < band.ToKm ? band : null;
     }
 }
 ```
 
-```csharp file=Wbs/WbsNode.cs
-namespace Highway.Api.Wbs;
+```csharp file=Network/ZoneNode.cs
+namespace FoodDelivery.Api.Network;
 
-/// <summary>One node in a work breakdown structure. Leaves carry budget and progress.</summary>
-public sealed class WbsNode
+/// <summary>One node in the delivery network (country, city, zone or restaurant). Leaves carry the day's order counts.</summary>
+public sealed class ZoneNode
 {
-    private readonly List<WbsNode> _children = new();
+    private readonly List<ZoneNode> _children = new();
 
-    public WbsNode(string code, string name, decimal ownBudget = 0m, decimal percentComplete = 0m)
+    public ZoneNode(string code, string name, int ownOrders = 0, int onTimeOrders = 0)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(code);
-        ArgumentOutOfRangeException.ThrowIfNegative(ownBudget);
-        if (percentComplete is < 0m or > 100m) throw new ArgumentOutOfRangeException(nameof(percentComplete));
+        ArgumentOutOfRangeException.ThrowIfNegative(ownOrders);
+        ArgumentOutOfRangeException.ThrowIfNegative(onTimeOrders);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(onTimeOrders, ownOrders);
         Code = code;
         Name = name;
-        OwnBudget = ownBudget;
-        PercentComplete = percentComplete;
+        OwnOrders = ownOrders;
+        OnTimeOrders = onTimeOrders;
     }
 
     public string Code { get; }
     public string Name { get; }
-    public decimal OwnBudget { get; }
-    public decimal PercentComplete { get; }
-    public IReadOnlyList<WbsNode> Children => _children;
+    public int OwnOrders { get; }
+    public int OnTimeOrders { get; }
+    public IReadOnlyList<ZoneNode> Children => _children;
 
-    public WbsNode Add(params WbsNode[] children)
+    public ZoneNode Add(params ZoneNode[] children)
     {
         foreach (var child in children)
         {
@@ -465,54 +468,54 @@ public sealed class WbsNode
 }
 ```
 
-```csharp file=Wbs/WbsRollup.cs
-namespace Highway.Api.Wbs;
+```csharp file=Network/OrderRollup.cs
+namespace FoodDelivery.Api.Network;
 
-public sealed record WbsSummary(string Code, decimal TotalBudget, decimal EarnedValue, decimal PercentComplete, int NodeCount);
+public sealed record ZoneSummary(string Code, long TotalOrders, long OnTimeOrders, decimal OnTimePercent, int NodeCount);
 
-public static class WbsRollup
+public static class OrderRollup
 {
     public const int MaxDepth = 64;
 
     /// <summary>Recursive: clearest code for a tree. Depth guard turns a cycle into a normal exception.</summary>
-    public static decimal TotalBudget(WbsNode node) => TotalBudget(node, depth: 0);
+    public static long TotalOrders(ZoneNode node) => TotalOrders(node, depth: 0);
 
-    private static decimal TotalBudget(WbsNode node, int depth)
+    private static long TotalOrders(ZoneNode node, int depth)
     {
         if (depth > MaxDepth)
-            throw new InvalidOperationException($"WBS deeper than {MaxDepth} levels at {node.Code}. Is there a cycle?");
-        decimal total = node.OwnBudget;
+            throw new InvalidOperationException($"Hierarchy deeper than {MaxDepth} levels at {node.Code}. Is there a cycle?");
+        long total = node.OwnOrders;
         foreach (var child in node.Children)
-            total += TotalBudget(child, depth + 1);
+            total += TotalOrders(child, depth + 1);
         return total;
     }
 
     /// <summary>Iterative with an explicit stack: no call-stack limit, and detects cycles by tracking visited nodes.</summary>
-    public static WbsSummary Summarise(WbsNode root)
+    public static ZoneSummary Summarise(ZoneNode root)
     {
         ArgumentNullException.ThrowIfNull(root);
-        var visited = new HashSet<WbsNode>(ReferenceEqualityComparer.Instance);
-        var pending = new Stack<WbsNode>();
+        var visited = new HashSet<ZoneNode>(ReferenceEqualityComparer.Instance);
+        var pending = new Stack<ZoneNode>();
         pending.Push(root);
 
-        decimal budget = 0m, earned = 0m;
+        long orders = 0, onTime = 0;
         while (pending.TryPop(out var node))
         {
             if (!visited.Add(node))
-                throw new InvalidOperationException($"WBS node {node.Code} is reachable twice (cycle or shared child).");
-            budget += node.OwnBudget;
-            earned += node.OwnBudget * node.PercentComplete / 100m;
+                throw new InvalidOperationException($"Node {node.Code} is reachable twice (cycle or shared child).");
+            orders += node.OwnOrders;
+            onTime += node.OnTimeOrders;                 // add counts, divide once at the end
             foreach (var child in node.Children) pending.Push(child);
         }
 
-        var percent = budget == 0m ? 0m : Math.Round(earned / budget * 100m, 2);
-        return new WbsSummary(root.Code, budget, earned, percent, visited.Count);
+        var percent = orders == 0 ? 0m : Math.Round((decimal)onTime / orders * 100m, 2);
+        return new ZoneSummary(root.Code, orders, onTime, percent, visited.Count);
     }
 }
 ```
 
 ```csharp file=Finance/StatementReconciler.cs
-namespace Highway.Api.Finance;
+namespace FoodDelivery.Api.Finance;
 
 public sealed record BankLine(DateOnly Date, decimal Amount, string Reference);
 public sealed record LedgerLine(DateOnly Date, decimal Amount, string Voucher);
@@ -553,17 +556,18 @@ public sealed class StatementReconciler
 }
 ```
 
-```csharp file=Helpline/ComplaintDesk.cs
+```csharp file=Support/ComplaintDesk.cs
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Highway.Api.Helpline;
+namespace FoodDelivery.Api.Support;
 
 public sealed record Complaint(string Fingerprint, string Mobile, string Text, DateTimeOffset FirstReportedAt, int Reports);
 
 /// <summary>
 /// Deduplicates complaints with a STABLE hash (SHA-256), not string.GetHashCode(), because the fingerprint
 /// is meant to be stored in a database column with a unique index and compared across servers and restarts.
+/// The in-memory dictionary stands in for that table; it grows forever, so production code uses PostgreSQL.
 /// </summary>
 public sealed class ComplaintDesk(TimeProvider clock)
 {
@@ -605,37 +609,37 @@ public sealed class ComplaintDesk(TimeProvider clock)
 ```
 
 ```csharp file=Program.cs
-using Highway.Api.Finance;
-using Highway.Api.Helpline;
-using Highway.Api.Segments;
-using Highway.Api.Wbs;
+using FoodDelivery.Api.Finance;
+using FoodDelivery.Api.Network;
+using FoodDelivery.Api.Pricing;
+using FoodDelivery.Api.Support;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Illustrative project data. A real system would load this from PostgreSQL at startup or on change.
-builder.Services.AddSingleton(new ChainageIndex(
+// Illustrative data. A real system would load this from PostgreSQL at startup and refresh it on change.
+builder.Services.AddSingleton(new DeliveryFeeTable(
 [
-    new RoadSegment("PKG-1", 0m, 22.5m, "Aravalli Infra"),
-    new RoadSegment("PKG-2", 22.5m, 47.0m, "Sohna Roadways"),
-    new RoadSegment("PKG-3", 47.0m, 71.8m, "Deccan Builders"),
-    new RoadSegment("PKG-4", 71.8m, 96.0m, "Ganga Constructions"),
-    new RoadSegment("PKG-5", 96.0m, 120.0m, "Aravalli Infra"),
+    new DeliveryBand("B1", 0m, 2.5m, 15m),
+    new DeliveryBand("B2", 2.5m, 4.0m, 25m),
+    new DeliveryBand("B3", 4.0m, 6.5m, 35m),
+    new DeliveryBand("B4", 6.5m, 9.0m, 49m),
+    new DeliveryBand("B5", 9.0m, 12.0m, 69m),
 ]));
-builder.Services.AddSingleton(new WbsNode("1", "Highway project").Add(
-    new WbsNode("1.1", "Package 1").Add(
-        new WbsNode("1.1.1", "Earthwork", ownBudget: 40_00_00_000m, percentComplete: 80m),
-        new WbsNode("1.1.2", "Pavement", ownBudget: 65_00_00_000m, percentComplete: 30m)),
-    new WbsNode("1.2", "Package 2", ownBudget: 80_00_00_000m, percentComplete: 10m)));
+builder.Services.AddSingleton(new ZoneNode("1", "Bengaluru").Add(
+    new ZoneNode("1.1", "South zone").Add(
+        new ZoneNode("1.1.1", "Koramangala", ownOrders: 4_000, onTimeOrders: 3_600),
+        new ZoneNode("1.1.2", "HSR Layout", ownOrders: 6_500, onTimeOrders: 5_525)),
+    new ZoneNode("1.2", "North zone", ownOrders: 8_000, onTimeOrders: 7_440)));
 builder.Services.AddSingleton<StatementReconciler>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<ComplaintDesk>();
 
 var app = builder.Build();
 
-app.MapGet("/chainage/{km:decimal}", (decimal km, ChainageIndex index) =>
-    index.Find(km) is { } s ? Results.Ok(s) : Results.NotFound(new { error = $"No package covers km {km}." }));
+app.MapGet("/delivery-fee/{km:decimal}", (decimal km, DeliveryFeeTable table) =>
+    table.Find(km) is { } band ? Results.Ok(band) : Results.NotFound(new { error = $"No delivery band covers {km} km." }));
 
-app.MapGet("/wbs/summary", (WbsNode root) => Results.Ok(WbsRollup.Summarise(root)));
+app.MapGet("/network/summary", (ZoneNode root) => Results.Ok(OrderRollup.Summarise(root)));
 
 app.MapPost("/reconcile", (ReconcileRequest req, StatementReconciler reconciler) =>
     Results.Ok(reconciler.Reconcile(req.Bank, req.Ledger)));
@@ -652,14 +656,17 @@ public sealed record ReconcileRequest(IReadOnlyList<BankLine> Bank, IReadOnlyLis
 public sealed record ComplaintRequest(string Mobile, string Text);
 ```
 
+With the sample data, `/network/summary` returns 18,500 orders, 16,565 on time, 89.54 %. Averaging the three leaf percentages (90 %, 85 %, 93 %) would give 89.33 %, which is wrong because HSR Layout and North zone handle more orders than Koramangala.
+
 What to notice:
 
-- **Validate once, search many times.** `ChainageIndex` sorts and checks the segments in its constructor. Every later lookup can trust the data.
-- **Two versions of the tree walk.** The recursive `TotalBudget` is the clearest; the iterative `Summarise` handles any depth and detects cycles and shared children. In real code, pick one, based on how much you trust the data.
+- **Validate once, search many times.** `DeliveryFeeTable` sorts and checks the bands in its constructor. Every later lookup can trust the data.
+- **Two versions of the tree walk.** The recursive `TotalOrders` is the clearest; the iterative `Summarise` handles any depth and detects cycles and shared children. In real code, pick one, based on how much you trust the data.
+- **Sum counts, divide once.** The on-time percentage is computed from summed counts, never by averaging child percentages.
 - **`ReferenceEqualityComparer`** makes the `visited` set compare nodes by identity, not by any `Equals` override, which is what "have I been at this exact node?" means.
 - **Stable sort matters in the reconciler.** Two bank lines with the same date and amount are matched to ledger lines in their original order, which makes the report repeatable.
 - **Stable hash for stored fingerprints.** `string.GetHashCode()` would change on every restart. SHA-256 gives the same 64-character hex string on every machine, so the database can enforce uniqueness.
-- **What this design leaves out.** Real reconciliation also matches on references, tolerates small differences and handles one bank line paying several invoices. Real chainage data comes from GIS. The algorithms stay the same; the matching rules grow.
+- **What this design leaves out.** Real reconciliation also matches on references (UTR numbers), tolerates small differences and handles one bank credit settling many orders. Real distances come from a maps/routing service, not straight lines, and the fee table is cached and refreshed when pricing changes. The algorithms stay the same; the rules grow.
 
 ## Bad design vs good design
 
@@ -676,7 +683,7 @@ foreach (var b in bank)
 }
 ```
 
-It is correct, and for a month of a small office's transactions (a few hundred lines) it is fine. For a project account with 3 lakh lines a year on each side, it does up to 3 lakh × 3 lakh = 9 × 10¹⁰ comparisons, on the order of minutes by the ~1 ns-per-step estimate, plus a `Remove` that shifts the list each time. It also hides a subtle bug: `FirstOrDefault` on records uses `==` on `Amount` and `Date` correctly here, but if someone later changes `LedgerLine` to a class, `Remove(match)` still works by reference while a teammate's "improved" version using `Contains` might not.
+It is correct, and for a month of a small restaurant's transactions (a few hundred lines) it is fine. For a payouts account with 3 lakh lines a month on each side, it does up to 3 lakh × 3 lakh = 9 × 10¹⁰ comparisons, on the order of minutes by the ~1 ns-per-step estimate, plus a `Remove` that shifts the list each time. It also hides a fragile assumption: `Remove(match)` uses `Equals`. With records that means "the first value-equal line", which happens to be fine; if someone later turns `LedgerLine` into a class that overrides `Equals` differently (say, by voucher number only), `Remove` can delete a different line from the one that was matched, and the report quietly goes wrong.
 
 **Good:** the `StatementReconciler` above: sort both sides once, walk once. O(n log n + m log m), predictable, and easy to extend with tolerance rules.
 
@@ -700,7 +707,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-public sealed record Node(string Name, decimal Budget, List<Node> Children);
+public sealed record Node(string Name, int Orders, List<Node> Children);
 
 public static class Program
 {
@@ -716,13 +723,13 @@ public static class Program
         }
 
         // 2. Recursion over a tree
-        var project = new Node("Project", 0m, new()
+        var city = new Node("Bengaluru", 0, new()
         {
-            new("Package A", 0m, new() { new("Earthwork", 40m, new()), new("Pavement", 65m, new()) }),
-            new("Package B", 80m, new()),
+            new("South zone", 0, new() { new("Koramangala", 4_000, new()), new("HSR Layout", 6_500, new()) }),
+            new("North zone", 8_000, new()),
         });
-        Print(project, 0);
-        Console.WriteLine($"Total budget: {Total(project)} crore");
+        Print(city, 0);
+        Console.WriteLine($"Total orders today: {Total(city):N0}");
 
         // 3. Two pointers: what is in one sorted list but not the other?
         int[] bank = { 100, 250, 250, 400, 900 };
@@ -736,25 +743,25 @@ public static class Program
         }
 
         // 4. Sorting: stable LINQ vs multi-key
-        var tasks = new[] { ("Drain", 2), ("Survey", 1), ("Kerb", 2), ("Clearing", 1) };
-        Console.WriteLine(string.Join(", ", tasks.OrderBy(t => t.Item2).Select(t => t.Item1)));  // ties keep input order
+        var tickets = new[] { ("Late order", 2), ("Refund", 1), ("Wrong item", 2), ("Payment failed", 1) };
+        Console.WriteLine(string.Join(", ", tickets.OrderBy(t => t.Item2).Select(t => t.Item1)));  // ties keep input order
 
         // Experiments:
-        // 1. Add a child to "Pavement" and check the total updates without changing Total().
+        // 1. Add a restaurant under "HSR Layout" and check the total updates without changing Total().
         // 2. Remove the 'if (n.Children.Count == 0)' shortcut in Total. Does it still work? Why?
         // 3. Make the bank array unsorted. What goes wrong with the two-pointer walk?
         // 4. Try an income below 0 in step 1. What does ~i - 1 give, and how would you guard it?
     }
 
-    static decimal Total(Node n)
+    static int Total(Node n)
     {
-        if (n.Children.Count == 0) return n.Budget;           // base case
-        return n.Budget + n.Children.Sum(Total);               // recursive case
+        if (n.Children.Count == 0) return n.Orders;           // base case
+        return n.Orders + n.Children.Sum(Total);               // recursive case
     }
 
     static void Print(Node n, int depth)
     {
-        Console.WriteLine($"{new string(' ', depth * 2)}- {n.Name} ({n.Budget})");
+        Console.WriteLine($"{new string(' ', depth * 2)}- {n.Name} ({n.Orders:N0})");
         foreach (var c in n.Children) Print(c, depth + 1);
     }
 }
@@ -763,15 +770,15 @@ public static class Program
 
 ## Exercises
 
-:::exercise id=m01-algorithms-ex1 difficulty=beginner kind=code title="Which package covers this chainage?"
-Given the sorted start chainages of contract packages, return the index of the package that contains a chainage, using binary search.
+:::exercise id=m01-algorithms-ex1 difficulty=beginner kind=code title="Which fee band covers this distance?"
+Given the sorted start distances (in km) of delivery-fee bands, return the index of the band that contains a delivery distance, using binary search.
 ::requirements
-- `ChainageSearch.FindPackage(starts, km)` returns the index of the **last** start that is ≤ `km`.
+- `FeeBandSearch.FindBand(starts, km)` returns the index of the **last** start that is ≤ `km`.
 - If `km` is before the first start, return `-1`.
-- A chainage exactly on a boundary belongs to the package that starts there.
-- Must be O(log n). The tests include 10 lakh starts.
+- A distance exactly on a boundary belongs to the band that starts there.
+- Must be O(log n). A stress test uses 10 lakh starts (far more than any real rate card) to make a linear scan visibly slow.
 ::acceptance
-- Starts `[0, 22.5, 47.0, 71.8, 96.0]`: 47.35 → 2; 22.5 → 1; 0 → 0; 130 → 4.
+- Starts `[0, 2.5, 4.0, 6.5, 9.0]`: 4.35 → 2; 2.5 → 1; 2.49 → 0; 0 → 0; 13 → 4 (the caller then checks the band's end).
 - `km = -1` returns `-1`.
 - An empty array returns `-1`.
 - 10 lakh starts and 1 lakh lookups complete well under the time limit.
@@ -793,37 +800,37 @@ while (lo <= hi)
 return candidate;
 ```
 ::starter
-```csharp file=ChainageSearch.cs
+```csharp file=FeeBandSearch.cs
 using System;
 
-public static class ChainageSearch
+public static class FeeBandSearch
 {
-    public static int FindPackage(decimal[] starts, decimal km) => throw new NotImplementedException();
+    public static int FindBand(decimal[] starts, decimal km) => throw new NotImplementedException();
 }
 ```
 ::tests
-```csharp file=ChainageSearchTests.cs
+```csharp file=FeeBandSearchTests.cs
 using System;
 using System.Diagnostics;
 using System.Linq;
 using Xunit;
 
-public class ChainageSearchTests
+public class FeeBandSearchTests
 {
-    private static readonly decimal[] Starts = { 0m, 22.5m, 47.0m, 71.8m, 96.0m };
+    private static readonly decimal[] Starts = { 0m, 2.5m, 4.0m, 6.5m, 9.0m };
 
     [Theory]
-    [InlineData(47.35, 2)]
-    [InlineData(22.5, 1)]
+    [InlineData(4.35, 2)]
+    [InlineData(2.5, 1)]
     [InlineData(0, 0)]
-    [InlineData(130, 4)]
+    [InlineData(13, 4)]
     [InlineData(-1, -1)]
-    [InlineData(22.49, 0)]
-    public void Finds_package(double km, int expected) =>
-        Assert.Equal(expected, ChainageSearch.FindPackage(Starts, (decimal)km));
+    [InlineData(2.49, 0)]
+    public void Finds_band(double km, int expected) =>
+        Assert.Equal(expected, FeeBandSearch.FindBand(Starts, (decimal)km));
 
     [Fact]
-    public void Empty_array() => Assert.Equal(-1, ChainageSearch.FindPackage(Array.Empty<decimal>(), 5m));
+    public void Empty_array() => Assert.Equal(-1, FeeBandSearch.FindBand(Array.Empty<decimal>(), 5m));
 
     [Fact]
     public void Large_input_is_logarithmic()
@@ -831,22 +838,22 @@ public class ChainageSearchTests
         var starts = Enumerable.Range(0, 1_000_000).Select(i => i * 0.05m).ToArray();
         var sw = Stopwatch.StartNew();
         long checksum = 0;
-        for (int i = 0; i < 100_000; i++) checksum += ChainageSearch.FindPackage(starts, i * 0.37m);
+        for (int i = 0; i < 100_000; i++) checksum += FeeBandSearch.FindBand(starts, i * 0.37m);
         sw.Stop();
-        Assert.Equal(7, ChainageSearch.FindPackage(starts, 0.37m));
+        Assert.Equal(7, FeeBandSearch.FindBand(starts, 0.37m));
         Assert.True(checksum > 0);
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(3), $"Took {sw.Elapsed.TotalMilliseconds} ms");
     }
 }
 ```
 ::solution
-```csharp file=ChainageSearch.cs
+```csharp file=FeeBandSearch.cs
 using System;
 
-public static class ChainageSearch
+public static class FeeBandSearch
 {
     /// <summary>Index of the last start ≤ km, or -1. O(log n). Requires starts sorted ascending.</summary>
-    public static int FindPackage(decimal[] starts, decimal km)
+    public static int FindBand(decimal[] starts, decimal km)
     {
         ArgumentNullException.ThrowIfNull(starts);
         int lo = 0, hi = starts.Length - 1, candidate = -1;
@@ -876,21 +883,21 @@ Each loop halves the range, so 10 lakh starts need about 20 iterations. The `can
 - `int mid = (lo + hi) / 2` can overflow for arrays with more than about a billion items; `lo + (hi - lo) / 2` cannot.
 - Forgetting that the array must be sorted. Unsorted input gives wrong answers silently.
 ::extensions
-Accept `RoadSegment` records with an end chainage and return `null` for a chainage in a gap between packages.
+Accept `DeliveryBand` records with an end distance and return `null` for a distance in a gap or beyond the last band (not deliverable).
 :::
 
 :::exercise id=m01-algorithms-ex2 difficulty=beginner kind=code title="Recursive document folder sizes"
-The project's document system stores drawings in nested folders. Implement recursive methods on `DocFolder` that work at any depth.
+The platform keeps restaurant menus, licences and photos in nested folders on its shared drive. Implement recursive methods on `DocFolder` that work at any depth.
 ::requirements
 - `TotalBytes()` returns the size of all files in this folder and every subfolder.
 - `FileCount()` returns the number of files in this folder and every subfolder.
 - `Depth()` returns 1 for a folder with no subfolders, otherwise 1 + the deepest subfolder's depth.
-- `FindPath(fileName)` returns the path of the first file with that name (searching this folder's files first, then subfolders in order), such as `"Project/Drawings/Bridges/B-12.dwg"`, or `null`.
+- `FindPath(fileName)` returns the path of the first file with that name (searching this folder's files first, then subfolders in order), such as `"Partners/Menus/Bengaluru/menu-1042.pdf"`, or `null`.
 ::acceptance
 - An empty folder has 0 bytes, 0 files and depth 1.
 - A folder with 2 files (100 and 250 bytes) and a subfolder with 1 file (50 bytes) has 400 bytes and 3 files.
 - A chain of three nested folders has depth 3.
-- `FindPath("B-12.dwg")` returns the full path joined with `/`.
+- `FindPath("menu-1042.pdf")` returns the full path joined with `/`.
 ::hint
 For each method, ask two questions: what is the answer for a folder with no subfolders (base case)? How do I combine the subfolders' answers (recursive case)?
 ::hint
@@ -943,7 +950,7 @@ public class DocFolderTests
     [Fact]
     public void Sums_across_levels()
     {
-        var root = new DocFolder("Project").AddFile("a.pdf", 100).AddFile("b.pdf", 250)
+        var root = new DocFolder("Partners").AddFile("a.pdf", 100).AddFile("b.pdf", 250)
             .AddFolder(new DocFolder("Sub").AddFile("c.pdf", 50));
         Assert.Equal(400L, root.TotalBytes());
         Assert.Equal(3, root.FileCount());
@@ -960,10 +967,10 @@ public class DocFolderTests
     [Fact]
     public void Finds_path()
     {
-        var root = new DocFolder("Project")
-            .AddFolder(new DocFolder("Reports").AddFile("MPR-Sep.pdf", 10))
-            .AddFolder(new DocFolder("Drawings").AddFolder(new DocFolder("Bridges").AddFile("B-12.dwg", 900)));
-        Assert.Equal("Project/Drawings/Bridges/B-12.dwg", root.FindPath("B-12.dwg"));
+        var root = new DocFolder("Partners")
+            .AddFolder(new DocFolder("Reports").AddFile("payouts-sep.pdf", 10))
+            .AddFolder(new DocFolder("Menus").AddFolder(new DocFolder("Bengaluru").AddFile("menu-1042.pdf", 900)));
+        Assert.Equal("Partners/Menus/Bengaluru/menu-1042.pdf", root.FindPath("menu-1042.pdf"));
         Assert.Null(root.FindPath("missing.dwg"));
     }
 }
@@ -1008,8 +1015,8 @@ public sealed class DocFolder
 Each method handles one folder and trusts the same method to handle each subfolder. The base case is built in: with no subfolders, the `Sum` over children is 0 and `Max` is skipped. `FindPath` stops at the first match, so it does not visit the rest of the tree.
 ::mistakes
 - Calling `_subfolders.Max(...)` on an empty list, which throws `InvalidOperationException`.
-- Building the path from the leaf upwards without the parent names, giving just `"B-12.dwg"`.
-- Using `int` for bytes. A project folder can easily exceed 2 GB (`int.MaxValue` is about 2.1 billion).
+- Building the path from the leaf upwards without the parent names, giving just `"menu-1042.pdf"`.
+- Using `int` for bytes. A folder of restaurant photos can easily exceed 2 GB (`int.MaxValue` is about 2.1 billion).
 ::extensions
 Add a depth guard (throw beyond 100 levels). Rewrite `TotalBytes` without recursion using a `Stack<DocFolder>`.
 :::
@@ -1150,12 +1157,12 @@ Work on records `(DateOnly Date, decimal Amount)` sorted by date then amount. Al
 :::
 
 :::exercise id=m01-algorithms-ex4 difficulty=intermediate kind=code title="Vehicle numbers as hash keys"
-A toll plaza system must count distinct vehicles per day. Plates arrive from cameras and manual entry in different formats: `"HR 26 DQ 5551"`, `"hr26dq5551"`, `"HR-26-DQ-5551"`. Make `VehicleNumber` a correct hash key.
+A cloud kitchen counts distinct delivery-partner bikes that pick up orders each day. Plates arrive from the gate camera, the rider app and manual entry by the guard in different formats: `"HR 26 DQ 5551"`, `"hr26dq5551"`, `"HR-26-DQ-5551"`. Make `VehicleNumber` a correct hash key.
 ::requirements
 - The constructor normalises the input: keep only letters and digits, convert to upper case. Empty after normalising throws `ArgumentException`.
 - Two `VehicleNumber`s are equal when their normalised values are equal. Implement `IEquatable<VehicleNumber>`, override `Equals(object)` and `GetHashCode`, and add `==` and `!=` operators.
 - `ToString()` returns the normalised value.
-- `TollLog.DistinctVehicles(IEnumerable<string> rawPlates)` returns the number of distinct vehicles.
+- `GateLog.DistinctVehicles(IEnumerable<string> rawPlates)` returns the number of distinct vehicles.
 ::acceptance
 - The three formats above are all equal and have the same hash code.
 - A `HashSet<VehicleNumber>` of those three has `Count == 1`.
@@ -1191,7 +1198,7 @@ public sealed class VehicleNumber : IEquatable<VehicleNumber>
     public static bool operator !=(VehicleNumber? a, VehicleNumber? b) => throw new NotImplementedException();
 }
 
-public static class TollLog
+public static class GateLog
 {
     public static int DistinctVehicles(IEnumerable<string> rawPlates) => throw new NotImplementedException();
 }
@@ -1222,8 +1229,8 @@ public class VehicleNumberTests
         var set = new HashSet<VehicleNumber> { new("HR 26 DQ 5551"), new("hr26dq5551"), new("MH12AB1234") };
         Assert.Equal(2, set.Count);
 
-        var trips = new Dictionary<VehicleNumber, int> { [new VehicleNumber("DL 3C AB 0001")] = 4 };
-        Assert.Equal(4, trips[new VehicleNumber("dl3cab0001")]);
+        var pickups = new Dictionary<VehicleNumber, int> { [new VehicleNumber("DL 3C AB 0001")] = 4 };
+        Assert.Equal(4, pickups[new VehicleNumber("dl3cab0001")]);
     }
 
     [Fact]
@@ -1244,7 +1251,7 @@ public class VehicleNumberTests
 
     [Fact]
     public void Counts_distinct_vehicles() =>
-        Assert.Equal(2, TollLog.DistinctVehicles(new[] { "HR 26 DQ 5551", "HR-26-DQ-5551", "UP16 Z 9999" }));
+        Assert.Equal(2, GateLog.DistinctVehicles(new[] { "HR 26 DQ 5551", "HR-26-DQ-5551", "UP16 Z 9999" }));
 }
 ```
 ::solution
@@ -1274,7 +1281,7 @@ public sealed class VehicleNumber : IEquatable<VehicleNumber>
     public static bool operator !=(VehicleNumber? a, VehicleNumber? b) => !(a == b);
 }
 
-public static class TollLog
+public static class GateLog
 {
     public static int DistinctVehicles(IEnumerable<string> rawPlates) =>
         rawPlates.Select(p => new VehicleNumber(p)).ToHashSet().Count;
@@ -1290,18 +1297,18 @@ Because the value is normalised once and is read-only, the hash code can never c
 - Writing `operator ==` as `a.Equals(b)`, which throws `NullReferenceException` when `a` is null.
 - Using `ToUpper()` (culture-sensitive) instead of `ToUpperInvariant()`; on a Turkish-locale server, `"i"` becomes `"İ"`.
 ::extensions
-Store a daily count per vehicle with `Dictionary<VehicleNumber, int>` and report vehicles seen more than 10 times (possible tailgating or tag misuse).
+Store a daily count per vehicle with `Dictionary<VehicleNumber, int>` and report bikes seen more than 40 times in a day (possibly one plate shared by several riders, which breaks rider verification).
 :::
 
 :::exercise id=m01-algorithms-ex5 difficulty=intermediate kind=written title="Pick the algorithm"
 For each scenario, name the algorithm or technique you would use, give its time complexity, and name one failure mode or edge case to test.
 
 1. An API returns the GST rate for a product's HSN code; there are about 12,000 codes, read on every invoice line.
-2. A screen lists 300 site issues sorted by severity (high first), and issues of the same severity must stay in the order they were reported.
+2. A screen lists 300 support tickets sorted by severity (high first), and issues of the same severity must stay in the order they were reported.
 3. A nightly job finds employees present in the HR system's export but missing from the payroll export; both files have 80,000 rows and are sorted by employee ID.
-4. A function computes the total quantity of steel in a bill of materials, where assemblies contain sub-assemblies to any depth, and the data is uploaded by vendors.
+4. A function computes the total price of a combo meal on a restaurant's menu, where combos can contain other combos and items to any depth, and the menu data is uploaded by restaurant partners.
 5. A pricing engine finds the discount band for an order value, with bands starting at ₹0, ₹10,000, ₹50,000, ₹2,00,000 and ₹10,00,000.
-6. An upload service must detect if a 2 GB drawing file is byte-for-byte the same as one already stored.
+6. An upload service must detect if a 2 GB restaurant promo video is byte-for-byte the same as one already stored.
 ::acceptance
 - Each answer names a technique and its Big O.
 - Answer 2 mentions stability.
@@ -1317,7 +1324,7 @@ For the file, think about what you can store and compare cheaply instead of 2 GB
 1. **Hash lookup** with a `Dictionary<string, decimal>` (or `FrozenDictionary`) loaded at startup: O(1) per line after O(n) build. Test: unknown HSN code (use `TryGetValue`) and refreshing rates without restarting.
 2. **Stable sort**: LINQ `OrderByDescending(i => i.Severity)` keeps report order for equal severities. O(n log n). `List.Sort` is not stable, so equal-severity issues could be reordered. For a fully deterministic result add `.ThenBy(i => i.ReportedAt).ThenBy(i => i.Id)`. Test: ties.
 3. **Two pointers** over both sorted files: O(n + m) with almost no memory. Test: verify both files really are sorted by the same rule (string vs numeric IDs: `"E100"` sorts before `"E20"` as text) and handle duplicate IDs.
-4. **Tree traversal** with an explicit `Stack<T>` and a visited set (or recursion with a depth limit), O(n). Vendor data may contain cycles (A contains B contains A) or absurd depth; recursion without a guard could crash the process with an uncatchable `StackOverflowException`. Test: a cycle and a 10,000-level chain.
+4. **Tree traversal** with an explicit `Stack<T>` and a visited set (or recursion with a depth limit), O(n). Partner-uploaded menus may contain cycles (combo A contains combo B contains A) or absurd depth; recursion without a guard could crash the process with an uncatchable `StackOverflowException`. Test: a cycle and a 10,000-level chain.
 5. **Binary search** for the last band start ≤ value: O(log n). With five bands a linear scan is equally good and simpler; binary search pays off with hundreds of bands. Test: exactly on a boundary, and ₹0.
 6. **Stable cryptographic hash** (SHA-256) computed while streaming the upload: O(n) in file size, constant memory. Store the hash with a unique index; on a match, treat as duplicate (optionally compare sizes, or bytes if absolute certainty is required). Do not use `GetHashCode()`, which is randomised per process. Test: two different files with the same name, and the same file with different names.
 ::mistakes
@@ -1326,12 +1333,12 @@ For the file, think about what you can store and compare cheaply instead of 2 GB
 - Forgetting that text IDs sort differently from numeric IDs, breaking the two-pointer walk.
 :::
 
-:::exercise id=m01-algorithms-ex6 difficulty=advanced kind=code title="Merge crane bookings and find free slots"
-A site has one tower crane. Teams book it for time ranges during the day, and bookings can overlap or touch. Build a small scheduler that merges bookings and lists free slots.
+:::exercise id=m01-algorithms-ex6 difficulty=advanced kind=code title="Merge oven bookings and find free slots"
+A cloud kitchen hosts several restaurant brands that share one large pizza oven. Each brand books the oven for time ranges during the day, and bookings can overlap or touch. Build a small scheduler that merges bookings and lists free slots.
 ::requirements
-- `CraneSchedule.Merge(bookings)` returns non-overlapping slots sorted by start. Overlapping **or touching** bookings (one ends at 10:00, the next starts at 10:00) merge into one.
+- `OvenSchedule.Merge(bookings)` returns non-overlapping slots sorted by start. Overlapping **or touching** bookings (one ends at 10:00, the next starts at 10:00) merge into one.
 - A booking with `End <= Start` throws `ArgumentException`.
-- `CraneSchedule.FreeSlots(bookings, dayStart, dayEnd)` returns the gaps within `[dayStart, dayEnd)` when the crane is free, sorted. Bookings partly outside the day are clipped.
+- `OvenSchedule.FreeSlots(bookings, dayStart, dayEnd)` returns the gaps within `[dayStart, dayEnd)` when the oven is free, sorted. Bookings partly outside the day are clipped.
 - Time O(n log n).
 ::acceptance
 - 09:00–10:30, 10:00–11:00, 13:00–14:00, 11:00–11:30 merge into 09:00–11:30 and 13:00–14:00.
@@ -1357,14 +1364,14 @@ foreach (var b in sorted.Skip(1))
 }
 ```
 ::starter
-```csharp file=CraneSchedule.cs
+```csharp file=OvenSchedule.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 
 public sealed record Slot(TimeOnly Start, TimeOnly End);
 
-public static class CraneSchedule
+public static class OvenSchedule
 {
     public static IReadOnlyList<Slot> Merge(IEnumerable<Slot> bookings) => throw new NotImplementedException();
 
@@ -1373,12 +1380,12 @@ public static class CraneSchedule
 }
 ```
 ::tests
-```csharp file=CraneScheduleTests.cs
+```csharp file=OvenScheduleTests.cs
 using System;
 using System.Linq;
 using Xunit;
 
-public class CraneScheduleTests
+public class OvenScheduleTests
 {
     private static TimeOnly T(int h, int m = 0) => new(h, m);
     private static Slot S(int h1, int m1, int h2, int m2) => new(T(h1, m1), T(h2, m2));
@@ -1387,38 +1394,38 @@ public class CraneScheduleTests
 
     [Fact]
     public void Merges_overlapping_and_touching() =>
-        Assert.Equal(new[] { S(9, 0, 11, 30), S(13, 0, 14, 0) }, CraneSchedule.Merge(Bookings).ToArray());
+        Assert.Equal(new[] { S(9, 0, 11, 30), S(13, 0, 14, 0) }, OvenSchedule.Merge(Bookings).ToArray());
 
     [Fact]
     public void Free_slots_in_day() =>
         Assert.Equal(new[] { S(8, 0, 9, 0), S(11, 30, 13, 0), S(14, 0, 18, 0) },
-            CraneSchedule.FreeSlots(Bookings, T(8), T(18)).ToArray());
+            OvenSchedule.FreeSlots(Bookings, T(8), T(18)).ToArray());
 
     [Fact]
     public void No_bookings_whole_day_free() =>
-        Assert.Equal(new[] { S(8, 0, 18, 0) }, CraneSchedule.FreeSlots(Array.Empty<Slot>(), T(8), T(18)).ToArray());
+        Assert.Equal(new[] { S(8, 0, 18, 0) }, OvenSchedule.FreeSlots(Array.Empty<Slot>(), T(8), T(18)).ToArray());
 
     [Fact]
     public void Clips_bookings_outside_day() =>
-        Assert.Equal(new[] { S(8, 30, 18, 0) }, CraneSchedule.FreeSlots(new[] { S(6, 0, 8, 30) }, T(8), T(18)).ToArray());
+        Assert.Equal(new[] { S(8, 30, 18, 0) }, OvenSchedule.FreeSlots(new[] { S(6, 0, 8, 30) }, T(8), T(18)).ToArray());
 
     [Fact]
-    public void Merge_of_nothing_is_empty() => Assert.Empty(CraneSchedule.Merge(Array.Empty<Slot>()));
+    public void Merge_of_nothing_is_empty() => Assert.Empty(OvenSchedule.Merge(Array.Empty<Slot>()));
 
     [Fact]
     public void Invalid_booking_throws() =>
-        Assert.Throws<ArgumentException>(() => CraneSchedule.Merge(new[] { S(10, 0, 9, 0) }));
+        Assert.Throws<ArgumentException>(() => OvenSchedule.Merge(new[] { S(10, 0, 9, 0) }));
 }
 ```
 ::solution
-```csharp file=CraneSchedule.cs
+```csharp file=OvenSchedule.cs
 using System;
 using System.Collections.Generic;
 using System.Linq;
 
 public sealed record Slot(TimeOnly Start, TimeOnly End);
 
-public static class CraneSchedule
+public static class OvenSchedule
 {
     /// <summary>Sort by start (O(n log n)), then one pass merging overlaps (O(n)).</summary>
     public static IReadOnlyList<Slot> Merge(IEnumerable<Slot> bookings)
@@ -1465,9 +1472,9 @@ public static class CraneSchedule
 }
 ```
 
-Sorting first means a booking can only overlap the *most recent* merged slot, so one pass suffices. This "sort, then sweep" shape solves many scheduling problems: meeting rooms, equipment bookings, overlapping leave requests, and chainage stretches with overlapping work permits.
+Sorting first means a booking can only overlap the *most recent* merged slot, so one pass suffices. This "sort, then sweep" shape solves many scheduling problems: meeting rooms, equipment bookings, overlapping leave requests, and delivery-slot capacity.
 ::alternatives
-If bookings arrive one at a time and you must reject overlaps immediately, keep them in a `SortedList<TimeOnly, Slot>` and binary-search for the neighbours of the new booking: O(log n) per check plus O(n) to insert. In PostgreSQL, a `tstzrange` column with an exclusion constraint (`EXCLUDE USING gist (crane_id WITH =, period WITH &&)`) makes the database reject overlapping bookings itself, which is the robust choice when many users book at once.
+If bookings arrive one at a time and you must reject overlaps immediately, keep them in a `SortedList<TimeOnly, Slot>` and binary-search for the neighbours of the new booking: O(log n) per check plus O(n) to insert. In PostgreSQL, a `tstzrange` column with an exclusion constraint (`EXCLUDE USING gist (oven_id WITH =, period WITH &&)`) makes the database reject overlapping bookings itself, which is the robust choice when many users book at once.
 ::mistakes
 - Comparing each booking with every other booking (O(n²)) and merging pairwise, which misses chains like A overlaps B overlaps C.
 - Setting the merged end to the new booking's end without taking the maximum, so a short booking inside a long one shortens it.
@@ -1501,23 +1508,23 @@ public void Binary_search_agrees_with_linear_search()
         var starts = Enumerable.Range(0, random.Next(0, 50)).Select(_ => (decimal)random.Next(0, 1000)).Distinct().Order().ToArray();
         var km = (decimal)random.Next(-10, 1010);
         int expected = Array.FindLastIndex(starts, s => s <= km);     // slow and obviously right
-        Assert.Equal(expected, ChainageSearch.FindPackage(starts, km));
+        Assert.Equal(expected, FeeBandSearch.FindBand(starts, km));
     }
 }
 ```
 
-**Test the contract, not the implementation.** For `VehicleNumber`, test "equal plates behave as one key", not "GetHashCode returns 1234". For the WBS roll-up, test totals and the cycle error, not the order in which nodes were visited.
+**Test the contract, not the implementation.** For `VehicleNumber`, test "equal plates behave as one key", not "GetHashCode returns 1234". For the order roll-up, test totals and the cycle error, not the order in which nodes were visited.
 
 **Use fixed seeds** for any randomness in tests, so a failure can be reproduced exactly.
 
 ## Real-world application
 
-- **Database engines** use every technique here: B-tree indexes (multi-way binary search), sort-merge joins (two pointers), hash joins and hash indexes (hashing), and recursive CTEs (`WITH RECURSIVE`) for hierarchies like a WBS or an org chart.
+- **Database engines** use every technique here: B-tree indexes (multi-way binary search), sort-merge joins (two pointers), hash joins and hash indexes (hashing), and recursive CTEs (`WITH RECURSIVE`) for hierarchies like a city → zone → restaurant tree or an org chart.
 - **Tax, tariff and pricing engines** look up slabs and bands with "last start ≤ value" searches.
-- **Bank and payment reconciliation** (UPI settlements, card networks, project accounts) is two-pointer or hash matching at scale, run as nightly batch jobs.
+- **Bank and payment reconciliation** (UPI settlements, card networks, restaurant payouts) is two-pointer or hash matching at scale, run as nightly batch jobs.
 - **Idempotency and deduplication** (payment APIs, complaint portals, message consumers) rely on stable hashes or unique keys. See [Idempotency keys](#/lesson/m10-idempotency).
-- **Scheduling** (crane, meeting rooms, operating theatres, train paths) is "sort, then sweep" over intervals.
-- **Tree-shaped business data** is everywhere: WBS, bills of materials, folder structures, menus, org charts, comment threads. The [Composite pattern](#/lesson/m06-composite) gives these trees a clean object model.
+- **Scheduling** (kitchen equipment, meeting rooms, operating theatres, train paths) is "sort, then sweep" over intervals.
+- **Tree-shaped business data** is everywhere: delivery zones, product categories, combo menus, folder structures, org charts, comment threads. The [Composite pattern](#/lesson/m06-composite) gives these trees a clean object model.
 - **Load balancers and sharded databases** route requests by hashing keys, and use consistent hashing to avoid reshuffling everything when servers are added.
 
 ## Interview questions
@@ -1542,7 +1549,7 @@ A stable sort keeps items that compare equal in their original relative order. L
 ::q advanced
 You must reconcile 5 crore bank transactions against 5 crore ledger entries nightly. Compare a hash-based approach and a two-pointer approach.
 ::a
-Hash-based: load one side into a dictionary keyed by (date, amount, reference) with a count or queue per key, then stream the other side and look each up. O(n + m) time with no sorting, but O(n) memory, likely tens of GB for 5 crore entries (estimate), which may not fit, and it is hard to resume after failure. Two pointers: sort both sides by the same key (ideally the database or an external merge sort does this, streaming from disk), then walk both in one pass with O(1) extra memory. Sorting costs O(n log n) but can be pushed to PostgreSQL with indexes so rows arrive pre-sorted. I would partition by date so each partition is small, run partitions in parallel, make each idempotent so a failed one can be re-run, and use the two-pointer walk per partition. Matching rules (tolerances, one-to-many) are applied inside the walk.
+Hash-based: load one side into a dictionary keyed by (date, amount, reference) with a count or queue per key, then stream the other side and look each up. O(n + m) time with no sorting, but O(n) memory, roughly 5–10 GB for 5 crore entries at 100–200 bytes each (estimate), which may not fit, and it is hard to resume after failure. Two pointers: sort both sides by the same key (ideally the database or an external merge sort does this, streaming from disk), then walk both in one pass with O(1) extra memory. Sorting costs O(n log n) but can be pushed to PostgreSQL with indexes so rows arrive pre-sorted. I would partition by date so each partition is small, run partitions in parallel, make each idempotent so a failed one can be re-run, and use the two-pointer walk per partition. Matching rules (tolerances, one-to-many) are applied inside the walk.
 ::q advanced
 Why is `hash(key) % N` a poor way to assign keys to N cache servers, and what is the alternative?
 ::a
@@ -1609,7 +1616,7 @@ A class overrides `Equals` to compare `Email` (ignoring case) but does not overr
 - [ ] `HashSet` throws `InvalidOperationException`.
 > The default hash code is identity-based. The set never calls `Equals` on items in other buckets. Override `GetHashCode` with a case-insensitive hash of `Email`.
 ::q single
-A recursive bill-of-materials total crashes the web server process with no error logged. What is the most likely cause?
+A recursive combo-menu price total crashes the web server process with no error logged. What is the most likely cause?
 - [ ] A `NullReferenceException` in a leaf.
 - [x] A cycle in the uploaded data causing a `StackOverflowException`, which cannot be caught.
 - [ ] Integer overflow in the total.
@@ -1630,7 +1637,7 @@ Which are good uses of a stable cryptographic hash such as SHA-256? (Select all 
 - [x] Verifying that a downloaded installer was not corrupted
 > SHA-256 is great for integrity and fingerprints. Passwords need a slow, salted algorithm (PBKDF2, bcrypt, Argon2) because fast hashes can be brute-forced.
 ::q single
-Crane bookings are 09:00–10:00, 09:30–09:45 and 10:00–11:00. After merging overlapping or touching bookings, what remains?
+Oven bookings are 09:00–10:00, 09:30–09:45 and 10:00–11:00. After merging overlapping or touching bookings, what remains?
 - [ ] 09:00–10:00 and 10:00–11:00
 - [ ] 09:00–09:45 and 10:00–11:00
 - [x] 09:00–11:00

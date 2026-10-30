@@ -26,7 +26,7 @@ references:
 
 Every business application has two kinds of code. One kind knows the **business**: how GST is split between the centre and the state, when an invoice can be cancelled, what makes a bill valid. The other kind knows **machinery**: how to talk to PostgreSQL, how to call a government portal over HTTPS, how to send an SMS. This lesson is about keeping those two apart, and about the one rule that does it: **dependencies point inward, towards the business.**
 
-The running example is GST e-invoicing for a contractor company. Each tax invoice must be registered with a government e-invoice registration portal, which returns a unique Invoice Reference Number (IRN). The tax rules are stable for years. The portal's API, the database and the SMS vendor change much more often. We want the rules to survive those changes untouched.
+The running example is GST e-invoicing for a digital-marketing agency in Pune that bills its clients for website builds and social-media campaigns. Each tax invoice must be registered with a government e-invoice registration portal, which returns a unique Invoice Reference Number (IRN). The tax rules are stable for years. The portal's API, the database and the SMS vendor change much more often. We want the rules to survive those changes untouched.
 
 ## Learning objectives
 
@@ -1050,34 +1050,34 @@ The application layer supplies `today` from an injected `TimeProvider`, converte
 Make the window configurable per supplier category (some taxpayers may face a shorter window) by passing a `maxAgeDays` parameter, keeping the function pure.
 :::
 
-:::exercise id=m08-domain-vs-infra-ex3 difficulty=intermediate kind=design title="Ports and adapters for site-document uploads"
-Site engineers upload photos and PDFs (measurement sheets, test certificates) for each bill. Requirements:
+:::exercise id=m08-domain-vs-infra-ex3 difficulty=intermediate kind=design title="Ports and adapters for KYC-document uploads"
+In a personal-loan app, applicants upload photos and PDFs of their KYC documents (PAN card, address proof, salary slips) for each loan application. Requirements:
 
 - Files go to object storage (today Azure Blob Storage, possibly S3 or on-premises MinIO next year).
 - Every file must be virus-scanned before anyone can download it.
-- PDFs of test certificates are sent to an OCR service, which extracts the certificate number and test date.
-- The rule "a bill cannot be submitted until each line has at least one approved document" belongs to the domain.
+- Images of PAN cards are sent to an OCR service, which extracts the PAN number, the name on the card and the date of birth.
+- The rule "a loan application cannot be submitted until each required document type has at least one approved document" belongs to the domain.
 
 Design the inside (domain, use cases, ports) and the outside (adapters). Use the LLD designer.
 ::acceptance
 - The domain has no reference to blob storage, antivirus or OCR vendors.
 - Each port is named in business language and has a small, focused contract.
 - Adapters are listed for at least storage, scanning and OCR, each implementing one port.
-- The "approved document per line" rule lives in a domain class, not in a use case or adapter.
+- The "approved document per required type" rule lives in a domain class, not in a use case or adapter.
 - There is a clear translation point for OCR output into a domain value object.
 ::hint
-Start with the domain: what is a `SiteDocument`, and what states does it pass through (uploaded, scanning, clean, infected, approved)?
+Start with the domain: what is a `KycDocument`, and what states does it pass through (uploaded, scanning, clean, infected, approved)?
 ::hint
 `IFileStore` with `PutAsync(stream)` returning a `StorageKey` is fine. Avoid ports such as `IBlobContainerClient`.
 ::hint
-Should the OCR port return the vendor's JSON, or a `CertificateDetails` value object?
+Should the OCR port return the vendor's JSON, or a `PanDetails` value object?
 ::hint
 Scanning is slow and asynchronous. Model it as a use case triggered by a message (`ScanDocumentHandler`), not as a blocking call inside upload.
 ::starter
 ```json
 {
   "classes": [
-    { "id": "SiteDocument", "name": "SiteDocument", "kind": "class", "fields": ["-DocumentId Id", "-DocumentStatus Status"], "methods": [], "responsibility": "Entity. TODO: states and rules" },
+    { "id": "KycDocument", "name": "KycDocument", "kind": "class", "fields": ["-DocumentId Id", "-DocumentStatus Status"], "methods": [], "responsibility": "Entity. TODO: states and rules" },
     { "id": "IFileStore", "name": "IFileStore", "kind": "interface", "fields": [], "methods": ["Task~StorageKey~ PutAsync(Stream content, string contentType)"], "responsibility": "Driven port" }
   ],
   "relations": []
@@ -1087,51 +1087,52 @@ Scanning is slow and asynchronous. Model it as a use case triggered by a message
 ```json
 {
   "classes": [
-    { "id": "SiteDocument", "name": "SiteDocument", "kind": "class",
-      "fields": ["-DocumentId Id", "-BillLineId LineId", "-StorageKey Key", "-DocumentStatus Status", "-CertificateDetails? Certificate"],
-      "methods": ["+void MarkClean()", "+void MarkInfected()", "+void AttachCertificate(CertificateDetails d)", "+void Approve(EngineerId by)"],
+    { "id": "KycDocument", "name": "KycDocument", "kind": "class",
+      "fields": ["-DocumentId Id", "-RequiredDocType DocType", "-StorageKey Key", "-DocumentStatus Status", "-PanDetails? Pan"],
+      "methods": ["+void MarkClean()", "+void MarkInfected()", "+void AttachPanDetails(PanDetails d)", "+void Approve(ReviewerId by)"],
       "responsibility": "Entity. Uploaded -> Clean or Infected -> Approved. Cannot approve unless Clean" },
-    { "id": "CertificateDetails", "name": "CertificateDetails", "kind": "record", "fields": ["+string CertificateNo", "+DateOnly TestedOn", "+string Lab"], "methods": [], "responsibility": "Value object, validated on creation" },
-    { "id": "BillDocuments", "name": "BillDocumentPolicy", "kind": "class", "fields": [], "methods": ["+bool CanSubmit(IEnumerable~BillLineId~ lines, IEnumerable~SiteDocument~ docs)"], "responsibility": "Domain service. Rule: every line has >= 1 approved document" },
+    { "id": "PanDetails", "name": "PanDetails", "kind": "record", "fields": ["+string PanNumber", "+string NameOnCard", "+DateOnly DateOfBirth"], "methods": [], "responsibility": "Value object, validated on creation (PAN format AAAAA9999A)" },
+    { "id": "AppDocs", "name": "ApplicationDocumentPolicy", "kind": "class", "fields": [], "methods": ["+bool CanSubmit(IEnumerable~RequiredDocType~ required, IEnumerable~KycDocument~ docs)"], "responsibility": "Domain service. Rule: every required type has >= 1 approved document" },
     { "id": "IFileStore", "name": "IFileStore", "kind": "interface", "fields": [], "methods": ["Task~StorageKey~ PutAsync(Stream content, string contentType, CancellationToken ct)", "Task~Stream~ OpenAsync(StorageKey key, CancellationToken ct)"], "responsibility": "Driven port (Application)" },
     { "id": "IMalwareScanner", "name": "IMalwareScanner", "kind": "interface", "fields": [], "methods": ["Task~ScanVerdict~ ScanAsync(StorageKey key, CancellationToken ct)"], "responsibility": "Driven port (Application)" },
-    { "id": "ICertificateReader", "name": "ICertificateReader", "kind": "interface", "fields": [], "methods": ["Task~CertificateDetails?~ ReadAsync(StorageKey key, CancellationToken ct)"], "responsibility": "Driven port. Returns our value object, never vendor JSON" },
-    { "id": "IDocRepo", "name": "ISiteDocumentRepository", "kind": "interface", "fields": [], "methods": ["Task~SiteDocument?~ GetAsync(DocumentId id, CancellationToken ct)", "Task AddAsync(SiteDocument d, CancellationToken ct)"], "responsibility": "Driven port (Domain)" },
+    { "id": "IPanCardReader", "name": "IPanCardReader", "kind": "interface", "fields": [], "methods": ["Task~PanDetails?~ ReadAsync(StorageKey key, CancellationToken ct)"], "responsibility": "Driven port. Returns our value object, never vendor JSON" },
+    { "id": "IDocRepo", "name": "IKycDocumentRepository", "kind": "interface", "fields": [], "methods": ["Task~KycDocument?~ GetAsync(DocumentId id, CancellationToken ct)", "Task AddAsync(KycDocument d, CancellationToken ct)"], "responsibility": "Driven port (Domain)" },
     { "id": "Upload", "name": "UploadDocumentHandler", "kind": "class", "fields": [], "methods": ["+Task~DocumentId~ HandleAsync(UploadDocument cmd)"], "responsibility": "Use case: store file, create document, enqueue scan" },
-    { "id": "Scan", "name": "ScanDocumentHandler", "kind": "class", "fields": [], "methods": ["+Task HandleAsync(DocumentUploaded evt)"], "responsibility": "Use case triggered by message: scan, mark, OCR if certificate" },
+    { "id": "Scan", "name": "ScanDocumentHandler", "kind": "class", "fields": [], "methods": ["+Task HandleAsync(DocumentUploaded evt)"], "responsibility": "Use case triggered by message: scan, mark, OCR if PAN card" },
     { "id": "BlobStore", "name": "AzureBlobFileStore", "kind": "class", "fields": ["-BlobContainerClient container"], "methods": [], "responsibility": "Adapter (Infrastructure)" },
     { "id": "MinioStore", "name": "S3CompatibleFileStore", "kind": "class", "fields": [], "methods": [], "responsibility": "Adapter for S3 or MinIO, swapped in by configuration" },
     { "id": "Av", "name": "ClamAvScanner", "kind": "class", "fields": [], "methods": [], "responsibility": "Adapter" },
-    { "id": "Ocr", "name": "OcrCertificateReader", "kind": "class", "fields": [], "methods": ["-CertificateDetails? Translate(VendorOcrResult r)"], "responsibility": "Adapter and anti-corruption layer for the OCR vendor" }
+    { "id": "Ocr", "name": "OcrPanCardReader", "kind": "class", "fields": [], "methods": ["-PanDetails? Translate(VendorOcrResult r)"], "responsibility": "Adapter and anti-corruption layer for the OCR vendor" }
   ],
   "relations": [
-    { "from": "SiteDocument", "to": "CertificateDetails", "kind": "composition", "multiplicity": "0..1" },
-    { "from": "BillDocuments", "to": "SiteDocument", "kind": "dependency" },
+    { "from": "KycDocument", "to": "PanDetails", "kind": "composition", "multiplicity": "0..1" },
+    { "from": "AppDocs", "to": "KycDocument", "kind": "dependency" },
     { "from": "Upload", "to": "IFileStore", "kind": "dependency" },
     { "from": "Upload", "to": "IDocRepo", "kind": "dependency" },
     { "from": "Scan", "to": "IMalwareScanner", "kind": "dependency" },
-    { "from": "Scan", "to": "ICertificateReader", "kind": "dependency" },
+    { "from": "Scan", "to": "IPanCardReader", "kind": "dependency" },
     { "from": "Scan", "to": "IDocRepo", "kind": "dependency" },
     { "from": "BlobStore", "to": "IFileStore", "kind": "implements" },
     { "from": "MinioStore", "to": "IFileStore", "kind": "implements" },
     { "from": "Av", "to": "IMalwareScanner", "kind": "implements" },
-    { "from": "Ocr", "to": "ICertificateReader", "kind": "implements" }
+    { "from": "Ocr", "to": "IPanCardReader", "kind": "implements" }
   ]
 }
 ```
 
 Key decisions:
 
-- **Domain:** `SiteDocument` owns its state machine. `Approve` throws unless the status is `Clean`, so no adapter or use case can approve an infected file. The submission rule is a domain service because it looks across documents and bill lines.
+- **Domain:** `KycDocument` owns its state machine. `Approve` throws unless the status is `Clean`, so no adapter or use case can approve an infected file. The submission rule is a domain service because it looks across documents and required document types.
 - **Ports are small and named for intent.** `IFileStore` has two methods, not the 40 of a blob SDK. Moving to S3 next year means one new adapter class and one changed line in `Program.cs`.
-- **OCR translation happens in the adapter.** The vendor's response (confidence scores, bounding boxes) is reduced to `CertificateDetails`, or `null` when confidence is too low. The domain never sees vendor types.
+- **OCR translation happens in the adapter.** The vendor's response (confidence scores, bounding boxes) is reduced to `PanDetails`, or `null` when confidence is too low (a human reviewer then types it in). The domain never sees vendor types.
 - **Scanning is asynchronous.** Upload stores the file and creates the document in `Uploaded` status, then a message triggers `ScanDocumentHandler`. Downloads of non-clean files are refused by the use case that serves files.
+- **KYC files are sensitive personal data.** Encrypt them at rest, serve downloads through short-lived signed URLs to reviewers only, log every access, and apply a retention rule (delete or archive after the period the regulator requires). These are adapter and configuration concerns; the domain only knows a document's status.
 ::alternatives
 If the storage provider offers built-in malware scanning, the scanner port may be implemented by an adapter that reads the provider's scan result instead of running a scanner, and the inside does not change at all. That is the payoff of a port named for intent.
 ::mistakes
 - Passing `Azure.Storage.Blobs` types (or a URI with a SAS token) into the domain.
 - One huge `IDocumentService` port covering storage, scanning and OCR. It can't be faked simply and changes for three reasons.
-- Putting the "approved document per line" rule in the upload use case.
+- Putting the "approved document per required type" rule in the upload use case.
 :::
 
 :::exercise id=m08-domain-vs-infra-ex4 difficulty=intermediate kind=code title="An anti-corruption adapter with a fake HTTP handler"
@@ -1549,7 +1550,7 @@ public class TaxInvoiceTests
     public void Intra_state_splits_cgst_and_sgst()
     {
         var inv = Invoice("06AAACB5678B1Z2");                 // both Haryana (06)
-        inv.AddLine("Bituminous work", "995421", 1_00_000.25m, 18m);
+        inv.AddLine("Website development", "998314", 1_00_000.25m, 18m);
         var tax = inv.Tax();
         Assert.Equal(9_000.03m, tax.Cgst);                    // 18,000.05 / 2, rounded up
         Assert.Equal(9_000.02m, tax.Sgst);                    // SGST takes the remaining paisa
@@ -1560,7 +1561,7 @@ public class TaxInvoiceTests
     public void Cancellation_window_is_24_hours()
     {
         var inv = Invoice("27AAACB5678B1Z2");
-        inv.AddLine("Survey", "998713", 50_000m, 18m);
+        inv.AddLine("Social media campaign", "998361", 50_000m, 18m);
         var ack = new DateTimeOffset(2026, 10, 20, 10, 0, 0, TimeSpan.FromHours(5.5));
         inv.MarkRegistered(new string('a', 64), ack);
         Assert.Throws<InvoiceRuleException>(() => inv.Cancel(ack.AddHours(24).AddMinutes(1)));
@@ -1587,7 +1588,7 @@ Prefer fakes and stubs, and assert on **state** (the invoice is registered) rath
 ## Real-world application
 
 - **Payment integrations.** A system that accepts UPI, cards and net banking defines one `IPaymentGateway` port in business terms and writes an adapter per provider. Switching providers, or routing by success rate, doesn't touch order rules.
-- **Government and partner portals.** E-invoicing, e-way bills, land-records and tender portals change schemas and authentication schemes. An adapter per portal version, behind a stable port, isolates that churn.
+- **Government and partner portals.** E-invoicing, e-way bills, DigiLocker-style document APIs and bank KYC services change schemas and authentication schemes. An adapter per portal version, behind a stable port, isolates that churn.
 - **Cloud portability.** A port such as `IFileStore` lets the same application run against Azure Blob Storage in the cloud and MinIO on-premises for a client that requires data to stay in their data centre.
 - **ASP.NET Core itself** follows the same idea: `IDistributedCache` has adapters for Redis, SQL Server and memory. `ILogger` has providers for console, files and observability vendors. Your code depends on the abstraction, and `Program.cs` picks the adapter.
 
